@@ -1,0 +1,21 @@
+{
+  "name": "effect-rdf",
+  "version": "0.1.0",
+  "description": "An experimental RDF-star toolkit written in Effect",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "effect": "^3.19.19"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.10",
+    "typescript": "^5.9.3"
+  }
+}
