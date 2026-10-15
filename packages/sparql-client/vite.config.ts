@@ -8,6 +8,7 @@ export default defineConfig({
   pack: {
     entry: ['src/*.ts'],
     dts: true,
+    tsconfig: 'tsconfig.build.json',
     format: ['esm'],
     sourcemap: true,
   },
