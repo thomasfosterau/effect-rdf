@@ -1,0 +1,43 @@
+{
+  "name": "@thomasfosterau/effect-shacl",
+  "version": "0.0.0",
+  "description": "Effect-idiomatic SHACL Core validator for @thomasfosterau/effect-rdf",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./*": {
+        "types": "./dist/*.d.mts",
+        "default": "./dist/*.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "vp pack"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-rdf": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-turtle": "workspace:*",
+    "effect": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}
