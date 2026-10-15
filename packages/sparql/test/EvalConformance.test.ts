@@ -101,7 +101,7 @@ const orderKey = (b: Bindings, vars: ReadonlyArray<string>): string =>
     })
     .join('|');
 
-const runQueryTest = (t: TestCase) =>
+const runQueryTest = (t: TestCase, optimize = true) =>
   Effect.gen(function* () {
     const text = fs.readFileSync(t.query!, 'utf8');
     const baseIri = pathToFileURL(t.query!).href;
@@ -109,7 +109,7 @@ const runQueryTest = (t: TestCase) =>
     const loaded = loadDataset(t, false);
     const initial = Dataset.addAll(loaded, datasetClauseQuads(query, loaded));
     const store = yield* Store.makeMemory(initial);
-    const engine = Engine.make(store, { baseIri });
+    const engine = Engine.make(store, { baseIri, optimize });
     const result = yield* engine.query(query);
     const expected = readExpected(t.result!);
     switch (result._tag) {
@@ -195,6 +195,8 @@ describe.skipIf(!exists)('SPARQL evaluation conformance', () => {
     '%s',
     async (_, t) => {
       expect(await Effect.runPromise(Effect.as(runQueryTest(t), true))).toBe(true);
+      // The optimizer must not change results.
+      expect(await Effect.runPromise(Effect.as(runQueryTest(t, false), true))).toBe(true);
     },
     20_000,
   );

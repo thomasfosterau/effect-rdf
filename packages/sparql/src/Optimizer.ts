@@ -14,7 +14,7 @@
  * @since 0.1.0
  */
 import * as Effect from 'effect/Effect';
-import type * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
 import type * as Ast from './Ast.ts';
 import type * as Store from './Store.ts';
@@ -147,7 +147,7 @@ const orderBgp = (
               ctx.graph._tag === 'NamedGraph'
                 ? ctx.graph.graph
                 : ctx.dataset.defaultGraph === 'default'
-                  ? undefined
+                  ? Term.defaultGraph
                   : undefined,
           }),
     );
