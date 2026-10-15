@@ -343,3 +343,41 @@ describe('Hash functions', () => {
     expect(Hash.sha512(input)).toBe(node('sha512'));
   });
 });
+
+describe('SERVICE with a variable endpoint', () => {
+  const remote = (endpoint: Term.NamedNode) =>
+    Stream.make(Bindings.make({ title: Term.literal(`from ${endpoint.value}`) }));
+  const FederatedLayer = Engine.layer({ service: (endpoint) => remote(endpoint) }).pipe(
+    Layer.provideMerge(
+      Store.layerMemory(
+        Dataset.make(
+          Term.quad(ex('p1'), ex('endpoint'), Term.namedNode('http://one.example/sparql')),
+          Term.quad(ex('p2'), ex('endpoint'), Term.namedNode('http://two.example/sparql')),
+        ),
+      ),
+    ),
+  );
+
+  it.effect('evaluates the remote pattern once per bound endpoint', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select(
+        'SELECT ?p ?title { ?p <http://example.org/endpoint> ?e SERVICE ?e { ?x ?y ?title } } ORDER BY ?p',
+      );
+      const rows = yield* Stream.runCollect(result.bindings);
+      expect(rows.map((b) => lex(b.map.get('title')))).toEqual([
+        'from http://one.example/sparql',
+        'from http://two.example/sparql',
+      ]);
+    }).pipe(Effect.provide(FederatedLayer)),
+  );
+
+  it.effect('fails when the endpoint variable is unbound', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select('SELECT * { SERVICE ?e { ?x ?y ?z } }');
+      const error = yield* Effect.flip(Stream.runCollect(result.bindings));
+      expect(error._tag).toBe('EvaluationError');
+    }).pipe(Effect.provide(FederatedLayer)),
+  );
+});

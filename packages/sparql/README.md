@@ -172,7 +172,11 @@ back to the engine. The algebra types live in `Algebra` (with `format`,
 `EngineOptions.service` receives the endpoint IRI and the `Algebra.Service`
 node (whose `pattern` holds the original syntax, printable with
 `Generator.printPattern`) and returns the remote solutions — the hook for an
-HTTP client. `EngineOptions.load` fetches documents for `LOAD`.
+HTTP client (implemented by `Federation` in
+[`@thomasfosterau/effect-sparql-client`](../sparql-client)).
+`SERVICE ?endpoint { … }` is evaluated once per solution after `?endpoint`
+has been bound by an earlier pattern. `EngineOptions.load` fetches documents
+for `LOAD`.
 
 ### Protocol servers and clients
 
@@ -196,6 +200,7 @@ The W3C test suites are run from `.test-suites/rdf-tests/sparql` (or
   (SPARQL 1.0, 1.1, 1.2). Result sets are compared up to blank node renaming
   (numeric literals by value); ordered results check the `ORDER BY` keys.
 - **Skipped** (77): `sparql11/entailment` (70; entailment regimes are not
-  supported) and `sparql11/service` (7; federation needs remote endpoints).
-  Protocol, Graph Store Protocol and service description tests belong to the
-  future HTTP packages.
+  supported) and `sparql11/service` (7; federation needs remote endpoints —
+  they pass in `effect-sparql-client`, with in-process servers). Protocol,
+  Graph Store Protocol and service description tests run in
+  `effect-sparql-server`.
