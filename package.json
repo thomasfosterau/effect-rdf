@@ -13,6 +13,7 @@
     "@types/node": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vite-plus": "catalog:"
   },
   "engines": {

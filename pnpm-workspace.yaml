@@ -10,4 +10,5 @@ catalog:
   '@types/node': ^24
   effect: 4.0.5
   typescript: ^7.0.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.2.0
   vite-plus: 1.2.0
