@@ -152,21 +152,37 @@ export const bijection = (
     return true;
   };
 
-  const search = (i: number): boolean => {
-    if (i === order.length) return true;
+  // Iterative depth-first search (graphs can have many thousands of blank nodes).
+  const cursors: Array<number> = [0];
+  while (cursors.length > 0) {
+    const i = cursors.length - 1;
+    if (i === order.length) return Option.some(mapping);
     const node = order[i]!;
-    for (const candidate of groupsB.get(a.labels.get(node)!)!) {
+    const candidates = groupsB.get(a.labels.get(node)!)!;
+    const previous = mapping.get(node);
+    if (previous !== undefined) {
+      mapping.delete(node);
+      used.delete(previous);
+    }
+    let next = cursors[i]!;
+    let advanced = false;
+    while (next < candidates.length) {
+      const candidate = candidates[next++]!;
       if (used.has(candidate)) continue;
       mapping.set(node, candidate);
       used.add(candidate);
-      if (consistent(node) && search(i + 1)) return true;
+      if (consistent(node)) {
+        advanced = true;
+        break;
+      }
       mapping.delete(node);
       used.delete(candidate);
     }
-    return false;
-  };
-
-  return search(0) ? Option.some(mapping) : Option.none();
+    cursors[i] = next;
+    if (advanced) cursors.push(0);
+    else cursors.pop();
+  }
+  return Option.none();
 };
 
 /**

@@ -45,3 +45,15 @@ describe('Isomorphism', () => {
     expect(Dataset.toNQuads(Isomorphism.relabel(x))).toBe(Dataset.toNQuads(Isomorphism.relabel(y)));
   });
 });
+
+describe('Isomorphism (large graphs)', () => {
+  it('handles many blank nodes without overflowing the stack', () => {
+    const graph = (prefix: string) =>
+      Dataset.fromIterable(
+        Array.from({ length: 20_000 }, (_, i) =>
+          Term.quad(b(`${prefix}${i}`), p, Term.literal(String(i))),
+        ),
+      );
+    expect(Isomorphism.isomorphic(graph('x'), graph('y'))).toBe(true);
+  });
+});
