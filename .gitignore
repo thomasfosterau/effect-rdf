@@ -31,3 +31,6 @@ dist-ssr
 
 # AI agent worktrees
 .claude/worktrees/
+
+# Conformance test suites (scripts/fetch-test-suites.sh)
+.test-suites/
