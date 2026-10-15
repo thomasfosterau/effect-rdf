@@ -47,19 +47,38 @@ const program = Effect.gen(function* () {
 ### Reasoning
 
 ```ts
-import { Reasoner } from '@thomasfosterau/effect-n3';
+import { Effect } from 'effect';
+import { N3, Reasoner } from '@thomasfosterau/effect-n3';
 
-const closure = yield* Reasoner.reason(doc.formula); // Formula with all inferences
+const program = Effect.gen(function* () {
+  const doc = yield* N3.parse(`
+    @prefix : <http://example.org/> .
+    @prefix math: <http://www.w3.org/2000/10/swap/math#> .
+    :socrates a :Man ; :age 70 .
+    { ?x a :Man } => { ?x a :Mortal } .
+    { ?x :age ?a . (?a 1) math:sum ?b } => { ?x :nextAge ?b } .
+  `);
+  const { closure, inferred } = yield* Reasoner.reason(doc);
+  return N3.serializeDocument(inferred, { prefixes: doc.prefixes });
+  // :socrates a :Mortal ; :nextAge 71 .
+});
 ```
+
+Builtins: a pragmatic subset of `math:`, `string:`, `list:` and `log:`
+(`includes`, `notIncludes`, `conclusion`, `collectAllIn`, `forAllIn`, …).
+`Reasoner.query(formula, pattern)` answers conjunctive queries. On the CG
+reasoner suite 76 of 89 tests pass; the rest need document dereferencing
+(`log:semantics`), `time:` builtins or have broken expected results (listed
+in `test/reasoner-conformance.test.ts`).
 
 ## Mapping to RDF datasets
 
-| N3                                  | RDF dataset                                         |
-| ----------------------------------- | --------------------------------------------------- |
-| top-level statement                 | quad in the default graph                           |
-| formula `{ … }` (each occurrence)   | fresh blank node `_:g`; contents in named graph `_:g` |
-| collection `( a b )` / `()`         | `rdf:first`/`rdf:rest` chain / `rdf:nil`            |
-| variable `?x`, literal subject, non-IRI predicate | `RdfParseError` (not representable) |
+| N3                                                | RDF dataset                                           |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| top-level statement                               | quad in the default graph                             |
+| formula `{ … }` (each occurrence)                 | fresh blank node `_:g`; contents in named graph `_:g` |
+| collection `( a b )` / `()`                       | `rdf:first`/`rdf:rest` chain / `rdf:nil`              |
+| variable `?x`, literal subject, non-IRI predicate | `RdfParseError` (not representable)                   |
 
 Serialising a dataset writes graphs named by blank nodes that are used as
 terms as nested formulas and folds well-formed lists into collections; graphs

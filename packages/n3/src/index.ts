@@ -16,4 +16,6 @@ export * as Model from './Model.ts';
 /** @since 0.1.0 */
 export * as N3 from './N3.ts';
 /** @since 0.1.0 */
+export * as Reasoner from './Reasoner.ts';
+/** @since 0.1.0 */
 export * as Vocab from './Vocab.ts';

@@ -7,7 +7,7 @@ import * as CoreIsomorphism from '@thomasfosterau/effect-rdf/Isomorphism';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
-import { Isomorphism, Mapping, Model, N3, Vocab } from '../src/index.ts';
+import { Isomorphism, Mapping, Model, N3, Reasoner, Vocab } from '../src/index.ts';
 
 const EX = 'http://example.org/';
 const ex = (local: string) => Term.namedNode(EX + local);
@@ -269,5 +269,68 @@ describe('Isomorphism', () => {
       `:s :p _:l1 . _:l1 <${rdf.first.value}> 1 ; <${rdf.rest.value}> _:l2 . _:l2 <${rdf.first.value}> 2 ; <${rdf.rest.value}> <${rdf.nil.value}> .`,
     ).formula;
     expect(Isomorphism.isomorphic(a, b)).toBe(true);
+  });
+});
+
+describe('Reasoner', () => {
+  it.effect('applies rules to a fixpoint, chaining rules', () =>
+    Effect.gen(function* () {
+      const infinite = parse(`
+        :socrates a :Man .
+        { ?x a :Man } => { ?x a :Mortal } .
+        { ?x a :Mortal } => { ?x :parent [ a :Mortal ] } .
+      `);
+      const error = yield* Effect.flip(Reasoner.reason(infinite, { maxRounds: 5 }));
+      expect(error.message).toContain('No fixpoint');
+      const finite = parse(`
+        :socrates a :Man .
+        { ?x a :Man } => { ?x a :Mortal } .
+        { ?x a :Mortal } => { ?x :fate :death ; :has [ a :Soul ] } .
+      `);
+      const { inferred, rounds } = yield* Reasoner.reason(finite);
+      expect(rounds).toBe(3);
+      expect(
+        Isomorphism.isomorphic(
+          inferred,
+          parse(':socrates a :Mortal ; :fate :death ; :has [ a :Soul ] .').formula,
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect('evaluates builtins and derived rules', () =>
+    Effect.gen(function* () {
+      const doc = parse(`
+        @prefix math: <http://www.w3.org/2000/10/swap/math#> .
+        @prefix string: <http://www.w3.org/2000/10/swap/string#> .
+        @prefix list: <http://www.w3.org/2000/10/swap/list#> .
+        :a :cm 180 ; :name "Ann" .
+        { ?p :cm ?cm . (?cm 100) math:quotient ?m . ?m math:greaterThan 1.5 } => { ?p :tall true ; :m ?m } .
+        { ?p :name ?n . ("Hello, " ?n) string:concatenation ?g } => { ?p :greeting ?g } .
+        { (1 2 3) list:member ?x . ?x math:notLessThan 3 } => { :big :item ?x } .
+        { :a :tall true } => { { ?y :cm ?c } => { ?y :measured true } } .
+      `);
+      const { inferred } = yield* Reasoner.reason(doc);
+      const keys = inferred.statements.map((s) => s.key);
+      expect(keys).toContain(`<${EX}a> <${EX}m> "1.8"^^<${xsd.decimal.value}>`);
+      expect(keys).toContain(`<${EX}a> <${EX}greeting> "Hello, Ann"`);
+      expect(keys).toContain(`<${EX}big> <${EX}item> "3"^^<${xsd.integer.value}>`);
+      expect(keys).toContain(`<${EX}a> <${EX}measured> "true"^^<${xsd.boolean.value}>`);
+    }),
+  );
+
+  it.effect('reports inconsistencies', () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(Reasoner.reason(parse(':a a :B . { ?x a :B } => false .')));
+      expect(error._tag).toBe('N3ReasonerError');
+    }),
+  );
+
+  it('answers queries', () => {
+    const doc = parse(':a :knows :b . :b :knows :c .');
+    const answers = Reasoner.query(doc.formula, parse('?x :knows [ :knows ?z ] .').formula);
+    expect(answers.map((b) => [b.get('x')!.key, b.get('z')!.key])).toEqual([
+      [`<${EX}a>`, `<${EX}c>`],
+    ]);
   });
 });
