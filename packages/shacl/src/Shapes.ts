@@ -6,7 +6,7 @@
  *
  * ```ts
  * import { Effect } from "effect"
- * import { Shapes } from "@thomasfosterau/effect-rdf-shacl"
+ * import { Shapes } from "@thomasfosterau/effect-shacl"
  *
  * const program = Effect.gen(function* () {
  *   const shapes = yield* Shapes.parse(shapesDataset)

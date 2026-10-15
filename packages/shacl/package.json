@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-rdf-shacl",
+  "name": "@thomasfosterau/effect-shacl",
   "version": "0.0.0",
   "description": "Effect-idiomatic SHACL Core validator for @thomasfosterau/effect-rdf",
   "license": "MIT",

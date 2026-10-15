@@ -1,4 +1,4 @@
-# @thomasfosterau/effect-rdf-rdfjson
+# @thomasfosterau/effect-rdfjson
 
 [RDF/JSON](https://www.w3.org/TR/rdf-json/) (`application/rdf+json`) for
 [`@thomasfosterau/effect-rdf`](../core), built on Effect `Schema`.
@@ -16,7 +16,7 @@
 
 ```ts
 import { Effect, Schema } from 'effect';
-import { RdfJson } from '@thomasfosterau/effect-rdf-rdfjson';
+import { RdfJson } from '@thomasfosterau/effect-rdfjson';
 
 const program = Effect.gen(function* () {
   const dataset = yield* Schema.decodeEffect(RdfJson.DatasetFromString)(`{

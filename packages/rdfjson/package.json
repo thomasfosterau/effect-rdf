@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-rdf-rdfjson",
+  "name": "@thomasfosterau/effect-rdfjson",
   "version": "0.0.0",
   "description": "RDF/JSON parser, serializer and Effect Schemas for effect-rdf",
   "license": "MIT",

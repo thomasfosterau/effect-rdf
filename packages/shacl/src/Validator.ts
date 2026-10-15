@@ -4,7 +4,7 @@
  *
  * ```ts
  * import { Effect } from "effect"
- * import { Validator, ValidationReport } from "@thomasfosterau/effect-rdf-shacl"
+ * import { Validator, ValidationReport } from "@thomasfosterau/effect-shacl"
  *
  * const program = Effect.gen(function* () {
  *   const report = yield* Validator.validate(dataGraph, shapesGraph)
@@ -776,7 +776,7 @@ export class Validator extends Context.Service<
       options?: ValidateOptions,
     ) => Effect.Effect<Dataset.Dataset, ValidationError | ConformanceError>;
   }
->()('@thomasfosterau/effect-rdf-shacl/Validator') {}
+>()('@thomasfosterau/effect-shacl/Validator') {}
 
 /**
  * Compiles a shapes graph into a `Validator` service implementation. The

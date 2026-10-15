@@ -1,4 +1,4 @@
-# @thomasfosterau/effect-rdf-shacl
+# @thomasfosterau/effect-shacl
 
 An Effect-native [SHACL Core](https://www.w3.org/TR/shacl/) validator for
 [`@thomasfosterau/effect-rdf`](../core).
@@ -25,7 +25,7 @@ skipped because they need a SPARQL evaluator.
 
 ```ts
 import { Effect } from 'effect';
-import { Validator, ValidationReport } from '@thomasfosterau/effect-rdf-shacl';
+import { Validator, ValidationReport } from '@thomasfosterau/effect-shacl';
 
 const program = Effect.gen(function* () {
   // shapesGraph and dataGraph are core `Dataset`s, e.g. parsed from Turtle.
@@ -76,7 +76,7 @@ use `rdfs:subClassOf` from the data graph, as the specification requires.
 
 ```ts
 import { Effect } from 'effect';
-import { Validator } from '@thomasfosterau/effect-rdf-shacl';
+import { Validator } from '@thomasfosterau/effect-shacl';
 
 const program = Effect.gen(function* () {
   const validator = yield* Validator.Validator;
@@ -94,7 +94,7 @@ const program = Effect.gen(function* () {
 
 ```ts
 import { Effect, Schema } from 'effect';
-import { Shapes, Validator } from '@thomasfosterau/effect-rdf-shacl';
+import { Shapes, Validator } from '@thomasfosterau/effect-shacl';
 
 const program = Effect.gen(function* () {
   const shapes = yield* Shapes.parse(shapesGraph);
@@ -122,7 +122,7 @@ SPARQL-based constraint components and `sh:target`:
 
 ```ts
 import { Effect, Layer } from 'effect';
-import { Sparql, Validator } from '@thomasfosterau/effect-rdf-shacl';
+import { Sparql, Validator } from '@thomasfosterau/effect-shacl';
 
 const EvaluatorLive = Layer.succeed(Sparql.SparqlConstraintEvaluator, {
   // One call per (shape, constraint, focus node); return the solutions as violations.

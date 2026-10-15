@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-rdf-rdfxml",
+  "name": "@thomasfosterau/effect-rdfxml",
   "version": "0.0.0",
   "description": "RDF 1.2 XML Syntax (RDF/XML) parser and serializer for effect-rdf",
   "license": "MIT",

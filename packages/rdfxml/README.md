@@ -1,4 +1,4 @@
-# @thomasfosterau/effect-rdf-rdfxml
+# @thomasfosterau/effect-rdfxml
 
 [RDF 1.2 XML Syntax](https://www.w3.org/TR/rdf12-xml/) (RDF/XML, `application/rdf+xml`)
 for [`@thomasfosterau/effect-rdf`](../core).
@@ -17,7 +17,7 @@ annotations via `rdf:annotation` / `rdf:annotationNodeID`.
 ```ts
 import { Effect } from 'effect';
 import { Dataset } from '@thomasfosterau/effect-rdf';
-import { RdfXml } from '@thomasfosterau/effect-rdf-rdfxml';
+import { RdfXml } from '@thomasfosterau/effect-rdfxml';
 
 const program = Effect.gen(function* () {
   const { dataset, prefixes } = yield* RdfXml.parse(

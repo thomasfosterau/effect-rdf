@@ -2,7 +2,7 @@
  * The SHACL vocabulary (`sh:`, `http://www.w3.org/ns/shacl#`).
  *
  * ```ts
- * import { Vocabulary } from "@thomasfosterau/effect-rdf-shacl"
+ * import { Vocabulary } from "@thomasfosterau/effect-shacl"
  *
  * Vocabulary.sh.NodeShape // NamedNode<"http://www.w3.org/ns/shacl#NodeShape">
  * ```

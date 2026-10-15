@@ -6,7 +6,7 @@
  * datatypes).
  *
  * This is deliberately isolated so it can be swapped for
- * `@thomasfosterau/effect-rdf-turtle` later.
+ * `@thomasfosterau/effect-turtle` later.
  */
 import { Dataset, Iri, Term, Vocab } from '@thomasfosterau/effect-rdf';
 

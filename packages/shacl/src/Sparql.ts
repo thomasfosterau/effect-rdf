@@ -13,7 +13,7 @@
  *
  * ```ts
  * import { Effect, Layer } from "effect"
- * import { Sparql } from "@thomasfosterau/effect-rdf-shacl"
+ * import { Sparql } from "@thomasfosterau/effect-shacl"
  *
  * const EvaluatorLive = Layer.succeed(Sparql.SparqlConstraintEvaluator, {
  *   evaluateConstraint: (input) => Effect.succeed([]),
@@ -115,4 +115,4 @@ export class SparqlConstraintEvaluator extends Context.Service<
       input: TargetInput,
     ) => Effect.Effect<ReadonlyArray<Term.GroundTerm>, SparqlEvaluationError>;
   }
->()('@thomasfosterau/effect-rdf-shacl/Sparql/SparqlConstraintEvaluator') {}
+>()('@thomasfosterau/effect-shacl/Sparql/SparqlConstraintEvaluator') {}
