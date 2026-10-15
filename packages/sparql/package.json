@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-rdf-sparql",
+  "name": "@thomasfosterau/effect-sparql",
   "version": "0.0.0",
   "description": "Effect-idiomatic SPARQL 1.1 / 1.2: parser, algebra, query engine, results formats and a typed query builder",
   "license": "MIT",
