@@ -206,13 +206,19 @@ export class Engine {
         }
         return undefined;
       case 'ShapeOr': {
+        // When validating a descendant of a target shape, prefer an
+        // alternative that goes through the target.
         let first: Outcome;
+        let passed = false;
         for (const c of e.shapeExprs) {
+          const before = ctx.target?.count ?? 0;
           const r = this.satisfies(n, c, ctx, deps, undefined);
-          if (r === undefined) return undefined;
-          first ??= r;
+          if (r === undefined) {
+            if (ctx.target === undefined || ctx.target.count > before) return undefined;
+            passed = true;
+          } else first ??= r;
         }
-        return `${n.key} matches none of the alternatives (${first})`;
+        return passed ? undefined : `${n.key} matches none of the alternatives (${first})`;
       }
       case 'ShapeNot': {
         const r = this.satisfies(n, e.shapeExpr, ctx, deps, undefined);

@@ -158,7 +158,8 @@ const termText = (t: Term.Term | undefined): string =>
 export const testExtension = (
   onPrint: (line: string, name: string) => void = () => {},
 ): Handler => {
-  const re = /^\s*(print|fail|p)\s*\(\s*(?:([spon])|"([^"]*)"|'([^']*)')\s*\)\s*$/;
+  const re = /^\s*(print|fail|p)\s*\(\s*(?:([spon])|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)\s*$/s;
+  const unescape = (s: string) => s.replace(/\\(.)/gs, '$1');
   return (action, context) => {
     if (!action.name.startsWith(testExtensionIri)) return Option.none();
     if (action.code === undefined) return Option.some(true);
@@ -177,7 +178,7 @@ export const testExtension = (
               ? (t?.object ?? context.node)
               : context.node,
       );
-    } else line = dq ?? sq ?? '';
+    } else line = unescape(dq ?? sq ?? '');
     onPrint(line, action.name);
     return Option.some(fn !== 'fail');
   };

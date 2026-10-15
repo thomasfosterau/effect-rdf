@@ -230,7 +230,11 @@ export const checkNodeConstraint = (n: Term.Term, nc: ShExJ.NodeConstraint): str
     const actual = n.language !== '' ? RDF_LANG_STRING : n.datatype.value;
     if (actual !== nc.datatype && !(n.language !== '' && n.datatype.value === nc.datatype))
       return `${n.key} does not have datatype <${nc.datatype}>`;
-    if (n.language === '' && !Xsd.isValidLexical(nc.datatype, n.value))
+    if (
+      n.language === '' &&
+      (!Xsd.isValidLexical(nc.datatype, n.value) ||
+        ((nc.datatype === `${XSD}float` || nc.datatype === `${XSD}double`) && n.value === '+INF'))
+    )
       return `${n.key} is not a valid <${nc.datatype}>`;
   }
   if (

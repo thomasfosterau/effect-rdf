@@ -165,7 +165,12 @@ class Translator {
       if (c === '\\') {
         this.i++;
         const e = this.escape();
-        out += e.kind === 'char' ? e.text : `[${e.negated ? '^' : ''}${e.body}]`;
+        out +=
+          e.kind === 'char'
+            ? e.text === '\\-'
+              ? '-'
+              : e.text
+            : `[${e.negated ? '^' : ''}${e.body}]`;
         continue;
       }
       if (c === '[') {
@@ -181,6 +186,17 @@ class Translator {
       if (c === '/') {
         this.i++;
         out += '\\/';
+        continue;
+      }
+      if (c === '{') {
+        const q = /^\{\d+(?:,\d*)?\}/.exec(this.src.slice(this.i));
+        if (q !== null) {
+          out += q[0];
+          this.i += q[0].length;
+        } else {
+          out += '\\{';
+          this.i++;
+        }
         continue;
       }
       if (c === ']' || c === '}') {
