@@ -154,11 +154,11 @@ describe('Engine', () => {
 });
 
 describe('QueryBuilder', () => {
-  const { v } = Q;
+  const v = Q.vars('person', 'name', 'email', 'p', 'age');
   const query = Q.select('person', 'name', Q.maybe('email'))
-    .where(Q.triple(v.person!, foaf('name'), v.name!))
-    .optional(Q.triple(v.person!, foaf('mbox'), v.email!))
-    .orderBy(Q.desc(v.name!));
+    .where(Q.triple(v.person, foaf('name'), v.name))
+    .optional(Q.triple(v.person, foaf('mbox'), v.email))
+    .orderBy(Q.desc(v.name));
 
   it('builds ASTs that print as SPARQL', () => {
     const text = query.toString();
@@ -184,8 +184,8 @@ describe('QueryBuilder', () => {
   it.effect('decodes rows with schemas', () =>
     Effect.gen(function* () {
       const people = Q.select('name', 'age')
-        .where(Q.triple(v.p!, foaf('name'), v.name!), Q.triple(v.p!, foaf('age'), v.age!))
-        .filter(Q.gt(v.age!, 26));
+        .where(Q.triple(v.p, foaf('name'), v.name), Q.triple(v.p, foaf('age'), v.age))
+        .filter(Q.gt(v.age, 26));
       const decoded = yield* Stream.runCollect(
         Q.decode(people, Schema.Struct({ name: TermSchema.string, age: TermSchema.integer })),
       );
@@ -195,8 +195,8 @@ describe('QueryBuilder', () => {
 
   it.effect('supports aggregates and grouping', () =>
     Effect.gen(function* () {
-      const q = Q.select(Q.as(Q.count(), 'n'), Q.as(Q.sum(v.age!), 'total')).where(
-        Q.triple(v.p!, foaf('age'), v.age!),
+      const q = Q.select(Q.as(Q.count(), 'n'), Q.as(Q.sum(v.age), 'total')).where(
+        Q.triple(v.p, foaf('age'), v.age),
       );
       const [row] = yield* Q.executeAll(q);
       expect(lex(row!.n)).toBe('2');

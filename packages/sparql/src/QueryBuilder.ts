@@ -6,7 +6,7 @@
  *
  * ```ts
  * import { QueryBuilder as Q } from '@thomasfosterau/effect-sparql'
- * const { v } = Q
+ * const v = Q.vars('person', 'name', 'email')
  *
  * const query = Q.select('person', 'name', Q.maybe('email'))
  *   .where(Q.triple(v.person, foaf.name, v.name))
@@ -111,6 +111,18 @@ export const v: { readonly [K in string]: Term.Variable<K> } = new Proxy(
   {},
   { get: (_, name) => (typeof name === 'string' ? Term.variable(name) : undefined) },
 ) as any;
+
+/**
+ * Creates several variables at once, typed by name:
+ * `const { s, name } = vars('s', 'name')`.
+ *
+ * @since 0.1.0
+ * @category variables
+ */
+export const vars = <const N extends ReadonlyArray<string>>(
+  ...names: N
+): { readonly [K in N[number]]: Term.Variable<K> } =>
+  Object.fromEntries(names.map((n) => [n, Term.variable(n)])) as any;
 
 /**
  * Marks a selected variable as possibly unbound (e.g. bound in an
