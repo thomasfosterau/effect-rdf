@@ -396,11 +396,7 @@ export const join = (left: Operation, right: Operation): Join => ({ _tag: 'Join'
  * @since 0.1.0
  * @category constructors
  */
-export const leftJoin = (
-  left: Operation,
-  right: Operation,
-  expression?: Expression,
-): LeftJoin =>
+export const leftJoin = (left: Operation, right: Operation, expression?: Expression): LeftJoin =>
   expression === undefined
     ? { _tag: 'LeftJoin', left, right }
     : { _tag: 'LeftJoin', left, right, expression };
@@ -431,7 +427,11 @@ export const minus = (left: Operation, right: Operation): Minus => ({ _tag: 'Min
  * @since 0.1.0
  * @category constructors
  */
-export const extend = (input: Operation, variable: Term.Variable, expression: Expression): Extend => ({
+export const extend = (
+  input: Operation,
+  variable: Term.Variable,
+  expression: Expression,
+): Extend => ({
   _tag: 'Extend',
   input,
   variable,
@@ -579,9 +579,7 @@ export const certainVariables = (op: Operation): ReadonlySet<string> => {
     }
     case 'Values': {
       return new Set(
-        op.variables
-          .map((v) => v.value)
-          .filter((v) => op.bindings.every((b) => b.map.has(v))),
+        op.variables.map((v) => v.value).filter((v) => op.bindings.every((b) => b.map.has(v))),
       );
     }
   }

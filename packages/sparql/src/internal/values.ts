@@ -54,8 +54,7 @@ export const isSimpleString = (t: Term.Term): t is Term.Literal =>
 
 /** A string literal: simple, `xsd:string` or language-tagged. */
 export const isStringLiteral = (t: Term.Term): t is Term.Literal =>
-  t._tag === 'Literal' &&
-  (t.language !== '' || t.datatype.value === Term.XSD_STRING);
+  t._tag === 'Literal' && (t.language !== '' || t.datatype.value === Term.XSD_STRING);
 
 export const stringLike = (value: string, like: Term.Literal): Term.Literal =>
   like.language === ''
@@ -191,12 +190,18 @@ export const arithmetic = (op: '+' | '-' | '*' | '/', a: Term.Term, b: Term.Term
 };
 
 /** Decimal division with a fixed number of fractional digits (rounded half-even). */
-export const divideDecimal = (u: BigDecimal.BigDecimal, v: BigDecimal.BigDecimal): BigDecimal.BigDecimal => {
+export const divideDecimal = (
+  u: BigDecimal.BigDecimal,
+  v: BigDecimal.BigDecimal,
+): BigDecimal.BigDecimal => {
   const exact = BigDecimal.divide(u, v);
-  const scaled = BigDecimal.round(Option.getOrElse(exact, () => BigDecimal.fromBigInt(0n)), {
-    scale: DIVISION_SCALE,
-    mode: 'half-even',
-  });
+  const scaled = BigDecimal.round(
+    Option.getOrElse(exact, () => BigDecimal.fromBigInt(0n)),
+    {
+      scale: DIVISION_SCALE,
+      mode: 'half-even',
+    },
+  );
   return BigDecimal.normalize(scaled);
 };
 
@@ -288,11 +293,7 @@ interface DurationValue {
 export const durationValue = (t: Term.Term): DurationValue | undefined => {
   if (t._tag !== 'Literal') return undefined;
   const d = t.datatype.value;
-  if (
-    d !== `${XSD}duration` &&
-    d !== `${XSD}dayTimeDuration` &&
-    d !== `${XSD}yearMonthDuration`
-  ) {
+  if (d !== `${XSD}duration` && d !== `${XSD}dayTimeDuration` && d !== `${XSD}yearMonthDuration`) {
     return undefined;
   }
   if (!Xsd.isValidLexical(d, t.value)) return undefined;
@@ -328,7 +329,9 @@ export const compareCodepoints = (a: string, b: string): number => {
 // -----------------------------------------------------------------------------
 
 const isBooleanLiteral = (t: Term.Term): t is Term.Literal =>
-  t._tag === 'Literal' && t.datatype.value === `${XSD}boolean` && Xsd.isValidLexical(t.datatype.value, t.value);
+  t._tag === 'Literal' &&
+  t.datatype.value === `${XSD}boolean` &&
+  Xsd.isValidLexical(t.datatype.value, t.value);
 
 const booleanValue = (t: Term.Literal): boolean => t.value === 'true' || t.value === '1';
 

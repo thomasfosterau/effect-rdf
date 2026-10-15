@@ -93,9 +93,7 @@ class Translator {
       case 'Group':
         return this.group(p);
       case 'Union':
-        return p.patterns
-          .map((g) => this.group(g))
-          .reduce((a, b) => Algebra.union(a, b));
+        return p.patterns.map((g) => this.group(g)).reduce((a, b) => Algebra.union(a, b));
       case 'Graph':
         return { _tag: 'Graph', name: p.name, input: this.group(p.pattern) };
       case 'Service':
@@ -168,7 +166,10 @@ class Translator {
 
   // --- expressions ----------------------------------------------------------
 
-  expression(e: Ast.Expression, aggregates?: (a: Ast.AggregateExpression) => Term.Variable): Algebra.Expression {
+  expression(
+    e: Ast.Expression,
+    aggregates?: (a: Ast.AggregateExpression) => Term.Variable,
+  ): Algebra.Expression {
     switch (e._tag) {
       case 'Variable':
       case 'NamedNode':
@@ -189,9 +190,13 @@ class Translator {
           args: e.args.map((a) => this.expression(a, aggregates)),
         };
       case 'Exists':
-        return { _tag: 'Exists', negated: e.negated, input: simplify(this.group(e.pattern)) };
+        // Not simplified: the empty BGPs at the start of each group are the
+        // "ContextSolution" through which the current solution flows into
+        // the pattern (SPARQL 1.2 §18.6).
+        return { _tag: 'Exists', negated: e.negated, input: this.group(e.pattern) };
       case 'Aggregate':
-        if (aggregates === undefined) throw new Error('Aggregate outside of an aggregation context');
+        if (aggregates === undefined)
+          throw new Error('Aggregate outside of an aggregation context');
         return aggregates(e);
     }
   }
@@ -200,8 +205,7 @@ class Translator {
 
   query(q: Ast.Query): Algebra.Query {
     let op = this.group(q.where);
-    const projection =
-      q._tag === 'Select' && q.projection !== '*' ? q.projection : ([] as const);
+    const projection = q._tag === 'Select' && q.projection !== '*' ? q.projection : ([] as const);
     const selectExpressions = projection.filter(
       (p): p is Ast.Projection => p._tag === 'Projection',
     );
@@ -218,8 +222,7 @@ class Translator {
     if (grouped) {
       const keys: Array<Algebra.GroupKey> = q.groupBy.map((g) => ({
         expression: this.expression(g.expression),
-        variable:
-          g.variable ?? (g.expression._tag === 'Variable' ? g.expression : this.fresh('g')),
+        variable: g.variable ?? (g.expression._tag === 'Variable' ? g.expression : this.fresh('g')),
       }));
       const keyNames = new Set(keys.map((k) => k.variable.value));
       const aggregates: Array<{ variable: Term.Variable; aggregate: Algebra.Aggregate }> = [];
@@ -238,9 +241,7 @@ class Translator {
       const sampleVariables = (e: Ast.Expression, aliases: ReadonlySet<string>): Ast.Expression => {
         switch (e._tag) {
           case 'Variable':
-            return keyNames.has(e.value) || aliases.has(e.value)
-              ? e
-              : Ast.aggregate('SAMPLE', e);
+            return keyNames.has(e.value) || aliases.has(e.value) ? e : Ast.aggregate('SAMPLE', e);
           case 'Operation':
             return Ast.operation(e.operator, ...e.args.map((a) => sampleVariables(a, aliases)));
           case 'FunctionCall':
@@ -311,9 +312,7 @@ class Translator {
         return { _tag: 'Construct', input: slice(op), template: q.template, ...dataset };
       case 'Describe': {
         const terms =
-          q.terms === '*'
-            ? Ast.inScopeVariables(q.where).map((v) => Term.variable(v))
-            : q.terms;
+          q.terms === '*' ? Ast.inScopeVariables(q.where).map((v) => Term.variable(v)) : q.terms;
         const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
         return {
           _tag: 'Describe',

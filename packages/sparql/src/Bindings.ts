@@ -33,7 +33,9 @@ export type TypeId = typeof TypeId;
  * @since 0.1.0
  * @category models
  */
-export class Bindings implements Iterable<readonly [string, Term.GroundTerm]>, Equal.Equal, Pipeable {
+export class Bindings
+  implements Iterable<readonly [string, Term.GroundTerm]>, Equal.Equal, Pipeable
+{
   readonly [TypeId]: TypeId = TypeId;
   #key: string | undefined;
   /** @internal */

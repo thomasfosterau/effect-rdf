@@ -29,10 +29,13 @@
     "build": "vp pack"
   },
   "dependencies": {
-    "@thomasfosterau/effect-rdf": "workspace:*"
+    "@thomasfosterau/effect-rdf": "workspace:*",
+    "@thomasfosterau/effect-rdfxml": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-ntriples": "workspace:*",
+    "@thomasfosterau/effect-turtle": "workspace:*",
     "effect": "catalog:",
     "vite-plus": "catalog:"
   },

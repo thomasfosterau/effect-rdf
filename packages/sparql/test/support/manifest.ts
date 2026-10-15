@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Term } from '@thomasfosterau/effect-rdf';
-import { parseTurtle } from './turtle.ts';
+import { parseRdf } from './rdf.ts';
 
 const MF = 'http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#';
 const QT = 'http://www.w3.org/2001/sw/DataAccess/tests/test-query#';
@@ -39,6 +39,7 @@ export interface TestCase {
   readonly resultGraphData: ReadonlyArray<GraphData>;
   readonly updateSuccess: boolean;
   readonly requires: ReadonlyArray<string>;
+  readonly laxCardinality: boolean;
 }
 
 type Node = Term.NamedNode | Term.BlankNode | Term.Literal;
@@ -78,7 +79,7 @@ const toPath = (t: Term.Term | undefined): string | undefined =>
 
 export const readManifest = (file: string): Array<TestCase> => {
   const base = pathToFileURL(file).href;
-  const g = new Graph(parseTurtle(fs.readFileSync(file, 'utf8'), base));
+  const g = new Graph(parseRdf(fs.readFileSync(file, 'utf8'), base, 'ttl'));
   const out: Array<TestCase> = [];
   for (const q of g.quads.filter((q) => q.predicate.value === `${MF}include`)) {
     for (const inc of g.list(q.object)) {
@@ -158,6 +159,7 @@ export const readManifest = (file: string): Array<TestCase> => {
         resultGraphData,
         updateSuccess,
         requires: g.objects(entry, `${MF}requires`).map((t) => t.value.replace(/.*#/, '')),
+        laxCardinality: g.object(entry, `${MF}resultCardinality`)?.value === `${MF}LaxCardinality`,
       });
     }
   }

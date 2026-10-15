@@ -177,7 +177,12 @@ const parseDateParts = (t: Term.Term) => {
   const lit = literalArg(t);
   const d = lit.datatype.value;
   if (
-    !(d === `${V.XSD}dateTime` || d === `${V.XSD}date` || d === `${V.XSD}time` || d === `${V.XSD}dateTimeStamp`) ||
+    !(
+      d === `${V.XSD}dateTime` ||
+      d === `${V.XSD}date` ||
+      d === `${V.XSD}time` ||
+      d === `${V.XSD}dateTimeStamp`
+    ) ||
     !Xsd.isValidLexical(d, lit.value)
   ) {
     return V.fail('Expected an xsd:dateTime');
@@ -208,7 +213,10 @@ const timezoneDuration = (tz: string): string => {
 };
 
 const encodeForUri = (s: string): string =>
-  encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  encodeURIComponent(s).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 
 const uuid = (random: () => number): string => {
   const bytes = Array.from({ length: 16 }, () => Math.floor(random() * 256));
@@ -225,13 +233,27 @@ const LANG_TAG = /^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/;
 // -----------------------------------------------------------------------------
 
 /**
+ * The evaluated arguments of a built-in function. Positions beyond the
+ * function's arity are `undefined` at runtime; the type assumes the
+ * required positions are present (checked by the parser).
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export type BuiltInArgs = ReadonlyArray<Term.GroundTerm> & {
+  readonly 0: Term.GroundTerm;
+  readonly 1: Term.GroundTerm;
+  readonly 2: Term.GroundTerm;
+};
+
+/**
  * Implementation of a strict built-in function.
  *
  * @since 0.1.0
  * @category models
  */
 export type BuiltIn = (
-  args: ReadonlyArray<Term.GroundTerm>,
+  args: BuiltInArgs,
   context: FunctionContext,
   solution: Bindings,
 ) => Term.GroundTerm;
@@ -500,7 +522,8 @@ const castString = (a: Term.Term): string => {
 const castTo = (target: string, a: Term.Term): Term.Literal => {
   const dtNode = Term.namedNode(target);
   if (target === Term.XSD_STRING) {
-    if (a._tag === 'Literal' && a.language !== '') return V.fail('Cannot cast a language-tagged string');
+    if (a._tag === 'Literal' && a.language !== '')
+      return V.fail('Cannot cast a language-tagged string');
     return V.simple(castString(a));
   }
   const l = literalArg(a);
@@ -525,7 +548,8 @@ const castTo = (target: string, a: Term.Term): Term.Literal => {
     if (isBool) value = boolValue ? 1n : 0n;
     else if (n !== undefined) {
       if (n.kind === 0) value = n.v;
-      else if (n.kind === 1) value = BigInt(BigDecimal.format(BigDecimal.truncate(n.v)).split('.')[0]!);
+      else if (n.kind === 1)
+        value = BigInt(BigDecimal.format(BigDecimal.truncate(n.v)).split('.')[0]!);
       else {
         if (!Number.isFinite(n.v)) return V.fail('Cannot cast NaN/INF to integer');
         value = BigInt(Math.trunc(n.v));
@@ -538,7 +562,7 @@ const castTo = (target: string, a: Term.Term): Term.Literal => {
   if (target === V.dt.decimal.value) {
     if (isBool) return V.numLiteral({ kind: 1, v: BigDecimal.fromBigInt(boolValue ? 1n : 0n) });
     if (n !== undefined) {
-      if (n.kind <= 1) return V.numLiteral({ kind: 1, v: V.toDecimal(n) });
+      if (n.kind === 0 || n.kind === 1) return V.numLiteral({ kind: 1, v: V.toDecimal(n) });
       if (!Number.isFinite(n.v)) return V.fail('Cannot cast NaN/INF to decimal');
       return V.numLiteral({ kind: 1, v: BigDecimal.fromNumberUnsafe(n.v) });
     }
@@ -553,7 +577,12 @@ const castTo = (target: string, a: Term.Term): Term.Literal => {
     if (isBool) value = boolValue ? 1 : 0;
     else if (n !== undefined) value = V.toNumber(n);
     else if (fromString && Xsd.isValidLexical(target, lexical)) {
-      value = lexical === 'INF' || lexical === '+INF' ? Infinity : lexical === '-INF' ? -Infinity : Number(lexical);
+      value =
+        lexical === 'INF' || lexical === '+INF'
+          ? Infinity
+          : lexical === '-INF'
+            ? -Infinity
+            : Number(lexical);
     } else return V.fail('Invalid floating point cast');
     return V.numLiteral({ kind, v: kind === 2 ? Math.fround(value) : value });
   }
@@ -602,6 +631,7 @@ export const isCast = (iri: string): boolean => CASTABLE.has(iri);
  */
 export const cast = (datatype: string, term: Term.GroundTerm): Term.Literal => {
   if (term._tag === 'BlankNode' || term._tag === 'Triple') return V.fail('Cannot cast');
-  if (term._tag === 'NamedNode' && datatype !== Term.XSD_STRING) return V.fail('Cannot cast an IRI');
+  if (term._tag === 'NamedNode' && datatype !== Term.XSD_STRING)
+    return V.fail('Cannot cast an IRI');
   return castTo(datatype, term);
 };
