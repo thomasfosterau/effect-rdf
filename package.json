@@ -13,6 +13,7 @@
     "@types/node": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.2.0",
     "vite-plus": "catalog:"
   },
   "engines": {
