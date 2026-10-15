@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-rdf-turtle",
+  "name": "@thomasfosterau/effect-turtle",
   "version": "0.0.0",
   "description": "Effect-idiomatic RDF 1.2 Turtle and TriG parsers and pretty serializers",
   "license": "MIT",
@@ -29,8 +29,8 @@
     "build": "vp pack"
   },
   "dependencies": {
-    "@thomasfosterau/effect-rdf": "workspace:*",
-    "@thomasfosterau/effect-rdf-ntriples": "workspace:*"
+    "@thomasfosterau/effect-ntriples": "workspace:*",
+    "@thomasfosterau/effect-rdf": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

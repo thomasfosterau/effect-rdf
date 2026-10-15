@@ -104,6 +104,19 @@ export const isIriChar = (c: number): boolean =>
 export const isAbsoluteIri = (iri: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:/.test(iri);
 
 /**
+ * Whether an IRI can be written as an N-Triples / Turtle `IRIREF`: it is
+ * absolute and contains no characters that would need escaping.
+ *
+ * @since 0.1.0
+ * @category validation
+ */
+export const isWritableIri = (iri: string): boolean => {
+  if (!isAbsoluteIri(iri)) return false;
+  for (let i = 0; i < iri.length; i++) if (!isIriChar(iri.charCodeAt(i))) return false;
+  return true;
+};
+
+/**
  * Whether a string is a valid `BLANK_NODE_LABEL` (without the `_:`).
  *
  * @since 0.1.0

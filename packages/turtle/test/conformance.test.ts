@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, type Term } from '@thomasfosterau/effect-rdf';
-import { NQuads, NTriples } from '@thomasfosterau/effect-rdf-ntriples';
+import { NQuads, NTriples } from '@thomasfosterau/effect-ntriples';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
@@ -59,7 +59,7 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
               expect(streamed._tag).toBe('RdfParseError');
               return;
             }
-            const { quads } = yield* suite.syntax.parseQuads(input, options);
+            const { quads, prefixes } = yield* suite.syntax.parseQuads(input, options);
             for (const size of [1, 5, 64]) {
               const streamed = yield* Stream.runCollect(
                 suite.syntax.parseStream(chunked(input, size), options),
@@ -67,6 +67,25 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
               expect(streamed.map((q: Term.Quad) => q.key)).toEqual(quads.map((q) => q.key));
             }
             const dataset = Dataset.fromIterable(quads);
+            // The serializers round-trip: pretty (with prefixes and base, or with
+            // auto-detected prefixes) and streaming output parse back to the same graph.
+            const variants = [
+              yield* suite.syntax.serialize(dataset, { prefixes, baseIri: action }),
+              yield* suite.syntax.serialize(dataset, {
+                autoPrefixes: true,
+                sparqlDirectives: true,
+              }),
+              yield* Stream.mkString(
+                suite.syntax.serializeStream(Stream.fromIterable(quads), { prefixes }),
+              ),
+            ];
+            for (const text of variants) {
+              const reparsed = yield* suite.syntax.parse(text, { baseIri: action });
+              expect(
+                Isomorphism.isomorphic(reparsed.dataset, dataset),
+                `serialised:\n${text}\nexpected:\n${Dataset.toNQuads(dataset)}\nactual:\n${Dataset.toNQuads(reparsed.dataset)}`,
+              ).toBe(true);
+            }
             if (entry.kind.endsWith('Eval')) {
               const result = Option.getOrThrow(entry.result);
               const expected = yield* suite.expected.parse(yield* read(result));

@@ -11,7 +11,7 @@
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
-import * as Lexical from '@thomasfosterau/effect-rdf-ntriples/Lexical';
+import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
 
 /** Thrown when more input is needed to finish the current statement. */
 class NeedMore {}

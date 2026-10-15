@@ -75,12 +75,12 @@ importers:
 
   packages/turtle:
     dependencies:
+      '@thomasfosterau/effect-ntriples':
+        specifier: workspace:*
+        version: link:../ntriples
       '@thomasfosterau/effect-rdf':
         specifier: workspace:*
         version: link:../core
-      '@thomasfosterau/effect-rdf-ntriples':
-        specifier: workspace:*
-        version: link:../ntriples
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'

@@ -10,7 +10,7 @@
  * ```ts
  * import * as fs from 'node:fs'
  * import { Effect } from 'effect'
- * import { Manifest } from '@thomasfosterau/effect-rdf-turtle'
+ * import { Manifest } from '@thomasfosterau/effect-turtle'
  *
  * const entries = Manifest.load(
  *   'https://w3c.github.io/rdf-tests/rdf/rdf12/rdf-turtle/manifest.ttl',

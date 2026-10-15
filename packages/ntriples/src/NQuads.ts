@@ -7,7 +7,7 @@
  * @example
  * ```ts
  * import { Effect } from 'effect'
- * import { NQuads } from '@thomasfosterau/effect-rdf-ntriples'
+ * import { NQuads } from '@thomasfosterau/effect-ntriples'
  *
  * const program = Effect.gen(function* () {
  *   const { dataset } = yield* NQuads.parse('<http://ex/s> <http://ex/p> <http://ex/o> <http://ex/g> .\n')

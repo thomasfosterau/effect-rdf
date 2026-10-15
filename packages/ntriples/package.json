@@ -1,5 +1,5 @@
 {
-  "name": "@thomasfosterau/effect-rdf-ntriples",
+  "name": "@thomasfosterau/effect-ntriples",
   "version": "0.0.0",
   "description": "Effect-idiomatic RDF 1.2 N-Triples and N-Quads parsers and serializers",
   "license": "MIT",

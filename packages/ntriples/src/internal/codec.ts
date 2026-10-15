@@ -117,7 +117,29 @@ export interface SerializeOptions extends Serialization.SerializeOptions {
 
 class SerializeFailure extends Error {}
 
+const checkIris = (term: Term.Term): void => {
+  switch (term._tag) {
+    case 'NamedNode':
+      if (!Lexical.isWritableIri(term.value)) {
+        throw new SerializeFailure(`Invalid or relative IRI ${term.key}`);
+      }
+      return;
+    case 'Literal':
+      return checkIris(term.datatype);
+    case 'Triple':
+      checkIris(term.subject);
+      checkIris(term.predicate);
+      return checkIris(term.object);
+    default:
+      return;
+  }
+};
+
 const formatQuad = (syntax: Syntax, quad: Term.Quad): string => {
+  checkIris(quad.subject);
+  checkIris(quad.predicate);
+  checkIris(quad.object);
+  checkIris(quad.graph);
   if (quad.subject._tag === 'Triple') {
     throw new SerializeFailure(
       `Triple terms are not allowed in the subject position in ${syntax.name}: ${quad.key}`,

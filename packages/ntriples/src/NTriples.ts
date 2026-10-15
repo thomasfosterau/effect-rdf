@@ -10,7 +10,7 @@
  * @example
  * ```ts
  * import { Effect } from 'effect'
- * import { NTriples } from '@thomasfosterau/effect-rdf-ntriples'
+ * import { NTriples } from '@thomasfosterau/effect-ntriples'
  *
  * const program = Effect.gen(function* () {
  *   const { dataset } = yield* NTriples.parse('<http://ex/s> <http://ex/p> "o"@en .\n')
