@@ -137,6 +137,8 @@ export interface QuadStoreShape {
    * optimizer to order joins. Should be cheap.
    */
   readonly estimate?: ((pattern: QuadPattern) => Effect.Effect<number, StoreError>) | undefined;
+  /** The exact number of quads matching a pattern, if the backend can count cheaply. */
+  readonly count?: ((pattern: QuadPattern) => Effect.Effect<number, StoreError>) | undefined;
   /** The named graphs of the store (including empty graphs it tracks). */
   readonly graphs: Stream.Stream<Term.NamedNode | Term.BlankNode, StoreError>;
   /** Whether a named graph exists. */
@@ -241,6 +243,11 @@ export const makeMemory = (
           );
         }),
       estimate: (pattern) =>
+        Effect.map(Ref.get(state), (s) => {
+          const p = toDatasetPattern(pattern);
+          return p === undefined ? 0 : Dataset.count(s.dataset, p);
+        }),
+      count: (pattern) =>
         Effect.map(Ref.get(state), (s) => {
           const p = toDatasetPattern(pattern);
           return p === undefined ? 0 : Dataset.count(s.dataset, p);
