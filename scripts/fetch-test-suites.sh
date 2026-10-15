@@ -16,6 +16,7 @@ fetch() {
 }
 fetch rdf-tests w3c/rdf-tests
 fetch json-ld-api w3c/json-ld-api
+fetch json-ld-framing w3c/json-ld-framing
 fetch data-shapes w3c/data-shapes
 fetch shexTest shexSpec/shexTest
 fetch N3 w3c/N3
