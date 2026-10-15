@@ -186,7 +186,11 @@ class QueryGen {
 
   triple(): string {
     const r = this.r;
-    const s = r.chance(0.75) ? r.pick(VARS) : r.chance(0.9) ? r.pick(resources).toString() : `<<( ${resources[0]} ${predicates[0]} ?d )>>`;
+    const s = r.chance(0.75)
+      ? r.pick(VARS)
+      : r.chance(0.9)
+        ? r.pick(resources).toString()
+        : `<<( ${resources[0]!.toString()} ${predicates[0]!.toString()} ?d )>>`;
     const p = r.chance(0.7) ? r.pick(predicates).toString() : r.pick(VARS);
     const o = r.chance(0.7) ? r.pick(VARS) : this.constant();
     return `${s} ${p} ${o} .`;
@@ -218,7 +222,11 @@ class QueryGen {
           parts.push(`MINUS { ${this.group(depth - 1)} }`);
           break;
         case 6: {
-          const e = r.chance(0.5) ? this.operand() : r.chance(0.5) ? this.expr(1) : `COALESCE(${r.pick(VARS)}, ${this.operand()})`;
+          const e = r.chance(0.5)
+            ? this.operand()
+            : r.chance(0.5)
+              ? this.expr(1)
+              : `COALESCE(${r.pick(VARS)}, ${this.operand()})`;
           parts.push(`BIND(${e} AS ?x${this.fresh++})`);
           break;
         }
@@ -233,7 +241,9 @@ class QueryGen {
           );
           break;
         case 9:
-          parts.push(`{ SELECT DISTINCT ${r.pick(VARS)} ${r.pick(VARS)} WHERE { ${this.group(depth - 1)} } }`);
+          parts.push(
+            `{ SELECT DISTINCT ${r.pick(VARS)} ${r.pick(VARS)} WHERE { ${this.group(depth - 1)} } }`,
+          );
           break;
         case 10: {
           const k = r.pick(VARS);
@@ -313,13 +323,13 @@ describe('Differential: SQL store vs in-memory store', () => {
               const expected = yield* Effect.exit(evaluate(memEngine, query));
               const actual = yield* Effect.exit(evaluate(sqlEngine, query));
               if (Exit.isFailure(expected)) {
-                expect(Exit.isFailure(actual), query).toBe(true);
+                expect({ query, failed: Exit.isFailure(actual) }).toEqual({ query, failed: true });
                 continue;
               }
               if (Exit.isFailure(actual)) {
                 expect.fail(`SQL evaluation failed for ${query}: ${String(actual.cause)}`);
               } else {
-                expect(actual.value, query).toEqual(expected.value);
+                expect({ query, rows: actual.value }).toEqual({ query, rows: expected.value });
               }
               compared++;
               if (expected.value.length > 0 && expected.value[0] !== 'false') nonEmpty++;

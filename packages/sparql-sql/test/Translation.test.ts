@@ -49,16 +49,16 @@ const run = (query: string, quads: ReadonlyArray<Term.Quad> = data) => {
           : [];
     return { rows, events };
   }).pipe(
-    Effect.provide(
-      SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) }),
-    ),
+    Effect.provide(SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) })),
   );
 };
 
 const executedSql = (events: ReadonlyArray<SqlStore.QueryEvent>): string => {
   const first = events[0];
   if (first?._tag !== 'Executed') {
-    throw new Error(`Not executed in SQL: ${first?._tag === 'Declined' ? first.reason : 'no event'}`);
+    throw new Error(
+      `Not executed in SQL: ${first?._tag === 'Declined' ? first.reason : 'no event'}`,
+    );
   }
   return first.sql;
 };
@@ -103,11 +103,7 @@ describe('SQL execution', () => {
       'SELECT ?p WHERE { ?p ex:name ?n FILTER(STRSTARTS(?n, "A") || LANGMATCHES(LANG(?n), "en")) }',
       ['substr', 'lower('],
     ],
-    [
-      'triple terms',
-      'SELECT ?s WHERE { ?s ex:p <<( ex:a ex:b ?o )>> }',
-      ['kind = 4'],
-    ],
+    ['triple terms', 'SELECT ?s WHERE { ?s ex:p <<( ex:a ex:b ?o )>> }', ['kind = 4']],
     ['ASK', 'ASK { ?p ex:age ?a FILTER(?a = 25) }', ['num']],
   ];
 
@@ -161,7 +157,11 @@ describe('SQL execution', () => {
       const quads = [
         ...data,
         Term.quad(ex('x'), ex('age'), Xsd.float(25)),
-        Term.quad(ex('y'), ex('age'), Term.literal('2020-01-01', Term.namedNode('http://www.w3.org/2001/XMLSchema#date'))),
+        Term.quad(
+          ex('y'),
+          ex('age'),
+          Term.literal('2020-01-01', Term.namedNode('http://www.w3.org/2001/XMLSchema#date')),
+        ),
       ];
       const { rows, events } = yield* run(
         'SELECT ?p WHERE { ?p ex:age ?a . ?q ex:age ?b FILTER(?a < ?b) }',
@@ -175,7 +175,10 @@ describe('SQL execution', () => {
       // Comparisons with constants of a known class remain in SQL.
       const constant = yield* run('SELECT ?p WHERE { ?p ex:age ?a FILTER(?a < 26) }', quads);
       expect(constant.events[0]?._tag).toBe('Executed');
-      expect(constant.rows).toEqual(['{ ?p → <http://example.org/bob> }', '{ ?p → <http://example.org/x> }']);
+      expect(constant.rows).toEqual([
+        '{ ?p → <http://example.org/bob> }',
+        '{ ?p → <http://example.org/x> }',
+      ]);
     }),
   );
 });

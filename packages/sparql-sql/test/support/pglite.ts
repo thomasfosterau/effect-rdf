@@ -40,7 +40,10 @@ export const layer: Layer.Layer<SqlClient.SqlClient, SqlError> = Layer.effect(
     const rows = (sql: string, params: ReadonlyArray<unknown>) =>
       Effect.map(query(sql, params, 'object'), (r) => r.rows as ReadonlyArray<any>);
     const values = (sql: string, params: ReadonlyArray<unknown>) =>
-      Effect.map(query(sql, params, 'array'), (r) => r.rows as ReadonlyArray<ReadonlyArray<unknown>>);
+      Effect.map(
+        query(sql, params, 'array'),
+        (r) => r.rows as ReadonlyArray<ReadonlyArray<unknown>>,
+      );
     const connection: Connection = {
       execute: (sql, params, transform) =>
         Effect.map(rows(sql, params), (r) => (transform ? transform(r) : r)),

@@ -124,76 +124,76 @@ export interface Backend {
 }
 
 const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
-    Effect.gen(function* () {
-      const text = fs.readFileSync(t.query!, 'utf8');
-      const baseIri = pathToFileURL(t.query!).href;
-      const query = yield* Parser.parseQuery(text, { baseIri });
-      const loaded = Dataset.fromIterable(loadQuads(t));
-      yield* store.insert(Dataset.addAll(loaded, datasetClauseQuads(query, loaded)));
-      const engine = Engine.make(store, { baseIri });
-      const result = yield* engine.query(query);
-      const expected = readExpected(t.result!);
-      switch (result._tag) {
-        case 'Ask':
-          expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({
-            _tag: 'Boolean',
-            value: result.value,
-          });
-          return;
-        case 'Graph': {
-          const quads = yield* Stream.runCollect(result.quads);
-          const actual = Dataset.fromIterable(quads);
-          const exp = expected as Dataset.Dataset;
-          if (!Isomorphism.isomorphic(actual, exp)) {
-            expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(exp));
-          }
-          return;
+  Effect.gen(function* () {
+    const text = fs.readFileSync(t.query!, 'utf8');
+    const baseIri = pathToFileURL(t.query!).href;
+    const query = yield* Parser.parseQuery(text, { baseIri });
+    const loaded = Dataset.fromIterable(loadQuads(t));
+    yield* store.insert(Dataset.addAll(loaded, datasetClauseQuads(query, loaded)));
+    const engine = Engine.make(store, { baseIri });
+    const result = yield* engine.query(query);
+    const expected = readExpected(t.result!);
+    switch (result._tag) {
+      case 'Ask':
+        expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({
+          _tag: 'Boolean',
+          value: result.value,
+        });
+        return;
+      case 'Graph': {
+        const quads = yield* Stream.runCollect(result.quads);
+        const actual = Dataset.fromIterable(quads);
+        const exp = expected as Dataset.Dataset;
+        if (!Isomorphism.isomorphic(actual, exp)) {
+          expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(exp));
         }
-        case 'Select': {
-          const set = yield* Results.collect(result);
-          let actual = set.bindings;
-          const exp = (expected as Results.ResultSet).bindings;
-          if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
-            const csv = Results.Csv.serializeString(set);
-            actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
-          }
-          const ok = sameResults(actual, exp, { lax: t.laxCardinality });
-          if (!ok) {
-            expect(actual.map((b) => b.toString()).sort()).toEqual(
-              exp.map((b) => b.toString()).sort(),
-            );
-            expect.fail('Results differ only in blank node structure');
-          }
-          const vars = orderVariables(query);
-          if (vars.length > 0 && !t.laxCardinality) {
-            expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
-          }
-          return;
-        }
-      }
-    });
-
-const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
-    Effect.gen(function* () {
-      const text = fs.readFileSync(t.query!, 'utf8');
-      const baseIri = pathToFileURL(t.query!).href;
-      yield* store.insert(loadQuads(t));
-      const engine = Engine.make(store, { baseIri });
-      const outcome = yield* Effect.result(engine.update(text));
-      if (!t.updateSuccess) {
-        expect(outcome._tag).toBe('Failure');
         return;
       }
-      if (outcome._tag === 'Failure') return yield* Effect.fail(outcome.failure);
-      const quads: Array<Term.Quad> = [];
-      for (const file of t.resultData) quads.push(...parseFile(file));
-      for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
-      const expected = Dataset.fromIterable(quads);
-      const actual = yield* Store.toDataset(store);
-      if (!Isomorphism.isomorphic(actual, expected)) {
-        expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(expected));
+      case 'Select': {
+        const set = yield* Results.collect(result);
+        let actual = set.bindings;
+        const exp = (expected as Results.ResultSet).bindings;
+        if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+          const csv = Results.Csv.serializeString(set);
+          actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
+        }
+        const ok = sameResults(actual, exp, { lax: t.laxCardinality });
+        if (!ok) {
+          expect(actual.map((b) => b.toString()).sort()).toEqual(
+            exp.map((b) => b.toString()).sort(),
+          );
+          expect.fail('Results differ only in blank node structure');
+        }
+        const vars = orderVariables(query);
+        if (vars.length > 0 && !t.laxCardinality) {
+          expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
+        }
+        return;
       }
-    });
+    }
+  });
+
+const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
+  Effect.gen(function* () {
+    const text = fs.readFileSync(t.query!, 'utf8');
+    const baseIri = pathToFileURL(t.query!).href;
+    yield* store.insert(loadQuads(t));
+    const engine = Engine.make(store, { baseIri });
+    const outcome = yield* Effect.result(engine.update(text));
+    if (!t.updateSuccess) {
+      expect(outcome._tag).toBe('Failure');
+      return;
+    }
+    if (outcome._tag === 'Failure') return yield* Effect.fail(outcome.failure);
+    const quads: Array<Term.Quad> = [];
+    for (const file of t.resultData) quads.push(...parseFile(file));
+    for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
+    const expected = Dataset.fromIterable(quads);
+    const actual = yield* Store.toDataset(store);
+    if (!Isomorphism.isomorphic(actual, expected)) {
+      expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(expected));
+    }
+  });
 
 const tests = loadTests();
 
@@ -207,7 +207,10 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
   const outcomes = new Map<string, SqlStore.QueryEvent['_tag']>();
   /** The tests for which at least one subtree was evaluated in SQL. */
   const executed = new Set<string>();
-  const run = (t: TestCase, f: (store: SqlStore.SqlStoreShape, t: TestCase) => Effect.Effect<void, unknown>) =>
+  const run = (
+    t: TestCase,
+    f: (store: SqlStore.SqlStoreShape, t: TestCase) => Effect.Effect<void, unknown>,
+  ) =>
     backend.run(
       (store) => f(store, t),
       (e) => {
@@ -215,40 +218,40 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
         if (e._tag === 'Executed') executed.add(t.id);
       },
     );
-describe.skipIf(!exists)(`SPARQL evaluation conformance (${name})`, () => {
-  const runnable = tests.filter((t) => skipReason(t) === undefined);
-  it('documents every skipped test', () => {
-    const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
-    expect(skippedTests.every((t) => skipReason(t)!.length > 0)).toBe(true);
+  describe.skipIf(!exists)(`SPARQL evaluation conformance (${name})`, () => {
+    const runnable = tests.filter((t) => skipReason(t) === undefined);
+    it('documents every skipped test', () => {
+      const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
+      expect(skippedTests.every((t) => skipReason(t)!.length > 0)).toBe(true);
+    });
+    it.each(
+      runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),
+    )(
+      '%s',
+      async (_, t) => {
+        await run(t, runQueryTest);
+      },
+      20_000,
+    );
+    it.each(
+      runnable.filter((t) => t.type === 'UpdateEvaluationTest').map((t) => [label(t), t] as const),
+    )(
+      '%s',
+      async (_, t) => {
+        await run(t, runUpdateTest);
+      },
+      20_000,
+    );
+    it('evaluates most queries in SQL', () => {
+      const queries = runnable.filter((t) => t.type !== 'UpdateEvaluationTest');
+      const root = queries.filter((t) => outcomes.get(t.id) === 'Executed').length;
+      const some = runnable.filter((t) => executed.has(t.id)).length;
+      // The whole query (the root of the algebra) runs as one SQL statement for
+      // more than half of the queries (the rest use ORDER BY, property paths,
+      // REGEX, arithmetic, … in the engine), and SQL evaluates subtrees of
+      // nearly all tests.
+      expect(root).toBeGreaterThan(queries.length * backend.minRootShare);
+      expect(some).toBeGreaterThan(runnable.length * 0.85);
+    });
   });
-  it.each(
-    runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),
-  )(
-    '%s',
-    async (_, t) => {
-      await run(t, runQueryTest);
-    },
-    20_000,
-  );
-  it.each(
-    runnable.filter((t) => t.type === 'UpdateEvaluationTest').map((t) => [label(t), t] as const),
-  )(
-    '%s',
-    async (_, t) => {
-      await run(t, runUpdateTest);
-    },
-    20_000,
-  );
-  it('evaluates most queries in SQL', () => {
-    const queries = runnable.filter((t) => t.type !== 'UpdateEvaluationTest');
-    const root = queries.filter((t) => outcomes.get(t.id) === 'Executed').length;
-    const some = runnable.filter((t) => executed.has(t.id)).length;
-    // The whole query (the root of the algebra) runs as one SQL statement for
-    // more than half of the queries (the rest use ORDER BY, property paths,
-    // REGEX, arithmetic, … in the engine), and SQL evaluates subtrees of
-    // nearly all tests.
-    expect(root).toBeGreaterThan(queries.length * backend.minRootShare);
-    expect(some).toBeGreaterThan(runnable.length * 0.85);
-  });
-});
 };

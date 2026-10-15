@@ -35,8 +35,8 @@
   },
   "devDependencies": {
     "@effect/sql-pg": "catalog:",
-    "@electric-sql/pglite": "catalog:",
     "@effect/vitest": "catalog:",
+    "@electric-sql/pglite": "catalog:",
     "@thomasfosterau/effect-ntriples": "workspace:*",
     "@thomasfosterau/effect-rdfxml": "workspace:*",
     "@thomasfosterau/effect-turtle": "workspace:*",
