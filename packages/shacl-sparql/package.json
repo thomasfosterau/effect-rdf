@@ -1,0 +1,45 @@
+{
+  "name": "@thomasfosterau/effect-shacl-sparql",
+  "version": "0.0.0",
+  "description": "SHACL-SPARQL for @thomasfosterau/effect-shacl: SPARQL-based constraints, constraint components and targets evaluated with @thomasfosterau/effect-sparql",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./*": {
+        "types": "./dist/*.d.mts",
+        "default": "./dist/*.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "vp pack"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-rdf": "workspace:*",
+    "@thomasfosterau/effect-shacl": "workspace:*",
+    "@thomasfosterau/effect-sparql": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-turtle": "workspace:*",
+    "effect": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}

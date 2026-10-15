@@ -5,7 +5,15 @@ import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
-import { Path, Shapes, Sparql, ValidationReport, Validator, Vocabulary } from '../src/index.ts';
+import {
+  Message,
+  Path,
+  Shapes,
+  Sparql,
+  ValidationReport,
+  Validator,
+  Vocabulary,
+} from '../src/index.ts';
 import { parseTurtle } from './utils/turtle.ts';
 
 const { sh } = Vocabulary;
@@ -396,5 +404,81 @@ describe('SHACL-SPARQL extension point', () => {
         }),
       ),
     ),
+  );
+
+  it.effect('substitutes evaluator bindings in messages', () =>
+    Effect.gen(function* () {
+      const report = yield* Validator.validate(
+        data,
+        ttl(`
+          ex:S sh:targetNode ex:a ;
+            sh:message "{$this} is bad: {?value} ({?reason})" ;
+            sh:sparql [ sh:select "SELECT $this WHERE { }" ] .
+        `),
+      );
+      expect(report.results[0]!.messages.map((m) => m.value)).toEqual([
+        'http://example.org/a is bad: 1 (too bad)',
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(Sparql.SparqlConstraintEvaluator, {
+          evaluateConstraint: () =>
+            Effect.succeed([
+              {
+                value: Term.literal('1', xsd.integer),
+                bindings: new Map([['reason', Term.literal('too bad')]]),
+              },
+            ]),
+          selectTargets: () => Effect.succeed([]),
+        }),
+      ),
+    ),
+  );
+});
+
+describe('Message templates', () => {
+  it('substitutes {?var} and {$var} placeholders', () => {
+    const lookup = (name: string) =>
+      name === 'value' ? ex('a') : name === 'n' ? Term.literal('3', xsd.integer) : undefined;
+    expect(Message.format('{$value} has {?n} items ({?unknown})', lookup)).toBe(
+      'http://example.org/a has 3 items ({?unknown})',
+    );
+    const message = Message.substitute(Term.literal('Wert {?n}', 'de'), lookup);
+    expect(message.value).toBe('Wert 3');
+    expect(message.language).toBe('de');
+    expect(Message.variables('{?a} {$b} {c}')).toEqual(['a', 'b']);
+    expect(Message.display(Term.blankNode('b0'))).toBe('_:b0');
+  });
+
+  it('derives parameter names from IRIs', () => {
+    expect(Message.localName(ex('maxWords'))).toBe('maxWords');
+    expect(Message.localName('http://example.org/ns#lang')).toBe('lang');
+    expect(Message.localName('urn:x:9abc')).toBe('abc');
+    expect(Message.localName('http://example.org/')).toBe('');
+  });
+
+  it.effect('substitutes core constraint parameters in sh:message', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetNode ex:a ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 2 ;
+            sh:message "{$this} needs at least {$minCount} values for {$path}"@en ;
+          ] ;
+          sh:property [
+            sh:path ex:age ;
+            sh:datatype xsd:integer ;
+            sh:message "{?value} is not an {$datatype}" ;
+          ] .
+      `);
+      const report = yield* Validator.validate(ttl(`ex:a ex:name "A" ; ex:age "x" .`), shapes);
+      const texts = report.results.flatMap((r) => r.messages.map((m) => m.value));
+      expect(texts).toHaveLength(2);
+      expect(texts).toContain(
+        'http://example.org/a needs at least 2 values for http://example.org/name',
+      );
+      expect(texts).toContain('x is not an http://www.w3.org/2001/XMLSchema#integer');
+    }),
   );
 });

@@ -78,6 +78,22 @@ by IRI), `service` (federation), `load` (`LOAD` support) and `optimize`.
 `default-graph-uri` / `named-graph-uri`); `FROM`/`FROM NAMED` in the query
 take precedence.
 
+### Pre-bound variables
+
+`RequestOptions.bindings` pre-binds variables (initial bindings) with the
+"values insertion" semantics of SHACL-SPARQL and SPARQL `EXISTS`
+(`Algebra.prebind`): the solution is joined into every BGP, property path and
+`GRAPH ?g` pattern, so it is visible to every `FILTER` and `BIND` — unlike a
+trailing `VALUES` clause.
+
+```ts
+const rows =
+  yield *
+  engine.select('SELECT $this WHERE { FILTER (isIRI($this)) }', {
+    bindings: Bindings.make({ this: Term.namedNode('http://example.org/a') }),
+  });
+```
+
 ## Typed query builder
 
 ```ts

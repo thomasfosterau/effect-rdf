@@ -153,6 +153,86 @@ describe('Engine', () => {
   );
 });
 
+describe('Pre-binding', () => {
+  const run = (query: string, bindings: Record<string, Term.GroundTerm>) =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select(`PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n${query}`, {
+        bindings: Bindings.make(bindings),
+      });
+      return (yield* Stream.runCollect(result.bindings)).map((b) => b.toString());
+    });
+
+  it.effect('makes pre-bound values visible in FILTERs of empty groups', () =>
+    Effect.gen(function* () {
+      expect(
+        yield* run('SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }', {
+          this: ex('alice'),
+        }),
+      ).toEqual(['{ ?this → <http://example.org/alice> }']);
+      expect(
+        yield* run('SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }', {
+          this: ex('bob'),
+        }),
+      ).toEqual([]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect('pre-binds BGPs, UNION branches, BIND and nested groups', () =>
+    Effect.gen(function* () {
+      expect(
+        yield* run('SELECT ?name WHERE { $this foaf:name ?name }', { this: ex('bob') }),
+      ).toEqual(['{ ?name → "Bob" }']);
+      expect(
+        yield* run(
+          'SELECT $this ?x WHERE { { FILTER (false) } UNION { BIND ($this AS ?x) } FILTER bound($this) }',
+          { this: ex('bob') },
+        ),
+      ).toEqual(['{ ?this → <http://example.org/bob>, ?x → <http://example.org/bob> }']);
+      expect(
+        yield* run(
+          'SELECT ?n WHERE { ?p foaf:knows ?q . FILTER EXISTS { $this foaf:name ?n0 } ?q foaf:name ?n }',
+          { this: ex('carol') },
+        ),
+      ).toEqual([]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect('pre-binds GRAPH ?g, ASK and algebra evaluation', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      expect(
+        yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }', {
+          bindings: Bindings.make({ g: ex('g1') }),
+        }),
+      ).toBe(true);
+      expect(
+        yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }', {
+          bindings: Bindings.make({ g: ex('g2') }),
+        }),
+      ).toBe(false);
+      const op = Translate.translatePattern(
+        (yield* Parser.parseQuery('SELECT * WHERE { ?s ?p ?o }')).where,
+      );
+      const rows = yield* Stream.runCollect(
+        engine.evaluate(op, { bindings: Bindings.make({ s: ex('alice'), p: foaf('age') }) }),
+      );
+      expect(rows.map((r) => lex(Bindings.getUndefined(r, 'o')))).toEqual(['30']);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it('rewrites the algebra by values insertion', () => {
+    const op = Algebra.prebind(
+      Translate.translatePattern(
+        Effect.runSync(Parser.parseQuery('SELECT * WHERE { ?s ?p ?o FILTER (?o != 1) }')).where,
+      ),
+      Bindings.make({ s: ex('alice') }),
+    );
+    expect(Algebra.format(op)).toContain('<http://example.org/alice> ?p ?o');
+    expect(Algebra.format(op)).toContain('table');
+  });
+});
+
 describe('QueryBuilder', () => {
   const v = Q.vars('person', 'name', 'email', 'p', 'age');
   const query = Q.select('person', 'name', Q.maybe('email'))

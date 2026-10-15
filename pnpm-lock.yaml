@@ -160,6 +160,31 @@ importers:
         specifier: 'catalog:'
         version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
 
+  packages/shacl-sparql:
+    dependencies:
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../core
+      '@thomasfosterau/effect-shacl':
+        specifier: workspace:*
+        version: link:../shacl
+      '@thomasfosterau/effect-sparql':
+        specifier: workspace:*
+        version: link:../sparql
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      '@thomasfosterau/effect-turtle':
+        specifier: workspace:*
+        version: link:../turtle
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
+
   packages/shex:
     dependencies:
       '@thomasfosterau/effect-rdf':

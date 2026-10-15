@@ -33,13 +33,14 @@ import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import { compareTerms } from './internal/compare.ts';
+import * as Message from './Message.ts';
 import * as Path from './Path.ts';
 import * as Shapes from './Shapes.ts';
 import * as Sparql from './Sparql.ts';
 import * as ValidationReport from './ValidationReport.ts';
-import { sh } from './Vocabulary.ts';
+import { SH, sh } from './Vocabulary.ts';
 
-const { rdf, rdfs } = Vocab;
+const { rdf, rdfs, xsd } = Vocab;
 
 // -----------------------------------------------------------------------------
 // Errors
@@ -262,6 +263,103 @@ const defaultMessage = (c: Shapes.Constraint, value: Term.Term | undefined): str
   }
 };
 
+const integer = (n: number) => Term.literal(String(n), xsd.integer);
+const boolean = (b: boolean) => Term.literal(String(b), xsd.boolean);
+const listText = (terms: ReadonlyArray<Term.Term>) =>
+  Term.literal(terms.map(Message.display).join(', '));
+
+/** The parameter values of a core constraint by parameter name (for message templates). */
+const coreParameters = (c: Shapes.Constraint): ReadonlyArray<readonly [string, Term.Term]> => {
+  switch (c._tag) {
+    case 'Class':
+      return [['class', c.class]];
+    case 'Datatype':
+      return [['datatype', c.datatype]];
+    case 'NodeKind':
+      return [['nodeKind', Term.namedNode(SH + c.nodeKind)]];
+    case 'MinCount':
+      return [['minCount', integer(c.minCount)]];
+    case 'MaxCount':
+      return [['maxCount', integer(c.maxCount)]];
+    case 'MinExclusive':
+      return [['minExclusive', c.value]];
+    case 'MinInclusive':
+      return [['minInclusive', c.value]];
+    case 'MaxExclusive':
+      return [['maxExclusive', c.value]];
+    case 'MaxInclusive':
+      return [['maxInclusive', c.value]];
+    case 'MinLength':
+      return [['minLength', integer(c.minLength)]];
+    case 'MaxLength':
+      return [['maxLength', integer(c.maxLength)]];
+    case 'Pattern':
+      return [
+        ['pattern', Term.literal(c.pattern)],
+        ['flags', Term.literal(c.flags)],
+      ];
+    case 'LanguageIn':
+      return [['languageIn', Term.literal(c.languages.join(', '))]];
+    case 'UniqueLang':
+      return [['uniqueLang', boolean(true)]];
+    case 'Equals':
+      return [['equals', c.predicate]];
+    case 'Disjoint':
+      return [['disjoint', c.predicate]];
+    case 'LessThan':
+      return [['lessThan', c.predicate]];
+    case 'LessThanOrEquals':
+      return [['lessThanOrEquals', c.predicate]];
+    case 'Not':
+      return [['not', c.shape]];
+    case 'And':
+      return [['and', listText(c.shapes)]];
+    case 'Or':
+      return [['or', listText(c.shapes)]];
+    case 'Xone':
+      return [['xone', listText(c.shapes)]];
+    case 'Node':
+      return [['node', c.shape]];
+    case 'Property':
+      return [['property', c.shape]];
+    case 'QualifiedMinCount':
+      return [
+        ['qualifiedValueShape', c.shape],
+        ['qualifiedMinCount', integer(c.count)],
+        ['qualifiedValueShapesDisjoint', boolean(c.disjoint)],
+      ];
+    case 'QualifiedMaxCount':
+      return [
+        ['qualifiedValueShape', c.shape],
+        ['qualifiedMaxCount', integer(c.count)],
+        ['qualifiedValueShapesDisjoint', boolean(c.disjoint)],
+      ];
+    case 'Closed':
+      return [
+        ['closed', boolean(true)],
+        ['ignoredProperties', listText(c.ignoredProperties)],
+      ];
+    case 'HasValue':
+      return [['hasValue', c.value]];
+    case 'In':
+      return [['in', listText(c.values)]];
+    case 'Sparql':
+      return [];
+    case 'Component':
+      return c.parameters.map((p) => [Message.localName(p.path), p.value] as const);
+  }
+};
+
+/** The `path` variable of message templates: the predicate, or the path in SPARQL syntax. */
+const pathTerm = (path: Path.Path): Term.Term =>
+  path._tag === 'PredicatePath' ? path.predicate : Term.literal(Path.toSparql(path));
+
+/** Substitutes `{?var}` / `{$var}` placeholders of result messages. */
+const substituteMessages = (
+  messages: ReadonlyArray<Term.Literal>,
+  lookup: (name: string) => Term.Term | undefined,
+): ReadonlyArray<Term.Literal> => messages.map((m) => Message.substitute(m, lookup));
+
 interface Engine {
   readonly validateShape: (
     shape: Shapes.Shape,
@@ -387,21 +485,37 @@ const makeEngine = (
     const component = Shapes.componentOf(c);
     const shapePath =
       shape._tag === 'PropertyShape' ? Option.some(shape.path) : Option.none<Path.Path>();
+    const parameters = new Map(coreParameters(c));
     const result = (
       value: Term.GroundTerm | undefined,
       extra: { readonly path?: Path.Path; readonly details?: Results } = {},
-    ) =>
-      ValidationReport.makeResult({
+    ) => {
+      const resultPath = extra.path === undefined ? shapePath : Option.some(extra.path);
+      return ValidationReport.makeResult({
         focusNode: focus,
         sourceShape: shape.id,
         sourceConstraintComponent: component,
         severity: shape.severity,
-        resultPath: extra.path === undefined ? shapePath : Option.some(extra.path),
+        resultPath,
         value: Option.fromNullishOr(value),
         messages:
-          shape.messages.length > 0 ? shape.messages : [Term.literal(defaultMessage(c, value))],
+          shape.messages.length > 0
+            ? substituteMessages(shape.messages, (name) => {
+                switch (name) {
+                  case 'this':
+                    return focus;
+                  case 'value':
+                    return value;
+                  case 'path':
+                    return Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined;
+                  default:
+                    return parameters.get(name);
+                }
+              })
+            : [Term.literal(defaultMessage(c, value))],
         details: withDetails ? (extra.details ?? []) : [],
       });
+    };
     const each = (failed: (v: Term.GroundTerm) => boolean): Results =>
       valueNodes.filter(failed).map((v) => result(v));
     const nestedResults = (id: Term.Term, v: Term.GroundTerm) => validateShape(shapeById(id), v);
@@ -583,23 +697,41 @@ const makeEngine = (
           focusNode: focus,
           valueNodes,
         });
-        return violations.map((violation) =>
-          ValidationReport.makeResult({
-            focusNode: violation.focusNode ?? focus,
+        return violations.map((violation) => {
+          const focusNode = violation.focusNode ?? focus;
+          const resultPath = violation.path !== undefined ? Option.some(violation.path) : shapePath;
+          const lookup = (name: string): Term.Term | undefined => {
+            const bound = violation.bindings?.get(name) ?? parameters.get(name);
+            if (bound !== undefined) return bound;
+            switch (name) {
+              case 'this':
+                return focusNode;
+              case 'value':
+                return violation.value;
+              case 'path':
+                return Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined;
+              default:
+                return undefined;
+            }
+          };
+          const templates =
+            violation.messages !== undefined && violation.messages.length > 0
+              ? violation.messages
+              : shape.messages;
+          return ValidationReport.makeResult({
+            focusNode,
             sourceShape: shape.id,
             sourceConstraintComponent: component,
             sourceConstraint: c._tag === 'Sparql' ? Option.some(c.node) : Option.none(),
             severity: violation.severity ?? shape.severity,
-            resultPath: violation.path !== undefined ? Option.some(violation.path) : shapePath,
+            resultPath,
             value: Option.fromNullishOr(violation.value),
             messages:
-              violation.messages !== undefined && violation.messages.length > 0
-                ? violation.messages
-                : shape.messages.length > 0
-                  ? shape.messages
-                  : [Term.literal(defaultMessage(c, violation.value))],
-          }),
-        );
+              templates.length > 0
+                ? substituteMessages(templates, lookup)
+                : [Term.literal(defaultMessage(c, violation.value))],
+          });
+        });
       }
     }
   });

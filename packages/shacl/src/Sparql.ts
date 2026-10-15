@@ -78,8 +78,18 @@ export interface Violation {
   readonly focusNode?: Term.GroundTerm | undefined;
   readonly value?: Term.GroundTerm | undefined;
   readonly path?: Path.Path | undefined;
+  /**
+   * The result messages, possibly containing `{?var}` / `{$var}`
+   * placeholders, which the validator substitutes from `bindings`.
+   */
   readonly messages?: ReadonlyArray<Term.Literal> | undefined;
   readonly severity?: Term.NamedNode | undefined;
+  /**
+   * The variables available to message templates: the solution of the
+   * query and, for SPARQL-based constraint components, the parameter values
+   * by parameter name.
+   */
+  readonly bindings?: ReadonlyMap<string, Term.GroundTerm> | undefined;
 }
 
 /**
