@@ -13,6 +13,8 @@ describe('Term', () => {
   it('literals', () => {
     expect(Term.literal('a"b\n').key).toBe('"a\\"b\\n"');
     expect(Term.literal('hi', 'EN').key).toBe('"hi"@en');
+    // RDF 1.2 canonical N-Triples escapes U+FFFE and U+FFFF
+    expect(Term.literal('\u0000\b\u007f￾￿').key).toBe('"\\u0000\\b\\u007F\\uFFFE\\uFFFF"');
     expect(Term.literal('hi', { language: 'ar', direction: 'rtl' }).key).toBe('"hi"@ar--rtl');
   });
   it('triple terms', () => {
