@@ -20,7 +20,12 @@ import type * as ShExJ from './ShExJ.ts';
  * @since 0.1.0
  * @category models
  */
-export type SemActSite = 'start' | 'shape' | 'tripleExpression' | 'tripleConstraint' | 'nodeConstraint';
+export type SemActSite =
+  | 'start'
+  | 'shape'
+  | 'tripleExpression'
+  | 'tripleConstraint'
+  | 'nodeConstraint';
 
 /**
  * The context a semantic action is evaluated in.
@@ -122,7 +127,8 @@ export const withExternalCode =
  * @since 0.1.0
  * @category layers
  */
-export const layer = (handler: Handler): Layer.Layer<never> => Layer.succeed(SemActHandler, handler);
+export const layer = (handler: Handler): Layer.Layer<never> =>
+  Layer.succeed(SemActHandler, handler);
 
 // -----------------------------------------------------------------------------
 // The Test extension
@@ -145,7 +151,9 @@ const termText = (t: Term.Term | undefined): string =>
         : t.datatype.value === 'http://www.w3.org/2001/XMLSchema#string'
           ? t.value
           : `"${t.value}"^^${t.datatype.value}`
-      : t.value;
+      : t._tag === 'NamedNode' || t._tag === 'BlankNode'
+        ? t.value
+        : t.key;
 
 /**
  * The ShEx Test extension: `print(s|p|o|n|"text")` records a line and
@@ -158,7 +166,8 @@ const termText = (t: Term.Term | undefined): string =>
 export const testExtension = (
   onPrint: (line: string, name: string) => void = () => {},
 ): Handler => {
-  const re = /^\s*(print|fail|p)\s*\(\s*(?:([spon])|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)\s*$/s;
+  const re =
+    /^\s*(print|fail|p)\s*\(\s*(?:([spon])|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)\s*$/s;
   const unescape = (s: string) => s.replace(/\\(.)/gs, '$1');
   return (action, context) => {
     if (!action.name.startsWith(testExtensionIri)) return Option.none();

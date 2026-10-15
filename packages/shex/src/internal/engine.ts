@@ -244,7 +244,11 @@ export class Engine {
   // ---------------------------------------------------------------------------
 
   /** The triple constraints of a triple expression (through inclusions). */
-  private tcsOf(te: ShExJ.TripleExprOrRef | undefined, out: Array<ShExJ.TripleConstraint>, seen: Set<string>): void {
+  private tcsOf(
+    te: ShExJ.TripleExprOrRef | undefined,
+    out: Array<ShExJ.TripleConstraint>,
+    seen: Set<string>,
+  ): void {
     if (te === undefined) return;
     if (typeof te === 'string') {
       if (seen.has(te)) return;
@@ -268,7 +272,11 @@ export class Engine {
   }
 
   /** All triple constraints of the shapes an extension refers to (recursively). */
-  private extensionTcs(e: ShExJ.ShapeExprOrRef, out: Array<ShExJ.TripleConstraint>, seen: Set<string>): void {
+  private extensionTcs(
+    e: ShExJ.ShapeExprOrRef,
+    out: Array<ShExJ.TripleConstraint>,
+    seen: Set<string>,
+  ): void {
     if (typeof e === 'string') {
       if (seen.has(e)) return;
       seen.add(e);
@@ -334,8 +342,7 @@ export class Engine {
     for (const arc of arcs) {
       const tcs = byPredicate.get(`${arc.dir} ${arc.predicate}`);
       if (tcs === undefined) {
-        if (arc.dir === 'out' && closed)
-          return `closed shape does not allow ${arc.triple.key}`;
+        if (arc.dir === 'out' && closed) return `closed shape does not allow ${arc.triple.key}`;
         continue;
       }
       const ok: Array<ShExJ.TripleConstraint> = [];
@@ -522,7 +529,10 @@ export class Engine {
     n: Term.Term,
     triples: ReadonlyArray<Term.Triple>,
   ): Outcome {
-    const visit = (te0: ShExJ.TripleExprOrRef, seen: Set<string>): { used: boolean; r: Outcome } => {
+    const visit = (
+      te0: ShExJ.TripleExprOrRef,
+      seen: Set<string>,
+    ): { used: boolean; r: Outcome } => {
       if (typeof te0 === 'string') {
         if (seen.has(te0)) return { used: false, r: undefined };
         seen.add(te0);

@@ -12,7 +12,7 @@
  */
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Effect from 'effect/Effect';
-import * as Schema from 'effect/Schema';
+import * as S from 'effect/Schema';
 import { ShExJError } from './ShExError.ts';
 
 // -----------------------------------------------------------------------------
@@ -359,47 +359,44 @@ export interface Annotation {
 // Schemas
 // -----------------------------------------------------------------------------
 
-const opt = Schema.optionalKey;
-const Int = Schema.Int;
-const atLeast2 = <S extends Schema.Top>(s: S) => Schema.Array(s).check(Schema.isMinLength(2));
-const atLeast1 = <S extends Schema.Top>(s: S) => Schema.Array(s).check(Schema.isMinLength(1));
+const opt = S.optionalKey;
+const Int = S.Int;
+const atLeast2 = <S extends S.Top>(s: S) => S.Array(s).check(S.isMinLength(2));
+const atLeast1 = <S extends S.Top>(s: S) => S.Array(s).check(S.isMinLength(1));
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const SemActSchema: Schema.Codec<SemAct> = Schema.Struct({
-  type: Schema.Literal('SemAct'),
-  name: Schema.String,
-  code: opt(Schema.String),
+export const SemActSchema: S.Codec<SemAct> = S.Struct({
+  type: S.Literal('SemAct'),
+  name: S.String,
+  code: opt(S.String),
 });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const ObjectLiteralSchema: Schema.Codec<ObjectLiteral> = Schema.Struct({
-  value: Schema.String,
-  language: opt(Schema.String),
-  type: opt(Schema.String),
+export const ObjectLiteralSchema: S.Codec<ObjectLiteral> = S.Struct({
+  value: S.String,
+  language: opt(S.String),
+  type: opt(S.String),
 });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const ObjectValueSchema: Schema.Codec<ObjectValue> = Schema.Union([
-  Schema.String,
-  ObjectLiteralSchema,
-]);
+export const ObjectValueSchema: S.Codec<ObjectValue> = S.Union([S.String, ObjectLiteralSchema]);
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const AnnotationSchema: Schema.Codec<Annotation> = Schema.Struct({
-  type: Schema.Literal('Annotation'),
-  predicate: Schema.String,
+export const AnnotationSchema: S.Codec<Annotation> = S.Struct({
+  type: S.Literal('Annotation'),
+  predicate: S.String,
   object: ObjectValueSchema,
 });
 
@@ -407,76 +404,75 @@ export const AnnotationSchema: Schema.Codec<Annotation> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const WildcardSchema: Schema.Codec<Wildcard> = Schema.Struct({
-  type: Schema.Literal('Wildcard'),
+export const WildcardSchema: S.Codec<Wildcard> = S.Struct({
+  type: S.Literal('Wildcard'),
 });
 
-const stem = <T extends string>(type: T) =>
-  Schema.Struct({ type: Schema.Literal(type), stem: Schema.String });
+const stem = <T extends string>(type: T) => S.Struct({ type: S.Literal(type), stem: S.String });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const IriStemSchema: Schema.Codec<IriStem> = stem('IriStem');
+export const IriStemSchema: S.Codec<IriStem> = stem('IriStem');
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const LiteralStemSchema: Schema.Codec<LiteralStem> = stem('LiteralStem');
+export const LiteralStemSchema: S.Codec<LiteralStem> = stem('LiteralStem');
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const LanguageStemSchema: Schema.Codec<LanguageStem> = stem('LanguageStem');
+export const LanguageStemSchema: S.Codec<LanguageStem> = stem('LanguageStem');
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const IriStemRangeSchema: Schema.Codec<IriStemRange> = Schema.Struct({
-  type: Schema.Literal('IriStemRange'),
-  stem: Schema.Union([Schema.String, WildcardSchema]),
-  exclusions: Schema.Array(Schema.Union([Schema.String, IriStemSchema])),
-});
-
-/**
- * @since 0.1.0
- * @category schemas
- */
-export const LiteralStemRangeSchema: Schema.Codec<LiteralStemRange> = Schema.Struct({
-  type: Schema.Literal('LiteralStemRange'),
-  stem: Schema.Union([Schema.String, WildcardSchema]),
-  exclusions: Schema.Array(Schema.Union([Schema.String, LiteralStemSchema])),
+export const IriStemRangeSchema: S.Codec<IriStemRange> = S.Struct({
+  type: S.Literal('IriStemRange'),
+  stem: S.Union([S.String, WildcardSchema]),
+  exclusions: S.Array(S.Union([S.String, IriStemSchema])),
 });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const LanguageSchema: Schema.Codec<Language> = Schema.Struct({
-  type: Schema.Literal('Language'),
-  languageTag: Schema.String,
+export const LiteralStemRangeSchema: S.Codec<LiteralStemRange> = S.Struct({
+  type: S.Literal('LiteralStemRange'),
+  stem: S.Union([S.String, WildcardSchema]),
+  exclusions: S.Array(S.Union([S.String, LiteralStemSchema])),
 });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const LanguageStemRangeSchema: Schema.Codec<LanguageStemRange> = Schema.Struct({
-  type: Schema.Literal('LanguageStemRange'),
-  stem: Schema.Union([Schema.String, WildcardSchema]),
-  exclusions: Schema.Array(Schema.Union([Schema.String, LanguageStemSchema])),
+export const LanguageSchema: S.Codec<Language> = S.Struct({
+  type: S.Literal('Language'),
+  languageTag: S.String,
 });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const ValueSetValueSchema: Schema.Codec<ValueSetValue> = Schema.Union([
-  Schema.String,
+export const LanguageStemRangeSchema: S.Codec<LanguageStemRange> = S.Struct({
+  type: S.Literal('LanguageStemRange'),
+  stem: S.Union([S.String, WildcardSchema]),
+  exclusions: S.Array(S.Union([S.String, LanguageStemSchema])),
+});
+
+/**
+ * @since 0.1.0
+ * @category schemas
+ */
+export const ValueSetValueSchema: S.Codec<ValueSetValue> = S.Union([
+  S.String,
   IriStemSchema,
   IriStemRangeSchema,
   LiteralStemSchema,
@@ -487,33 +483,33 @@ export const ValueSetValueSchema: Schema.Codec<ValueSetValue> = Schema.Union([
   ObjectLiteralSchema,
 ]);
 
-const shapeExprOrRef: Schema.Codec<ShapeExprOrRef> = Schema.suspend(
-  (): Schema.Codec<ShapeExprOrRef> => ShapeExprOrRefSchema,
+const shapeExprOrRef: S.Codec<ShapeExprOrRef> = S.suspend(
+  (): S.Codec<ShapeExprOrRef> => ShapeExprOrRefSchema,
 );
-const tripleExprOrRef: Schema.Codec<TripleExprOrRef> = Schema.suspend(
-  (): Schema.Codec<TripleExprOrRef> => TripleExprOrRefSchema,
+const tripleExprOrRef: S.Codec<TripleExprOrRef> = S.suspend(
+  (): S.Codec<TripleExprOrRef> => TripleExprOrRefSchema,
 );
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const NodeConstraintSchema: Schema.Codec<NodeConstraint> = Schema.Struct({
-  type: Schema.Literal('NodeConstraint'),
-  nodeKind: opt(Schema.Literals(['iri', 'bnode', 'nonliteral', 'literal'])),
-  datatype: opt(Schema.String),
+export const NodeConstraintSchema: S.Codec<NodeConstraint> = S.Struct({
+  type: S.Literal('NodeConstraint'),
+  nodeKind: opt(S.Literals(['iri', 'bnode', 'nonliteral', 'literal'])),
+  datatype: opt(S.String),
   length: opt(Int),
   minlength: opt(Int),
   maxlength: opt(Int),
-  pattern: opt(Schema.String),
-  flags: opt(Schema.String),
-  mininclusive: opt(Schema.Number),
-  minexclusive: opt(Schema.Number),
-  maxinclusive: opt(Schema.Number),
-  maxexclusive: opt(Schema.Number),
+  pattern: opt(S.String),
+  flags: opt(S.String),
+  mininclusive: opt(S.Number),
+  minexclusive: opt(S.Number),
+  maxinclusive: opt(S.Number),
+  maxexclusive: opt(S.Number),
   totaldigits: opt(Int),
   fractiondigits: opt(Int),
-  values: opt(Schema.Array(ValueSetValueSchema)),
+  values: opt(S.Array(ValueSetValueSchema)),
   semActs: opt(atLeast1(SemActSchema)),
   annotations: opt(atLeast1(AnnotationSchema)),
 });
@@ -522,16 +518,16 @@ export const NodeConstraintSchema: Schema.Codec<NodeConstraint> = Schema.Struct(
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeExternalSchema: Schema.Codec<ShapeExternal> = Schema.Struct({
-  type: Schema.Literal('ShapeExternal'),
+export const ShapeExternalSchema: S.Codec<ShapeExternal> = S.Struct({
+  type: S.Literal('ShapeExternal'),
 });
 
 /**
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeOrSchema: Schema.Codec<ShapeOr> = Schema.Struct({
-  type: Schema.Literal('ShapeOr'),
+export const ShapeOrSchema: S.Codec<ShapeOr> = S.Struct({
+  type: S.Literal('ShapeOr'),
   shapeExprs: atLeast2(shapeExprOrRef),
 });
 
@@ -539,8 +535,8 @@ export const ShapeOrSchema: Schema.Codec<ShapeOr> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeAndSchema: Schema.Codec<ShapeAnd> = Schema.Struct({
-  type: Schema.Literal('ShapeAnd'),
+export const ShapeAndSchema: S.Codec<ShapeAnd> = S.Struct({
+  type: S.Literal('ShapeAnd'),
   shapeExprs: atLeast2(shapeExprOrRef),
 });
 
@@ -548,8 +544,8 @@ export const ShapeAndSchema: Schema.Codec<ShapeAnd> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeNotSchema: Schema.Codec<ShapeNot> = Schema.Struct({
-  type: Schema.Literal('ShapeNot'),
+export const ShapeNotSchema: S.Codec<ShapeNot> = S.Struct({
+  type: S.Literal('ShapeNot'),
   shapeExpr: shapeExprOrRef,
 });
 
@@ -557,11 +553,11 @@ export const ShapeNotSchema: Schema.Codec<ShapeNot> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeSchema: Schema.Codec<Shape> = Schema.Struct({
-  type: Schema.Literal('Shape'),
-  closed: opt(Schema.Boolean),
+export const ShapeSchema: S.Codec<Shape> = S.Struct({
+  type: S.Literal('Shape'),
+  closed: opt(S.Boolean),
   extends: opt(atLeast1(shapeExprOrRef)),
-  extra: opt(atLeast1(Schema.String)),
+  extra: opt(atLeast1(S.String)),
   expression: opt(tripleExprOrRef),
   semActs: opt(atLeast1(SemActSchema)),
   annotations: opt(atLeast1(AnnotationSchema)),
@@ -571,7 +567,7 @@ export const ShapeSchema: Schema.Codec<Shape> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeExprSchema: Schema.Codec<ShapeExpr> = Schema.Union([
+export const ShapeExprSchema: S.Codec<ShapeExpr> = S.Union([
   ShapeOrSchema,
   ShapeAndSchema,
   ShapeNotSchema,
@@ -584,10 +580,7 @@ export const ShapeExprSchema: Schema.Codec<ShapeExpr> = Schema.Union([
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeExprOrRefSchema: Schema.Codec<ShapeExprOrRef> = Schema.Union([
-  Schema.String,
-  ShapeExprSchema,
-]);
+export const ShapeExprOrRefSchema: S.Codec<ShapeExprOrRef> = S.Union([S.String, ShapeExprSchema]);
 
 const cardinalityFields = {
   min: opt(Int),
@@ -598,11 +591,11 @@ const cardinalityFields = {
  * @since 0.1.0
  * @category schemas
  */
-export const TripleConstraintSchema: Schema.Codec<TripleConstraint> = Schema.Struct({
-  type: Schema.Literal('TripleConstraint'),
-  id: opt(Schema.String),
-  inverse: opt(Schema.Boolean),
-  predicate: Schema.String,
+export const TripleConstraintSchema: S.Codec<TripleConstraint> = S.Struct({
+  type: S.Literal('TripleConstraint'),
+  id: opt(S.String),
+  inverse: opt(S.Boolean),
+  predicate: S.String,
   valueExpr: opt(shapeExprOrRef),
   ...cardinalityFields,
   semActs: opt(atLeast1(SemActSchema)),
@@ -613,9 +606,9 @@ export const TripleConstraintSchema: Schema.Codec<TripleConstraint> = Schema.Str
  * @since 0.1.0
  * @category schemas
  */
-export const EachOfSchema: Schema.Codec<EachOf> = Schema.Struct({
-  type: Schema.Literal('EachOf'),
-  id: opt(Schema.String),
+export const EachOfSchema: S.Codec<EachOf> = S.Struct({
+  type: S.Literal('EachOf'),
+  id: opt(S.String),
   expressions: atLeast1(tripleExprOrRef),
   ...cardinalityFields,
   semActs: opt(atLeast1(SemActSchema)),
@@ -626,9 +619,9 @@ export const EachOfSchema: Schema.Codec<EachOf> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const OneOfSchema: Schema.Codec<OneOf> = Schema.Struct({
-  type: Schema.Literal('OneOf'),
-  id: opt(Schema.String),
+export const OneOfSchema: S.Codec<OneOf> = S.Struct({
+  type: S.Literal('OneOf'),
+  id: opt(S.String),
   expressions: atLeast1(tripleExprOrRef),
   ...cardinalityFields,
   semActs: opt(atLeast1(SemActSchema)),
@@ -639,7 +632,7 @@ export const OneOfSchema: Schema.Codec<OneOf> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const TripleExprSchema: Schema.Codec<TripleExpr> = Schema.Union([
+export const TripleExprSchema: S.Codec<TripleExpr> = S.Union([
   EachOfSchema,
   OneOfSchema,
   TripleConstraintSchema,
@@ -649,8 +642,8 @@ export const TripleExprSchema: Schema.Codec<TripleExpr> = Schema.Union([
  * @since 0.1.0
  * @category schemas
  */
-export const TripleExprOrRefSchema: Schema.Codec<TripleExprOrRef> = Schema.Union([
-  Schema.String,
+export const TripleExprOrRefSchema: S.Codec<TripleExprOrRef> = S.Union([
+  S.String,
   TripleExprSchema,
 ]);
 
@@ -658,10 +651,10 @@ export const TripleExprOrRefSchema: Schema.Codec<TripleExprOrRef> = Schema.Union
  * @since 0.1.0
  * @category schemas
  */
-export const ShapeDeclSchema: Schema.Codec<ShapeDecl> = Schema.Struct({
-  type: Schema.Literal('ShapeDecl'),
-  id: Schema.String,
-  abstract: opt(Schema.Boolean),
+export const ShapeDeclSchema: S.Codec<ShapeDecl> = S.Struct({
+  type: S.Literal('ShapeDecl'),
+  id: S.String,
+  abstract: opt(S.Boolean),
   restricts: opt(atLeast1(ShapeExprOrRefSchema)),
   shapeExpr: ShapeExprOrRefSchema,
 });
@@ -672,10 +665,10 @@ export const ShapeDeclSchema: Schema.Codec<ShapeDecl> = Schema.Struct({
  * @since 0.1.0
  * @category schemas
  */
-export const SchemaSchema: Schema.Codec<Schema> = Schema.Struct({
-  type: Schema.Literal('Schema'),
-  '@context': opt(Schema.String),
-  imports: opt(atLeast1(Schema.String)),
+export const SchemaSchema: S.Codec<Schema> = S.Struct({
+  type: S.Literal('Schema'),
+  '@context': opt(S.String),
+  imports: opt(atLeast1(S.String)),
   startActs: opt(atLeast1(SemActSchema)),
   start: opt(ShapeExprOrRefSchema),
   shapes: opt(atLeast1(ShapeDeclSchema)),
@@ -700,7 +693,7 @@ export const context = 'http://www.w3.org/ns/shex.jsonld';
  * @category decoding
  */
 export const decode = (input: unknown): Effect.Effect<Schema, ShExJError> =>
-  Schema.decodeUnknownEffect(SchemaSchema)(input).pipe(
+  S.decodeUnknownEffect(SchemaSchema)(input).pipe(
     Effect.mapError((e) => new ShExJError({ message: e.message })),
   );
 

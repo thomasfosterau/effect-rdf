@@ -1,3 +1,4 @@
+/* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
 import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
@@ -41,8 +42,7 @@ const suitePath = (iri: string): string | undefined =>
 
 const loadShExC = (iri: string): Effect.Effect<ShExJ.Schema, ShExImportError> => {
   const rel = suitePath(iri);
-  const candidates =
-    rel === undefined ? [] : /\.[a-z]+$/.test(rel) ? [rel] : [`${rel}.shex`];
+  const candidates = rel === undefined ? [] : /\.[a-z]+$/.test(rel) ? [rel] : [`${rel}.shex`];
   const file = candidates.find((c) => exists(c));
   if (file === undefined)
     return Effect.fail(new ShExImportError({ iri, message: 'not found in the test suite' }));

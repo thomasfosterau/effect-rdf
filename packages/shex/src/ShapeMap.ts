@@ -188,7 +188,11 @@ class MapParser {
     if (c === '"' || c === "'") {
       let q = 3;
       m = this.input.startsWith(c.repeat(3), this.pos)
-        ? matchAt(c === "'" ? RE.STRING_LITERAL_LONG1 : RE.STRING_LITERAL_LONG2, this.input, this.pos)
+        ? matchAt(
+            c === "'" ? RE.STRING_LITERAL_LONG1 : RE.STRING_LITERAL_LONG2,
+            this.input,
+            this.pos,
+          )
         : undefined;
       if (m === undefined) {
         q = 1;
@@ -305,7 +309,9 @@ export const parse = (
     } catch (e) {
       if (e instanceof Failure) {
         const { line, column } = lineColumn(input, e.pos);
-        return Effect.fail(new RdfParseError({ format: 'ShapeMap', message: e.message, line, column }));
+        return Effect.fail(
+          new RdfParseError({ format: 'ShapeMap', message: e.message, line, column }),
+        );
       }
       return Effect.fail(new RdfParseError({ format: 'ShapeMap', message: String(e) }));
     }
@@ -330,7 +336,9 @@ export const parseTerm = (input: string, options: ParseOptions = {}): Term.Groun
   }
   if (input.startsWith('_:')) return Term.blankNode(input.slice(2));
   return Term.namedNode(
-    options.baseIri === undefined || Iri.isAbsolute(input) ? input : Iri.resolve(input, options.baseIri),
+    options.baseIri === undefined || Iri.isAbsolute(input)
+      ? input
+      : Iri.resolve(input, options.baseIri),
   );
 };
 

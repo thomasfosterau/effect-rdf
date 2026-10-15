@@ -122,7 +122,13 @@ const numericValue = (n: Term.Term): Numeric | undefined => {
   }
   const v = n.value.trim();
   const value =
-    v === 'INF' || v === '+INF' ? Infinity : v === '-INF' ? -Infinity : v === 'NaN' ? NaN : Number(v);
+    v === 'INF' || v === '+INF'
+      ? Infinity
+      : v === '-INF'
+        ? -Infinity
+        : v === 'NaN'
+          ? NaN
+          : Number(v);
   return { kind: 'float', value };
 };
 
@@ -220,7 +226,8 @@ export const checkNodeConstraint = (n: Term.Term, nc: ShExJ.NodeConstraint): str
       if (n._tag !== 'Literal') return `${n.key} is not a literal`;
       break;
     case 'nonliteral':
-      if (n._tag !== 'NamedNode' && n._tag !== 'BlankNode') return `${n.key} is not an IRI or blank node`;
+      if (n._tag !== 'NamedNode' && n._tag !== 'BlankNode')
+        return `${n.key} is not an IRI or blank node`;
       break;
     default:
       break;

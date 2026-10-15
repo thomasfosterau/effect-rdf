@@ -45,7 +45,23 @@ const BLOCKS: Record<string, string> = {
   Katakana: '\\u30A0-\\u30FF',
 };
 
-const SYNTAX = new Set(['^', '$', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '/']);
+const SYNTAX = new Set([
+  '^',
+  '$',
+  '\\',
+  '.',
+  '*',
+  '+',
+  '?',
+  '(',
+  ')',
+  '[',
+  ']',
+  '{',
+  '}',
+  '|',
+  '/',
+]);
 
 class Translator {
   i = 0;
@@ -248,8 +264,7 @@ const restoreRanges = (body: string): string => {
   return out;
 };
 
-const isRangeEndpoint = (atom: string): boolean =>
-  !/^\\[pPdDwWsS]/.test(atom) && atom !== '\\-';
+const isRangeEndpoint = (atom: string): boolean => !/^\\[pPdDwWsS]/.test(atom) && atom !== '\\-';
 
 /**
  * Compiles an XPath regular expression with XPath flags (`s`, `m`, `i`, `x`,

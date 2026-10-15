@@ -208,7 +208,8 @@ class Parser {
         return (this.tok = t('LANGTAG', m));
       return (this.tok = t('PUNCT', '@'));
     }
-    if ((m = matchAt(RE.PNAME_LN, input, start)) !== undefined) return (this.tok = t('PNAME_LN', m));
+    if ((m = matchAt(RE.PNAME_LN, input, start)) !== undefined)
+      return (this.tok = t('PNAME_LN', m));
     if ((m = matchAt(RE.DOUBLE, input, start)) !== undefined) return (this.tok = t('DOUBLE', m));
     if ((m = matchAt(RE.DECIMAL, input, start)) !== undefined) return (this.tok = t('DECIMAL', m));
     if ((m = matchAt(RE.INTEGER, input, start)) !== undefined) return (this.tok = t('INTEGER', m));
@@ -216,7 +217,8 @@ class Parser {
       if ((m = matchAt(RE.IRIREF, input, start)) !== undefined) return (this.tok = t('IRIREF', m));
       this.fail('invalid IRI reference', start);
     }
-    if ((m = matchAt(RE.PNAME_NS, input, start)) !== undefined) return (this.tok = t('PNAME_NS', m));
+    if ((m = matchAt(RE.PNAME_NS, input, start)) !== undefined)
+      return (this.tok = t('PNAME_NS', m));
     if (c === '/' && input[start + 1] !== '/') {
       if ((m = matchAt(RE.REGEXP, input, start)) !== undefined) return (this.tok = t('REGEXP', m));
       this.fail('invalid regular expression', start);
@@ -520,7 +522,7 @@ class Parser {
     if (restricts.length > 0) decl.restricts = restricts;
     if (this.productions.has(label)) this.fail(`${label} is a triple expression`, labelPos);
     if (this.shapes.has(label)) this.fail(`${label} already defined`, labelPos);
-    this.shapes.set(label, { id: label, ...decl });
+    this.shapes.set(label, decl);
   }
 
   // ---------------------------------------------------------------------------
@@ -548,16 +550,16 @@ class Parser {
 
   isShapeRefStart(): boolean {
     const t = this.peek();
-    return t.type === 'ATPNAME_LN' || t.type === 'ATPNAME_NS' || (t.type === 'PUNCT' && t.text === '@');
+    return (
+      t.type === 'ATPNAME_LN' || t.type === 'ATPNAME_NS' || (t.type === 'PUNCT' && t.text === '@')
+    );
   }
 
   shapeRef(): string {
     const t = this.next();
     if (t.type === 'ATPNAME_LN') {
       const i = t.text.indexOf(':');
-      return (
-        this.expandPrefix(t.text.slice(1, i), t.start) + unescapeLocal(t.text.slice(i + 1))
-      );
+      return this.expandPrefix(t.text.slice(1, i), t.start) + unescapeLocal(t.text.slice(i + 1));
     }
     if (t.type === 'ATPNAME_NS') return this.expandPrefix(t.text.slice(1, -1), t.start);
     return this.label();
@@ -575,7 +577,10 @@ class Parser {
         rest.needsAtom.unshift(atom);
         return rest.expr;
       }
-      const atom: AnyShapeExpr = { type: 'ShapeNot', shapeExpr: this.nonest(this.shapeAtom(false)) };
+      const atom: AnyShapeExpr = {
+        type: 'ShapeNot',
+        shapeExpr: this.nonest(this.shapeAtom(false)),
+      };
       return this.prependAtom(atom, this.shapeOrOpt());
     }
     if (this.isShapeRefStart()) {
@@ -680,11 +685,7 @@ class Parser {
   }
 
   isShapeDefinitionStart(): boolean {
-    return (
-      this.isPunct('{') ||
-      this.isPunct('&') ||
-      this.isKeyword('EXTENDS', 'EXTRA', 'CLOSED')
-    );
+    return this.isPunct('{') || this.isPunct('&') || this.isKeyword('EXTENDS', 'EXTRA', 'CLOSED');
   }
 
   /**
@@ -851,7 +852,8 @@ class Parser {
       const facets = this.facets(true, true);
       if (!numericDatatypes.has(datatype)) {
         for (const f of numericFacetNames) {
-          if (f in facets) this.fail(`facet ${f} not allowed for unknown datatype ${datatype}`, pos);
+          if (f in facets)
+            this.fail(`facet ${f} not allowed for unknown datatype ${datatype}`, pos);
         }
       }
       return { type: 'NodeConstraint', datatype, ...facets };
@@ -944,10 +946,7 @@ class Parser {
         const dt = this.iri();
         if (dt === XSD_DECIMAL || dt === XSD_FLOAT || dt === XSD_DOUBLE) return parseFloat(value);
         if (numericDatatypes.has(dt)) return parseInt(value, 10);
-        return this.fail(
-          `numeric range facet expected numeric datatype instead of ${dt}`,
-          pos,
-        );
+        return this.fail(`numeric range facet expected numeric datatype instead of ${dt}`, pos);
       }
       default:
         return this.unexpected('a numeric literal');
@@ -1186,9 +1185,9 @@ class Parser {
     const card = this.cardinality();
     const annotations = this.annotations();
     const semActs = this.semanticActions();
-    const tc: Mutable<ShExJ.TripleConstraint> = { type: 'TripleConstraint' };
-    if (inverse) tc.inverse = true;
-    tc.predicate = predicate;
+    const tc: Mutable<ShExJ.TripleConstraint> = inverse
+      ? { type: 'TripleConstraint', inverse: true, predicate }
+      : { type: 'TripleConstraint', predicate };
     if (valueExpr !== EMPTY) tc.valueExpr = valueExpr;
     if (card !== undefined) {
       tc.min = card.min;

@@ -18,11 +18,7 @@ import type * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import { Engine } from './internal/engine.ts';
 import * as SemAct from './SemAct.ts';
-import {
-  ShExImportError,
-  type ShExStructureError,
-  ShExValidationError,
-} from './ShExError.ts';
+import { ShExImportError, type ShExStructureError, ShExValidationError } from './ShExError.ts';
 import type * as ShExJ from './ShExJ.ts';
 import * as ShapeMap from './ShapeMap.ts';
 import * as Structure from './Structure.ts';
@@ -227,7 +223,9 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
         if (ShapeMap.isStart(a.shape)) {
           if (resolved.start === undefined)
             return Effect.fail(
-              new ShExValidationError({ message: 'the shape map uses START but the schema has no start' }),
+              new ShExValidationError({
+                message: 'the shape map uses START but the schema has no start',
+              }),
             );
         } else if (!index.shapes.has(a.shape)) {
           return Effect.fail(
@@ -236,7 +234,10 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
         }
       }
       const engine = new Engine(index, dataset, handler, externs);
-      const startFailure = engine.runSemActs(resolved.startActs, { site: 'start', node: undefined });
+      const startFailure = engine.runSemActs(resolved.startActs, {
+        site: 'start',
+        node: undefined,
+      });
       const results: Array<ShapeResult> = fixed.map((a) => {
         const reason =
           startFailure ??

@@ -47,6 +47,16 @@ export class ShExImportError extends Schema.TaggedError<ShExImportError>()('ShEx
 }) {}
 
 /**
+ * An RDF graph that is not a valid ShExR representation of a schema.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
+export class ShExRError extends Schema.TaggedError<ShExRError>()('ShExRError', {
+  message: Schema.String,
+}) {}
+
+/**
  * A validation request that cannot be evaluated, e.g. a shape map that names
  * a shape label the schema does not declare.
  *

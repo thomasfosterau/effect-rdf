@@ -71,7 +71,9 @@ export const parseWithMetadata = (
     } catch (e) {
       if (e instanceof Failure) {
         const { line, column } = lineColumn(input, e.pos);
-        return Effect.fail(new RdfParseError({ format: 'ShExC', message: e.message, line, column }));
+        return Effect.fail(
+          new RdfParseError({ format: 'ShExC', message: e.message, line, column }),
+        );
       }
       return Effect.fail(new RdfParseError({ format: 'ShExC', message: String(e) }));
     }
@@ -110,8 +112,11 @@ const XSD = 'http://www.w3.org/2001/XMLSchema#';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 
 const escapeIri = (iri: string): string =>
-  // eslint-disable-next-line no-control-regex
-  iri.replace(/[\u0000- <>"{}|^`\\]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  iri.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000- <>"{}|^`\\]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
 
 const escapeString = (s: string): string =>
   s.replace(/["\\\n\r\t\b\f]/g, (c) =>
@@ -130,7 +135,8 @@ const escapeString = (s: string): string =>
                 : '\\f',
   );
 
-const escapeRegexp = (s: string): string => s.replace(/\//g, '\\/').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+const escapeRegexp = (s: string): string =>
+  s.replace(/\//g, '\\/').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
 
 const escapeCode = (s: string): string => s.replace(/\\/g, '\\\\').replace(/%/g, '\\%');
 
@@ -196,7 +202,7 @@ class Printer {
   cardinality(c: ShExJ.Cardinality): string {
     const min = c.min ?? 1;
     const max = c.max ?? 1;
-    if (min === 1 && max === 1) return '';
+    if (c.min === undefined && c.max === undefined) return '';
     if (min === 0 && max === -1) return '*';
     if (min === 1 && max === -1) return '+';
     if (min === 0 && max === 1) return '?';
@@ -297,7 +303,8 @@ class Printer {
   shape(s: ShExJ.Shape, indent: string): string {
     const head: Array<string> = [];
     for (const ext of s.extends ?? []) head.push(`EXTENDS ${this.junct(ext, indent, 'ShapeNot')}`);
-    if (s.extra !== undefined) head.push(`EXTRA ${s.extra.map((p) => this.predicate(p)).join(' ')}`);
+    if (s.extra !== undefined)
+      head.push(`EXTRA ${s.extra.map((p) => this.predicate(p)).join(' ')}`);
     if (s.closed === true) head.push('CLOSED');
     const inner = indent + this.unit;
     const body =

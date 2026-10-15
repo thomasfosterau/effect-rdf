@@ -92,11 +92,7 @@ export const unescapeRegexp = (s: string): string =>
   s.replace(
     /\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|\\(.)/gs,
     (all, u4: string | undefined, u8: string | undefined, c: string | undefined) =>
-      c !== undefined
-        ? c === '/'
-          ? '/'
-          : all
-        : String.fromCodePoint(parseInt(u4 ?? u8!, 16)),
+      c !== undefined ? (c === '/' ? '/' : all) : String.fromCodePoint(parseInt(u4 ?? u8!, 16)),
   );
 
 /** Unescapes a semantic action `CODE` body (`\%`, `\\` and UCHAR). */

@@ -217,7 +217,8 @@ export const problems = (
   };
   const checkInclude = (label: string) => {
     if (tripleExprs.has(label)) return;
-    if (shapes.has(label)) errors.push(`inclusion &${label} names a shape, not a triple expression`);
+    if (shapes.has(label))
+      errors.push(`inclusion &${label} names a shape, not a triple expression`);
     else if (options.allowUnresolved !== true)
       errors.push(`inclusion of undeclared triple expression ${label}`);
   };
