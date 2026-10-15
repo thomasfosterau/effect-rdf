@@ -124,7 +124,10 @@ export const isRisky = (compiled: CompiledQuery, storeClasses: ReadonlySet<numbe
 };
 
 class Unsupported {
-  constructor(readonly reason: string) {}
+  readonly reason: string;
+  constructor(reason: string) {
+    this.reason = reason;
+  }
 }
 
 const unsupported = (reason: string): never => {
@@ -388,14 +391,23 @@ class Compiler {
   readonly risks: Array<Risk> = [];
   readonly localClasses = new Set<number>();
 
+  readonly context: TranslationContext;
+  readonly resolve: (term: Term.GroundTerm) => number | undefined;
+  /** Query-local terms, by key (stable across the two compilation passes). */
+  readonly locals: Map<string, { readonly id: number; readonly term: Term.GroundTerm }>;
+  /** Whether the query-local terms are complete (second pass). */
+  readonly localsKnown: boolean;
+
   constructor(
-    readonly context: TranslationContext,
-    readonly resolve: (term: Term.GroundTerm) => number | undefined,
-    /** Query-local terms, by key (stable across the two compilation passes). */
-    readonly locals: Map<string, { readonly id: number; readonly term: Term.GroundTerm }>,
-    /** Whether the query-local terms are complete (second pass). */
-    readonly localsKnown: boolean,
+    context: TranslationContext,
+    resolve: (term: Term.GroundTerm) => number | undefined,
+    locals: Map<string, { readonly id: number; readonly term: Term.GroundTerm }>,
+    localsKnown: boolean,
   ) {
+    this.context = context;
+    this.resolve = resolve;
+    this.locals = locals;
+    this.localsKnown = localsKnown;
     this.dialect = context.dialect;
     this.T = context.tables.terms;
     this.Q = context.tables.quads;
@@ -1441,11 +1453,16 @@ class Compiler {
   }
 
   /** Records the class combinations of a comparison that SQL cannot evaluate exactly. */
-  risk(pairs: ReadonlyArray<readonly [number, number]>, a: Operand, b: Operand): void {
+  risk(
+    pairs: ReadonlyArray<readonly [number, number]>,
+    a: Operand,
+    b: Operand,
+    handled: ReadonlySet<string> = new Set(),
+  ): void {
     const possible = (o: Operand, c: number) => o.classes === undefined || o.classes.includes(c);
     for (const [x, y] of pairs) {
       for (const [p, q] of x === y ? [[x, y] as const] : [[x, y] as const, [y, x] as const]) {
-        if (!possible(a, p) || !possible(b, q)) continue;
+        if (!possible(a, p) || !possible(b, q) || handled.has(`${p},${q}`)) continue;
         const r: Risk = {
           a: p,
           aStatic: a.classes !== undefined,
@@ -1458,6 +1475,41 @@ class Compiler {
     }
   }
 
+  /**
+   * Exact comparisons of a float-or-double term with a numeric constant,
+   * following SPARQL's type promotion (integers and decimals are promoted to
+   * float, floats to double). Returns the branches and the class pairs they
+   * handle.
+   */
+  promoted(
+    a: Operand,
+    b: Operand,
+    op: string,
+  ): { readonly branches: Array<readonly [C, string]>; readonly handled: Set<string> } {
+    const branches: Array<readonly [C, string]> = [];
+    const handled = new Set<string>();
+    const one = (t: Operand, c: Operand, flip: boolean) => {
+      if (c.tag !== 'const' || t.tag === 'const' || !isStatic(c.num) || !isStatic(c.cls)) return;
+      const v = c.num.s;
+      const cc = c.cls.s;
+      if (typeof v !== 'number') return;
+      const add = (cls: number, value: number) => {
+        if (!Number.isFinite(value)) return;
+        const cmp = flip
+          ? `${this.lit(value)} ${op} ${this.f(t.num)}`
+          : `${this.f(t.num)} ${op} ${this.lit(value)}`;
+        branches.push([this.clsIn(t, [cls]), cmp]);
+        handled.add(flip ? `${cc},${cls}` : `${cls},${cc}`);
+      };
+      if (cc === Enc.Cls.SafeNumber) add(Enc.Cls.Float, Math.fround(v));
+      else if (cc === Enc.Cls.Double) add(Enc.Cls.Float, v);
+      else if (cc === Enc.Cls.Float) add(Enc.Cls.Double, v);
+    };
+    one(a, b, false);
+    one(b, a, true);
+    return { branches, handled };
+  }
+
   /** SPARQL `=` (value equality, with errors as `NULL`). */
   equals(a: Operand, b: Operand): string {
     if (a.tag === 'null' || b.tag === 'null') return 'NULL';
@@ -1465,13 +1517,15 @@ class Compiler {
       const r = Expression.equals(a.term!, b.term!);
       return Result.isSuccess(r) ? (r.success ? 'TRUE' : 'FALSE') : 'NULL';
     }
-    this.risk(RISK_EQUAL, a, b);
+    const promoted = this.promoted(a, b, '=');
+    this.risk(RISK_EQUAL, a, b, promoted.handled);
     const bothIds = a.id !== undefined && b.id !== undefined;
     const num = `${this.f(a.num)} = ${this.f(b.num)}`;
     return caseOf(
       [
         [or(this.isNullC(a), this.isNullC(b)), 'NULL'],
         [bothIds ? this.eqFF(a.id!, b.id!) : false, 'TRUE'],
+        ...promoted.branches,
         [and(this.clsIn(a, [1, 2]), this.clsIn(b, [1, 2])), num],
         [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],
         [and(this.clsIn(a, [6]), this.clsIn(b, [6])), num],
@@ -1498,12 +1552,14 @@ class Compiler {
   /** SPARQL `<`, `>`, `<=`, `>=`. */
   compare(a: Operand, b: Operand, op: '<' | '>' | '<=' | '>='): string {
     if (a.tag === 'null' || b.tag === 'null') return 'NULL';
-    this.risk(RISK_ORDER, a, b);
+    const promoted = this.promoted(a, b, op);
+    this.risk(RISK_ORDER, a, b, promoted.handled);
     const num = `${this.f(a.num)} ${op} ${this.f(b.num)}`;
     const str = `${this.dialect.binary(this.f(a.value))} ${op} ${this.dialect.binary(this.f(b.value))}`;
     return caseOf(
       [
         [or(this.isNullC(a), this.isNullC(b)), 'NULL'],
+        ...promoted.branches,
         [and(this.clsIn(a, [1, 2]), this.clsIn(b, [1, 2])), num],
         [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],
         [and(this.clsIn(a, [4]), this.clsIn(b, [4])), str],
