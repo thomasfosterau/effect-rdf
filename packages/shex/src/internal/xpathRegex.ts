@@ -65,11 +65,14 @@ const SYNTAX = new Set([
 
 class Translator {
   i = 0;
-  constructor(
-    readonly src: string,
-    readonly dotAll: boolean,
-    readonly extended: boolean,
-  ) {}
+  readonly src: string;
+  readonly dotAll: boolean;
+  readonly extended: boolean;
+  constructor(src: string, dotAll: boolean, extended: boolean) {
+    this.src = src;
+    this.dotAll = dotAll;
+    this.extended = extended;
+  }
 
   fail(msg: string): never {
     throw new Error(`${msg} at ${this.i} in /${this.src}/`);

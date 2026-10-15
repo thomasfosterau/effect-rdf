@@ -52,7 +52,9 @@ class Reader {
 
   readonly expressionSites = new Set<string>();
 
-  constructor(readonly dataset: Dataset.Dataset) {
+  readonly dataset: Dataset.Dataset;
+  constructor(dataset: Dataset.Dataset) {
+    this.dataset = dataset;
     for (const q of Dataset.match(dataset, { predicate: sx('expression') })) {
       this.countUse(q.object);
       this.expressionSites.add(q.object.key);

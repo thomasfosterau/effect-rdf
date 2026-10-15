@@ -46,10 +46,12 @@ export interface Env {
 
 /** @internal */
 export class NeedDocument {
-  constructor(
-    readonly url: string,
-    readonly profile: string | undefined,
-  ) {}
+  readonly url: string;
+  readonly profile: string | undefined;
+  constructor(url: string, profile: string | undefined) {
+    this.url = url;
+    this.profile = profile;
+  }
 }
 
 /** @internal */

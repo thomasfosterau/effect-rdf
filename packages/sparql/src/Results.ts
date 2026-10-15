@@ -596,7 +596,10 @@ export const termToTsv = (t: Term.GroundTerm): string => {
 
 class TermReader {
   pos = 0;
-  constructor(readonly text: string) {}
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
   fail(): never {
     throw new Error(`Invalid term: ${this.text}`);
   }

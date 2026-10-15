@@ -99,10 +99,12 @@ const isForbiddenPropertyAttribute = (iri: string) =>
   iri === rdf('li');
 
 class ParseFailure {
-  constructor(
-    readonly message: string,
-    readonly position: Xml.Position | undefined,
-  ) {}
+  readonly message: string;
+  readonly position: Xml.Position | undefined;
+  constructor(message: string, position: Xml.Position | undefined) {
+    this.message = message;
+    this.position = position;
+  }
 }
 
 interface Context {
@@ -137,10 +139,12 @@ class RdfXmlParser {
   readonly ids = new Set<string>();
   counter = 0;
 
-  constructor(
-    readonly blankNodePrefix: string,
-    readonly defaultVersion: string | undefined,
-  ) {}
+  readonly blankNodePrefix: string;
+  readonly defaultVersion: string | undefined;
+  constructor(blankNodePrefix: string, defaultVersion: string | undefined) {
+    this.blankNodePrefix = blankNodePrefix;
+    this.defaultVersion = defaultVersion;
+  }
 
   fail(message: string, node?: { readonly position: Xml.Position }): never {
     throw new ParseFailure(message, node?.position);
@@ -641,7 +645,10 @@ export interface SerializeOptions extends Serialization.SerializeOptions {
 }
 
 class SerializeFailure {
-  constructor(readonly message: string) {}
+  readonly message: string;
+  constructor(message: string) {
+    this.message = message;
+  }
 }
 
 const LOCAL_SUFFIX_RE = new RegExp(`[${Xml.NAME_START}][${Xml.NAME_CHAR}]*$`, 'u');
@@ -680,10 +687,9 @@ class Writer {
   needsVersion = false;
   needsIts = false;
 
-  constructor(
-    readonly options: SerializeOptions,
-    prefixes: PrefixMap.PrefixMap,
-  ) {
+  readonly options: SerializeOptions;
+  constructor(options: SerializeOptions, prefixes: PrefixMap.PrefixMap) {
+    this.options = options;
     const byNamespace = new Map<string, string>();
     const used = new Set<string>();
     for (const [prefix, ns] of prefixes.prefixes) {

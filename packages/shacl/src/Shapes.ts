@@ -342,10 +342,12 @@ export const componentOf = (constraint: Constraint): Term.NamedNode | Term.Blank
 // -----------------------------------------------------------------------------
 
 class ParseFailure {
-  constructor(
-    readonly message: string,
-    readonly node: Term.Term | undefined,
-  ) {}
+  readonly message: string;
+  readonly node: Term.Term | undefined;
+  constructor(message: string, node: Term.Term | undefined) {
+    this.message = message;
+    this.node = node;
+  }
 }
 
 const TRUE = Term.literal('true', xsd.boolean).key;

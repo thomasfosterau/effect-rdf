@@ -22,7 +22,10 @@ export class StreamWriter {
   private predicate: string | undefined;
   private started = false;
 
-  constructor(readonly options: WriterOptions) {}
+  readonly options: WriterOptions;
+  constructor(options: WriterOptions) {
+    this.options = options;
+  }
 
   /** Created lazily so that option validation errors surface as failures. */
   private get writer(): Writer {

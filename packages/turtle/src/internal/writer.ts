@@ -183,11 +183,13 @@ export class Writer {
   private readonly labels = new Map<string, string>();
   private rendered = new Set<string>();
 
-  constructor(
-    readonly options: WriterOptions,
-    private readonly quads: ReadonlyArray<Term.Quad>,
-    private readonly relabel = true,
-  ) {
+  readonly options: WriterOptions;
+  private readonly quads: ReadonlyArray<Term.Quad>;
+  private readonly relabel;
+  constructor(options: WriterOptions, quads: ReadonlyArray<Term.Quad>, relabel = true) {
+    this.options = options;
+    this.quads = quads;
+    this.relabel = relabel;
     const declared = new Map<string, string>();
     if (options.autoPrefixes) {
       for (const [p, ns] of detectPrefixes(quads, options.baseIri)) declared.set(p, ns);

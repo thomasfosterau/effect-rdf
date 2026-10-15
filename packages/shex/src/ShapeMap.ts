@@ -121,10 +121,12 @@ export interface ParseOptions {
 
 class MapParser {
   pos = 0;
-  constructor(
-    readonly input: string,
-    readonly options: ParseOptions,
-  ) {}
+  readonly input: string;
+  readonly options: ParseOptions;
+  constructor(input: string, options: ParseOptions) {
+    this.input = input;
+    this.options = options;
+  }
 
   fail(message: string): never {
     throw new Failure(message, this.pos);

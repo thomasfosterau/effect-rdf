@@ -50,12 +50,21 @@ export class Engine {
   private readonly neighbourhoods = new Map<string, ReadonlyArray<Arc>>();
   private readonly shapeTcs = new WeakMap<object, ReadonlyArray<ShExJ.TripleConstraint>>();
 
+  readonly index: SchemaIndex;
+  readonly dataset: Dataset.Dataset;
+  readonly handler: SemAct.Handler;
+  readonly externs: ReadonlyMap<string, ShExJ.ShapeDecl>;
   constructor(
-    readonly index: SchemaIndex,
-    readonly dataset: Dataset.Dataset,
-    readonly handler: SemAct.Handler,
-    readonly externs: ReadonlyMap<string, ShExJ.ShapeDecl>,
-  ) {}
+    index: SchemaIndex,
+    dataset: Dataset.Dataset,
+    handler: SemAct.Handler,
+    externs: ReadonlyMap<string, ShExJ.ShapeDecl>,
+  ) {
+    this.index = index;
+    this.dataset = dataset;
+    this.handler = handler;
+    this.externs = externs;
+  }
 
   // ---------------------------------------------------------------------------
   // Data access

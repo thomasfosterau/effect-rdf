@@ -17,6 +17,7 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "noEmit": true,
     "esModuleInterop": true,

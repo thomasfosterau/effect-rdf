@@ -615,7 +615,10 @@ export class Builder<
   O extends string = never,
 > implements Pipeable {
   /** @internal */
-  constructor(readonly query: QueryOf<K>) {}
+  readonly query: QueryOf<K>;
+  constructor(query: QueryOf<K>) {
+    this.query = query;
+  }
 
   private with(patch: Partial<Ast.QueryBase> & Record<string, unknown>): Builder<K, R, O> {
     return new Builder({ ...this.query, ...patch } as QueryOf<K>);

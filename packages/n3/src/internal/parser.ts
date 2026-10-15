@@ -16,11 +16,14 @@ import { i18n, log, sameAs } from '../Vocab.ts';
 
 /** @internal */
 export class SyntaxFailure {
-  constructor(
-    readonly message: string,
-    readonly line: number,
-    readonly column: number,
-  ) {}
+  readonly message: string;
+  readonly line: number;
+  readonly column: number;
+  constructor(message: string, line: number, column: number) {
+    this.message = message;
+    this.line = line;
+    this.column = column;
+  }
 }
 
 /** @internal */
@@ -119,10 +122,9 @@ class N3Parser {
   private readonly scopes: Array<Map<string, Model.N3Term>> = [];
   private readonly variableNames = new Set<string>();
 
-  constructor(
-    private readonly input: string,
-    options?: ParserOptions,
-  ) {
+  private readonly input: string;
+  constructor(input: string, options?: ParserOptions) {
+    this.input = input;
     this.base = options?.baseIri;
     this.bnodePrefix = options?.blankNodePrefix ?? '';
     // Labels written in the document; generated labels avoid them.

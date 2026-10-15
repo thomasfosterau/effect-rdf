@@ -1,7 +1,7 @@
-#!/usr/bin/env -S node --experimental-transform-types --no-warnings
+#!/usr/bin/env -S node --no-warnings
 // Serves RDF files over the SPARQL 1.1 Protocol and Graph Store Protocol.
 // Uses the built `dist/` when available, otherwise the TypeScript sources
-// (which need Node's `--experimental-transform-types`).
+// (run directly with Node's built-in type stripping).
 import { existsSync } from 'node:fs';
 
 const dist = new URL('../dist/Cli.mjs', import.meta.url);

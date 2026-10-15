@@ -304,10 +304,12 @@ export const evaluate = (
  */
 export class PathSyntaxError {
   readonly _tag = 'PathSyntaxError';
-  constructor(
-    readonly node: Term.Term,
-    readonly message: string,
-  ) {}
+  readonly node: Term.Term;
+  readonly message: string;
+  constructor(node: Term.Term, message: string) {
+    this.node = node;
+    this.message = message;
+  }
 }
 
 /**

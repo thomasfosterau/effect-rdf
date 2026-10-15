@@ -149,10 +149,12 @@ const PUNCTUATION = [
 ] as const;
 
 class Failure {
-  constructor(
-    readonly message: string,
-    readonly offset: number,
-  ) {}
+  readonly message: string;
+  readonly offset: number;
+  constructor(message: string, offset: number) {
+    this.message = message;
+    this.offset = offset;
+  }
 }
 
 const fail = (message: string, offset: number): never => {
@@ -180,7 +182,10 @@ const ECHAR: Record<string, string> = {
 
 class Lexer {
   pos = 0;
-  constructor(readonly input: string) {}
+  readonly input: string;
+  constructor(input: string) {
+    this.input = input;
+  }
 
   skipWs(): void {
     RE_WS.lastIndex = this.pos;
@@ -367,10 +372,9 @@ class SparqlParser {
   private aggregatesAllowed = false;
   private inAggregate = false;
 
-  constructor(
-    readonly input: string,
-    options: ParseOptions | undefined,
-  ) {
+  readonly input: string;
+  constructor(input: string, options: ParseOptions | undefined) {
+    this.input = input;
     this.lexer = new Lexer(input);
     this.base = options?.baseIri;
     this.prefixes = { ...options?.prefixes };

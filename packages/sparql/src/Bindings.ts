@@ -39,16 +39,18 @@ export class Bindings
   readonly [TypeId]: TypeId = TypeId;
   #key: string | undefined;
   /** @internal */
-  constructor(
-    readonly map: ReadonlyMap<string, Term.GroundTerm>,
-    /**
-     * The solution this one was extended from (by `BIND` / select
-     * expressions), identifying the "same solution" for `BNODE(str)`.
-     *
-     * @internal
-     */
-    readonly origin?: Bindings | undefined,
-  ) {}
+  readonly map: ReadonlyMap<string, Term.GroundTerm>;
+  /**
+   * The solution this one was extended from (by `BIND` / select
+   * expressions), identifying the "same solution" for `BNODE(str)`.
+   *
+   * @internal
+   */
+  readonly origin: Bindings | undefined;
+  constructor(map: ReadonlyMap<string, Term.GroundTerm>, origin?: Bindings) {
+    this.map = map;
+    this.origin = origin;
+  }
 
   /** The number of bound variables. */
   get size(): number {
