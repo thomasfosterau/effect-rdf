@@ -778,3 +778,142 @@ export const format = (op: Operation, indent = ''): string => {
  * @category constructors
  */
 export const internalVariable = (name: string): Term.Variable => Term.variable(`@${name}`);
+
+// -----------------------------------------------------------------------------
+// Pre-binding
+// -----------------------------------------------------------------------------
+
+/**
+ * Applies `f` to every graph pattern nested in an expression (the patterns
+ * of `EXISTS` / `NOT EXISTS`).
+ *
+ * @since 0.1.0
+ * @category utils
+ */
+export const mapExpressionPatterns = (
+  expression: Expression,
+  f: (op: Operation) => Operation,
+): Expression => {
+  switch (expression._tag) {
+    case 'Exists':
+      return { ...expression, input: f(expression.input) };
+    case 'Operation':
+      return { ...expression, args: expression.args.map((a) => mapExpressionPatterns(a, f)) };
+    case 'FunctionCall':
+      return { ...expression, args: expression.args.map((a) => mapExpressionPatterns(a, f)) };
+    default:
+      return expression;
+  }
+};
+
+/**
+ * Pre-binds variables in an algebra expression, following the "values
+ * insertion" definition of SHACL-SPARQL (Appendix "Pre-binding of
+ * Variables", aligned with the SPARQL `EXISTS` errata): every basic graph
+ * pattern, property path and `GRAPH ?var` pattern `Y` — including those
+ * nested in `EXISTS` — is replaced by `Join(Table(μ), Y)`, where `Table(μ)`
+ * is a one-row `VALUES` table holding the pre-bound solution `μ`.
+ *
+ * The pre-bound values are also substituted into the replaced patterns,
+ * which does not change the result (the join restores the bindings) but lets
+ * the optimizer and the store use them as constants.
+ *
+ * Unlike a trailing `VALUES` clause, pre-bound values are visible to every
+ * `FILTER` and `BIND`, including those of groups that never match the
+ * variable: `SELECT $this WHERE { FILTER ($this = ex:a) }` has one solution
+ * when `this` is pre-bound to `ex:a`. Queries using `MINUS`, `VALUES` or
+ * `SERVICE`, rebinding a pre-bound variable with `AS`, or with sub-queries
+ * that do not project the pre-bound variables, have no well-defined meaning
+ * under pre-binding.
+ *
+ * @since 0.1.0
+ * @category utils
+ */
+export const prebind = (op: Operation, bindings: Bindings): Operation => {
+  if (bindings.map.size === 0) return op;
+  const table: Values = {
+    _tag: 'Values',
+    variables: Array.from(bindings.map.keys(), (v) => Term.variable(v)),
+    bindings: [bindings],
+  };
+  const term = (t: Ast.TermPattern): Ast.TermPattern => {
+    if (t._tag === 'Variable') {
+      const v = bindings.map.get(t.value);
+      return v === undefined ? t : (v as Ast.TermPattern);
+    }
+    if (t._tag === 'Triple') {
+      const s = term(t.subject);
+      const p = term(t.predicate);
+      const o = term(t.object);
+      return s === t.subject && p === t.predicate && o === t.object
+        ? t
+        : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
+    }
+    return t;
+  };
+  const predicate = (p: Ast.VarOrIri): Ast.VarOrIri => {
+    if (p._tag !== 'Variable') return p;
+    const v = bindings.map.get(p.value);
+    return v !== undefined && v._tag === 'NamedNode' ? v : p;
+  };
+  const expr = (e: Expression): Expression => mapExpressionPatterns(e, go);
+  const go = (o: Operation): Operation => {
+    switch (o._tag) {
+      case 'Bgp':
+        return o.patterns.length === 0
+          ? table
+          : join(
+              table,
+              bgp(
+                o.patterns.map((p): Ast.TriplePattern => ({
+                  _tag: 'TriplePattern',
+                  subject: term(p.subject),
+                  predicate: predicate(p.predicate),
+                  object: term(p.object),
+                })),
+              ),
+            );
+      case 'Path':
+        return join(table, { ...o, subject: term(o.subject), object: term(o.object) });
+      case 'Graph': {
+        const input = go(o.input);
+        const value = o.name._tag === 'Variable' ? bindings.map.get(o.name.value) : undefined;
+        if (value === undefined) return { ...o, input };
+        return join(
+          table,
+          value._tag === 'NamedNode' ? { ...o, name: value, input } : { ...o, input },
+        );
+      }
+      case 'Filter':
+        return { ...o, expression: expr(o.expression), input: go(o.input) };
+      case 'LeftJoin':
+        return o.expression === undefined
+          ? { ...o, left: go(o.left), right: go(o.right) }
+          : { ...o, left: go(o.left), right: go(o.right), expression: expr(o.expression) };
+      case 'Extend':
+        return { ...o, expression: expr(o.expression), input: go(o.input) };
+      case 'OrderBy':
+        return {
+          ...o,
+          input: go(o.input),
+          conditions: o.conditions.map((c) => ({ ...c, expression: expr(c.expression) })),
+        };
+      case 'Group':
+        return {
+          ...o,
+          input: go(o.input),
+          keys: o.keys.map((k) => ({ ...k, expression: expr(k.expression) })),
+          aggregates: o.aggregates.map((a) => ({
+            ...a,
+            aggregate:
+              a.aggregate.expression === '*'
+                ? a.aggregate
+                : { ...a.aggregate, expression: expr(a.aggregate.expression) },
+          })),
+        };
+      default:
+        return mapChildren(o, go);
+    }
+  };
+  return go(op);
+};

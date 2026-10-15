@@ -121,10 +121,9 @@ export const lineColumn = (
 
 /** An internal parse failure carrying the input offset. */
 export class Failure extends Error {
-  constructor(
-    message: string,
-    readonly pos: number,
-  ) {
+  readonly pos: number;
+  constructor(message: string, pos: number) {
     super(message);
+    this.pos = pos;
   }
 }

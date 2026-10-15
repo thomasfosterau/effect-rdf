@@ -49,10 +49,9 @@ class Writer {
   private readonly inlinable = new Set<string>();
   private readonly emitted = new Set<string>();
 
-  constructor(
-    private readonly root: Model.Formula,
-    options?: WriterOptions,
-  ) {
+  private readonly root: Model.Formula;
+  constructor(root: Model.Formula, options?: WriterOptions) {
+    this.root = root;
     this.prefixes = options?.prefixes ?? PrefixMap.empty;
     this.base = options?.baseIri;
     this.unit = options?.indent ?? '    ';

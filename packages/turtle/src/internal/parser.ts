@@ -19,12 +19,12 @@ const needMore = new NeedMore();
 
 /** @internal */
 export class SyntaxFailure extends Error {
-  constructor(
-    message: string,
-    readonly line: number,
-    readonly column: number,
-  ) {
+  readonly line: number;
+  readonly column: number;
+  constructor(message: string, line: number, column: number) {
     super(message);
+    this.line = line;
+    this.column = column;
   }
 }
 
@@ -84,7 +84,9 @@ export class Parser {
   private graph: Term.Graph;
   private inGraph = false;
 
-  constructor(readonly options: ParserOptions) {
+  readonly options: ParserOptions;
+  constructor(options: ParserOptions) {
+    this.options = options;
     this.base = options.baseIri;
     this.graph = options.graph;
   }

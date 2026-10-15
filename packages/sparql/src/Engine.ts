@@ -102,6 +102,14 @@ export interface RequestOptions {
    * precedence.
    */
   readonly dataset?: Store.DatasetSpec | undefined;
+  /**
+   * Pre-bound variables (initial bindings). The solution is inserted into
+   * every basic graph pattern, property path and `GRAPH ?var` pattern of the
+   * query as described by `Algebra.prebind`, so the values are visible to
+   * every `FILTER` and `BIND` of the query — the pre-binding semantics of
+   * SHACL-SPARQL and of SPARQL `EXISTS`.
+   */
+  readonly bindings?: B.Bindings | undefined;
 }
 
 /**
@@ -209,6 +217,9 @@ const instantiate = (
   return out;
 };
 
+const prebind = (op: Algebra.Operation, request: RequestOptions | undefined): Algebra.Operation =>
+  request?.bindings === undefined ? op : Algebra.prebind(op, request.bindings);
+
 const dedupeQuads = <E>(quads: Stream.Stream<Term.Quad, E>): Stream.Stream<Term.Quad, E> =>
   Stream.suspend(() => {
     const seen = new Set<string>();
@@ -274,7 +285,7 @@ export const make = (
         datasetFor(algebra.dataset, request),
         query.prologue.base ?? request?.baseIri ?? options.baseIri,
       );
-      const input = yield* optimize(algebra.input, env);
+      const input = yield* optimize(prebind(algebra.input, request), env);
       return { algebra, env, input };
     });
 
@@ -461,7 +472,7 @@ export const make = (
             ? { defaultGraph: [op.with], namedGraphs: 'all' }
             : (request?.dataset ?? defaultDataset);
       const env = makeEnv(dataset, baseIri);
-      const input = yield* optimize(where, env);
+      const input = yield* optimize(prebind(where, request), env);
       const solutions = yield* Stream.runCollect(Evaluator.evaluate(input, env));
       const target: Term.Graph = op.with ?? Term.defaultGraph;
       const deletes = solutions.flatMap((b) => instantiate(op.delete, b, target));
@@ -570,7 +581,7 @@ export const make = (
 
   const evaluate: SparqlEngineShape['evaluate'] = (op, request) =>
     Evaluator.evaluate(
-      op,
+      prebind(op, request),
       makeEnv(request?.dataset ?? defaultDataset, request?.baseIri ?? options.baseIri),
     );
 

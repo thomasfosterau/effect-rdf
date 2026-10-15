@@ -46,7 +46,9 @@ type Node = Term.NamedNode | Term.BlankNode | Term.Literal;
 
 class Graph {
   readonly bySubject = new Map<string, Array<Term.Quad>>();
-  constructor(readonly quads: ReadonlyArray<Term.Quad>) {
+  readonly quads: ReadonlyArray<Term.Quad>;
+  constructor(quads: ReadonlyArray<Term.Quad>) {
+    this.quads = quads;
     for (const q of quads) {
       const k = q.subject.key;
       let l = this.bySubject.get(k);

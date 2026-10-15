@@ -338,7 +338,10 @@ const hash = (s: string): string => {
 };
 
 class Inconsistency {
-  constructor(readonly rule: Model.Statement) {}
+  readonly rule: Model.Statement;
+  constructor(rule: Model.Statement) {
+    this.rule = rule;
+  }
 }
 
 const instantiate = (rule: Rule, b: Bindings): ReadonlyArray<Model.Statement> => {
@@ -383,7 +386,10 @@ const instantiate = (rule: Rule, b: Bindings): ReadonlyArray<Model.Statement> =>
 };
 
 class LimitExceeded {
-  constructor(readonly message: string) {}
+  readonly message: string;
+  constructor(message: string) {
+    this.message = message;
+  }
 }
 
 /** Forward chaining to a fixpoint; throws `Inconsistency` / `LimitExceeded`. */

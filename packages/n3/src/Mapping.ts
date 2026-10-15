@@ -47,7 +47,10 @@ export class UnrepresentableError extends Schema.TaggedError<UnrepresentableErro
 ) {}
 
 class Failure {
-  constructor(readonly message: string) {}
+  readonly message: string;
+  constructor(message: string) {
+    this.message = message;
+  }
 }
 
 const guard = <A>(f: () => A): Effect.Effect<A, UnrepresentableError> =>

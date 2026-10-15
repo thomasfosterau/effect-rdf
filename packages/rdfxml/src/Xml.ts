@@ -280,10 +280,12 @@ export const isWhitespace = (value: string): boolean => /^[ \t\r\n]*$/.test(valu
 // -----------------------------------------------------------------------------
 
 class Failure {
-  constructor(
-    readonly message: string,
-    readonly offset: number,
-  ) {}
+  readonly message: string;
+  readonly offset: number;
+  constructor(message: string, offset: number) {
+    this.message = message;
+    this.offset = offset;
+  }
 }
 
 interface AttributeDefault {
@@ -312,10 +314,12 @@ class Parser {
   expanded = 0;
   hasExternalSubset = false;
 
-  constructor(
-    readonly src: string,
-    private readonly lineStarts: Array<number>,
-  ) {}
+  readonly src: string;
+  private readonly lineStarts: Array<number>;
+  constructor(src: string, lineStarts: Array<number>) {
+    this.src = src;
+    this.lineStarts = lineStarts;
+  }
 
   fail(message: string, offset = this.pos): never {
     throw new Failure(message, offset);

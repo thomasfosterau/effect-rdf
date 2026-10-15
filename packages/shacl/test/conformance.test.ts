@@ -5,9 +5,9 @@
  * focusNode / resultPath / value / sourceShape / sourceConstraintComponent /
  * severity (and expected `sh:resultMessage`s), ignoring blank node identity.
  *
- * SHACL-SPARQL tests (the `sparql/` folder) are skipped: SPARQL constraints
- * require a `Sparql.SparqlConstraintEvaluator`, which is provided by a
- * separate integration.
+ * SHACL-SPARQL tests (the `sparql/` folder) are skipped here: SPARQL
+ * constraints require a `Sparql.SparqlConstraintEvaluator`, provided by
+ * `@thomasfosterau/effect-shacl-sparql`, whose conformance test runs them.
  */
 import { describe, expect, it } from '@effect/vitest';
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
@@ -157,7 +157,7 @@ const runCase = (tc: TestCase) =>
 const classify = (tc: TestCase): string | undefined => {
   const type = Dataset.objectsOf(tc.ds, tc.node, rdf.type)[0];
   return tc.name.startsWith('sparql/')
-    ? 'SHACL-SPARQL requires a SparqlConstraintEvaluator (not part of the core validator)'
+    ? 'SHACL-SPARQL needs a SparqlConstraintEvaluator; run by @thomasfosterau/effect-shacl-sparql'
     : type?.key !== sht('Validate').key
       ? `unsupported test type ${type?.key}`
       : skipList.get(tc.name);

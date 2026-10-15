@@ -223,7 +223,10 @@ export const canonicalJson = (v: Json): string => {
 export class IdIssuer {
   #counter = 0;
   readonly #map = new Map<string, string>();
-  constructor(readonly prefix: string = '_:b') {}
+  readonly prefix: string;
+  constructor(prefix: string = '_:b') {
+    this.prefix = prefix;
+  }
   issue(old?: string | null): string {
     if (old != null) {
       const existing = this.#map.get(old);

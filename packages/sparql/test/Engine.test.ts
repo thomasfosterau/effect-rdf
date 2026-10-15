@@ -153,6 +153,86 @@ describe('Engine', () => {
   );
 });
 
+describe('Pre-binding', () => {
+  const run = (query: string, bindings: Record<string, Term.GroundTerm>) =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select(`PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n${query}`, {
+        bindings: Bindings.make(bindings),
+      });
+      return (yield* Stream.runCollect(result.bindings)).map((b) => b.toString());
+    });
+
+  it.effect('makes pre-bound values visible in FILTERs of empty groups', () =>
+    Effect.gen(function* () {
+      expect(
+        yield* run('SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }', {
+          this: ex('alice'),
+        }),
+      ).toEqual(['{ ?this → <http://example.org/alice> }']);
+      expect(
+        yield* run('SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }', {
+          this: ex('bob'),
+        }),
+      ).toEqual([]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect('pre-binds BGPs, UNION branches, BIND and nested groups', () =>
+    Effect.gen(function* () {
+      expect(
+        yield* run('SELECT ?name WHERE { $this foaf:name ?name }', { this: ex('bob') }),
+      ).toEqual(['{ ?name → "Bob" }']);
+      expect(
+        yield* run(
+          'SELECT $this ?x WHERE { { FILTER (false) } UNION { BIND ($this AS ?x) } FILTER bound($this) }',
+          { this: ex('bob') },
+        ),
+      ).toEqual(['{ ?this → <http://example.org/bob>, ?x → <http://example.org/bob> }']);
+      expect(
+        yield* run(
+          'SELECT ?n WHERE { ?p foaf:knows ?q . FILTER EXISTS { $this foaf:name ?n0 } ?q foaf:name ?n }',
+          { this: ex('carol') },
+        ),
+      ).toEqual([]);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect('pre-binds GRAPH ?g, ASK and algebra evaluation', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      expect(
+        yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }', {
+          bindings: Bindings.make({ g: ex('g1') }),
+        }),
+      ).toBe(true);
+      expect(
+        yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }', {
+          bindings: Bindings.make({ g: ex('g2') }),
+        }),
+      ).toBe(false);
+      const op = Translate.translatePattern(
+        (yield* Parser.parseQuery('SELECT * WHERE { ?s ?p ?o }')).where,
+      );
+      const rows = yield* Stream.runCollect(
+        engine.evaluate(op, { bindings: Bindings.make({ s: ex('alice'), p: foaf('age') }) }),
+      );
+      expect(rows.map((r) => lex(Bindings.getUndefined(r, 'o')))).toEqual(['30']);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it('rewrites the algebra by values insertion', () => {
+    const op = Algebra.prebind(
+      Translate.translatePattern(
+        Effect.runSync(Parser.parseQuery('SELECT * WHERE { ?s ?p ?o FILTER (?o != 1) }')).where,
+      ),
+      Bindings.make({ s: ex('alice') }),
+    );
+    expect(Algebra.format(op)).toContain('<http://example.org/alice> ?p ?o');
+    expect(Algebra.format(op)).toContain('table');
+  });
+});
+
 describe('QueryBuilder', () => {
   const v = Q.vars('person', 'name', 'email', 'p', 'age');
   const query = Q.select('person', 'name', Q.maybe('email'))
@@ -262,4 +342,42 @@ describe('Hash functions', () => {
     expect(Hash.sha384(input)).toBe(node('sha384'));
     expect(Hash.sha512(input)).toBe(node('sha512'));
   });
+});
+
+describe('SERVICE with a variable endpoint', () => {
+  const remote = (endpoint: Term.NamedNode) =>
+    Stream.make(Bindings.make({ title: Term.literal(`from ${endpoint.value}`) }));
+  const FederatedLayer = Engine.layer({ service: (endpoint) => remote(endpoint) }).pipe(
+    Layer.provideMerge(
+      Store.layerMemory(
+        Dataset.make(
+          Term.quad(ex('p1'), ex('endpoint'), Term.namedNode('http://one.example/sparql')),
+          Term.quad(ex('p2'), ex('endpoint'), Term.namedNode('http://two.example/sparql')),
+        ),
+      ),
+    ),
+  );
+
+  it.effect('evaluates the remote pattern once per bound endpoint', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select(
+        'SELECT ?p ?title { ?p <http://example.org/endpoint> ?e SERVICE ?e { ?x ?y ?title } } ORDER BY ?p',
+      );
+      const rows = yield* Stream.runCollect(result.bindings);
+      expect(rows.map((b) => lex(b.map.get('title')))).toEqual([
+        'from http://one.example/sparql',
+        'from http://two.example/sparql',
+      ]);
+    }).pipe(Effect.provide(FederatedLayer)),
+  );
+
+  it.effect('fails when the endpoint variable is unbound', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select('SELECT * { SERVICE ?e { ?x ?y ?z } }');
+      const error = yield* Effect.flip(Stream.runCollect(result.bindings));
+      expect(error._tag).toBe('EvaluationError');
+    }).pipe(Effect.provide(FederatedLayer)),
+  );
 });

@@ -169,10 +169,9 @@ class Parser {
   startActs: ReadonlyArray<ShExJ.SemAct> | undefined;
   readonly nested = new WeakSet<object>();
 
-  constructor(
-    readonly input: string,
-    options: ParserOptions,
-  ) {
+  readonly input: string;
+  constructor(input: string, options: ParserOptions) {
+    this.input = input;
     this.base = options.baseIri;
     for (const [k, v] of Object.entries(options.prefixes ?? {})) this.prefixes.set(k, v);
   }

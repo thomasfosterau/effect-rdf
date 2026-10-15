@@ -18,7 +18,10 @@ export const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
 /** A thrown expression evaluation error. */
 export class EvalFailure {
-  constructor(readonly message: string) {}
+  readonly message: string;
+  constructor(message: string) {
+    this.message = message;
+  }
 }
 
 export const fail = (message: string): never => {

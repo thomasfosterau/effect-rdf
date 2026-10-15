@@ -16,10 +16,13 @@ An Effect-native [SHACL Core](https://www.w3.org/TR/shacl/) validator for
   standard RDF validation report graph.
 - **`Sparql`**: the `SparqlConstraintEvaluator` service interface, the extension
   point for SHACL-SPARQL (`sh:sparql`, SPARQL-based constraint components,
-  `sh:target`).
+  `sh:target`), implemented by `@thomasfosterau/effect-shacl-sparql`.
+- **`Message`**: `{?var}` / `{$var}` message template substitution.
 
-All 98 SHACL Core tests of the W3C test suite pass. The `sparql/` tests are
-skipped because they need a SPARQL evaluator.
+All 98 SHACL Core tests of the W3C test suite pass. The 22 `sparql/` tests
+need a SPARQL evaluator and are run (and pass) by
+[`@thomasfosterau/effect-shacl-sparql`](../shacl-sparql), which implements
+`Sparql.SparqlConstraintEvaluator` on `@thomasfosterau/effect-sparql`.
 
 ## Validating a data graph
 
@@ -118,7 +121,16 @@ for (const shape of shapes.shapes) {
 
 The core validator does not execute SPARQL. Provide a
 `Sparql.SparqlConstraintEvaluator` to evaluate `sh:sparql` constraints,
-SPARQL-based constraint components and `sh:target`:
+SPARQL-based constraint components and `sh:target` — normally the one from
+`@thomasfosterau/effect-shacl-sparql`:
+
+```ts
+import { Evaluator } from '@thomasfosterau/effect-shacl-sparql';
+
+Validator.validate(dataGraph, shapesGraph).pipe(Effect.provide(Evaluator.layer()));
+```
+
+or a custom implementation:
 
 ```ts
 import { Effect, Layer } from 'effect';
@@ -140,7 +152,11 @@ Without an evaluator, shapes graphs using these features fail with
 ## Notes
 
 - Validating recursive shapes is undefined in SHACL; this validator detects it.
-- `sh:message` templates (`{$param}`, `{?var}`) are not substituted.
+- `sh:message` templates are substituted: `{?var}` / `{$var}` refer to
+  `this`, `value`, `path` and the constraint's parameters by local name
+  (`{$minCount}`, `{$datatype}`, …); for SPARQL-based constraints also to
+  the solution variables (`Violation.bindings`). Unknown placeholders are
+  left as they are.
 - Literal comparisons (`sh:minInclusive`, `sh:lessThan`, …) follow SPARQL `<`:
   numerics across types, strings, booleans, date/time values (with the 14-hour
   timezone rule) and durations; incomparable values are violations.

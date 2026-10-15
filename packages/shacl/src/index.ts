@@ -7,6 +7,8 @@
  */
 
 /** @since 0.1.0 */
+export * as Message from './Message.ts';
+/** @since 0.1.0 */
 export * as Path from './Path.ts';
 /** @since 0.1.0 */
 export * as Shapes from './Shapes.ts';

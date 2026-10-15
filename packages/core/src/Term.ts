@@ -97,8 +97,10 @@ abstract class TermBase implements Equal.Equal, Pipeable {
  */
 export class NamedNode<out Iri extends string = string> extends TermBase {
   readonly _tag = 'NamedNode' as const;
-  constructor(readonly value: Iri) {
+  readonly value: Iri;
+  constructor(value: Iri) {
     super();
+    this.value = value;
   }
   protected computeKey(): string {
     return `<${escapeIri(this.value)}>`;
@@ -114,8 +116,10 @@ export class NamedNode<out Iri extends string = string> extends TermBase {
  */
 export class BlankNode extends TermBase {
   readonly _tag = 'BlankNode' as const;
-  constructor(readonly value: string) {
+  readonly value: string;
+  constructor(value: string) {
     super();
+    this.value = value;
   }
   protected computeKey(): string {
     return `_:${this.value}`;
@@ -132,13 +136,16 @@ export class BlankNode extends TermBase {
  */
 export class Literal extends TermBase {
   readonly _tag = 'Literal' as const;
-  constructor(
-    readonly value: string,
-    readonly datatype: NamedNode,
-    readonly language: string = '',
-    readonly direction?: Direction,
-  ) {
+  readonly value: string;
+  readonly datatype: NamedNode;
+  readonly language: string;
+  readonly direction: Direction | undefined;
+  constructor(value: string, datatype: NamedNode, language: string = '', direction?: Direction) {
     super();
+    this.value = value;
+    this.datatype = datatype;
+    this.language = language;
+    this.direction = direction;
   }
   protected computeKey(): string {
     const lexical = `"${escapeString(this.value)}"`;
@@ -161,8 +168,10 @@ export class Literal extends TermBase {
  */
 export class Variable<out Name extends string = string> extends TermBase {
   readonly _tag = 'Variable' as const;
-  constructor(readonly value: Name) {
+  readonly value: Name;
+  constructor(value: Name) {
     super();
+    this.value = value;
   }
   protected computeKey(): string {
     return `?${this.value}`;
@@ -197,12 +206,14 @@ export class Triple<
   out O extends Object = Object,
 > extends TermBase {
   readonly _tag = 'Triple' as const;
-  constructor(
-    readonly subject: S,
-    readonly predicate: P,
-    readonly object: O,
-  ) {
+  readonly subject: S;
+  readonly predicate: P;
+  readonly object: O;
+  constructor(subject: S, predicate: P, object: O) {
     super();
+    this.subject = subject;
+    this.predicate = predicate;
+    this.object = object;
   }
   protected computeKey(): string {
     return `<<( ${this.subject.key} ${this.predicate.key} ${this.object.key} )>>`;
@@ -232,12 +243,16 @@ export class Quad<
   readonly _tag = 'Quad' as const;
   #key: string | undefined;
   #hash: number | undefined;
-  constructor(
-    readonly subject: S,
-    readonly predicate: P,
-    readonly object: O,
-    readonly graph: G,
-  ) {}
+  readonly subject: S;
+  readonly predicate: P;
+  readonly object: O;
+  readonly graph: G;
+  constructor(subject: S, predicate: P, object: O, graph: G) {
+    this.subject = subject;
+    this.predicate = predicate;
+    this.object = object;
+    this.graph = graph;
+  }
 
   /** The canonical N-Quads statement (without the trailing ` .`). */
   get key(): string {

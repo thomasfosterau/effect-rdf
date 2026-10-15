@@ -103,8 +103,10 @@ abstract class N3Base implements Equal.Equal, Pipeable {
  */
 export class Collection extends N3Base {
   readonly _tag = 'Collection' as const;
-  constructor(readonly items: ReadonlyArray<N3Term>) {
+  readonly items: ReadonlyArray<N3Term>;
+  constructor(items: ReadonlyArray<N3Term>) {
     super();
+    this.items = items;
   }
   protected computeKey(): string {
     return this.items.length === 0 ? '()' : `( ${this.items.map((t) => t.key).join(' ')} )`;
@@ -124,12 +126,14 @@ export class Statement<
   out O extends N3Term = N3Term,
 > extends N3Base {
   readonly _tag = 'Statement' as const;
-  constructor(
-    readonly subject: S,
-    readonly predicate: P,
-    readonly object: O,
-  ) {
+  readonly subject: S;
+  readonly predicate: P;
+  readonly object: O;
+  constructor(subject: S, predicate: P, object: O) {
     super();
+    this.subject = subject;
+    this.predicate = predicate;
+    this.object = object;
   }
   protected computeKey(): string {
     return `${this.subject.key} ${this.predicate.key} ${this.object.key}`;

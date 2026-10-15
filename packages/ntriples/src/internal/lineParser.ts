@@ -3,12 +3,12 @@ import * as Lexical from '../Lexical.ts';
 
 /** @internal */
 export class SyntaxFailure extends Error {
-  constructor(
-    message: string,
-    readonly line: number,
-    readonly column: number,
-  ) {
+  readonly line: number;
+  readonly column: number;
+  constructor(message: string, line: number, column: number) {
     super(message);
+    this.line = line;
+    this.column = column;
   }
 }
 
@@ -31,7 +31,10 @@ export class LineParser {
   private line = 0;
   private readonly blankNodes = new Map<string, Term.BlankNode>();
 
-  constructor(readonly options: LineParserOptions) {}
+  readonly options: LineParserOptions;
+  constructor(options: LineParserOptions) {
+    this.options = options;
+  }
 
   /** Parses one line (without its line terminator). */
   parseLine(input: string, line: number): Term.Quad | undefined {
