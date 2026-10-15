@@ -656,37 +656,25 @@ const LOCAL_SUFFIX_RE = new RegExp(`[${Xml.NAME_START}][${Xml.NAME_CHAR}]*$`, 'u
  * @category serializing
  */
 export const splitIri = (iri: string): Option.Option<readonly [string, string]> => {
+  // The leftmost match is the longest NCName suffix.
   const m = LOCAL_SUFFIX_RE.exec(iri);
-  if (m === null) return Option.none();
-  // The local name must start with a name-start character; trim leading
-  // characters that are only valid inside names.
-  let local = m[0];
-  let start = m.index;
-  while (local !== '' && !Xml.isNCName(local)) {
-    const cp = local.codePointAt(0)!;
-    const n = cp > 0xffff ? 2 : 1;
-    local = local.slice(n);
-    start += n;
-  }
-  if (local === '' || start === 0) return Option.none();
-  return Option.some([iri.slice(0, start), local] as const);
+  if (m === null || m.index === 0) return Option.none();
+  return Option.some([iri.slice(0, m.index), m[0]] as const);
 };
-
-const escapeText = (value: string): string =>
-  value.replace(/[&<>\r]/g, (c) =>
-    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&#xD;',
-  );
 
 const escapeAttr = Xml.escapeAttribute;
 
 interface Namespaces {
+  /** namespace → prefix, for configured and generated prefixes. */
   readonly byNamespace: Map<string, string>;
+  /** Prefixes taken (configured, generated or reserved). */
   readonly used: Set<string>;
+  /** Namespaces actually referenced by the output. */
+  readonly declared: Set<string>;
   counter: number;
 }
 
 class Writer {
-  readonly lines: Array<string> = [];
   readonly namespaces: Namespaces;
   readonly blankLabels = new Map<string, string>();
   needsVersion = false;
@@ -719,7 +707,7 @@ class Writer {
       used.add('rdf');
     }
     used.add('its');
-    this.namespaces = { byNamespace, used, counter: 0 };
+    this.namespaces = { byNamespace, used, declared: new Set([RDF]), counter: 0 };
   }
 
   fail(message: string): never {
@@ -727,10 +715,25 @@ class Writer {
   }
 
   qname(iri: string, what: string): string {
-    const split = splitIri(iri);
-    if (Option.isNone(split)) this.fail(`The ${what} <${iri}> cannot be written as an XML QName`);
-    const [ns, local] = split.value;
-    if (!Xml.isValidText(ns)) this.fail(`The ${what} <${iri}> contains invalid XML characters`);
+    if (!Xml.isValidText(iri)) this.fail(`The ${what} <${iri}> contains invalid XML characters`);
+    // Prefer the longest configured namespace that leaves an NCName.
+    let best: readonly [string, string] | undefined;
+    for (const ns of this.namespaces.byNamespace.keys()) {
+      if (
+        iri.startsWith(ns) &&
+        (best === undefined || ns.length > best[0].length) &&
+        Xml.isNCName(iri.slice(ns.length))
+      ) {
+        best = [ns, iri.slice(ns.length)];
+      }
+    }
+    if (best === undefined) {
+      const split = splitIri(iri);
+      if (Option.isNone(split)) this.fail(`The ${what} <${iri}> cannot be written as an XML QName`);
+      best = split.value;
+    }
+    const [ns, local] = best;
+    this.namespaces.declared.add(ns);
     let prefix = this.namespaces.byNamespace.get(ns);
     if (prefix === undefined) {
       do prefix = `ns${++this.namespaces.counter}`;
@@ -775,7 +778,7 @@ interface Graph {
 
 const text = (value: string, writer: Writer): string => {
   if (!Xml.isValidText(value)) writer.fail('A literal contains characters not allowed in XML 1.0');
-  return escapeText(value);
+  return Xml.escapeText(value);
 };
 
 const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeOptions): string => {
@@ -990,9 +993,9 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   const out: Array<string> = [];
   if (options.xmlDeclaration ?? true) out.push('<?xml version="1.0" encoding="utf-8"?>');
   const decls: Array<string> = [];
-  const nsEntries = [...writer.namespaces.byNamespace.entries()].sort((a, b) =>
-    a[1] === 'rdf' ? -1 : b[1] === 'rdf' ? 1 : a[1] < b[1] ? -1 : 1,
-  );
+  const nsEntries = [...writer.namespaces.byNamespace.entries()]
+    .filter(([ns]) => writer.namespaces.declared.has(ns))
+    .sort((a, b) => (a[1] === 'rdf' ? -1 : b[1] === 'rdf' ? 1 : a[1] < b[1] ? -1 : 1));
   for (const [ns, prefix] of nsEntries) decls.push(`xmlns:${prefix}="${escapeAttr(ns)}"`);
   if (writer.needsIts) decls.push(`xmlns:its="${ITS}"`, 'its:version="2.0"');
   if (options.baseIri !== undefined) decls.push(`xml:base="${escapeAttr(options.baseIri)}"`);
