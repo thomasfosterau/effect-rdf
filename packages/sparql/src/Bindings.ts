@@ -39,7 +39,16 @@ export class Bindings
   readonly [TypeId]: TypeId = TypeId;
   #key: string | undefined;
   /** @internal */
-  constructor(readonly map: ReadonlyMap<string, Term.GroundTerm>) {}
+  constructor(
+    readonly map: ReadonlyMap<string, Term.GroundTerm>,
+    /**
+     * The solution this one was extended from (by `BIND` / select
+     * expressions), identifying the "same solution" for `BNODE(str)`.
+     *
+     * @internal
+     */
+    readonly origin?: Bindings | undefined,
+  ) {}
 
   /** The number of bound variables. */
   get size(): number {
@@ -161,7 +170,7 @@ export const variables = (self: Bindings): ReadonlyArray<string> => Array.from(s
 export const set = (self: Bindings, name: string, term: Term.GroundTerm): Bindings => {
   const map = new Map(self.map);
   map.set(name, term);
-  return new Bindings(map);
+  return new Bindings(map, self.origin ?? self);
 };
 
 /**

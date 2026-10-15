@@ -111,9 +111,7 @@ export const matchQuads = (
   if (def === 'union') return dedupeTriples(env.store.match({ ...pattern, graph: undefined }));
   if (def.length === 0) return Stream.empty;
   if (def.length === 1) return env.store.match({ ...pattern, graph: def[0]! });
-  return dedupeTriples(
-    Stream.concat(...(def.map((g) => env.store.match({ ...pattern, graph: g })) as [any, any])),
-  );
+  return dedupeTriples(concatAll(def.map((g) => env.store.match({ ...pattern, graph: g }))));
 };
 
 const concatAll = <A, E>(streams: ReadonlyArray<Stream.Stream<A, E>>): Stream.Stream<A, E> =>
@@ -330,12 +328,51 @@ const pathAll = (
   }
 };
 
+/** Whether a path can match with zero length. */
+const nullable = (path: Ast.Path): boolean => {
+  switch (path._tag) {
+    case 'PathZeroOrMore':
+    case 'PathZeroOrOne':
+      return true;
+    case 'PathInverse':
+      return nullable(path.path);
+    case 'PathSequence':
+      return path.paths.every(nullable);
+    case 'PathAlternative':
+      return path.paths.some(nullable);
+    default:
+      return false;
+  }
+};
+
+const isGraphNode = (env: Env, term: Term.GroundTerm): E<boolean> =>
+  Effect.map(
+    Effect.all([
+      Stream.runHead(matchQuads(env, { subject: term })),
+      Stream.runHead(matchQuads(env, { object: term })),
+    ]),
+    ([a, b]) => Option.isSome(a) || Option.isSome(b),
+  );
+
 const evalPath = (op: Algebra.Path, env: Env, initial: Bindings): S =>
   Stream.fromIterableEffect(
     Effect.gen(function* () {
       const s = ground(op.subject, initial);
       const o = ground(op.object, initial);
       const out: Array<Bindings> = [];
+      // A variable endpoint ranges over the nodes of the graph only (the
+      // zero-length case must not produce terms that are not in the graph),
+      // so an endpoint bound by an outer solution must be a graph node.
+      if (nullable(op.path)) {
+        for (const [term, value] of [
+          [op.subject, s],
+          [op.object, o],
+        ] as const) {
+          if (value !== undefined && term._tag !== 'NamedNode' && term._tag !== 'Literal') {
+            if (!(yield* isGraphNode(env, value))) return out;
+          }
+        }
+      }
       const emit = (x: Term.GroundTerm, y: Term.GroundTerm) => {
         const map = new Map(initial.map);
         if (unify(op.subject, x, map) && unify(op.object, y, map)) out.push(new B.Bindings(map));
@@ -632,13 +669,8 @@ const aggregateValue = (
         if (defined.length !== values.length) return undefined;
         const lits = defined.map((v) => (v._tag === 'Literal' ? v : V.fail('Not a literal')));
         const sep = agg.separator ?? ' ';
-        const value = lits.map((l) => l.value).join(sep);
-        const first = lits[0];
-        const sameLang =
-          first !== undefined &&
-          first.language !== '' &&
-          lits.every((l) => l.language === first.language && l.direction === first.direction);
-        return sameLang ? V.stringLike(value, first) : V.simple(value);
+        // GROUP_CONCAT always produces an xsd:string.
+        return V.simple(lits.map((l) => l.value).join(sep));
       }
     }
   } catch (err) {

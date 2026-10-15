@@ -406,8 +406,7 @@ export const equals = (a: Term.Term, b: Term.Term): boolean => {
   }
   if (a.language !== '' || b.language !== '') {
     // Language-tagged strings are equal only when they are the same term.
-    if (a.language !== '' && b.language !== '') return false;
-    if (isKnownLiteral(a) && isKnownLiteral(b)) return false;
+    return false;
   }
   // Both literals with known, value-disjoint datatypes are unequal; anything
   // else (unknown datatypes, ill-formed values) is a type error.

@@ -501,6 +501,16 @@ const XSD_INTEGER_TYPES = new Set(
   ].map((t) => V.XSD + t),
 );
 
+/** The XPath string form of a float/double (`fn:string`). */
+const xpathDoubleString = (v: number): string => {
+  if (Number.isNaN(v)) return 'NaN';
+  if (!Number.isFinite(v)) return v > 0 ? 'INF' : '-INF';
+  const abs = Math.abs(v);
+  if (abs === 0) return Object.is(v, -0) ? '-0' : '0';
+  if (abs >= 1e-6 && abs < 1e6) return String(v);
+  return Xsd.canonicalDouble(v);
+};
+
 const castString = (a: Term.Term): string => {
   if (a._tag === 'NamedNode') return a.value;
   const l = literalArg(a);
@@ -511,7 +521,7 @@ const castString = (a: Term.Term): string => {
       const s = Xsd.canonicalDecimal(n.v);
       return s.endsWith('.0') ? s.slice(0, -2) : s;
     }
-    return Xsd.canonicalDouble(n.v);
+    return xpathDoubleString(n.v);
   }
   if (l.datatype.value === V.dt.boolean.value && Xsd.isValidLexical(l.datatype.value, l.value)) {
     return l.value === 'true' || l.value === '1' ? 'true' : 'false';

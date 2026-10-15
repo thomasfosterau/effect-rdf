@@ -1095,7 +1095,7 @@ class SparqlParser {
     this.expectPunct('<<(');
     const subject = this.iri();
     const predicate =
-      this.isWord('a') && this.tok.value === 'a' ? (this.advance(), rdfType) : this.iri();
+      this.type() === 'WORD' && this.tok.value === 'a' ? (this.advance(), rdfType) : this.iri();
     const object = this.isPunct('<<(') ? this.tripleTermData() : this.dataTerm();
     this.expectPunct(')>>');
     return Term.triple(subject, predicate, object);
@@ -1874,7 +1874,7 @@ class SparqlParser {
       variables: true,
       blankNodes,
       scope: opIndex,
-      labels: this.templateLabels,
+      labels: new Map(),
     });
     if (deleteFirst) {
       del = this.quadPattern(templateCtx(false));

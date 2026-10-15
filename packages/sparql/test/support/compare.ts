@@ -3,7 +3,7 @@
  * to blank node renaming (by encoding them as RDF graphs and using graph
  * isomorphism), optionally respecting order.
  */
-import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
+import { Dataset, Isomorphism, Term, Xsd } from '@thomasfosterau/effect-rdf';
 import type { Bindings } from '../../src/Bindings.ts';
 import * as B from '../../src/Bindings.ts';
 import type * as Results from '../../src/Results.ts';
@@ -11,13 +11,18 @@ import type * as Results from '../../src/Results.ts';
 const RS = 'http://www.w3.org/2001/sw/DataAccess/tests/result-set#';
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 
+/** Numeric literals are compared by value (canonical form). */
+export const normalize = (t: Term.GroundTerm): Term.GroundTerm =>
+  t._tag === 'Literal' && Xsd.isNumericDatatype(t.datatype.value) ? Xsd.canonicalize(t) : t;
+
 /** Encodes solutions as a graph: one fresh blank node per row. */
 const encode = (bindings: ReadonlyArray<Bindings>, ordered: boolean): Dataset.Dataset => {
   const quads: Array<Term.Quad> = [];
   bindings.forEach((b, i) => {
     const row = Term.blankNode(`row${i}_${Math.random().toString(36).slice(2)}`);
     quads.push(Term.quad(row, Term.namedNode('urn:row'), Term.literal(ordered ? String(i) : 'x')));
-    for (const [k, v] of b) quads.push(Term.quad(row, Term.namedNode(`urn:var:${k}`), v));
+    for (const [k, v] of b)
+      quads.push(Term.quad(row, Term.namedNode(`urn:var:${k}`), normalize(v)));
   });
   return Dataset.fromIterable(quads);
 };
@@ -36,7 +41,10 @@ export const sameResults = (
     return sameResults(dedupe(actual), dedupe(expected));
   }
   if (actual.length !== expected.length) return false;
-  return Isomorphism.isomorphic(encode(actual, options.ordered ?? false), encode(expected, options.ordered ?? false));
+  return Isomorphism.isomorphic(
+    encode(actual, options.ordered ?? false),
+    encode(expected, options.ordered ?? false),
+  );
 };
 
 /** Reads a result set (or boolean) encoded with the `rs:` vocabulary. */
@@ -54,7 +62,8 @@ export const fromRdf = (quads: ReadonlyArray<Term.Quad>): Results.ParsedResult |
   )?.subject;
   if (rs === undefined) return undefined;
   const bool = objects(rs, `${RS}boolean`)[0];
-  if (bool !== undefined && bool._tag === 'Literal') return { _tag: 'Boolean', value: bool.value === 'true' };
+  if (bool !== undefined && bool._tag === 'Literal')
+    return { _tag: 'Boolean', value: bool.value === 'true' };
   const variables = objects(rs, `${RS}resultVariable`).map((v) => (v as Term.Literal).value);
   const solutions = objects(rs, `${RS}solution`).map((sol) => {
     const index = objects(sol, `${RS}index`)[0];

@@ -224,7 +224,10 @@ class Translator {
         expression: this.expression(g.expression),
         variable: g.variable ?? (g.expression._tag === 'Variable' ? g.expression : this.fresh('g')),
       }));
-      const keyNames = new Set(keys.map((k) => k.variable.value));
+      const keyNames = new Set([
+        ...keys.map((k) => k.variable.value),
+        ...(q.values?.variables.map((v) => v.value) ?? []),
+      ]);
       const aggregates: Array<{ variable: Term.Variable; aggregate: Algebra.Aggregate }> = [];
       const aggregateVariable = (a: Ast.AggregateExpression): Term.Variable => {
         const aggregate: Algebra.Aggregate = {

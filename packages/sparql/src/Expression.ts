@@ -55,8 +55,9 @@ export const makeContext = (options?: {
     random: options?.random ?? Math.random,
     blankNode: (label, solution) => {
       if (label === undefined) return Term.blankNode(`${prefix}${counter++}`);
-      let scope = scopes.get(solution);
-      if (scope === undefined) scopes.set(solution, (scope = new Map()));
+      const row = solution.origin ?? solution;
+      let scope = scopes.get(row);
+      if (scope === undefined) scopes.set(row, (scope = new Map()));
       let node = scope.get(label);
       if (node === undefined) scope.set(label, (node = Term.blankNode(`${prefix}${counter++}`)));
       return node;
