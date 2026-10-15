@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-turtle": "workspace:*",
     "effect": "catalog:",
     "vite-plus": "catalog:"
   },

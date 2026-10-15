@@ -33,4 +33,4 @@ dist-ssr
 .claude/worktrees/
 
 # Conformance test suites (scripts/fetch-test-suites.sh)
-.test-suites/
+.test-suites

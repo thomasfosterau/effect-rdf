@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: voidzero-dev/setup-vp@v1.9.0
+        with:
+          node-version: '24'
+          cache: true
+      - run: vp check
+      - name: Fetch conformance test suites
+        run: ./scripts/fetch-test-suites.sh
+      - run: vp test
+      - run: vp run -r build

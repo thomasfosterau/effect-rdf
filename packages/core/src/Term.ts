@@ -713,7 +713,7 @@ export const compareQuads = (a: Quad, b: Quad): -1 | 0 | 1 =>
  */
 export const escapeString = (value: string): string => {
   // eslint-disable-next-line no-control-regex
-  if (!/["\\\u0000-\u001f\u007f]/.test(value)) return value;
+  if (!/["\\\u0000-\u001f\u007f\ufffe\uffff]/.test(value)) return value;
   let out = '';
   for (const ch of value) {
     switch (ch) {
@@ -741,7 +741,7 @@ export const escapeString = (value: string): string => {
       default: {
         const code = ch.codePointAt(0)!;
         out +=
-          code < 0x20 || code === 0x7f
+          code < 0x20 || code === 0x7f || code === 0xfffe || code === 0xffff
             ? `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
             : ch;
       }

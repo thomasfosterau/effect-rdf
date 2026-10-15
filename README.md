@@ -1,3 +1,3 @@
 # effect-rdf
 
-An experimental RDF-star toolkit written in Effect.
+An Effect-idiomatic RDF 1.2 / RDF-star toolkit.
