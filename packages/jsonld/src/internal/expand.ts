@@ -185,10 +185,10 @@ const finalize = (result: Json, activeProperty: string | null, options: ExpandOp
   if (isObject(result)) {
     const keys = Object.keys(result);
     if (keys.length === 1 && keys[0] === '@language') return null;
-    // 19
-    if (activeProperty === null || activeProperty === '@graph') {
+    // 19 (free-floating nodes are kept in frames)
+    if (!options.frameExpansion && (activeProperty === null || activeProperty === '@graph')) {
       if (keys.length === 0 || '@value' in result || '@list' in result) return null;
-      if (keys.length === 1 && keys[0] === '@id' && !options.frameExpansion) return null;
+      if (keys.length === 1 && keys[0] === '@id') return null;
     }
   }
   return result;
@@ -384,14 +384,17 @@ const expandObject = (
           nests.push(key);
           continue;
         }
-        case '@default':
+        case '@default': {
+          if (options.frameExpansion) {
+            expandedValue = expandElement(env, active, activeProperty, value, baseUrl, options);
+          }
+          break;
+        }
         case '@embed':
         case '@explicit':
         case '@omitDefault':
         case '@requireAll': {
-          if (options.frameExpansion) {
-            expandedValue = expandElement(env, active, activeProperty, value, baseUrl, options);
-          }
+          if (options.frameExpansion) expandedValue = asArray(value);
           break;
         }
         default:

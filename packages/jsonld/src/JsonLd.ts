@@ -26,14 +26,15 @@ import {
   type LoadedDocument,
   NeedDocument,
   type ProcessingMode,
+  expandIri,
   initialContext,
   processContext,
 } from './internal/context.ts';
 import { expandElement } from './internal/expand.ts';
 import { flattenExpanded } from './internal/flatten.ts';
-import { frame as frameAlgorithm } from './internal/frame.ts';
+import { cleanupNull, frame as frameAlgorithm } from './internal/frame.ts';
 import * as Rdf from './internal/rdf.ts';
-import { type Json, type JsonObject, isObject, isString } from './internal/util.ts';
+import { type Json, type JsonObject, fail, isObject, isString } from './internal/util.ts';
 
 /**
  * Any JSON value.
@@ -137,8 +138,8 @@ export interface FromRdfOptions {
  * @category options
  */
 export interface FrameOptions extends Options {
-  /** The default `@embed` flag: `@once` (default), `@always` or `@never`. */
-  readonly embed?: '@once' | '@always' | '@never' | undefined;
+  /** The default `@embed` flag: `@once` (default), `@always`, `@never` or `@link`. */
+  readonly embed?: '@once' | '@always' | '@never' | '@link' | undefined;
   /** The default `@explicit` flag. */
   readonly explicit?: boolean | undefined;
   /** The default `@omitDefault` flag. */
@@ -382,59 +383,72 @@ export const frame = (
   Effect.gen(function* () {
     const resolved = yield* resolveInput(input, options);
     const resolvedFrame = yield* resolveInput(frame as Input, options);
-    return yield* run(options, (env) => {
-      const expanded = expandSync(env, resolved, { ...options, ordered: false });
-      const expandedFrame = expandSync(env, resolvedFrame, { ...options, ordered: false }, true);
-      let context: Json = isObject(resolvedFrame.document)
-        ? (resolvedFrame.document['@context'] ?? null)
-        : null;
-      const framed = frameAlgorithm(env, expanded, expandedFrame, {
-        embed: options?.embed ?? '@once',
-        explicit: options?.explicit ?? false,
-        omitDefault: options?.omitDefault ?? false,
-        requireAll: options?.requireAll ?? false,
-        ordered: options?.ordered ?? false,
-      });
-      if (context === null) context = {};
-      const compactOptions: Options = { ...options };
-      let compacted = compactSync(
-        env,
-        framed,
-        context,
-        resolved.documentUrl,
-        compactOptions,
-      ) as JsonObject;
-      const graphKey = (() => {
-        const ctx = processContext(
-          env,
-          initialContext(options?.base ?? resolved.documentUrl),
-          context,
-          resolvedFrame.documentUrl ?? options?.base ?? resolved.documentUrl ?? null,
-        );
-        return compactIri(env, ctx, '@graph', null, true, false, {
-          compactArrays: true,
-          ordered: false,
-          compactToRelative: true,
-        });
-      })();
-      const omitGraph =
-        options?.omitGraph ?? (options?.processingMode === 'json-ld-1.0' ? true : false);
-      const { '@context': ctxEntry, ...rest } = compacted;
-      if (!omitGraph && !(graphKey in rest)) {
-        compacted = Object.keys(rest).length === 0 ? { [graphKey]: [] } : { [graphKey]: [rest] };
-        if (ctxEntry !== undefined) compacted = { '@context': ctxEntry, ...compacted };
-      } else if (omitGraph && graphKey in rest && Array.isArray(rest[graphKey])) {
-        if (rest[graphKey].length === 1 && Object.keys(rest).length === 1) {
-          compacted = { ...rest[graphKey][0] };
-          if (ctxEntry !== undefined) compacted = { '@context': ctxEntry, ...compacted };
-        }
-      }
-      return pruneBlankNodes(compacted, env, options);
-    });
+    return yield* run(options, (env) => frameSync(env, resolved, resolvedFrame, options));
   });
 
-const pruneBlankNodes = (value: JsonObject, _env: Env, _options: Options | undefined): JsonObject =>
-  value;
+const frameSync = (
+  env: Env,
+  resolved: ResolvedInput,
+  resolvedFrame: ResolvedInput,
+  options: FrameOptions | undefined,
+): JsonObject => {
+  const frameDocument: Json = resolvedFrame.document;
+  if (!isObject(frameDocument) && !Array.isArray(frameDocument)) {
+    return fail('invalid frame', 'a frame must be a JSON object');
+  }
+  const context: Json = isObject(frameDocument)
+    ? ((frameDocument as JsonObject)['@context'] ?? null)
+    : null;
+  const base = options?.base !== undefined ? options.base : resolved.documentUrl;
+  const frameBase = resolvedFrame.documentUrl ?? base;
+  const frameContext = processContext(env, initialContext(frameBase), context, frameBase);
+  const merged = !(
+    isObject(frameDocument) &&
+    Object.keys(frameDocument).some((k) => expandIri(env, frameContext, k, true) === '@graph')
+  );
+  const expanded = expandSync(env, resolved, { ...options, ordered: false });
+  const expandedFrame = expandSync(env, resolvedFrame, { ...options, ordered: false }, true);
+  const is11 = env.processingMode !== 'json-ld-1.0';
+  const framed = frameAlgorithm(expanded, expandedFrame, {
+    embed: options?.embed ?? '@once',
+    explicit: options?.explicit ?? false,
+    omitDefault: options?.omitDefault ?? false,
+    requireAll: options?.requireAll ?? false,
+    ordered: options?.ordered ?? false,
+    merged,
+    is11,
+  });
+  const compactToRelative = options?.compactToRelative ?? true;
+  let active = initialContext(
+    options?.base != null ? options.base : compactToRelative ? resolved.documentUrl : null,
+  );
+  active = processContext(env, active, context, frameBase);
+  const compactOptions = {
+    compactArrays: options?.compactArrays ?? true,
+    ordered: options?.ordered ?? false,
+    compactToRelative,
+  };
+  const omitGraph = options?.omitGraph ?? is11;
+  let compacted = compactElement(env, active, null, framed, compactOptions);
+  if (omitGraph && Array.isArray(compacted)) {
+    if (compacted.length === 1 && compactOptions.compactArrays) compacted = compacted[0];
+  } else if (!omitGraph && isObject(compacted)) {
+    compacted = [compacted];
+  }
+  if (Array.isArray(compacted)) {
+    const graphKey = compactIri(env, active, '@graph', null, true, false, compactOptions);
+    compacted = { [graphKey]: compacted };
+  }
+  if (compacted === null || compacted === undefined) compacted = {};
+  if (
+    context !== null &&
+    !(isObject(context) && Object.keys(context).length === 0) &&
+    !(Array.isArray(context) && context.length === 0)
+  ) {
+    compacted = { '@context': context, ...compacted };
+  }
+  return cleanupNull(compacted);
+};
 
 /**
  * Converts a JSON-LD document to an RDF dataset (Deserialize JSON-LD to RDF

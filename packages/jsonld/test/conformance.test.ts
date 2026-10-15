@@ -64,7 +64,7 @@ const runManifest = (
       it.skipIf(skipReason !== undefined)(`${id} ${test.name} ${skipReason ?? ''}`, async () => {
         const result = await evaluate(test, run);
         entry[result.ok ? 'pass' : 'fail']++;
-        expect(result).toMatchObject({ ok: true });
+        expect(result.ok ? 'ok' : result.detail).toBe('ok');
       });
     }
   });
