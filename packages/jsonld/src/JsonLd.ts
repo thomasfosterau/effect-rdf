@@ -548,13 +548,80 @@ export interface SerializeOptions extends Serialization.SerializeOptions, FromRd
   readonly documentLoader?: DocumentLoader.Loader | undefined;
 }
 
-const positionOf = (input: string, error: unknown): { line?: number; column?: number } => {
-  const m = /position (\d+)/.exec(String(error));
-  if (m === null) return {};
-  const pos = Number(m[1]);
+/** Finds the offset of the first JSON syntax error in `input`. */
+const jsonErrorOffset = (input: string): number => {
+  let i = 0;
+  const ws = () => {
+    while (i < input.length && ' \t\n\r'.includes(input[i]!)) i++;
+  };
+  const fail = (): never => {
+    throw i;
+  };
+  const literal = (word: string) => {
+    if (input.startsWith(word, i)) i += word.length;
+    else fail();
+  };
+  const string = () => {
+    i++;
+    while (i < input.length && input[i] !== '"') {
+      if (input[i] === '\\') i++;
+      else if (input.charCodeAt(i) < 0x20) fail();
+      i++;
+    }
+    if (i >= input.length) fail();
+    i++;
+  };
+  const value = (): void => {
+    ws();
+    const c = input[i];
+    if (c === '{' || c === '[') {
+      const close = c === '{' ? '}' : ']';
+      i++;
+      ws();
+      if (input[i] === close) {
+        i++;
+        return;
+      }
+      for (;;) {
+        if (c === '{') {
+          ws();
+          if (input[i] !== '"') fail();
+          string();
+          ws();
+          if (input[i] !== ':') fail();
+          i++;
+        }
+        value();
+        ws();
+        if (input[i] === ',') i++;
+        else if (input[i] === close) {
+          i++;
+          return;
+        } else fail();
+      }
+    } else if (c === '"') string();
+    else if (c === 't') literal('true');
+    else if (c === 'f') literal('false');
+    else if (c === 'n') literal('null');
+    else {
+      const m = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/.exec(input.slice(i));
+      if (m === null || m[0] === '') return fail();
+      i += m[0].length;
+    }
+  };
+  try {
+    value();
+    ws();
+    return i;
+  } catch (offset) {
+    return offset as number;
+  }
+};
+
+const positionOf = (input: string): { line: number; column: number } => {
+  const pos = jsonErrorOffset(input);
   const before = input.slice(0, pos);
-  const line = before.split('\n').length;
-  return { line, column: pos - before.lastIndexOf('\n') };
+  return { line: before.split('\n').length, column: pos - before.lastIndexOf('\n') };
 };
 
 /**
@@ -576,7 +643,7 @@ export const parse = (
         new Serialization.RdfParseError({
           format: format.name,
           message: `invalid JSON: ${String(e)}`,
-          ...positionOf(input, e),
+          ...positionOf(input),
         }),
       );
     }
