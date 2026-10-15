@@ -38,6 +38,53 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      vite:
+        specifier: npm:@voidzero-dev/vite-plus-core@1.2.0
+        version: '@voidzero-dev/vite-plus-core@1.2.0(@types/node@24.19.2)(typescript@7.0.2)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
+
+  packages/core:
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
+
+  packages/rdfjson:
+    dependencies:
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
+
+  packages/rdfxml:
+    dependencies:
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
       vite-plus:
         specifier: 'catalog:'
         version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
