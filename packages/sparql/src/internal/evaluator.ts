@@ -453,6 +453,8 @@ const Algebra_containsExists = (e: Algebra.Expression): boolean => {
 const bindable = (op: Algebra.Operation): boolean =>
   op._tag === 'Bgp' ||
   op._tag === 'Path' ||
+  // `SERVICE ?endpoint` is evaluated per solution once `?endpoint` is bound.
+  (op._tag === 'Service' && op.name._tag === 'Variable') ||
   (op._tag === 'Join' && bindable(op.left) && bindable(op.right));
 
 const evalWith = (op: Algebra.Operation, env: Env, initial: Bindings): S => {
@@ -463,6 +465,8 @@ const evalWith = (op: Algebra.Operation, env: Env, initial: Bindings): S => {
       return evalPath(op, env, initial);
     case 'Join':
       return Stream.flatMap(evalWith(op.left, env, initial), (b) => evalWith(op.right, env, b));
+    case 'Service':
+      return evalBoundService(op, env, initial);
     default:
       return Stream.die(new Error('not bindable'));
   }
@@ -742,21 +746,54 @@ const evalExtend = (op: Algebra.Extend, env: Env): S => {
   );
 };
 
-const evalService = (op: Algebra.Service, env: Env): S => {
+const runService = (op: Algebra.Service, env: Env, endpoint: Term.NamedNode): S => {
   const handler = env.service;
-  const run = (endpoint: Term.NamedNode): S =>
+  const stream: S =
     handler === undefined
       ? Stream.fail(
           new EvaluationError({ message: `SERVICE <${endpoint.value}> is not supported` }),
         )
       : handler(endpoint, op, env);
+  return op.silent ? Stream.catchCause(stream, () => Stream.succeed(B.empty)) : stream;
+};
+
+const evalService = (op: Algebra.Service, env: Env): S => {
   if (op.name._tag === 'Variable') {
     return Stream.fail(
-      new EvaluationError({ message: 'SERVICE with a variable endpoint is not supported' }),
+      new EvaluationError({
+        message: `SERVICE ?${op.name.value} needs the endpoint variable to be bound first`,
+      }),
     );
   }
-  const stream = run(op.name);
-  return op.silent ? Stream.catchCause(stream, () => Stream.succeed(B.empty)) : stream;
+  return runService(op, env, op.name);
+};
+
+/**
+ * `SERVICE ?endpoint { … }` with `?endpoint` bound by an earlier pattern:
+ * the remote pattern is evaluated at the bound endpoint and joined with the
+ * solution.
+ */
+const mergeWith = (initial: Bindings, solutions: S): S =>
+  Stream.flatMap(solutions, (b) => {
+    const m = B.merge(initial, b);
+    return m === undefined ? Stream.empty : Stream.succeed(m);
+  });
+
+const evalBoundService = (op: Algebra.Service, env: Env, initial: Bindings): S => {
+  if (op.name._tag === 'NamedNode') {
+    return mergeWith(initial, runService(op, env, op.name));
+  }
+  const endpoint = initial.map.get(op.name.value);
+  if (endpoint === undefined || endpoint._tag !== 'NamedNode') {
+    return op.silent
+      ? Stream.succeed(initial)
+      : Stream.fail(
+          new EvaluationError({
+            message: `SERVICE ?${op.name.value} is not bound to an IRI`,
+          }),
+        );
+  }
+  return mergeWith(initial, runService(op, env, endpoint));
 };
 
 // -----------------------------------------------------------------------------
