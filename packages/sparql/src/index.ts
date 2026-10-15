@@ -26,8 +26,12 @@ export * as Optimizer from './Optimizer.ts';
 /** @since 0.1.0 */
 export * as Parser from './Parser.ts';
 /** @since 0.1.0 */
+export * as QueryBuilder from './QueryBuilder.ts';
+/** @since 0.1.0 */
 export * as Results from './Results.ts';
 /** @since 0.1.0 */
 export * as Store from './Store.ts';
+/** @since 0.1.0 */
+export * as TermSchema from './TermSchema.ts';
 /** @since 0.1.0 */
 export * as Translate from './Translate.ts';
