@@ -19,11 +19,7 @@ const data = [
   Term.quad(ex('bob'), foaf('mbox'), Term.namedNode('mailto:bob@example.org')),
   Term.quad(ex('bob'), foaf('age'), Xsd.integer(25)),
   Term.quad(ex('carol'), foaf('name'), Term.literal('Carol', 'en'), ex('g1')),
-  Term.quad(
-    Term.triple(ex('alice'), foaf('knows'), ex('bob')),
-    ex('since'),
-    Xsd.integer(2020),
-  ),
+  Term.quad(Term.triple(ex('alice'), foaf('knows'), ex('bob')), ex('since'), Xsd.integer(2020)),
 ];
 
 const StoreLayer = SqlStore.layerSqlite({ filename: ':memory:' });
@@ -86,12 +82,13 @@ describe('SqlStore', () => {
       const rows = yield* Stream.runCollect(result.bindings);
       expect(
         rows
-          .map((b) => `${lex(Bindings.getUndefined(b, 'name'))}:${lex(Bindings.getUndefined(b, 'age'))}`)
+          .map(
+            (b) =>
+              `${lex(Bindings.getUndefined(b, 'name'))}:${lex(Bindings.getUndefined(b, 'age'))}`,
+          )
           .sort(),
       ).toEqual(['Alice:30', 'Bob:undefined']);
-      const count = yield* engine.select(
-        'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }',
-      );
+      const count = yield* engine.select('SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }');
       const c = yield* Stream.runCollect(count.bindings);
       expect(lex(Bindings.getUndefined(c[0]!, 'n'))).toBe('1');
       const since = yield* engine.select(

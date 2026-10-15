@@ -51,7 +51,7 @@ describe('Performance', () => {
         const n = Bindings.getUndefined(rows[0]!, 'n');
         expect(n?._tag === 'Literal' && Number(n.value) > 0).toBe(true);
         expect(queried).toBeLessThan(10_000);
-        console.log(
+        yield* Effect.logInfo(
           `Loaded ${N} triples in ${loaded.toFixed(0)} ms; join + filter + count in ${queried.toFixed(0)} ms`,
         );
       }).pipe(Effect.provide(SqlStore.layerSqlite({ filename: ':memory:' }))),

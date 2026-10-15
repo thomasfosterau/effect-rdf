@@ -88,7 +88,9 @@ const decimalDigits = (d: BigDecimal.BigDecimal): number => {
 };
 
 /** The comparison class and numeric value of a term. */
-export const classify = (term: Term.GroundTerm): { readonly cls: number; readonly num: number | null } => {
+export const classify = (
+  term: Term.GroundTerm,
+): { readonly cls: number; readonly num: number | null } => {
   switch (term._tag) {
     case 'NamedNode':
     case 'BlankNode':
@@ -159,9 +161,31 @@ export const encode = (
   const { cls, num } = classify(term);
   switch (term._tag) {
     case 'NamedNode':
-      return { kind: Kind.NamedNode, value: term.value, datatype: '', lang: '', dir: '', sub: null, pre: null, obj: null, cls, num };
+      return {
+        kind: Kind.NamedNode,
+        value: term.value,
+        datatype: '',
+        lang: '',
+        dir: '',
+        sub: null,
+        pre: null,
+        obj: null,
+        cls,
+        num,
+      };
     case 'BlankNode':
-      return { kind: Kind.BlankNode, value: term.value, datatype: '', lang: '', dir: '', sub: null, pre: null, obj: null, cls, num };
+      return {
+        kind: Kind.BlankNode,
+        value: term.value,
+        datatype: '',
+        lang: '',
+        dir: '',
+        sub: null,
+        pre: null,
+        obj: null,
+        cls,
+        num,
+      };
     case 'Literal':
       return {
         kind: Kind.Literal,

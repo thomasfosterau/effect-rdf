@@ -136,7 +136,8 @@ const chunks = <A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A
 };
 
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v));
-const str = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
+const str = (v: unknown): string =>
+  typeof v === 'string' ? v : v === null || v === undefined ? '' : String(v as number);
 
 const depth = (t: Term.GroundTerm): number =>
   t._tag === 'Triple'
@@ -240,7 +241,9 @@ export const make = (
         const found = new Map<string, number>();
         const values = Array.from(new Set(rows.map((r) => r.value)));
         for (const chunk of chunks(values, 500)) {
-          const list = chunk.map((_, i) => dialect.valueKey(dialect.castText(ph(i + 1)))).join(', ');
+          const list = chunk
+            .map((_, i) => dialect.valueKey(dialect.castText(ph(i + 1))))
+            .join(', ');
           const result = yield* run(
             `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE ${dialect.valueKey('value')} IN (${list})`,
             chunk,
@@ -555,9 +558,7 @@ export const make = (
               const next =
                 rows.length < pageSize || last === undefined
                   ? Option.none<ReadonlyArray<number>>()
-                  : Option.some(
-                      order.map((c) => num(last[['s', 'p', 'o', 'g'].indexOf(c)])),
-                    );
+                  : Option.some(order.map((c) => num(last[['s', 'p', 'o', 'g'].indexOf(c)])));
               return [quads, next] as const;
             }),
           );
@@ -705,8 +706,7 @@ export const make = (
 
     const clear = (graph: Term.Graph) =>
       Effect.gen(function* () {
-        const id =
-          graph._tag === 'DefaultGraph' ? 0 : yield* graphIdOf(graph, false);
+        const id = graph._tag === 'DefaultGraph' ? 0 : yield* graphIdOf(graph, false);
         if (id === undefined) return;
         yield* exec(`DELETE FROM ${Qt} WHERE g = ${id}`);
       }).pipe(Effect.mapError(storeError('clear failed')));
@@ -714,11 +714,13 @@ export const make = (
     const transaction = <A, E, R>(
       effect: Effect.Effect<A, E, R>,
     ): Effect.Effect<A, E | Store.StoreError, R> =>
-      sql.withTransaction(effect).pipe(
-        Effect.mapError((e) =>
-          SqlError.isSqlError(e) ? storeError('transaction failed')(e) : (e as E),
-        ),
-      );
+      sql
+        .withTransaction(effect)
+        .pipe(
+          Effect.mapError((e) =>
+            SqlError.isSqlError(e) ? storeError('transaction failed')(e) : (e as E),
+          ),
+        );
 
     // --- SPARQL to SQL ------------------------------------------------------------
 
@@ -776,7 +778,7 @@ export const make = (
             const v = r[i];
             if (c.type === 'int') {
               if (v !== null && v !== undefined) {
-                map.set(c.variable, new Term.Literal(String(v), INTEGER));
+                map.set(c.variable, new Term.Literal(str(v), INTEGER));
               }
               i += 1;
               continue;
@@ -823,7 +825,13 @@ export const make = (
             const rows = yield* run(q.sql, q.params).pipe(
               Effect.withSpan('SqlStore.query', { attributes: { 'db.query.text': q.sql } }),
             );
-            onQuery?.({ _tag: 'Executed', operation: op, sql: q.sql, params: q.params, rows: rows.length });
+            onQuery?.({
+              _tag: 'Executed',
+              operation: op,
+              sql: q.sql,
+              params: q.params,
+              rows: rows.length,
+            });
             return Stream.fromArray(yield* decodeSolutions(q, rows));
           }).pipe(Effect.mapError(storeError('SQL query failed'))),
         );

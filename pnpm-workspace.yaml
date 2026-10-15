@@ -4,6 +4,7 @@ packages:
 catalogMode: prefer
 
 catalog:
+  '@electric-sql/pglite': 0.5.8
   '@effect/vitest': 4.0.5
   '@effect/platform-node': 4.0.5
   '@effect/sql-pg': 4.0.5

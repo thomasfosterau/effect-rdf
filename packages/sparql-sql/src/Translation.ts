@@ -419,7 +419,7 @@ class Compiler {
       i = this.params.length;
       this.paramIndex.set(value, i);
     }
-    return this.dialect.castText(`\u0001${i}\u0001`);
+    return this.dialect.castText(`\ue000${i}\ue000`);
   }
 
   lit(v: Static): string {
@@ -477,7 +477,10 @@ class Compiler {
   render(
     block: Block,
     names: ReadonlyArray<string> = Array.from(block.cols.keys()),
-    options: { readonly distinct?: boolean; readonly types?: ReadonlyMap<string, 'id' | 'int'> } = {},
+    options: {
+      readonly distinct?: boolean;
+      readonly types?: ReadonlyMap<string, 'id' | 'int'>;
+    } = {},
   ): string {
     const select = names.map((n) => {
       const c = block.cols.get(n);
@@ -557,9 +560,7 @@ class Compiler {
       case 'Extend': {
         const input = this.op(op.input, g, unit);
         if (input.cols.has(op.variable.value)) return unsupported('BIND to a bound variable');
-        const col = this.termValued(
-          this.operand(op.expression, { cols: input.cols, graph: g }),
-        );
+        const col = this.termValued(this.operand(op.expression, { cols: input.cols, graph: g }));
         const cols = new Map(input.cols);
         cols.set(op.variable.value, col);
         return { ...input, cols };
@@ -782,7 +783,9 @@ class Compiler {
         merged.set(n, m);
         out.set(
           n,
-          ca.nullable ? { sql: `COALESCE(${ca.sql}, ${cr.sql})`, nullable: true, type: ca.type } : ca,
+          ca.nullable
+            ? { sql: `COALESCE(${ca.sql}, ${cr.sql})`, nullable: true, type: ca.type }
+            : ca,
         );
       }
     }
@@ -840,7 +843,10 @@ class Compiler {
       conds.push(this.compat(ca, cb).cond);
       if (!isHidden(n)) {
         overlapConds.push(
-          and(ca.nullable ? `${ca.sql} IS NOT NULL` : true, cb.nullable ? `${cb.sql} IS NOT NULL` : true),
+          and(
+            ca.nullable ? `${ca.sql} IS NOT NULL` : true,
+            cb.nullable ? `${cb.sql} IS NOT NULL` : true,
+          ),
         );
       }
     }
@@ -907,19 +913,31 @@ class Compiler {
       needed.add(k.expression.value);
       keyVars.push({ source: k.expression.value, target: k.variable.value });
     }
-    const aggs: Array<{ readonly target: string; readonly sql: (s: string) => string; readonly col: Omit<Col, 'sql'> }> = [];
+    const aggs: Array<{
+      readonly target: string;
+      readonly sql: (s: string) => string;
+      readonly col: Omit<Col, 'sql'>;
+    }> = [];
     for (const { variable, aggregate } of op.aggregates) {
       const e = aggregate.expression;
       if (aggregate.name === 'COUNT') {
         if (e === '*') {
           if (aggregate.distinct) return unsupported('COUNT(DISTINCT *)');
-          aggs.push({ target: variable.value, sql: () => 'COUNT(*)', col: { nullable: false, type: 'int' } });
+          aggs.push({
+            target: variable.value,
+            sql: () => 'COUNT(*)',
+            col: { nullable: false, type: 'int' },
+          });
           continue;
         }
         if (e._tag !== 'Variable') return unsupported('COUNT of an expression');
         const name = e.value;
         if (!input.cols.has(name)) {
-          aggs.push({ target: variable.value, sql: () => '0', col: { nullable: false, type: 'int' } });
+          aggs.push({
+            target: variable.value,
+            sql: () => '0',
+            col: { nullable: false, type: 'int' },
+          });
           continue;
         }
         needed.add(name);
@@ -934,7 +952,11 @@ class Compiler {
         const name = e.value;
         const c = input.cols.get(name);
         if (c === undefined) {
-          aggs.push({ target: variable.value, sql: () => this.dialect.nullId, col: { nullable: true, type: 'id' } });
+          aggs.push({
+            target: variable.value,
+            sql: () => this.dialect.nullId,
+            col: { nullable: true, type: 'id' },
+          });
           continue;
         }
         needed.add(name);
@@ -976,8 +998,15 @@ class Compiler {
     if (this.locals.size === 0) return lookup;
     if (!this.localsKnown) return lookup;
     const branches = Array.from(this.locals.values()).map(({ id: localId, term }) => {
-      const row = Enc.encode(term, [0, 0, 0]);
-      return `WHEN ${localId} THEN ${this.lit(row[field])}`;
+      const v = this.lit(Enc.encode(term, [0, 0, 0])[field]);
+      // Typed values, so that the branches agree with the dictionary column.
+      const typed =
+        field === 'num'
+          ? this.dialect.castDouble(v)
+          : field === 'kind' || field === 'cls'
+            ? this.dialect.castInt(v)
+            : this.dialect.castText(v);
+      return `WHEN ${localId} THEN ${typed}`;
     });
     return `(CASE WHEN ${id} < 0 THEN (CASE ${id} ${branches.join(' ')} END) ELSE ${lookup} END)`;
   }
@@ -1120,11 +1149,19 @@ class Compiler {
   termValued(o: Operand): Col {
     switch (o.tag) {
       case 'term':
-        return { sql: this.f(o.id!), nullable: !isStatic(o.isNull) || o.isNull.s !== false, type: 'id' };
+        return {
+          sql: this.f(o.id!),
+          nullable: !isStatic(o.isNull) || o.isNull.s !== false,
+          type: 'id',
+        };
       case 'const':
         return { sql: String(this.idOf(o.term!)), nullable: false, type: 'id' };
       case 'int':
-        return { sql: this.f(o.num), nullable: !isStatic(o.isNull) || o.isNull.s !== false, type: 'int' };
+        return {
+          sql: this.f(o.num),
+          nullable: !isStatic(o.isNull) || o.isNull.s !== false,
+          type: 'int',
+        };
       case 'bool':
         return {
           sql: `(CASE WHEN ${o.bool!} THEN ${this.idOf(TRUE)} WHEN NOT ${o.bool!} THEN ${this.idOf(FALSE)} END)`,
@@ -1144,7 +1181,9 @@ class Compiler {
       case 'Variable': {
         const c = env.cols.get(e.value);
         if (c === undefined) return this.NULL;
-        return c.type === 'int' ? this.intOperand(c.sql, c.nullable) : this.termOperand(c.sql, c.nullable);
+        return c.type === 'int'
+          ? this.intOperand(c.sql, c.nullable)
+          : this.termOperand(c.sql, c.nullable);
       }
       case 'NamedNode':
       case 'Literal':
@@ -1200,7 +1239,8 @@ class Compiler {
         const a = arg(0);
         const b = arg(1);
         if (a.tag === 'null' || b.tag === 'null') return bool('NULL');
-        if (a.id === undefined || b.id === undefined) return unsupported('sameTerm of computed values');
+        if (a.id === undefined || b.id === undefined)
+          return unsupported('sameTerm of computed values');
         return bool(`(${this.f(a.id)} = ${this.f(b.id)})`);
       }
       case 'ISIRI':
@@ -1230,7 +1270,8 @@ class Compiler {
         const a = arg(0);
         if (a.tag === 'const') {
           const t = a.term!;
-          if (t._tag === 'NamedNode' || t._tag === 'Literal') return this.constOperand(Term.literal(t.value));
+          if (t._tag === 'NamedNode' || t._tag === 'Literal')
+            return this.constOperand(Term.literal(t.value));
           return this.NULL;
         }
         if (a.tag === 'str' || a.tag === 'null') return a;
@@ -1238,7 +1279,10 @@ class Compiler {
           caseOf(
             [
               [this.isNullC(a), 'NULL'],
-              [or(this.eqC(a.kind, Enc.Kind.NamedNode), this.eqC(a.kind, Enc.Kind.Literal)), this.f(a.value)],
+              [
+                or(this.eqC(a.kind, Enc.Kind.NamedNode), this.eqC(a.kind, Enc.Kind.Literal)),
+                this.f(a.value),
+              ],
             ],
             'NULL',
           ),
@@ -1283,7 +1327,12 @@ class Compiler {
         if (a.tag === 'null') return a;
         return this.intOperand(
           caseOf(
-            [[this.clsIn(a, [Enc.Cls.String, Enc.Cls.LangString]), this.dialect.length(this.f(a.value))]],
+            [
+              [
+                this.clsIn(a, [Enc.Cls.String, Enc.Cls.LangString]),
+                this.dialect.length(this.f(a.value)),
+              ],
+            ],
             'NULL',
           ),
           true,
@@ -1316,7 +1365,8 @@ class Compiler {
         const b = arg(1);
         if (b.tag !== 'const') return unsupported('LANGMATCHES with a non-constant range');
         const range = b.term!;
-        if (range._tag !== 'Literal' || Enc.classify(range).cls !== Enc.Cls.String) return bool('NULL');
+        if (range._tag !== 'Literal' || Enc.classify(range).cls !== Enc.Cls.String)
+          return bool('NULL');
         // eslint-disable-next-line no-control-regex
         if (!/^[\x00-\x7f]*$/.test(range.value)) return unsupported('Non-ASCII language range');
         const r = range.value.toLowerCase();
@@ -1342,8 +1392,10 @@ class Compiler {
         if (parts.length === 0) return this.NULL;
         const cols = parts.map((o) => this.termValued(o));
         const type = cols[0]!.type;
-        if (cols.some((c) => c.type !== type)) return unsupported('COALESCE of integer and term values');
-        const sql = cols.length === 1 ? cols[0]!.sql : `COALESCE(${cols.map((c) => c.sql).join(', ')})`;
+        if (cols.some((c) => c.type !== type))
+          return unsupported('COALESCE of integer and term values');
+        const sql =
+          cols.length === 1 ? cols[0]!.sql : `COALESCE(${cols.map((c) => c.sql).join(', ')})`;
         const nullable = cols.every((c) => c.nullable);
         return type === 'int' ? this.intOperand(sql, nullable) : this.termOperand(sql, nullable);
       }
@@ -1394,7 +1446,12 @@ class Compiler {
     for (const [x, y] of pairs) {
       for (const [p, q] of x === y ? [[x, y] as const] : [[x, y] as const, [y, x] as const]) {
         if (!possible(a, p) || !possible(b, q)) continue;
-        const r: Risk = { a: p, aStatic: a.classes !== undefined, b: q, bStatic: b.classes !== undefined };
+        const r: Risk = {
+          a: p,
+          aStatic: a.classes !== undefined,
+          b: q,
+          bStatic: b.classes !== undefined,
+        };
         if (r.aStatic && r.bStatic) unsupported('Comparison that SQL cannot evaluate exactly');
         this.risks.push(r);
       }
@@ -1451,7 +1508,12 @@ class Compiler {
         [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],
         [and(this.clsIn(a, [4]), this.clsIn(b, [4])), str],
         [
-          and(this.clsIn(a, [5]), this.clsIn(b, [5]), this.eqFF(a.lang, b.lang), this.eqFF(a.dir, b.dir)),
+          and(
+            this.clsIn(a, [5]),
+            this.clsIn(b, [5]),
+            this.eqFF(a.lang, b.lang),
+            this.eqFF(a.dir, b.dir),
+          ),
           str,
         ],
         [and(this.clsIn(a, [6]), this.clsIn(b, [6])), num],
@@ -1503,7 +1565,8 @@ class Compiler {
       const ic = inner.cols.get(hidden);
       const oc = env.cols.get(hidden);
       if (ic !== undefined) {
-        if (oc === undefined || oc.nullable) return unsupported('EXISTS in a graph-independent pattern');
+        if (oc === undefined || oc.nullable)
+          return unsupported('EXISTS in a graph-independent pattern');
         if (ic.sql !== oc.sql) where.push(`${ic.sql} = ${oc.sql}`);
       }
     }
@@ -1551,7 +1614,7 @@ const compileOnce = (
   // may have allocated parameters that are not used).
   const params: Array<unknown> = [];
   const numbering = new Map<string, number>();
-  const sql = marked.replace(/\u0001(\d+)\u0001/g, (_, i: string) => {
+  const sql = marked.replace(/\ue000(\d+)\ue000/g, (_, i: string) => {
     if (context.dialect.anonymousParameters) {
       params.push(c.params[Number(i) - 1]);
       return context.dialect.placeholder(params.length);
