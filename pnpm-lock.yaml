@@ -175,6 +175,9 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      '@thomasfosterau/effect-jsonld':
+        specifier: workspace:*
+        version: link:../jsonld
       '@thomasfosterau/effect-turtle':
         specifier: workspace:*
         version: link:../turtle
