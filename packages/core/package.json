@@ -1,0 +1,39 @@
+{
+  "name": "@thomasfosterau/effect-rdf",
+  "version": "0.0.0",
+  "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./*": {
+        "types": "./dist/*.d.mts",
+        "default": "./dist/*.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "vp pack"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
+  }
+}
