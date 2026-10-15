@@ -6,6 +6,12 @@ settings:
 
 catalogs:
   default:
+    '@effect/sql-pg':
+      specifier: 4.0.5
+      version: 4.0.5
+    '@effect/sql-sqlite-node':
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/vitest':
       specifier: 4.0.5
       version: 4.0.5
@@ -204,6 +210,40 @@ importers:
         specifier: 'catalog:'
         version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
 
+  packages/sparql-sql:
+    dependencies:
+      '@effect/sql-sqlite-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../core
+      '@thomasfosterau/effect-sparql':
+        specifier: workspace:*
+        version: link:../sparql
+    devDependencies:
+      '@effect/sql-pg':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      '@thomasfosterau/effect-ntriples':
+        specifier: workspace:*
+        version: link:../ntriples
+      '@thomasfosterau/effect-rdfxml':
+        specifier: workspace:*
+        version: link:../rdfxml
+      '@thomasfosterau/effect-turtle':
+        specifier: workspace:*
+        version: link:../turtle
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
+
   packages/turtle:
     dependencies:
       '@thomasfosterau/effect-ntriples':
@@ -239,6 +279,16 @@ packages:
 
   '@blazediff/core@1.10.0':
     resolution: {integrity: sha512-AOQff0zgR7cGsZL+4E7hVkmujoPUpm0J9xzWGWZj5wCjd3gmxESXAPfKyuzs93VdpQNFhHlBhfOjrcZ+XTERtQ==}
+
+  '@effect/sql-pg@4.0.5':
+    resolution: {integrity: sha512-F9tG76H+aryhYcp5pvgd+MwWrNltv3XAuLcZSBsOOX6q+PEl+IM4zkQKzx0TF9OsEMH/SQ+3gZRdYWOsDF+vJQ==}
+    peerDependencies:
+      effect: ^4.0.5
+
+  '@effect/sql-sqlite-node@4.0.5':
+    resolution: {integrity: sha512-SHza5qNwiI4dRtUk45wvUfvZq7vB950DW2wD6npzt2aH/tesFfPlZJSDBIvwhazoK+gvDknBOONfKyFZsIF+tg==}
+    peerDependencies:
+      effect: ^4.0.5
 
   '@effect/vitest@4.0.5':
     resolution: {integrity: sha512-q64paZ/i4V2NiRhTyqCmT2KiDbFjlxc2EZrZca8GGt+Nf8844946HyJM5bPk/q+YeRkFSxIrlCs+J+LSfky/wA==}
@@ -1246,6 +1296,14 @@ snapshots:
   '@babel/runtime@7.29.10': {}
 
   '@blazediff/core@1.10.0': {}
+
+  '@effect/sql-pg@4.0.5(effect@4.0.5)':
+    dependencies:
+      effect: 4.0.5
+
+  '@effect/sql-sqlite-node@4.0.5(effect@4.0.5)':
+    dependencies:
+      effect: 4.0.5
 
   '@effect/vitest@4.0.5(effect@4.0.5)(vitest@5.0.4)':
     dependencies:

@@ -6,6 +6,7 @@ catalogMode: prefer
 catalog:
   '@effect/vitest': 4.0.5
   '@effect/platform-node': 4.0.5
+  '@effect/sql-pg': 4.0.5
   '@effect/sql-sqlite-node': 4.0.5
   '@types/node': ^24
   effect: 4.0.5
