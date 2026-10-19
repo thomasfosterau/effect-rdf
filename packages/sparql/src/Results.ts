@@ -12,10 +12,13 @@ import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
+import type * as ParseError from '@thomasfosterau/effect-parse/ParseError';
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as XmlParser from '@thomasfosterau/effect-rdfxml/Xml';
 import * as B from './Bindings.ts';
+import * as TextResults from './internal/textResults.ts';
 
 type Bindings = B.Bindings;
 
@@ -128,7 +131,8 @@ export const fromResultSet = (set: ResultSet): SelectResult => ({
 // -----------------------------------------------------------------------------
 
 /**
- * An error parsing a results document.
+ * An error parsing a results document. The text formats (TSV and CSV)
+ * report the 1-based `line` and `column` of the error.
  *
  * @since 0.1.0
  * @category errors
@@ -138,8 +142,14 @@ export class ResultsParseError extends Schema.TaggedError<ResultsParseError>()(
   {
     format: Schema.String,
     message: Schema.String,
+    line: Schema.optional(Schema.Number),
+    column: Schema.optional(Schema.Number),
   },
 ) {}
+
+/** The last line of a rendered `ParseError`: what was expected and found. */
+const parseErrorSummary = (error: ParseError.ParseError): string =>
+  error.message.slice(error.message.lastIndexOf('\n') + 1);
 
 /**
  * Metadata of a results format.
@@ -594,99 +604,6 @@ export const termToTsv = (t: Term.GroundTerm): string => {
   return t.key.replace(/\t/g, '\\t');
 };
 
-class TermReader {
-  pos = 0;
-  readonly text: string;
-  constructor(text: string) {
-    this.text = text;
-  }
-  fail(): never {
-    throw new Error(`Invalid term: ${this.text}`);
-  }
-  ws() {
-    while (this.pos < this.text.length && /\s/.test(this.text[this.pos]!)) this.pos++;
-  }
-  term(): Term.GroundTerm {
-    this.ws();
-    const t = this.text;
-    const rest = t.slice(this.pos);
-    if (rest.startsWith('<<(')) {
-      this.pos += 3;
-      const s = this.term();
-      const p = this.term();
-      const o = this.term();
-      this.ws();
-      if (!t.startsWith(')>>', this.pos)) this.fail();
-      this.pos += 3;
-      return Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
-    }
-    if (rest.startsWith('<')) {
-      const end = t.indexOf('>', this.pos);
-      if (end === -1) this.fail();
-      const iri = unescape(t.slice(this.pos + 1, end));
-      this.pos = end + 1;
-      return Term.namedNode(iri);
-    }
-    if (rest.startsWith('_:')) {
-      const m = /^_:([^\s)]+)/.exec(rest)!;
-      this.pos += m[0].length;
-      return Term.blankNode(m[1]!);
-    }
-    if (rest.startsWith('"') || rest.startsWith("'")) {
-      const q = rest[0]!;
-      const long = rest.startsWith(q.repeat(3));
-      let i = this.pos + (long ? 3 : 1);
-      let value = '';
-      for (;;) {
-        if (i >= t.length) this.fail();
-        if (t[i] === '\\') {
-          value += t.slice(i, i + 2);
-          i += 2;
-          continue;
-        }
-        if (long ? t.startsWith(q.repeat(3), i) : t[i] === q) break;
-        value += t[i];
-        i++;
-      }
-      this.pos = i + (long ? 3 : 1);
-      const lex = unescape(value);
-      const lang = /^@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)(?:--(ltr|rtl))?/.exec(t.slice(this.pos));
-      if (lang !== null) {
-        this.pos += lang[0].length;
-        return lang[2] !== undefined
-          ? Term.literal(lex, { language: lang[1]!, direction: lang[2] as Term.Direction })
-          : Term.literal(lex, lang[1]!);
-      }
-      if (t.startsWith('^^', this.pos)) {
-        this.pos += 2;
-        const dt = this.term();
-        if (dt._tag !== 'NamedNode') this.fail();
-        return Term.literal(lex, dt);
-      }
-      return Term.literal(lex);
-    }
-    const num = /^[+-]?(?:\d+\.?\d*[eE][+-]?\d+|\.\d+[eE][+-]?\d+|\d*\.\d+|\d+)/.exec(rest);
-    if (num !== null) {
-      this.pos += num[0].length;
-      const v = num[0];
-      const dt = /[eE]/.test(v) ? 'double' : v.includes('.') ? 'decimal' : 'integer';
-      return Term.literal(v, Term.namedNode(XSD + dt));
-    }
-    const bool = /^(true|false)\b/.exec(rest);
-    if (bool !== null) {
-      this.pos += bool[0].length;
-      return Term.literal(bool[1]!, Term.namedNode(`${XSD}boolean`));
-    }
-    return this.fail();
-  }
-}
-
-const unescape = (s: string): string =>
-  s.replace(/\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|\\(.)/g, (_, u4, u8, c) => {
-    if (u4 !== undefined || u8 !== undefined) return String.fromCodePoint(parseInt(u4 ?? u8, 16));
-    return ({ t: '\t', n: '\n', r: '\r', b: '\b', f: '\f' } as Record<string, string>)[c] ?? c;
-  });
-
 /**
  * Parses a term written in the Turtle / SPARQL syntax used by TSV results
  * (IRIs in `<>`, blank nodes, quoted literals, numbers, booleans, triple
@@ -695,16 +612,8 @@ const unescape = (s: string): string =>
  * @since 0.1.0
  * @category tsv
  */
-export const parseTerm = (text: string): Option.Option<Term.GroundTerm> => {
-  try {
-    const reader = new TermReader(text);
-    const t = reader.term();
-    reader.ws();
-    return reader.pos === text.length ? Option.some(t) : Option.none();
-  } catch {
-    return Option.none();
-  }
-};
+export const parseTerm = (text: string): Option.Option<Term.GroundTerm> =>
+  Result.getSuccess(Parser.parse(TextResults.groundTerm, text));
 
 const serializeTsv = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
   if (result._tag === 'Ask') return Stream.succeed(`${result.value}\n`);
@@ -739,19 +648,27 @@ const parseTsv = (input: string): Effect.Effect<ParsedResult, ResultsParseError>
     }
     const vars = lines[0]!.split('\t').map((v) => v.trim().replace(/^[?$]/, ''));
     const bindings: Array<Bindings> = [];
-    for (const line of lines.slice(1)) {
-      const cells = line.split('\t');
+    for (let row = 1; row < lines.length; row++) {
+      const cells = lines[row]!.split('\t');
       const entries: Array<readonly [string, Term.GroundTerm | undefined]> = [];
+      let offset = 0;
       for (let i = 0; i < vars.length; i++) {
-        const cell = (cells[i] ?? '').trim();
-        if (cell === '') continue;
-        const t = parseTerm(cell);
-        if (Option.isNone(t)) {
+        const cell = cells[i] ?? '';
+        const start = offset;
+        offset += cell.length + 1;
+        if (cell.trim() === '') continue;
+        const t = Parser.parse(TextResults.groundTerm, cell);
+        if (Result.isFailure(t)) {
           return Effect.fail(
-            new ResultsParseError({ format: 'tsv', message: `Invalid term: ${cell}` }),
+            new ResultsParseError({
+              format: 'tsv',
+              message: `Invalid term: ${cell.trim()}: ${parseErrorSummary(t.failure)}`,
+              line: row + 1,
+              column: start + t.failure.position.column,
+            }),
           );
         }
-        entries.push([vars[i]!, t.value]);
+        entries.push([vars[i]!, t.success]);
       }
       bindings.push(B.fromEntries(entries));
     }
@@ -810,48 +727,6 @@ const serializeCsv = <E>(result: SelectResult<E> | AskResult): Stream.Stream<str
   );
 };
 
-const parseCsvRows = (input: string): Array<Array<{ value: string; quoted: boolean }>> => {
-  const rows: Array<Array<{ value: string; quoted: boolean }>> = [];
-  let row: Array<{ value: string; quoted: boolean }> = [];
-  let i = 0;
-  while (i < input.length) {
-    let value = '';
-    let quoted = false;
-    if (input[i] === '"') {
-      quoted = true;
-      i++;
-      for (;;) {
-        if (i >= input.length) break;
-        if (input[i] === '"') {
-          if (input[i + 1] === '"') {
-            value += '"';
-            i += 2;
-            continue;
-          }
-          i++;
-          break;
-        }
-        value += input[i++];
-      }
-    } else {
-      while (i < input.length && input[i] !== ',' && input[i] !== '\n' && input[i] !== '\r') {
-        value += input[i++];
-      }
-    }
-    row.push({ value, quoted });
-    if (input[i] === ',') {
-      i++;
-      continue;
-    }
-    if (input[i] === '\r') i++;
-    if (input[i] === '\n') i++;
-    rows.push(row);
-    row = [];
-  }
-  if (row.length > 0) rows.push(row);
-  return rows;
-};
-
 /**
  * Interprets a CSV cell. The CSV format is lossy: blank nodes are recognised
  * by `_:`, absolute IRIs (with a scheme) become IRIs, numbers and booleans
@@ -872,7 +747,19 @@ const csvCell = (cell: string): Term.GroundTerm => {
 
 const parseCsv = (input: string): Effect.Effect<ParsedResult, ResultsParseError> =>
   Effect.suspend((): Effect.Effect<ParsedResult, ResultsParseError> => {
-    const rows = parseCsvRows(input);
+    const parsed = Parser.parse(TextResults.csvRows, input);
+    if (Result.isFailure(parsed)) {
+      const { line, column } = parsed.failure.position;
+      return Effect.fail(
+        new ResultsParseError({
+          format: 'csv',
+          message: parseErrorSummary(parsed.failure),
+          line,
+          column,
+        }),
+      );
+    }
+    const rows = parsed.success;
     if (rows.length === 0) {
       return Effect.fail(new ResultsParseError({ format: 'csv', message: 'Empty document' }));
     }

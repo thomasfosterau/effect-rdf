@@ -135,6 +135,14 @@ const body = Results.Json.serialize(selectResult); // Stream<string>
 const parsed = yield * Results.Xml.parse(text); // ResultSet | BooleanResult
 ```
 
+The TSV term syntax and CSV rows are parsed with
+[`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+(a peer dependency, next to `effect`), using compiled grammars. A
+`ResultsParseError` from the TSV or CSV parsers carries the 1-based `line`
+and `column` of the error. `pnpm bench` times both parsers on every
+SRX/SRJ result in the conformance suites, re-serialised as TSV and CSV,
+plus a synthetic 20,000-row document.
+
 ## Extension points
 
 These are the seams for the packages built on top of this one.
