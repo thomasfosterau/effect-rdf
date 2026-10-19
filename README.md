@@ -31,11 +31,12 @@ Each package has a README with its API and usage examples.
 ## Install
 
 The packages are published under the `@thomasfosterau` scope and have
-`effect` (4.x) as a peer dependency:
+`effect` (4.x) as a peer dependency (`effect-sparql` also has
+`@thomasfosterau/effect-parse`):
 
 ```sh
 pnpm add effect @thomasfosterau/effect-rdf @thomasfosterau/effect-turtle
-pnpm add @thomasfosterau/effect-sparql @thomasfosterau/effect-shacl @thomasfosterau/effect-shacl-sparql
+pnpm add @thomasfosterau/effect-parse @thomasfosterau/effect-sparql @thomasfosterau/effect-shacl @thomasfosterau/effect-shacl-sparql
 ```
 
 ## Quick tour

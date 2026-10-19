@@ -9,6 +9,7 @@ catalog:
   '@effect/platform-node': 4.0.5
   '@effect/sql-pg': 4.0.5
   '@effect/sql-sqlite-node': 4.0.5
+  '@thomasfosterau/effect-parse': 0.1.0
   '@types/node': ^24
   effect: 4.0.5
   typescript: ^7.0.0
