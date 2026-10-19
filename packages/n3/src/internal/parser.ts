@@ -1,16 +1,29 @@
 /**
- * Hand-written recursive-descent parser for Notation3.
+ * The Notation3 parser, in two steps:
  *
- * The parser works directly on the input string (no separate token stream)
- * and throws `SyntaxFailure` on the first error; the public API wraps it in
- * an `Effect`.
+ * 1. A compiled `@thomasfosterau/effect-parse` grammar over the input string
+ *    (no separate lexer) produces a syntax tree. It is built on the Turtle
+ *    terminals of `effect-rdf-grammar`, as the N3 grammar is: N3 extends
+ *    Turtle with formulas, paths, quick variables, `=`, `=>`, `<=`, `has`,
+ *    `is … of` and the legacy `@forAll` / `@forSome`.
+ * 2. A builder walks the tree in document order and does everything that
+ *    depends on what came before: `@prefix` / `@base`, quantifier scopes,
+ *    blank node allocation and the order in which statements are emitted
+ *    (paths emit their statements as they are read).
+ *
+ * Keeping the grammar free of per-document state lets it be compiled.
  *
  * @internal
  */
+import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Terminals from '@thomasfosterau/effect-rdf-grammar/Terminals';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
+import * as Result from 'effect/Result';
 import * as Model from '../Model.ts';
 import { i18n, log, sameAs } from '../Vocab.ts';
 
@@ -33,7 +46,7 @@ export interface ParserOptions {
 }
 
 // -----------------------------------------------------------------------------
-// Character classes
+// Character classes (also used by the writer)
 // -----------------------------------------------------------------------------
 
 /** @internal */
@@ -56,21 +69,14 @@ export const isPnCharsBase = (c: number): boolean =>
 /** @internal */
 export const isPnCharsU = (c: number): boolean => c === 0x5f || isPnCharsBase(c);
 
-const isDigit = (c: number): boolean => c >= 0x30 && c <= 0x39;
-
 /** @internal */
 export const isPnChars = (c: number): boolean =>
   isPnCharsU(c) ||
   c === 0x2d ||
-  isDigit(c) ||
+  (c >= 0x30 && c <= 0x39) ||
   c === 0xb7 ||
   (c >= 0x300 && c <= 0x36f) ||
   (c >= 0x203f && c <= 0x2040);
-
-const isHex = (c: number): boolean =>
-  isDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
-
-const isWs = (c: number): boolean => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;
 
 /** Whether a string is a valid `PN_PREFIX` (or empty). @internal */
 export const isPnPrefix = (s: string): boolean => {
@@ -87,34 +93,474 @@ export const isVarName = (s: string): boolean => {
   return cps.length > 0 && isPnCharsU(cps[0]!) && cps.slice(1).every(isPnChars);
 };
 
-const PN_LOCAL_ESCAPABLE = new Set("_~.-!$&'()*+,;=/?#@%");
+// -----------------------------------------------------------------------------
+// Syntax tree
+// -----------------------------------------------------------------------------
 
-const NUMBER = /[+-]?(?:\d+\.\d*[eE][+-]?\d+|\.\d+[eE][+-]?\d+|\d+[eE][+-]?\d+|\d*\.\d+|\d+)/y;
-const LANGTAG = /[a-zA-Z]+(?:-[a-zA-Z0-9]+)*/y;
-const I18N_DATATYPE = /^([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)_(ltr|rtl)$/;
+/** An IRI as written: an IRI reference or a prefixed name, at an offset. */
+type IriNode =
+  | {
+      readonly _tag: 'IriRef';
+      readonly value: string;
+      readonly at: number;
+      /** Whether the reference contains `UCHAR` escapes. */
+      readonly escaped: boolean;
+    }
+  | {
+      readonly _tag: 'PName';
+      readonly prefix: string;
+      readonly local: string;
+      readonly at: number;
+    };
+
+type Item =
+  | IriNode
+  | { readonly _tag: 'Blank'; readonly label: string }
+  | { readonly _tag: 'Anon'; readonly id: IriNode | undefined; readonly pol: ReadonlyArray<Pol> }
+  | { readonly _tag: 'List'; readonly items: ReadonlyArray<Path> }
+  | { readonly _tag: 'Formula'; readonly statements: ReadonlyArray<Statement> }
+  | { readonly _tag: 'Var'; readonly name: string }
+  /** A syntax error found while reading (reported in document order by the builder). */
+  | { readonly _tag: 'Error'; readonly message: string; readonly at: number }
+  | { readonly _tag: 'Literal'; readonly value: Term.Literal }
+  | {
+      readonly _tag: 'String';
+      readonly value: string;
+      readonly language: string | undefined;
+      readonly datatype: IriNode | undefined;
+    };
+
+/** A path: an item, or an item followed by `!` (forward) and `^` (backward) steps. */
+type Path =
+  | Item
+  | {
+      readonly _tag: 'Path';
+      readonly head: Item;
+      readonly steps: ReadonlyArray<readonly ['!' | '^', Item]>;
+    };
+
+type Verb =
+  | { readonly _tag: 'Fixed'; readonly predicate: Model.N3Term }
+  | { readonly _tag: 'Path'; readonly path: Path; readonly inverse: boolean };
+
+/** A verb and its objects. */
+type Pol = readonly [verb: Verb, objects: ReadonlyArray<Path>];
+
+type Statement =
+  | { readonly _tag: 'Prefix'; readonly prefix: string; readonly iri: IriNode }
+  | { readonly _tag: 'Base'; readonly iri: IriNode }
+  | {
+      readonly _tag: 'Quantifier';
+      readonly universal: boolean;
+      readonly iris: ReadonlyArray<IriNode>;
+    }
+  | { readonly _tag: 'Triples'; readonly subject: Path; readonly pol: ReadonlyArray<Pol> }
+  | { readonly _tag: 'Error'; readonly message: string; readonly at: number };
+
+// -----------------------------------------------------------------------------
+// Grammar
+// -----------------------------------------------------------------------------
+
+/** A syntax error with its offset (the cause of a grammar failure). */
+interface Fail {
+  readonly message: string;
+  readonly at: number;
+}
+
+type P<A> = Parser.Parser<A, Fail>;
+
+const fail = <A>(message: string, at: number): Result.Result<A, Fail> =>
+  Result.fail({ message, at });
+
+const WHITESPACE = 'whitespace';
+
+/** Whitespace and `#` comments (which also end at a form feed). */
+const ws: P<void> = Parser.asVoid(
+  Parser.repeat(
+    Parser.alt(
+      Token.takeWhile(' \t\r\n', { min: 1 }),
+      Parser.preceded(Token.literal('#'), Token.takeTill('\n\r\f')),
+    ).pipe(Parser.expected(WHITESPACE)),
+  ),
+);
+
+const lit = (s: string): P<string> => Token.literal(s);
+
+const closeBracket: P<string> = Parser.cut(Parser.preceded(ws, Token.literal(']'))).pipe(
+  Parser.expected("']'"),
+);
+
+/** `s` after whitespace. */
+const sym = (s: string): P<string> => Parser.preceded(ws, Token.literal(s));
+
+/** A character that ends a statement, a list of objects or a formula. */
+const endOf = (chars: string): P<unknown> =>
+  Parser.preceded(ws, Parser.alt(Parser.eof, Parser.peek(Token.oneOf(chars))));
+
+/** An `@` keyword: `@` followed by letters. */
+const atWord: P<string> = Parser.taken(
+  Parser.preceded(lit('@'), Token.takeWhile(Terminals.alpha, { min: 1 })),
+);
+
+const atKeyword = (word: string): P<string> => atWord.pipe(Parser.filter((w) => w === word));
+
+/** A `PN_PREFIX` not followed by `:` (a bare word such as `a`, `is`, `true`). */
+const bareWord: P<string> = Parser.terminated(Terminals.pnPrefix, Parser.not(lit(':')));
+
+const word = (w: string): P<string> => bareWord.pipe(Parser.filter((x) => x === w));
+
+// eslint-disable-next-line no-control-regex
+const forbiddenInIri = /[\u0000- <>"{}|^`\\]/u;
+
+/** IRIREF (escapes of characters not allowed in IRIs are rejected by the builder). */
+const iriRef: P<IriNode> = Parser.seq(Parser.location, Terminals.iriRef, Parser.location).pipe(
+  Parser.map(([at, value, end]): IriNode => ({
+    _tag: 'IriRef',
+    value,
+    at,
+    escaped: end - at - 2 !== value.length,
+  })),
+);
+
+const pname: P<IriNode> = Parser.seq(Parser.location, Terminals.prefixedName).pipe(
+  Parser.map(([at, { prefix, local }]): IriNode => ({ _tag: 'PName', prefix, local, at })),
+);
+
+/** `iri`: an IRI reference or a prefixed name. */
+const iri: P<IriNode> = Parser.alt(iriRef, pname).pipe(Parser.expected('an IRI'));
+
+const path: P<Path> = Parser.suspend(() => path_);
+const pol: P<ReadonlyArray<Pol>> = Parser.suspend(() => pol_);
+const statementList = (inFormula: boolean): P<ReadonlyArray<Statement>> =>
+  Parser.suspend(() => (inFormula ? formulaStatements : documentStatements));
 
 const TRUE = Term.literal('true', xsd.boolean);
 const FALSE = Term.literal('false', xsd.boolean);
 
-interface Verb {
-  readonly predicate: Model.N3Term;
-  readonly inverse: boolean;
-}
+/**
+ * Where a numeric literal can start: a digit, or `.`, `+` or `-` followed by
+ * one. Checking up front (without consuming input) reports errors at a `.`
+ * that ends a statement, rather than after it.
+ */
+const numberStart: P<void> = Parser.make<void>((state) => {
+  const input = state.input as string;
+  const isDigit = (k: number) => {
+    const c = input.charCodeAt(k);
+    return c >= 0x30 && c <= 0x39;
+  };
+  const c = input.charCodeAt(state.pos);
+  const ok =
+    isDigit(state.pos) ||
+    (c === 0x2e && isDigit(state.pos + 1)) ||
+    ((c === 0x2b || c === 0x2d) &&
+      (isDigit(state.pos + 1) ||
+        (input.charCodeAt(state.pos + 1) === 0x2e && isDigit(state.pos + 2))));
+  return ok ? undefined : state.backtrack('Token', expectedNumber);
+});
 
-type Name =
-  | { readonly _tag: 'PName'; readonly prefix: string; readonly local: string }
-  | { readonly _tag: 'Bare'; readonly word: string };
+const expectedNumber = ['a number'];
 
-/** @internal */
-export const parse = (input: string, options?: ParserOptions): Model.Document =>
-  new N3Parser(input, options).parseDocument();
+const numeric: P<Item> = Parser.preceded(numberStart, Terminals.numericLiteral).pipe(
+  Parser.map(([lexical, type]): Item => ({
+    _tag: 'Literal',
+    value: Term.literal(
+      lexical,
+      type === 'double' ? xsd.double : type === 'decimal' ? xsd.decimal : xsd.integer,
+    ),
+  })),
+);
 
-class N3Parser {
-  private i = 0;
+const rdfLiteral: P<Item> = Parser.seq(
+  Terminals.stringLiteral,
+  Parser.alt(
+    Parser.preceded(Parser.peek(lit('@')), Parser.cut(Terminals.langTag)).pipe(
+      Parser.map((language) => ({ language, datatype: undefined })),
+    ),
+    Parser.preceded(sym('^^'), Parser.cut(Parser.preceded(ws, iri))).pipe(
+      Parser.map((datatype) => ({ language: undefined, datatype })),
+    ),
+    Parser.succeed({ language: undefined, datatype: undefined }),
+  ),
+).pipe(
+  Parser.map(([value, { language, datatype }]): Item => ({
+    _tag: 'String',
+    value,
+    language,
+    datatype,
+  })),
+);
+
+const quickVar: P<Item> = Parser.preceded(
+  lit('?'),
+  Parser.cut(
+    Parser.taken(Parser.seq(Token.oneOf(Terminals.pnCharsU), Token.takeWhile(Terminals.pnChars))),
+  ).pipe(Parser.expected('a variable name')),
+).pipe(Parser.map((name): Item => ({ _tag: 'Var', name })));
+
+const blank: P<Item> = Parser.preceded(
+  Parser.peek(lit('_:')),
+  Parser.cut(Terminals.blankNodeLabel.pipe(Parser.expected('a blank node label'))),
+).pipe(Parser.map((label): Item => ({ _tag: 'Blank', label })));
+
+/** `[ … ]`: an anonymous node, or `[ id <iri> … ]`. */
+const bracket: P<Item> = Parser.preceded(
+  lit('['),
+  Parser.cut(
+    Parser.alt(
+      sym(']').pipe(Parser.as<Item>({ _tag: 'Anon', id: undefined, pol: [] })),
+      Parser.seq(
+        Parser.preceded(Parser.seq(ws, word('id')), Parser.cut(Parser.preceded(ws, iri))),
+        Parser.cut(Parser.terminated(pol, closeBracket)),
+      ).pipe(Parser.map(([id, pol]): Item => ({ _tag: 'Anon', id, pol }))),
+      Parser.terminated(pol, closeBracket).pipe(
+        Parser.map((pol): Item => ({ _tag: 'Anon', id: undefined, pol })),
+      ),
+    ),
+  ),
+);
+
+/** `( … )`: a collection. */
+const collection: P<Item> = Parser.delimited(
+  lit('('),
+  Parser.cut(Parser.repeat(Parser.preceded(Parser.not(sym(')')), path))),
+  Parser.cut(sym(')').pipe(Parser.expected("')'"))),
+).pipe(Parser.map((items): Item => ({ _tag: 'List', items })));
+
+/** `{ … }`: a formula. */
+const formula: P<Item> = Parser.delimited(
+  lit('{'),
+  Parser.cut(statementList(true)),
+  Parser.cut(sym('}').pipe(Parser.expected("'}'"))),
+).pipe(Parser.map((statements): Item => ({ _tag: 'Formula', statements })));
+
+/** A prefixed name, or the bare words `true` and `false`. */
+const nameItem: P<Item> = Parser.alt(
+  pname,
+  Parser.seq(Parser.location, bareWord).pipe(
+    Parser.map(([at, w]): Item =>
+      w === 'true'
+        ? { _tag: 'Literal', value: TRUE }
+        : w === 'false'
+          ? { _tag: 'Literal', value: FALSE }
+          : { _tag: 'Error', message: `Unexpected keyword or undeclared prefix '${w}'`, at },
+    ),
+  ),
+);
+
+/**
+ * A grammar rule compiled to a function of its own. Formulas, collections and
+ * `[ … ]` nest, so the compiled functions on that path recurse; keeping the
+ * leaf terms out of them keeps their stack frames small, and the nesting
+ * depth the parser supports large.
+ */
+const rule = <A>(p: P<A>): P<A> => Parser.suspend(() => p);
+
+const leafItem: P<Item> = rule(
+  Parser.alt(
+    iriRef,
+    rdfLiteral,
+    quickVar,
+    atKeyword('@true').pipe(Parser.as<Item>({ _tag: 'Literal', value: TRUE })),
+    atKeyword('@false').pipe(Parser.as<Item>({ _tag: 'Literal', value: FALSE })),
+    blank,
+    numeric,
+    nameItem,
+  ),
+);
+
+const pathItem: P<Item> = Parser.preceded(
+  ws,
+  Parser.alt(bracket, collection, formula, leafItem).pipe(Parser.expected('a term')),
+);
+
+const path_: P<Path> = Parser.seq(
+  pathItem,
+  Parser.repeat(
+    Parser.seq(
+      Parser.preceded(
+        ws,
+        Parser.alt(lit('!'), Parser.terminated(lit('^'), Parser.not(lit('^')))),
+      ) as P<'!' | '^'>,
+      Parser.cut(pathItem),
+    ),
+  ),
+).pipe(
+  Parser.map(([head, steps]): Path => (steps.length === 0 ? head : { _tag: 'Path', head, steps })),
+);
+
+const fixed = (predicate: Model.N3Term): Verb => ({ _tag: 'Fixed', predicate });
+
+const fixedVerb: P<Verb> = rule(
+  Parser.alt(
+    lit('=>').pipe(Parser.as(fixed(log.implies))),
+    lit('=').pipe(Parser.as(fixed(sameAs))),
+    // `<=` unless the `<` starts an IRI reference.
+    Parser.preceded(Parser.not(iriRef), lit('<=')).pipe(Parser.as(fixed(log.isImpliedBy))),
+    Parser.alt(word('a'), atKeyword('@a')).pipe(Parser.as(fixed(rdf.type))),
+  ),
+);
+
+const verb: P<Verb> = Parser.preceded(
+  ws,
+  Parser.alt(
+    fixedVerb,
+    Parser.preceded(Parser.seq(Parser.not(iriRef), lit('<-')), Parser.cut(path)).pipe(
+      Parser.map((path): Verb => ({ _tag: 'Path', path, inverse: true })),
+    ),
+    Parser.preceded(Parser.alt(word('has'), atKeyword('@has')), Parser.cut(path)).pipe(
+      Parser.map((path): Verb => ({ _tag: 'Path', path, inverse: false })),
+    ),
+    Parser.preceded(
+      Parser.alt(word('is'), atKeyword('@is')),
+      Parser.cut(
+        Parser.terminated(
+          path,
+          Parser.preceded(ws, Parser.alt(word('of'), atKeyword('@of'))).pipe(
+            Parser.expected("'of' after 'is ...'"),
+          ),
+        ),
+      ),
+    ).pipe(Parser.map((path): Verb => ({ _tag: 'Path', path, inverse: true }))),
+    path.pipe(Parser.map((path): Verb => ({ _tag: 'Path', path, inverse: false }))),
+  ),
+);
+
+const objectList: P<ReadonlyArray<Path>> = Parser.separated(path, sym(','), { min: 1 }).pipe(
+  Parser.expected('an object'),
+);
+
+const semicolons = Parser.repeat(sym(';'), { min: 1 });
+
+const pol_: P<ReadonlyArray<Pol>> = Parser.terminated(
+  Parser.seq(
+    Parser.seq(verb, Parser.cut(objectList)),
+    Parser.repeat(
+      Parser.preceded(
+        semicolons,
+        Parser.preceded(Parser.not(endOf('.]}')), Parser.cut(Parser.seq(verb, objectList))),
+      ),
+    ),
+  ),
+  Parser.opt(semicolons),
+).pipe(
+  Parser.map(([first, rest]): ReadonlyArray<Pol> =>
+    rest.length === 0 ? [first] : [first, ...rest],
+  ),
+);
+
+const triples: P<Statement> = Parser.seq(
+  path,
+  Parser.alt(Parser.preceded(Parser.peek(endOf('.}')), Parser.succeed([])), pol),
+).pipe(Parser.map(([subject, pol]): Statement => ({ _tag: 'Triples', subject, pol })));
+
+/** The body of `@prefix` / `PREFIX`: `PN_PREFIX? ':' IRIREF`. */
+const prefixBody: P<Statement> = Parser.seq(
+  Parser.preceded(
+    ws,
+    Parser.terminated(
+      Parser.opt(Terminals.pnPrefix),
+      lit(':').pipe(Parser.expected('a prefix name ending in ":"')),
+    ),
+  ),
+  Parser.preceded(ws, iriRef),
+).pipe(
+  Parser.map(([prefix, iri]): Statement => ({
+    _tag: 'Prefix',
+    prefix: prefix._tag === 'Some' ? prefix.value : '',
+    iri,
+  })),
+);
+
+const baseBody: P<Statement> = Parser.preceded(ws, iriRef).pipe(
+  Parser.map((iri): Statement => ({ _tag: 'Base', iri })),
+);
+
+const quantifier = (universal: boolean): P<Statement> =>
+  Parser.alt(
+    Parser.preceded(Parser.peek(endOf('.}')), Parser.succeed<ReadonlyArray<IriNode>>([])),
+    Parser.separated(Parser.preceded(ws, iri), sym(','), { min: 1 }),
+  ).pipe(Parser.map((iris): Statement => ({ _tag: 'Quantifier', universal, iris })));
+
+/** `PREFIX` / `BASE` (case-insensitive, no trailing `.`). */
+const sparqlDirective: P<Statement> = rule(
+  Parser.preceded(
+    ws,
+    Parser.alt(
+      Parser.preceded(
+        Parser.terminated(
+          Ascii.caseless('PREFIX'),
+          Parser.not(Token.oneOf([':.', Terminals.pnChars])),
+        ),
+        Parser.cut(prefixBody),
+      ),
+      Parser.preceded(
+        Parser.terminated(
+          Ascii.caseless('BASE'),
+          Parser.not(Token.oneOf([':.', Terminals.pnChars])),
+        ),
+        Parser.cut(baseBody),
+      ),
+    ),
+  ),
+);
+
+const atDirective: P<Statement> = rule(
+  Parser.alt(
+    Parser.preceded(atKeyword('@prefix'), Parser.cut(prefixBody)),
+    Parser.preceded(atKeyword('@base'), Parser.cut(baseBody)),
+    Parser.preceded(atKeyword('@forAll'), Parser.cut(quantifier(true))),
+    Parser.preceded(atKeyword('@forSome'), Parser.cut(quantifier(false))),
+    Parser.preceded(
+      Parser.peek(atKeyword('@keywords')),
+      Parser.cut(
+        Parser.location.pipe(
+          Parser.tryMap((at) => fail<Statement>('@keywords is not supported by Notation3', at)),
+        ),
+      ),
+    ),
+  ),
+);
+
+const statement: P<Statement> = Parser.preceded(ws, Parser.alt(atDirective, triples));
+
+/** Statements, each ended by `.` (optional before the `}` of a formula). */
+const statements = (inFormula: boolean): P<ReadonlyArray<Statement>> =>
+  Parser.repeat(
+    Parser.preceded(
+      Parser.not(inFormula ? endOf('}') : Parser.preceded(ws, Parser.eof)),
+      Parser.alt(
+        sparqlDirective,
+        Parser.cut(
+          Parser.terminated(
+            statement,
+            (inFormula ? Parser.alt(sym('.'), Parser.peek(sym('}'))) : sym('.')).pipe(
+              Parser.expected("'.'"),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+const formulaStatements = statements(true);
+const documentStatements = statements(false);
+
+const document = Parser.compile(
+  Parser.terminated(documentStatements, Parser.preceded(ws, Parser.eof)),
+);
+
+// -----------------------------------------------------------------------------
+// Builder
+// -----------------------------------------------------------------------------
+
+const I18N_DATATYPE = /^([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)_(ltr|rtl)$/;
+
+class Builder {
   private readonly prefixes = new Map<string, string>();
-  private base: string | undefined;
+  base: string | undefined;
   private readonly bnodePrefix: string;
   private readonly bnodes = new Map<string, Term.BlankNode>();
+  private readonly reserved = new Set<string>();
   private anonCounter = 0;
   /** Statement collectors, one per open formula (innermost last). */
   private readonly out: Array<Array<Model.Statement>> = [];
@@ -122,8 +568,8 @@ class N3Parser {
   private readonly scopes: Array<Map<string, Model.N3Term>> = [];
   private readonly variableNames = new Set<string>();
 
-  private readonly input: string;
-  constructor(input: string, options?: ParserOptions) {
+  readonly input: string;
+  constructor(input: string, options: ParserOptions | undefined) {
     this.input = input;
     this.base = options?.baseIri;
     this.bnodePrefix = options?.blankNodePrefix ?? '';
@@ -133,70 +579,148 @@ class N3Parser {
     }
   }
 
-  private readonly reserved = new Set<string>();
+  document(statements: ReadonlyArray<Statement>): Model.Document {
+    const formula = this.formula(statements);
+    return {
+      formula,
+      prefixes: PrefixMap.make(this.prefixes),
+      baseIri: this.base,
+    };
+  }
 
-  // ---------------------------------------------------------------------------
-  // Errors and low-level helpers
-  // ---------------------------------------------------------------------------
+  private formula(statements: ReadonlyArray<Statement>): Model.Formula {
+    this.out.push([]);
+    this.scopes.push(new Map());
+    for (const s of statements) this.statement(s);
+    this.scopes.pop();
+    return new Model.Formula(this.out.pop()!);
+  }
 
-  private fail(message: string, at: number = this.i): never {
-    let line = 1;
-    let lineStart = 0;
-    const end = Math.min(at, this.input.length);
-    for (let k = 0; k < end; k++) {
-      if (this.input.charCodeAt(k) === 0x0a) {
-        line++;
-        lineStart = k + 1;
+  private statement(s: Statement): void {
+    switch (s._tag) {
+      case 'Prefix':
+        this.prefixes.set(s.prefix, this.iri(s.iri));
+        return;
+      case 'Base':
+        this.base = this.iri(s.iri);
+        return;
+      case 'Quantifier': {
+        const scope = this.scopes[this.scopes.length - 1]!;
+        for (const node of s.iris) {
+          const iri = this.iri(node);
+          scope.set(iri, s.universal ? this.variableFor(iri) : this.freshBlank());
+        }
+        return;
+      }
+      case 'Triples': {
+        const subject = this.path(s.subject);
+        this.pol(subject, s.pol);
+        return;
+      }
+      case 'Error':
+        return failAt(this.input, s.message, s.at);
+    }
+  }
+
+  private pol(subject: Model.N3Term, pol: ReadonlyArray<Pol>): void {
+    for (const [verb, objects] of pol) {
+      const predicate = verb._tag === 'Fixed' ? verb.predicate : this.path(verb.path);
+      const inverse = verb._tag === 'Path' && verb.inverse;
+      for (const o of objects) {
+        const object = this.path(o);
+        if (inverse) this.emit(object, predicate, subject);
+        else this.emit(subject, predicate, object);
       }
     }
-    throw new SyntaxFailure(message, line, end - lineStart + 1);
   }
 
-  private describe(at: number = this.i): string {
-    if (at >= this.input.length) return 'end of input';
-    const cp = this.input.codePointAt(at)!;
-    return `'${String.fromCodePoint(cp)}'`;
+  private path(p: Path): Model.N3Term {
+    if (p._tag !== 'Path') return this.item(p);
+    let item = this.item(p.head);
+    for (const [dir, step] of p.steps) {
+      const predicate = this.item(step);
+      const b = this.freshBlank();
+      if (dir === '!') this.emit(item, predicate, b);
+      else this.emit(b, predicate, item);
+      item = b;
+    }
+    return item;
   }
 
-  private eof(): boolean {
-    return this.i >= this.input.length;
-  }
-
-  private peek(offset = 0): number {
-    return this.input.charCodeAt(this.i + offset);
-  }
-
-  private peekCp(): number {
-    return this.input.codePointAt(this.i) ?? -1;
-  }
-
-  private ch(offset = 0): string {
-    return this.input.charAt(this.i + offset);
-  }
-
-  private startsWith(s: string): boolean {
-    return this.input.startsWith(s, this.i);
-  }
-
-  private ws(): void {
-    const input = this.input;
-    while (this.i < input.length) {
-      const c = input.charCodeAt(this.i);
-      if (isWs(c)) this.i++;
-      else if (c === 0x23 /* # */) {
-        while (this.i < input.length) {
-          const d = input.charCodeAt(this.i);
-          if (d === 0x0a || d === 0x0d || d === 0x0c) break;
-          this.i++;
+  private item(item: Item): Model.N3Term {
+    switch (item._tag) {
+      case 'IriRef':
+      case 'PName':
+        return this.named(this.iri(item));
+      case 'Blank':
+        return this.labelledBlank(item.label);
+      case 'Anon': {
+        if (item.id !== undefined) {
+          const node = this.named(this.iri(item.id));
+          this.pol(node, item.pol);
+          return node;
         }
-      } else break;
+        const b = this.freshBlank();
+        this.pol(b, item.pol);
+        return b;
+      }
+      case 'List':
+        return new Model.Collection(item.items.map((p) => this.path(p)));
+      case 'Formula': {
+        const f = this.formula(item.statements);
+        // An empty graph term is the literal `true` (N3 test suite: graph/empty_graph).
+        return f.size === 0 ? TRUE : f;
+      }
+      case 'Error':
+        return failAt(this.input, item.message, item.at);
+      case 'Var':
+        this.variableNames.add(item.name);
+        return new Term.Variable(item.name);
+      case 'Literal':
+        return item.value;
+      case 'String': {
+        if (item.language !== undefined) return Term.literal(item.value, item.language);
+        if (item.datatype === undefined) return Term.literal(item.value);
+        const datatype = this.iri(item.datatype);
+        const dir = datatype.startsWith(i18n.base)
+          ? I18N_DATATYPE.exec(datatype.slice(i18n.base.length))
+          : null;
+        if (dir !== null) {
+          return Term.literal(item.value, {
+            language: dir[1]!,
+            direction: dir[2] as Term.Direction,
+          });
+        }
+        return Term.literal(item.value, new Term.NamedNode(datatype));
+      }
     }
   }
 
-  private expect(s: string, what?: string): void {
-    this.ws();
-    if (!this.startsWith(s)) this.fail(`Expected ${what ?? `'${s}'`} but found ${this.describe()}`);
-    this.i += s.length;
+  private iri(node: IriNode): string {
+    if (node._tag === 'IriRef') {
+      if (node.escaped && forbiddenInIri.test(node.value)) {
+        return failAt(this.input, 'Invalid escaped character in IRI', node.at);
+      }
+      return this.resolveIri(node.value);
+    }
+    const ns = this.prefixes.get(node.prefix);
+    if (ns !== undefined) return ns + node.local;
+    // The empty prefix defaults to `<#>` (the current document), as in cwm.
+    if (node.prefix === '') return this.resolveIri('#') + node.local;
+    return failAt(this.input, `Undeclared prefix '${node.prefix}:'`, node.at);
+  }
+
+  private resolveIri(value: string): string {
+    return this.base === undefined ? value : Iri.resolve(value, this.base);
+  }
+
+  /** Applies explicit-quantifier substitutions to an IRI. */
+  private named(iri: string): Model.N3Term {
+    for (let k = this.scopes.length - 1; k >= 0; k--) {
+      const t = this.scopes[k]!.get(iri);
+      if (t !== undefined) return t;
+    }
+    return new Term.NamedNode(iri);
   }
 
   private emit(subject: Model.N3Term, predicate: Model.N3Term, object: Model.N3Term): void {
@@ -219,132 +743,6 @@ class N3Parser {
     return b;
   }
 
-  private resolveIri(value: string): string {
-    return this.base === undefined ? value : Iri.resolve(value, this.base);
-  }
-
-  /** Applies explicit-quantifier substitutions to an IRI. */
-  private named(iri: string): Model.N3Term {
-    for (let k = this.scopes.length - 1; k >= 0; k--) {
-      const t = this.scopes[k]!.get(iri);
-      if (t !== undefined) return t;
-    }
-    return new Term.NamedNode(iri);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Document structure
-  // ---------------------------------------------------------------------------
-
-  parseDocument(): Model.Document {
-    this.out.push([]);
-    this.scopes.push(new Map());
-    this.statements(false);
-    const statements = this.out.pop()!;
-    return {
-      formula: new Model.Formula(statements),
-      prefixes: PrefixMap.make(this.prefixes),
-      baseIri: this.base,
-    };
-  }
-
-  /** Parses statements until end of input (top level) or a closing `}`. */
-  private statements(inFormula: boolean): void {
-    for (;;) {
-      this.ws();
-      if (this.eof()) {
-        if (inFormula) this.fail("Unterminated formula: expected '}'");
-        return;
-      }
-      if (inFormula && this.peek() === 0x7d /* } */) return;
-      if (this.sparqlDirective()) continue;
-      this.statement();
-      this.ws();
-      if (this.peek() === 0x2e /* . */) {
-        this.i++;
-        continue;
-      }
-      if (inFormula && this.peek() === 0x7d) return;
-      this.fail(`Expected '.' but found ${this.describe()}`);
-    }
-  }
-
-  /** `PREFIX` / `BASE` (case-insensitive, no trailing '.'). */
-  private sparqlDirective(): boolean {
-    const r = /(PREFIX|BASE)/iy;
-    r.lastIndex = this.i;
-    const m = r.exec(this.input);
-    if (m === null) return false;
-    const after = this.input.codePointAt(this.i + m[0].length) ?? -1;
-    if (after === 0x3a || after === 0x2e || isPnChars(after)) return false;
-    this.i += m[0].length;
-    if (m[1]!.toUpperCase() === 'PREFIX') this.prefixBody();
-    else this.baseBody();
-    return true;
-  }
-
-  private statement(): void {
-    if (this.peek() === 0x40 /* @ */) {
-      const word = this.atWord();
-      switch (word) {
-        case '@prefix':
-          this.i += word.length;
-          return this.prefixBody();
-        case '@base':
-          this.i += word.length;
-          return this.baseBody();
-        case '@forAll':
-        case '@forSome':
-          this.i += word.length;
-          return this.quantifier(word === '@forAll');
-        case '@keywords':
-          return this.fail('@keywords is not supported by Notation3');
-        default:
-          break;
-      }
-    }
-    this.triples();
-  }
-
-  private atWord(): string {
-    const m = /@[A-Za-z]+/y;
-    m.lastIndex = this.i;
-    return m.exec(this.input)?.[0] ?? '@';
-  }
-
-  private prefixBody(): void {
-    this.ws();
-    const start = this.i;
-    let prefix = '';
-    if (isPnCharsBase(this.peekCp())) prefix = this.pnPrefix();
-    if (this.peek() !== 0x3a /* : */) this.fail('Expected a prefix name ending in ":"', start);
-    this.i++;
-    this.ws();
-    if (this.peek() !== 0x3c /* < */) this.fail(`Expected an IRI but found ${this.describe()}`);
-    const iri = this.iriRef();
-    this.prefixes.set(prefix, this.resolveIri(iri));
-  }
-
-  private baseBody(): void {
-    this.ws();
-    if (this.peek() !== 0x3c) this.fail(`Expected an IRI but found ${this.describe()}`);
-    this.base = this.resolveIri(this.iriRef());
-  }
-
-  private quantifier(universal: boolean): void {
-    const scope = this.scopes[this.scopes.length - 1]!;
-    this.ws();
-    if (this.peek() === 0x2e || this.peek() === 0x7d) return;
-    for (;;) {
-      this.ws();
-      const iri = this.iriValue();
-      scope.set(iri, universal ? this.variableFor(iri) : this.freshBlank());
-      this.ws();
-      if (this.peek() !== 0x2c /* , */) return;
-      this.i++;
-    }
-  }
-
   private variableFor(iri: string): Term.Variable {
     const local = /[^#/:]*$/.exec(iri)?.[0] ?? '';
     let name = /^[A-Za-z_][A-Za-z0-9_]*$/.test(local) ? local : 'v';
@@ -356,514 +754,41 @@ class N3Parser {
     this.variableNames.add(name);
     return new Term.Variable(name);
   }
-
-  // ---------------------------------------------------------------------------
-  // Triples
-  // ---------------------------------------------------------------------------
-
-  private triples(): void {
-    const subject = this.path();
-    this.ws();
-    const c = this.peek();
-    if (this.eof() || c === 0x2e || c === 0x7d) return;
-    this.predicateObjectList(subject);
-  }
-
-  private predicateObjectList(subject: Model.N3Term): void {
-    for (;;) {
-      const verb = this.verb();
-      this.objectList(subject, verb);
-      this.ws();
-      if (this.peek() !== 0x3b /* ; */) return;
-      while (this.peek() === 0x3b) {
-        this.i++;
-        this.ws();
-      }
-      const c = this.peek();
-      if (this.eof() || c === 0x2e || c === 0x5d || c === 0x7d) return;
-    }
-  }
-
-  private objectList(subject: Model.N3Term, verb: Verb): void {
-    for (;;) {
-      this.ws();
-      const c = this.peek();
-      const endOfList = c === 0x2e && !isDigit(this.peek(1));
-      if (this.eof() || endOfList || c === 0x3b || c === 0x2c || c === 0x5d || c === 0x7d) {
-        this.fail(`Expected an object but found ${this.describe()}`);
-      }
-      const object = this.path();
-      if (verb.inverse) this.emit(object, verb.predicate, subject);
-      else this.emit(subject, verb.predicate, object);
-      this.ws();
-      if (this.peek() !== 0x2c /* , */) return;
-      this.i++;
-    }
-  }
-
-  private verb(): Verb {
-    this.ws();
-    const c = this.peek();
-    if (c === 0x3d /* = */) {
-      if (this.peek(1) === 0x3e /* > */) {
-        this.i += 2;
-        return { predicate: log.implies, inverse: false };
-      }
-      this.i++;
-      return { predicate: sameAs, inverse: false };
-    }
-    if (c === 0x3c /* < */ && !this.looksLikeIriRef()) {
-      if (this.peek(1) === 0x3d) {
-        this.i += 2;
-        return { predicate: log.isImpliedBy, inverse: false };
-      }
-      if (this.peek(1) === 0x2d /* - */) {
-        this.i += 2;
-        return { predicate: this.path(), inverse: true };
-      }
-    }
-    const start = this.i;
-    let word: string | undefined;
-    if (c === 0x40 /* @ */) {
-      word = this.atWord();
-      this.i += word.length;
-    } else if (isPnCharsBase(this.peekCp())) {
-      const name = this.name();
-      if (name._tag === 'Bare') word = name.word;
-    }
-    switch (word) {
-      case 'a':
-      case '@a':
-        return { predicate: rdf.type, inverse: false };
-      case 'has':
-      case '@has':
-        return { predicate: this.path(), inverse: false };
-      case 'is':
-      case '@is': {
-        const predicate = this.path();
-        this.ws();
-        const ofStart = this.i;
-        let of: string | undefined;
-        if (this.peek() === 0x40) {
-          of = this.atWord();
-          this.i += of.length;
-        } else if (isPnCharsBase(this.peekCp())) {
-          const name = this.name();
-          if (name._tag === 'Bare') of = name.word;
-        }
-        if (of !== 'of' && of !== '@of') this.fail("Expected 'of' after 'is ...'", ofStart);
-        return { predicate, inverse: true };
-      }
-      default:
-        this.i = start;
-        return { predicate: this.path(), inverse: false };
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Expressions
-  // ---------------------------------------------------------------------------
-
-  private path(): Model.N3Term {
-    let item = this.pathItem();
-    for (;;) {
-      this.ws();
-      const c = this.peek();
-      if (c === 0x21 /* ! */) {
-        this.i++;
-        const predicate = this.pathItem();
-        const b = this.freshBlank();
-        this.emit(item, predicate, b);
-        item = b;
-      } else if (c === 0x5e /* ^ */ && this.peek(1) !== 0x5e) {
-        this.i++;
-        const predicate = this.pathItem();
-        const b = this.freshBlank();
-        this.emit(b, predicate, item);
-        item = b;
-      } else return item;
-    }
-  }
-
-  private pathItem(): Model.N3Term {
-    this.ws();
-    if (this.eof()) this.fail('Unexpected end of input');
-    const c = this.peek();
-    switch (c) {
-      case 0x3c /* < */:
-        if (!this.looksLikeIriRef()) this.fail(`Unexpected ${this.describe()}`);
-        return this.named(this.resolveIri(this.iriRef()));
-      case 0x5b /* [ */:
-        return this.bracket();
-      case 0x28 /* ( */:
-        return this.collection();
-      case 0x7b /* { */:
-        return this.formula();
-      case 0x22 /* " */:
-      case 0x27 /* ' */:
-        return this.rdfLiteral();
-      case 0x3f /* ? */:
-        return this.quickVar();
-      case 0x40 /* @ */: {
-        const word = this.atWord();
-        if (word === '@true' || word === '@false') {
-          this.i += word.length;
-          return word === '@true' ? TRUE : FALSE;
-        }
-        return this.fail(`Unexpected keyword ${word}`);
-      }
-      default:
-        break;
-    }
-    if (c === 0x5f /* _ */ && this.peek(1) === 0x3a /* : */) return this.blankNodeLabel();
-    if (isDigit(c) || c === 0x2b || c === 0x2d || c === 0x2e) {
-      NUMBER.lastIndex = this.i;
-      const m = NUMBER.exec(this.input);
-      if (m !== null) {
-        this.i += m[0].length;
-        const lexical = m[0];
-        const datatype = /[eE]/.test(lexical)
-          ? xsd.double
-          : lexical.includes('.')
-            ? xsd.decimal
-            : xsd.integer;
-        return Term.literal(lexical, datatype);
-      }
-      return this.fail(`Unexpected ${this.describe()}`);
-    }
-    if (c === 0x3a || isPnCharsBase(this.peekCp())) {
-      const start = this.i;
-      const name = this.name();
-      if (name._tag === 'PName') return this.named(this.expandPName(name, start));
-      switch (name.word) {
-        case 'true':
-          return TRUE;
-        case 'false':
-          return FALSE;
-        default:
-          return this.fail(`Unexpected keyword or undeclared prefix '${name.word}'`, start);
-      }
-    }
-    return this.fail(`Unexpected ${this.describe()}`);
-  }
-
-  private bracket(): Model.N3Term {
-    this.i++; // [
-    this.ws();
-    if (this.peek() === 0x5d /* ] */) {
-      this.i++;
-      return this.freshBlank();
-    }
-    // iriPropertyList: `[ id <iri> predicateObjectList ]`
-    const start = this.i;
-    if (isPnCharsBase(this.peekCp())) {
-      const name = this.name();
-      if (name._tag === 'Bare' && name.word === 'id') {
-        this.ws();
-        const iri = this.named(this.iriValue());
-        this.ws();
-        this.predicateObjectList(iri);
-        this.expect(']');
-        return iri;
-      }
-      this.i = start;
-    }
-    const b = this.freshBlank();
-    this.predicateObjectList(b);
-    this.expect(']');
-    return b;
-  }
-
-  private collection(): Model.N3Term {
-    this.i++; // (
-    const items: Array<Model.N3Term> = [];
-    for (;;) {
-      this.ws();
-      if (this.eof()) this.fail("Unterminated collection: expected ')'");
-      if (this.peek() === 0x29 /* ) */) {
-        this.i++;
-        return new Model.Collection(items);
-      }
-      items.push(this.path());
-    }
-  }
-
-  private formula(): Model.N3Term {
-    this.i++; // {
-    this.out.push([]);
-    this.scopes.push(new Map());
-    this.statements(true);
-    this.i++; // }
-    this.scopes.pop();
-    const statements = this.out.pop()!;
-    // An empty graph term is the literal `true` (N3 test suite: graph/empty_graph).
-    return statements.length === 0 ? TRUE : new Model.Formula(statements);
-  }
-
-  private quickVar(): Model.N3Term {
-    const start = this.i;
-    this.i++; // ?
-    if (!isPnCharsU(this.peekCp())) this.fail('Invalid variable name', start);
-    while (!this.eof() && isPnChars(this.peekCp())) this.i += this.peekCp() > 0xffff ? 2 : 1;
-    const name = this.input.slice(start + 1, this.i);
-    this.variableNames.add(name);
-    return new Term.Variable(name);
-  }
-
-  private blankNodeLabel(): Model.N3Term {
-    const start = this.i;
-    this.i += 2; // _:
-    const first = this.peekCp();
-    if (!(isPnCharsU(first) || isDigit(first))) this.fail('Invalid blank node label', start);
-    this.i += first > 0xffff ? 2 : 1;
-    let lastGood = this.i;
-    while (!this.eof()) {
-      const c = this.peekCp();
-      if (c === 0x2e) this.i++;
-      else if (isPnChars(c)) {
-        this.i += c > 0xffff ? 2 : 1;
-        lastGood = this.i;
-      } else break;
-    }
-    this.i = lastGood;
-    return this.labelledBlank(this.input.slice(start + 2, this.i));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Literals
-  // ---------------------------------------------------------------------------
-
-  private rdfLiteral(): Model.N3Term {
-    const value = this.string();
-    if (this.peek() === 0x40 /* @ */) {
-      this.i++;
-      LANGTAG.lastIndex = this.i;
-      const m = LANGTAG.exec(this.input);
-      if (m === null) this.fail('Invalid language tag');
-      this.i += m[0].length;
-      return Term.literal(value, m[0]);
-    }
-    const save = this.i;
-    this.ws();
-    if (this.startsWith('^^')) {
-      this.i += 2;
-      this.ws();
-      const datatype = this.iriValue();
-      const dir = datatype.startsWith(i18n.base)
-        ? I18N_DATATYPE.exec(datatype.slice(i18n.base.length))
-        : null;
-      if (dir !== null) {
-        return Term.literal(value, { language: dir[1]!, direction: dir[2] as Term.Direction });
-      }
-      return Term.literal(value, new Term.NamedNode(datatype));
-    }
-    this.i = save;
-    return Term.literal(value);
-  }
-
-  private string(): string {
-    const q = this.ch();
-    const long = this.startsWith(q + q + q);
-    const start = this.i;
-    this.i += long ? 3 : 1;
-    let out = '';
-    const input = this.input;
-    for (;;) {
-      if (this.i >= input.length) this.fail('Unterminated string literal', start);
-      const c = input.charAt(this.i);
-      if (c === q) {
-        if (!long) {
-          this.i++;
-          return out;
-        }
-        if (input.startsWith(q + q + q, this.i)) {
-          this.i += 3;
-          return out;
-        }
-        out += q;
-        this.i++;
-        continue;
-      }
-      if (c === '\\') {
-        out += this.stringEscape();
-        continue;
-      }
-      if (!long && (c === '\n' || c === '\r')) this.fail('Line break in short string literal');
-      out += c;
-      this.i++;
-    }
-  }
-
-  private stringEscape(): string {
-    const e = this.ch(1);
-    switch (e) {
-      case 't':
-        this.i += 2;
-        return '\t';
-      case 'b':
-        this.i += 2;
-        return '\b';
-      case 'n':
-        this.i += 2;
-        return '\n';
-      case 'r':
-        this.i += 2;
-        return '\r';
-      case 'f':
-        this.i += 2;
-        return '\f';
-      case '"':
-      case "'":
-      case '\\':
-        this.i += 2;
-        return e;
-      case 'u':
-      case 'U':
-        return this.uchar();
-      default:
-        return this.fail(`Invalid escape sequence '\\${e}'`);
-    }
-  }
-
-  private uchar(): string {
-    const n = this.ch(1) === 'u' ? 4 : 8;
-    const hex = this.input.slice(this.i + 2, this.i + 2 + n);
-    if (hex.length !== n || !/^[0-9A-Fa-f]+$/.test(hex)) {
-      this.fail('Invalid unicode escape');
-    }
-    const cp = parseInt(hex, 16);
-    if (cp > 0x10ffff) this.fail('Invalid unicode code point');
-    this.i += 2 + n;
-    return String.fromCodePoint(cp);
-  }
-
-  // ---------------------------------------------------------------------------
-  // IRIs and names
-  // ---------------------------------------------------------------------------
-
-  /** Whether the `<` at the cursor starts an IRIREF (as opposed to `<=`/`<-`). */
-  private looksLikeIriRef(): boolean {
-    const input = this.input;
-    for (let k = this.i + 1; k < input.length; k++) {
-      const c = input.charCodeAt(k);
-      if (c === 0x3e) return true;
-      if (c <= 0x20 || c === 0x3c || c === 0x22 || c === 0x7b || c === 0x7d) return false;
-      if (c === 0x7c || c === 0x5e || c === 0x60) return false;
-    }
-    return false;
-  }
-
-  /** Parses an IRIREF and returns its (unresolved, unescaped) value. */
-  private iriRef(): string {
-    const start = this.i;
-    this.i++; // <
-    let out = '';
-    const input = this.input;
-    for (;;) {
-      if (this.i >= input.length) this.fail('Unterminated IRI', start);
-      const c = input.charCodeAt(this.i);
-      if (c === 0x3e) {
-        this.i++;
-        return out;
-      }
-      if (c === 0x5c /* \ */) {
-        const e = this.ch(1);
-        if (e !== 'u' && e !== 'U') this.fail('Invalid escape in IRI');
-        const decoded = this.uchar();
-        const d = decoded.codePointAt(0)!;
-        if (d <= 0x20 || '<>"{}|^`\\'.includes(decoded))
-          this.fail('Invalid escaped character in IRI');
-        out += decoded;
-        continue;
-      }
-      if (c <= 0x20 || c === 0x3c || c === 0x22 || c === 0x7b || c === 0x7d || c === 0x7c) {
-        this.fail('Invalid character in IRI');
-      }
-      if (c === 0x5e || c === 0x60) this.fail('Invalid character in IRI');
-      out += input.charAt(this.i);
-      this.i++;
-    }
-  }
-
-  /** An IRI in `iri` position: an IRIREF or a prefixed name, resolved. */
-  private iriValue(): string {
-    if (this.peek() === 0x3c) {
-      if (!this.looksLikeIriRef()) this.fail(`Expected an IRI but found ${this.describe()}`);
-      return this.resolveIri(this.iriRef());
-    }
-    const start = this.i;
-    if (this.peek() === 0x3a || isPnCharsBase(this.peekCp())) {
-      const name = this.name();
-      if (name._tag === 'PName') return this.expandPName(name, start);
-    }
-    return this.fail(`Expected an IRI but found ${this.describe(start)}`, start);
-  }
-
-  private expandPName(name: Extract<Name, { _tag: 'PName' }>, at: number): string {
-    const ns = this.prefixes.get(name.prefix);
-    if (ns !== undefined) return ns + name.local;
-    // The empty prefix defaults to `<#>` (the current document), as in cwm.
-    if (name.prefix === '') return this.resolveIri('#') + name.local;
-    return this.fail(`Undeclared prefix '${name.prefix}:'`, at);
-  }
-
-  private pnPrefix(): string {
-    const start = this.i;
-    this.i += this.peekCp() > 0xffff ? 2 : 1;
-    let lastGood = this.i;
-    while (!this.eof()) {
-      const c = this.peekCp();
-      if (c === 0x2e) this.i++;
-      else if (isPnChars(c)) {
-        this.i += c > 0xffff ? 2 : 1;
-        lastGood = this.i;
-      } else break;
-    }
-    this.i = lastGood;
-    return this.input.slice(start, this.i);
-  }
-
-  /** Reads a prefixed name or a bare word (keyword). */
-  private name(): Name {
-    const prefix = this.peek() === 0x3a ? '' : this.pnPrefix();
-    if (this.peek() !== 0x3a) return { _tag: 'Bare', word: prefix };
-    this.i++; // :
-    return { _tag: 'PName', prefix, local: this.pnLocal() };
-  }
-
-  private pnLocal(): string {
-    let out = '';
-    let lastGoodI = this.i;
-    let lastGoodLen = 0;
-    let first = true;
-    const input = this.input;
-    while (this.i < input.length) {
-      const c = this.peekCp();
-      if (c === 0x5c /* \ */) {
-        const e = this.ch(1);
-        if (!PN_LOCAL_ESCAPABLE.has(e)) this.fail(`Invalid escape '\\${e}' in local name`);
-        out += e;
-        this.i += 2;
-      } else if (c === 0x25 /* % */) {
-        if (!isHex(this.peek(1)) || !isHex(this.peek(2))) this.fail('Invalid percent escape');
-        out += input.slice(this.i, this.i + 3);
-        this.i += 3;
-      } else if (c === 0x2e /* . */) {
-        if (first) break;
-        out += '.';
-        this.i++;
-        first = false;
-        continue;
-      } else if (c === 0x3a || (first ? isPnCharsU(c) || isDigit(c) : isPnChars(c))) {
-        const s = String.fromCodePoint(c);
-        out += s;
-        this.i += s.length;
-      } else break;
-      first = false;
-      lastGoodI = this.i;
-      lastGoodLen = out.length;
-    }
-    this.i = lastGoodI;
-    return out.slice(0, lastGoodLen);
-  }
 }
+
+// -----------------------------------------------------------------------------
+// Entry point
+// -----------------------------------------------------------------------------
+
+const failAt = (input: string, message: string, at: number): never => {
+  let line = 1;
+  let lineStart = 0;
+  const end = Math.min(at, input.length);
+  for (let k = 0; k < end; k++) {
+    if (input.charCodeAt(k) === 0x0a) {
+      line++;
+      lineStart = k + 1;
+    }
+  }
+  throw new SyntaxFailure(message, line, end - lineStart + 1);
+};
+
+const describe = (input: string, at: number): string =>
+  at >= input.length ? 'end of input' : `'${String.fromCodePoint(input.codePointAt(at)!)}'`;
+
+/** @internal */
+export const parse = (input: string, options?: ParserOptions): Model.Document => {
+  const result = Parser.parse(document, input);
+  if (Result.isFailure(result)) {
+    const error = result.failure;
+    if (error.cause !== undefined) return failAt(input, error.cause.message, error.cause.at);
+    const found = describe(input, error.offset);
+    const expected = error.expected.filter((e) => e !== WHITESPACE);
+    const message =
+      expected.length === 0 || expected.length > 3
+        ? `Unexpected ${found}`
+        : `Expected ${expected.join(' or ')} but found ${found}`;
+    return failAt(input, message, error.offset);
+  }
+  return new Builder(input, options).document(result.success);
+};

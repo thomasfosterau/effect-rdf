@@ -98,6 +98,13 @@ Following the current CG specification and its test suite:
 - `"…"^^i18n:ar-eg_rtl` is read (and written) as a directional
   language-tagged string.
 
+The parser is a compiled
+[`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+grammar (a peer dependency, next to `effect`) built on the Turtle terminals
+of `@thomasfosterau/effect-rdf-grammar`, as the N3 grammar is built on
+Turtle's. `pnpm bench` times it on every `.n3` and `.ttl` file of the N3
+suites and on a large synthetic document.
+
 ## Conformance
 
 `test/conformance.test.ts` runs the W3C N3 CG suite (`.test-suites/N3/tests`):

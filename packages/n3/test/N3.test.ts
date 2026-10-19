@@ -120,6 +120,21 @@ describe('N3.parse', () => {
     expect(s!.object._tag).toBe('BlankNode');
   });
 
+  it('rejects IRIs whose escapes encode disallowed characters', () => {
+    const error = Effect.runSync(Effect.flip(N3.parse('<a> <b> <c\\u0020d> .')));
+    expect(error).toMatchObject({ line: 1, column: 9 });
+    expect(error.message).toContain('Invalid escaped character in IRI');
+    expect(Exit.isSuccess(Effect.runSyncExit(N3.parse('<a> <b> <c\\u0041d> .')))).toBe(true);
+  });
+
+  it('parses deeply nested formulas, lists and blank nodes', () => {
+    const depth = 300;
+    const text =
+      '<a> <b> ' + '{ <a> <b> '.repeat(depth) + '( [ <p> <o> ] )' + ' }'.repeat(depth) + ' .';
+    const exit = Effect.runSyncExit(N3.parse(text));
+    expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
   it('reports syntax errors with positions', () => {
     const exit = Effect.runSyncExit(N3.parse('@prefix : <http://e/> .\n:a :b .'));
     expect(Exit.isFailure(exit)).toBe(true);
