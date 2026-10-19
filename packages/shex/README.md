@@ -22,7 +22,10 @@
   and the extension hierarchy has no cycles.
 - **ShapeMaps** (`ShapeMap`): the compact syntax for fixed maps
   (`node@shape`, `node@START`), query maps with `{FOCUS p _}` / `{_ p FOCUS}`
-  selectors, and the JSON form.
+  selectors, and the JSON form. The compact syntax is parsed with
+  [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+  (a peer dependency, next to `effect`). Errors are `RdfParseError`s with
+  line and column.
 - **Validation** (`Validator`): the ShEx 2.1 semantics plus ShEx 2.2
   `EXTENDS`/`ABSTRACT`/`RESTRICTS`.
   - Triple expressions are matched by searching for a partition of the

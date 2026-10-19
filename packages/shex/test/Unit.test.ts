@@ -104,6 +104,61 @@ describe('ShapeMap', () => {
       expect(fixed.map((a) => a.node.key)).toContain('<http://ex.example/dave>');
     }),
   );
+
+  it.effect('parses terms, comments and blank node subjects', () =>
+    Effect.gen(function* () {
+      const map = yield* ShapeMap.parse(
+        `# a comment
+        {_:b a FOCUS}@_:S, /* block */ 1.5e3@<S>, '''a''b'''@<T>,
+        "\\u0041"^^<http://dt>@START, ex:a\\.b@ex:S`,
+        {
+          baseIri: 'http://base.example/',
+          prefixes: { ex: 'http://ex.example/' },
+          shapePrefixes: { ex: 'http://shapes.example/' },
+        },
+      );
+      expect(map.map((a) => a.node)).toEqual([
+        {
+          _tag: 'TriplePattern',
+          subject: Term.blankNode('b'),
+          predicate: Term.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+          object: 'FOCUS',
+        },
+        Term.literal('1.5e3', Term.namedNode('http://www.w3.org/2001/XMLSchema#double')),
+        Term.literal("a''b"),
+        Term.literal('A', Term.namedNode('http://dt')),
+        ex('a.b'),
+      ]);
+      expect(map.map((a) => a.shape)).toEqual([
+        '_:S',
+        'http://base.example/S',
+        'http://base.example/T',
+        ShapeMap.start,
+        'http://shapes.example/S',
+      ]);
+    }),
+  );
+
+  it.effect('reports errors with line and column', () =>
+    Effect.gen(function* () {
+      const unknown = yield* Effect.flip(ShapeMap.parse('<a>@START,\n  foo:b@START'));
+      expect(unknown).toMatchObject({ message: 'unknown prefix "foo:"', line: 2, column: 3 });
+      const focus = yield* Effect.flip(ShapeMap.parse('{FOCUS <p> FOCUS}@START'));
+      expect(focus.message).toBe('a triple pattern needs exactly one FOCUS');
+      const escape = yield* Effect.flip(ShapeMap.parse('"x\\q"@START'));
+      expect(escape).toMatchObject({ line: 1, column: 4 });
+      const label = yield* Effect.flip(ShapeMap.parse('<a>@'));
+      expect(label.message).toContain('expected a shape label');
+      expect(yield* ShapeMap.parse('  ')).toEqual([]);
+    }),
+  );
+
+  it('parses JSON shape map terms, falling back to IRIs', () => {
+    expect(ShapeMap.parseTerm('"x"@en')).toEqual(Term.literal('x', 'en'));
+    expect(ShapeMap.parseTerm('s', { baseIri: 'http://base.example/' })).toEqual(
+      Term.namedNode('http://base.example/s'),
+    );
+  });
 });
 
 describe('Validator', () => {

@@ -33,11 +33,13 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-parse": "catalog:",
     "@thomasfosterau/effect-turtle": "workspace:*",
     "effect": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
+    "@thomasfosterau/effect-parse": "catalog:",
     "effect": "catalog:"
   }
 }
