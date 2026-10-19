@@ -212,6 +212,9 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      '@thomasfosterau/effect-parse':
+        specifier: 'catalog:'
+        version: 0.1.0(effect@4.0.5)
       '@thomasfosterau/effect-turtle':
         specifier: workspace:*
         version: link:../turtle

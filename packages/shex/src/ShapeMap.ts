@@ -6,20 +6,16 @@
  *
  * @since 0.1.0
  */
+import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as Result from 'effect/Result';
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import { RdfParseError } from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import {
-  Failure,
-  lineColumn,
-  matchAt,
-  RE,
-  unescapeLocal,
-  unescapeString,
-  unescapeUchar,
-} from './internal/lexer.ts';
+import * as Tokens from './internal/tokens.ts';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -119,181 +115,141 @@ export interface ParseOptions {
   readonly shapePrefixes?: Readonly<Record<string, string>> | undefined;
 }
 
-class MapParser {
-  pos = 0;
-  readonly input: string;
-  readonly options: ParseOptions;
-  constructor(input: string, options: ParseOptions) {
-    this.input = input;
-    this.options = options;
-  }
+/** The options of the current parse, for resolving IRIs. */
+class Options extends Context.Service<Options, ParseOptions>()(
+  '@thomasfosterau/effect-shex/ShapeMap/Options',
+) {}
 
-  fail(message: string): never {
-    throw new Failure(message, this.pos);
-  }
+const lex = Tokens.lexeme;
 
-  ws(): void {
-    const m = matchAt(RE.SKIP, this.input, this.pos);
-    if (m !== undefined) this.pos += m.length;
-  }
+/**
+ * An IRI: an `IRIREF` resolved against the base IRI, or a prefixed name
+ * expanded with `prefixes` (falling back to the options' prefixes).
+ */
+const iri = (
+  prefixes: (options: ParseOptions) => Readonly<Record<string, string>> | undefined,
+): Parser.Parser<string, string, Options> =>
+  Parser.alt(
+    Parser.seq(Parser.service(Options), Tokens.iriRef).pipe(
+      Parser.map(([{ baseIri }, iri]) =>
+        baseIri === undefined || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, baseIri),
+      ),
+    ),
+    // Once a prefixed name has matched, an unknown prefix is an error.
+    Parser.preceded(
+      Parser.peek(Tokens.prefixedName),
+      Parser.cut(
+        Parser.seq(Parser.service(Options), Tokens.prefixedName).pipe(
+          Parser.tryMap(([options, { prefix, local }]) => {
+            const ns = prefixes(options)?.[prefix] ?? options.prefixes?.[prefix];
+            return ns === undefined
+              ? Result.fail(`unknown prefix "${prefix}:"`)
+              : Result.succeed(ns + local);
+          }),
+        ),
+      ),
+    ),
+  );
 
-  eat(s: string): boolean {
-    this.ws();
-    if (this.input.startsWith(s, this.pos)) {
-      this.pos += s.length;
-      return true;
-    }
-    return false;
-  }
+const noPrefixes = () => undefined;
 
-  keyword(kw: string): boolean {
-    this.ws();
-    const m = matchAt(/[A-Za-z]+/y, this.input, this.pos);
-    if (m !== undefined && m.toUpperCase() === kw) {
-      this.pos += m.length;
-      return true;
-    }
-    return false;
-  }
+const namedNode = iri(noPrefixes).pipe(Parser.map((value) => Term.namedNode(value)));
 
-  iri(prefixes: Readonly<Record<string, string>> | undefined): string | undefined {
-    this.ws();
-    let m = matchAt(RE.IRIREF, this.input, this.pos);
-    if (m !== undefined) {
-      this.pos += m.length;
-      const iri = unescapeUchar(m.slice(1, -1));
-      const base = this.options.baseIri;
-      return base === undefined || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, base);
-    }
-    m = matchAt(RE.PNAME_LN, this.input, this.pos) ?? matchAt(RE.PNAME_NS, this.input, this.pos);
-    if (m !== undefined) {
-      const i = m.indexOf(':');
-      const prefix = m.slice(0, i);
-      const ns = prefixes?.[prefix] ?? this.options.prefixes?.[prefix];
-      if (ns === undefined) this.fail(`unknown prefix "${prefix}:"`);
-      this.pos += m.length;
-      return ns + unescapeLocal(m.slice(i + 1));
-    }
-    return undefined;
-  }
+const literal = Parser.seq(
+  Tokens.stringLiteral,
+  Parser.opt(
+    Parser.alt(
+      Tokens.langTag,
+      Parser.preceded(
+        Token.literal('^^'),
+        Parser.cut(lex(namedNode).pipe(Parser.expected('a datatype IRI'))),
+      ),
+    ),
+  ),
+).pipe(
+  Parser.map(([value, suffix]) =>
+    suffix._tag === 'None'
+      ? Term.literal(value)
+      : Term.literal(value, suffix.value as string | Term.NamedNode),
+  ),
+);
 
-  term(): Term.GroundTerm | undefined {
-    this.ws();
-    const iri = this.iri(undefined);
-    if (iri !== undefined) return Term.namedNode(iri);
-    let m = matchAt(RE.BLANK_NODE_LABEL, this.input, this.pos);
-    if (m !== undefined) {
-      this.pos += m.length;
-      return Term.blankNode(m.slice(2));
-    }
-    const c = this.input[this.pos];
-    if (c === '"' || c === "'") {
-      let q = 3;
-      m = this.input.startsWith(c.repeat(3), this.pos)
-        ? matchAt(
-            c === "'" ? RE.STRING_LITERAL_LONG1 : RE.STRING_LITERAL_LONG2,
-            this.input,
-            this.pos,
-          )
-        : undefined;
-      if (m === undefined) {
-        q = 1;
-        m = matchAt(c === "'" ? RE.STRING_LITERAL1 : RE.STRING_LITERAL2, this.input, this.pos);
-      }
-      if (m === undefined) this.fail('invalid string literal');
-      this.pos += m.length;
-      const value = unescapeString(m.slice(q, -q));
-      const lang = matchAt(RE.LANGTAG, this.input, this.pos);
-      if (lang !== undefined) {
-        this.pos += lang.length;
-        return Term.literal(value, lang.slice(1));
-      }
-      if (this.input.startsWith('^^', this.pos)) {
-        this.pos += 2;
-        const dt = this.iri(undefined) ?? this.fail('expected a datatype IRI');
-        return Term.literal(value, Term.namedNode(dt));
-      }
-      return Term.literal(value);
-    }
-    for (const [re, dt] of [
-      [RE.DOUBLE, 'double'],
-      [RE.DECIMAL, 'decimal'],
-      [RE.INTEGER, 'integer'],
-    ] as const) {
-      m = matchAt(re, this.input, this.pos);
-      if (m !== undefined) {
-        this.pos += m.length;
-        return Term.literal(m, Term.namedNode(XSD + dt));
-      }
-    }
-    m = matchAt(/(?:true|false)\b/y, this.input, this.pos);
-    if (m !== undefined) {
-      this.pos += m.length;
-      return Term.literal(m, Term.namedNode(`${XSD}boolean`));
-    }
-    return undefined;
-  }
+const term: Parser.Parser<Term.GroundTerm, string, Options> = lex(
+  Parser.alt(
+    namedNode,
+    Tokens.blankNodeLabel.pipe(Parser.map((label) => Term.blankNode(label))),
+    literal,
+    Tokens.numericLiteral.pipe(
+      Parser.map(([value, type]) => Term.literal(value, Term.namedNode(XSD + type))),
+    ),
+    Tokens.booleanLiteral.pipe(
+      Parser.map((value) => Term.literal(value, Term.namedNode(`${XSD}boolean`))),
+    ),
+  ),
+);
 
-  predicate(): Term.NamedNode {
-    this.ws();
-    if (matchAt(/a(?![A-Za-z0-9_:-])/y, this.input, this.pos) !== undefined) {
-      this.pos++;
-      return Term.namedNode(RDF_TYPE);
-    }
-    const iri = this.iri(undefined) ?? this.fail('expected a predicate');
-    return Term.namedNode(iri);
-  }
+const predicate = lex(
+  Parser.alt(
+    Parser.terminated(Token.literal('a'), Parser.not(Token.oneOf([Tokens.pnChars, ':']))).pipe(
+      Parser.as(Term.namedNode(RDF_TYPE)),
+    ),
+    namedNode,
+  ),
+).pipe(Parser.expected('a predicate'));
 
-  nodeSelector(): NodeSelector {
-    if (this.eat('{')) {
-      let subject: TriplePattern['subject'];
-      if (this.keyword('FOCUS')) subject = 'FOCUS';
-      else if (this.eat('_')) subject = '_';
-      else {
-        const t = this.term();
-        if (t === undefined || t._tag === 'Literal') return this.fail('expected a subject');
-        subject = t;
-      }
-      const predicate = this.predicate();
-      let object: TriplePattern['object'];
-      if (this.keyword('FOCUS')) object = 'FOCUS';
-      else if (this.eat('_')) object = '_';
-      else object = this.term() ?? this.fail('expected an object');
-      if ((subject === 'FOCUS') === (object === 'FOCUS'))
-        this.fail('a triple pattern needs exactly one FOCUS');
-      if (!this.eat('}')) this.fail("expected '}'");
-      return { _tag: 'TriplePattern', subject, predicate, object };
-    }
-    return this.term() ?? this.fail('expected a node selector');
-  }
+const focus = lex(Tokens.keyword('FOCUS')).pipe(Parser.as('FOCUS' as const));
+const wildcard = lex(Parser.terminated(Token.literal('_'), Parser.not(Token.literal(':'))));
 
-  shapeSelector(): ShapeSelector {
-    if (!this.eat('@')) this.fail("expected '@'");
-    if (this.keyword('START')) return start;
-    const iri = this.iri(this.options.shapePrefixes);
-    if (iri !== undefined) return iri;
-    const m = matchAt(RE.BLANK_NODE_LABEL, this.input, this.pos);
-    if (m !== undefined) {
-      this.pos += m.length;
-      return m;
-    }
-    return this.fail('expected a shape label');
-  }
+const triplePattern = Parser.preceded(
+  lex(Token.literal('{')),
+  Parser.cut(
+    Parser.terminated(
+      Parser.seq(
+        Parser.alt(
+          focus,
+          wildcard,
+          term.pipe(
+            Parser.filter((t): t is Term.Subject => t._tag !== 'Literal'),
+            Parser.expected('a subject'),
+          ),
+        ),
+        predicate,
+        Parser.alt(focus, wildcard, term.pipe(Parser.expected('an object'))),
+      ),
+      lex(Token.literal('}')),
+    ).pipe(
+      Parser.tryMap(([subject, predicate, object]) =>
+        (subject === 'FOCUS') === (object === 'FOCUS')
+          ? Result.fail('a triple pattern needs exactly one FOCUS')
+          : Result.succeed<NodeSelector>({ _tag: 'TriplePattern', subject, predicate, object }),
+      ),
+    ),
+  ),
+);
 
-  shapeMap(): QueryShapeMap {
-    const out: Array<QueryAssociation> = [];
-    this.ws();
-    if (this.pos >= this.input.length) return out;
-    do {
-      const node = this.nodeSelector();
-      const shape = this.shapeSelector();
-      out.push({ node, shape });
-    } while (this.eat(','));
-    this.ws();
-    if (this.pos < this.input.length) this.fail('unexpected input');
-    return out;
-  }
-}
+const nodeSelector: Parser.Parser<NodeSelector, string, Options> = Parser.alt(
+  triplePattern,
+  term,
+).pipe(Parser.expected('a node selector'));
+
+const shapeSelector: Parser.Parser<ShapeSelector, string, Options> = Parser.preceded(
+  lex(Token.literal('@')),
+  Parser.cut(
+    Parser.alt(
+      lex(Tokens.keyword('START')).pipe(Parser.as(start)),
+      lex(iri((options) => options.shapePrefixes)),
+      lex(Tokens.blankNodeLabel).pipe(Parser.map((label) => `_:${label}`)),
+    ).pipe(Parser.expected('a shape label')),
+  ),
+);
+
+const shapeMap: Parser.Parser<QueryShapeMap, string, Options> = Parser.terminated(
+  Parser.separated(
+    Parser.struct({ node: nodeSelector, shape: shapeSelector }),
+    lex(Token.literal(',')),
+  ),
+  Tokens.skip,
+);
 
 /**
  * Parses a (query) shape map in the compact syntax.
@@ -306,18 +262,15 @@ export const parse = (
   options: ParseOptions = {},
 ): Effect.Effect<QueryShapeMap, RdfParseError> =>
   Effect.suspend(() => {
-    try {
-      return Effect.succeed(new MapParser(input, options).shapeMap());
-    } catch (e) {
-      if (e instanceof Failure) {
-        const { line, column } = lineColumn(input, e.pos);
-        return Effect.fail(
-          new RdfParseError({ format: 'ShapeMap', message: e.message, line, column }),
-        );
-      }
-      return Effect.fail(new RdfParseError({ format: 'ShapeMap', message: String(e) }));
-    }
+    const result = Parser.parse(Parser.provideService(shapeMap, Options, options), input);
+    if (Result.isSuccess(result)) return Effect.succeed(result.success);
+    const error = result.failure;
+    const { line, column } = error.position;
+    const message = error.cause ?? error.message.slice(error.message.lastIndexOf('\n') + 1);
+    return Effect.fail(new RdfParseError({ format: 'ShapeMap', message, line, column }));
   });
+
+const groundTerm = Parser.terminated(term, Tokens.skip);
 
 /**
  * Parses a single RDF term in N-Triples / Turtle notation (`<iri>`,
@@ -328,14 +281,8 @@ export const parse = (
  * @category parsing
  */
 export const parseTerm = (input: string, options: ParseOptions = {}): Term.GroundTerm => {
-  try {
-    const p = new MapParser(input, options);
-    const t = p.term();
-    p.ws();
-    if (t !== undefined && p.pos === input.length) return t;
-  } catch {
-    // fall through
-  }
+  const result = Parser.parse(Parser.provideService(groundTerm, Options, options), input);
+  if (Result.isSuccess(result)) return result.success;
   if (input.startsWith('_:')) return Term.blankNode(input.slice(2));
   return Term.namedNode(
     options.baseIri === undefined || Iri.isAbsolute(input)
