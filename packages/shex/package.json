@@ -26,7 +26,8 @@
     }
   },
   "scripts": {
-    "build": "vp pack"
+    "build": "vp pack",
+    "bench": "node --experimental-strip-types --no-warnings bench/shexc.ts"
   },
   "dependencies": {
     "@thomasfosterau/effect-rdf": "workspace:*"

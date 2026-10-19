@@ -1,23 +1,25 @@
 /**
- * A hand-written recursive-descent parser for the ShEx compact syntax
- * (ShExC), producing ShExJ. The construction of ShExJ objects mirrors the
- * reference grammar (shex.js `ShExJison.jison`) so that the output matches
- * the ShExJ representations of the shexTest suite.
+ * The ShEx compact syntax (ShExC) parser, producing ShExJ. It is written
+ * with `@thomasfosterau/effect-parse` as a compiled grammar over the tokens
+ * of `shexcLexer.ts` (whose IRIs are already resolved), followed by a pass
+ * over the declarations in document order for the checks that depend on
+ * what was declared before (duplicate labels, shape and triple expression
+ * labels). The construction of ShExJ objects mirrors the reference grammar
+ * (shex.js `ShExJison.jison`) so that the output matches the ShExJ
+ * representations of the shexTest suite.
+ *
+ * Like the reference grammar, the parser is LL(1): every choice is made by
+ * dispatching on the kind of the next token (and committing to it), never by
+ * trying alternatives in turn.
  *
  * @internal
  */
-import * as Iri from '@thomasfosterau/effect-rdf/Iri';
+import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Result from 'effect/Result';
 import type * as ShExJ from '../ShExJ.ts';
-import {
-  Failure,
-  matchAt,
-  RE,
-  unescapeCode,
-  unescapeLocal,
-  unescapeRegexp,
-  unescapeString,
-  unescapeUchar,
-} from './lexer.ts';
+import { resolve, type Tok, tokenize } from './shexcLexer.ts';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
@@ -53,91 +55,6 @@ const numericDatatypes = new Set(
 
 const numericFacetNames = ['mininclusive', 'minexclusive', 'maxinclusive', 'maxexclusive'];
 
-const KEYWORDS = new Set([
-  'BASE',
-  'PREFIX',
-  'IMPORT',
-  'START',
-  'EXTERNAL',
-  'ABSTRACT',
-  'RESTRICTS',
-  'EXTENDS',
-  'CLOSED',
-  'EXTRA',
-  'LITERAL',
-  'BNODE',
-  'IRI',
-  'NONLITERAL',
-  'AND',
-  'OR',
-  'NOT',
-  'MININCLUSIVE',
-  'MINEXCLUSIVE',
-  'MAXINCLUSIVE',
-  'MAXEXCLUSIVE',
-  'LENGTH',
-  'MINLENGTH',
-  'MAXLENGTH',
-  'TOTALDIGITS',
-  'FRACTIONDIGITS',
-]);
-
-type TokenType =
-  | 'ATPNAME_LN'
-  | 'ATPNAME_NS'
-  | 'LANGTAG'
-  | 'PNAME_LN'
-  | 'PNAME_NS'
-  | 'DOUBLE'
-  | 'DECIMAL'
-  | 'INTEGER'
-  | 'IRIREF'
-  | 'REGEXP'
-  | 'BLANK_NODE_LABEL'
-  | 'STRING'
-  | 'LANG_STRING'
-  | 'KEYWORD'
-  | 'PUNCT'
-  | 'EOF';
-
-interface Token {
-  readonly type: TokenType;
-  /** Raw token text (for KEYWORD: upper-cased keyword; for PUNCT: the punctuation). */
-  readonly text: string;
-  readonly start: number;
-  readonly end: number;
-  /** For strings: the quote length (1 or 3). */
-  readonly quote?: number;
-}
-
-const PUNCTS = [
-  '//',
-  '^^',
-  '||',
-  '=',
-  '{',
-  '}',
-  '&',
-  '|',
-  ',',
-  '(',
-  ')',
-  '[',
-  ']',
-  '$',
-  '!',
-  '^',
-  '.',
-  '~',
-  ';',
-  '*',
-  '+',
-  '?',
-  '-',
-  '%',
-  '@',
-];
-
 /** A placeholder for the empty shape `.` / `{ }` (omitted as a value expression). */
 const EMPTY: ShExJ.Shape = { type: 'Shape' };
 
@@ -157,1033 +74,848 @@ export interface ParserResult {
   readonly baseIri: string | undefined;
 }
 
-class Parser {
-  pos = 0;
-  tok: Token | undefined;
-  base: string | undefined;
-  readonly prefixes = new Map<string, string>();
-  readonly imports: Array<string> = [];
-  readonly shapes = new Map<string, ShExJ.ShapeDecl>();
-  readonly productions = new Set<string>();
-  start: AnyShapeExpr | undefined;
-  startActs: ReadonlyArray<ShExJ.SemAct> | undefined;
-  readonly nested = new WeakSet<object>();
+/** A parse error at a character offset. */
+export interface ShExCError {
+  readonly message: string;
+  readonly offset: number;
+}
 
-  readonly input: string;
-  constructor(input: string, options: ParserOptions) {
-    this.input = input;
-    this.base = options.baseIri;
-    for (const [k, v] of Object.entries(options.prefixes ?? {})) this.prefixes.set(k, v);
+/** An error found by the grammar, at a token index. */
+interface SemanticError {
+  readonly message: string;
+  readonly at: number;
+}
+
+type P<A> = Parser.Parser<A, SemanticError, never, ReadonlyArray<Tok>>;
+
+// -----------------------------------------------------------------------------
+// Token parsers
+// -----------------------------------------------------------------------------
+
+/** A token of the given kind (see `Tok.kind`). */
+const tok = (kind: string, label = `'${kind}'`): P<Tok> =>
+  Token.oneOf<ReadonlyArray<Tok>>((t) => t.kind === kind).pipe(Parser.expected(label));
+
+const anyToken = Token.oneOf<ReadonlyArray<Tok>>(() => true);
+const nextKind = Parser.peek(anyToken).pipe(Parser.map((t) => t.kind));
+
+/**
+ * Chooses a parser by the kind of the next token, failing (without consuming
+ * input) when no case matches and there is no `otherwise`.
+ */
+const select = <A, B = never>(
+  label: string,
+  cases: ReadonlyArray<readonly [ReadonlyArray<string>, P<A>]>,
+  otherwise?: P<B>,
+): P<A | B> => {
+  const record: Record<string, P<A | B>> = {};
+  for (const [kinds, p] of cases) for (const k of kinds) record[k] ??= p;
+  const chosen: P<A | B> =
+    otherwise === undefined
+      ? Parser.dispatch(nextKind, record)
+      : Parser.dispatch(nextKind, record, otherwise);
+  return chosen.pipe(Parser.expected(label));
+};
+
+/** Fails with a semantic error at token index `at`. */
+const failAt = <A>(message: string, at: number): Result.Result<A, SemanticError> =>
+  Result.fail({ message, at });
+
+const optional = <A>(p: P<A>): P<A | undefined> =>
+  Parser.opt(p).pipe(Parser.map((o) => (o._tag === 'Some' ? o.value : undefined)));
+
+/** Whether the next token is of one of `kinds` (consumed if so). */
+const accept = (...kinds: ReadonlyArray<string>): P<boolean> =>
+  Parser.opt(Token.oneOf<ReadonlyArray<Tok>>((t) => kinds.includes(t.kind))).pipe(
+    Parser.map((o) => o._tag === 'Some'),
+  );
+
+const IRI_KINDS = ['IRIREF', 'PNAME'];
+
+/** The IRI of an IRIREF or PNAME token, or the token's resolution error. */
+const iri: P<string> = Parser.seq(
+  Parser.location,
+  Token.oneOf<ReadonlyArray<Tok>>((t) => t.kind === 'IRIREF' || t.kind === 'PNAME'),
+).pipe(
+  Parser.tryMap(([at, t]) =>
+    t.error === undefined ? Result.succeed(t.iri) : failAt<string>(t.error, at),
+  ),
+  Parser.cut,
+  Parser.expected('an IRI'),
+);
+
+const blankNode = tok('BLANK_NODE_LABEL', 'a blank node').pipe(Parser.map((t) => t.text));
+
+/** shapeExprLabel / tripleExprLabel: iri | blankNode */
+const label: P<string> = select('an IRI or a blank node', [
+  [IRI_KINDS, iri],
+  [['BLANK_NODE_LABEL'], blankNode],
+]);
+
+const predicate: P<string> = select('a predicate', [
+  [['a'], anyToken.pipe(Parser.as(RDF_TYPE))],
+  [IRI_KINDS, iri],
+]);
+
+const LITERAL_KINDS = ['STRING', 'LANG_STRING', 'INTEGER', 'DECIMAL', 'DOUBLE', 'true', 'false'];
+
+const literal: P<ShExJ.ObjectLiteral> = select('a literal', [
+  [['INTEGER'], anyToken.pipe(Parser.map((t) => ({ value: t.text, type: XSD_INTEGER })))],
+  [['DECIMAL'], anyToken.pipe(Parser.map((t) => ({ value: t.text, type: XSD_DECIMAL })))],
+  [['DOUBLE'], anyToken.pipe(Parser.map((t) => ({ value: t.text, type: XSD_DOUBLE })))],
+  [
+    ['LANG_STRING'],
+    anyToken.pipe(Parser.map((t) => ({ value: t.text, language: t.suffix.toLowerCase() }))),
+  ],
+  [
+    ['STRING'],
+    Parser.seq(anyToken, optional(Parser.preceded(tok('^^'), Parser.cut(iri)))).pipe(
+      Parser.map(([t, type]): ShExJ.ObjectLiteral =>
+        type === undefined ? { value: t.text } : { value: t.text, type },
+      ),
+    ),
+  ],
+  [['true', 'false'], anyToken.pipe(Parser.map((t) => ({ value: t.text, type: XSD_BOOLEAN })))],
+]);
+
+// -----------------------------------------------------------------------------
+// Shape expression helpers
+// -----------------------------------------------------------------------------
+
+/**
+ * A shape expression, and whether it was written in parentheses: a
+ * parenthesised `AND` is not merged into an enclosing `AND`.
+ */
+interface Atom {
+  readonly e: AnyShapeExpr;
+  readonly nested: boolean;
+}
+
+const plain = (e: AnyShapeExpr): Atom => ({ e, nested: false });
+
+const junction = (
+  type: 'ShapeAnd' | 'ShapeOr',
+  atom: Atom,
+  juncts: ReadonlyArray<AnyShapeExpr>,
+): AnyShapeExpr => {
+  if (juncts.length === 0) return atom.e;
+  const e = atom.e;
+  if (typeof e === 'object' && e.type === type && !atom.nested) {
+    return { ...e, shapeExprs: (e as ShExJ.ShapeAnd).shapeExprs.concat(juncts) };
   }
+  return { type, shapeExprs: [e, ...juncts] };
+};
 
-  // ---------------------------------------------------------------------------
-  // Lexing
-  // ---------------------------------------------------------------------------
-
-  fail(message: string, pos: number = this.peek().start): never {
-    throw new Failure(message, pos);
-  }
-
-  skip(pos: number): number {
-    const m = matchAt(RE.SKIP, this.input, pos);
-    return m === undefined ? pos : pos + m.length;
-  }
-
-  peek(): Token {
-    if (this.tok !== undefined) return this.tok;
-    const input = this.input;
-    const start = this.skip(this.pos);
-    const t = (type: TokenType, text: string, end = start + text.length, quote?: number): Token =>
-      quote === undefined ? { type, text, start, end } : { type, text, start, end, quote };
-    if (start >= input.length) return (this.tok = t('EOF', '', start));
-    const c = input[start]!;
-    let m: string | undefined;
-    if (c === '@') {
-      if ((m = matchAt(RE.ATPNAME_LN, input, start)) !== undefined)
-        return (this.tok = t('ATPNAME_LN', m));
-      if ((m = matchAt(RE.ATPNAME_NS, input, start)) !== undefined)
-        return (this.tok = t('ATPNAME_NS', m));
-      if ((m = matchAt(RE.LANGTAG, input, start)) !== undefined)
-        return (this.tok = t('LANGTAG', m));
-      return (this.tok = t('PUNCT', '@'));
-    }
-    if ((m = matchAt(RE.PNAME_LN, input, start)) !== undefined)
-      return (this.tok = t('PNAME_LN', m));
-    if ((m = matchAt(RE.DOUBLE, input, start)) !== undefined) return (this.tok = t('DOUBLE', m));
-    if ((m = matchAt(RE.DECIMAL, input, start)) !== undefined) return (this.tok = t('DECIMAL', m));
-    if ((m = matchAt(RE.INTEGER, input, start)) !== undefined) return (this.tok = t('INTEGER', m));
-    if (c === '<') {
-      if ((m = matchAt(RE.IRIREF, input, start)) !== undefined) return (this.tok = t('IRIREF', m));
-      this.fail('invalid IRI reference', start);
-    }
-    if ((m = matchAt(RE.PNAME_NS, input, start)) !== undefined)
-      return (this.tok = t('PNAME_NS', m));
-    if (c === '/' && input[start + 1] !== '/') {
-      if ((m = matchAt(RE.REGEXP, input, start)) !== undefined) return (this.tok = t('REGEXP', m));
-      this.fail('invalid regular expression', start);
-    }
-    if (c === '_' && (m = matchAt(RE.BLANK_NODE_LABEL, input, start)) !== undefined)
-      return (this.tok = t('BLANK_NODE_LABEL', m));
-    if (c === '"' || c === "'") {
-      const long = c === "'" ? RE.STRING_LITERAL_LONG1 : RE.STRING_LITERAL_LONG2;
-      const short = c === "'" ? RE.STRING_LITERAL1 : RE.STRING_LITERAL2;
-      let quote = 3;
-      m = input.startsWith(c.repeat(3), start) ? matchAt(long, input, start) : undefined;
-      if (m === undefined) {
-        quote = 1;
-        m = matchAt(short, input, start);
-      }
-      if (m === undefined) this.fail('invalid string literal', start);
-      const lang = matchAt(RE.LANGTAG_SUFFIX, input, start + m.length);
-      if (lang !== undefined) return (this.tok = t('LANG_STRING', m + lang, undefined, quote));
-      return (this.tok = t('STRING', m, undefined, quote));
-    }
-    if ((m = matchAt(RE.WORD, input, start)) !== undefined) {
-      if (m === 'a' || m === 'true' || m === 'false') return (this.tok = t('PUNCT', m));
-      const upper = m.toUpperCase();
-      if (KEYWORDS.has(upper)) return (this.tok = t('KEYWORD', upper, start + m.length));
-      this.fail(`unexpected word "${m}"`, start);
-    }
-    for (const p of PUNCTS) {
-      if (input.startsWith(p, start)) return (this.tok = t('PUNCT', p));
-    }
-    return this.fail(`invalid character ${JSON.stringify(c)}`, start);
-  }
-
-  next(): Token {
-    const tok = this.peek();
-    this.pos = tok.end;
-    this.tok = undefined;
-    return tok;
-  }
-
-  isPunct(p: string): boolean {
-    const t = this.peek();
-    return t.type === 'PUNCT' && t.text === p;
-  }
-
-  isKeyword(...kw: ReadonlyArray<string>): boolean {
-    const t = this.peek();
-    return t.type === 'KEYWORD' && kw.includes(t.text);
-  }
-
-  acceptPunct(p: string): boolean {
-    if (this.isPunct(p)) {
-      this.next();
-      return true;
-    }
-    return false;
-  }
-
-  acceptKeyword(kw: string): boolean {
-    if (this.isKeyword(kw)) {
-      this.next();
-      return true;
-    }
-    return false;
-  }
-
-  expectPunct(p: string): Token {
-    if (!this.isPunct(p)) this.unexpected(`'${p}'`);
-    return this.next();
-  }
-
-  unexpected(expected: string): never {
-    const t = this.peek();
-    const found = t.type === 'EOF' ? 'end of input' : JSON.stringify(t.text);
-    return this.fail(`expected ${expected}, found ${found}`, t.start);
-  }
-
-  /** Scans a `REPEAT_RANGE` at the current position, if any. */
-  scanRepeatRange(): string | undefined {
-    const start = this.skip(this.pos);
-    const m = matchAt(RE.REPEAT_RANGE, this.input, start);
-    if (m === undefined) return undefined;
-    this.pos = start + m.length;
-    this.tok = undefined;
-    return m;
-  }
-
-  /** Scans a `CODE` block at the current position, if any. */
-  scanCode(): string | undefined {
-    const start = this.skip(this.pos);
-    const m = matchAt(RE.CODE, this.input, start);
-    if (m === undefined) return undefined;
-    this.pos = start + m.length;
-    this.tok = undefined;
-    return m;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Terminals
-  // ---------------------------------------------------------------------------
-
-  resolve(iri: string): string {
-    return this.base === undefined || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, this.base);
-  }
-
-  expandPrefix(prefix: string, pos: number): string {
-    const ns = this.prefixes.get(prefix);
-    if (ns === undefined) this.fail(`unknown prefix "${prefix}:"`, pos);
-    return ns;
-  }
-
-  isIriStart(): boolean {
-    const t = this.peek();
-    return t.type === 'IRIREF' || t.type === 'PNAME_LN' || t.type === 'PNAME_NS';
-  }
-
-  iri(): string {
-    const t = this.peek();
-    switch (t.type) {
-      case 'IRIREF':
-        this.next();
-        return this.resolve(unescapeUchar(t.text.slice(1, -1)));
-      case 'PNAME_LN': {
-        this.next();
-        const i = t.text.indexOf(':');
-        return this.expandPrefix(t.text.slice(0, i), t.start) + unescapeLocal(t.text.slice(i + 1));
-      }
-      case 'PNAME_NS':
-        this.next();
-        return this.expandPrefix(t.text.slice(0, -1), t.start);
-      default:
-        return this.unexpected('an IRI');
-    }
-  }
-
-  isLabelStart(): boolean {
-    return this.isIriStart() || this.peek().type === 'BLANK_NODE_LABEL';
-  }
-
-  /** shapeExprLabel / tripleExprLabel: iri | blankNode */
-  label(): string {
-    const t = this.peek();
-    if (t.type === 'BLANK_NODE_LABEL') {
-      this.next();
-      return t.text;
-    }
-    return this.iri();
-  }
-
-  predicate(): string {
-    if (this.acceptPunct('a')) return RDF_TYPE;
-    return this.iri();
-  }
-
-  isLiteralStart(): boolean {
-    const t = this.peek();
-    return (
-      t.type === 'STRING' ||
-      t.type === 'LANG_STRING' ||
-      t.type === 'INTEGER' ||
-      t.type === 'DECIMAL' ||
-      t.type === 'DOUBLE' ||
-      (t.type === 'PUNCT' && (t.text === 'true' || t.text === 'false'))
-    );
-  }
-
-  stringValue(t: Token): string {
-    const q = t.quote ?? 1;
-    return unescapeString(t.text.slice(q, -q));
-  }
-
-  literal(): ShExJ.ObjectLiteral {
-    const t = this.peek();
-    switch (t.type) {
-      case 'INTEGER':
-        this.next();
-        return { value: t.text, type: XSD_INTEGER };
-      case 'DECIMAL':
-        this.next();
-        return { value: t.text, type: XSD_DECIMAL };
-      case 'DOUBLE':
-        this.next();
-        return { value: t.text, type: XSD_DOUBLE };
-      case 'LANG_STRING': {
-        this.next();
-        const at = t.text.lastIndexOf('@');
-        const q = t.quote ?? 1;
-        return {
-          value: unescapeString(t.text.slice(q, at - q)),
-          language: t.text.slice(at + 1).toLowerCase(),
-        };
-      }
-      case 'STRING': {
-        this.next();
-        const value = this.stringValue(t);
-        if (this.acceptPunct('^^')) return { value, type: this.iri() };
-        return { value };
-      }
-      case 'PUNCT':
-        if (t.text === 'true' || t.text === 'false') {
-          this.next();
-          return { value: t.text, type: XSD_BOOLEAN };
-        }
-        break;
-      default:
-        break;
-    }
-    return this.unexpected('a literal');
-  }
-
-  // ---------------------------------------------------------------------------
-  // Document
-  // ---------------------------------------------------------------------------
-
-  document(): ShExJ.Schema {
-    let started = false;
-    for (;;) {
-      if (this.directive()) continue;
-      const t = this.peek();
-      if (t.type === 'EOF') break;
-      if (!started && this.isPunct('%')) {
-        this.startActs = this.codeDecls();
-        started = true;
-        continue;
-      }
-      if (this.isKeyword('START')) {
-        this.startDecl();
-      } else if (this.isKeyword('ABSTRACT') || this.isLabelStart()) {
-        this.shapeExprDecl();
-      } else {
-        this.unexpected('a directive or shape declaration');
-      }
-      started = true;
-    }
-    const schema: Mutable<ShExJ.Schema> = { type: 'Schema' };
-    if (this.imports.length > 0) schema.imports = this.imports;
-    if (this.startActs !== undefined) schema.startActs = this.startActs;
-    if (this.start !== undefined) schema.start = this.start;
-    if (this.shapes.size > 0) schema.shapes = Array.from(this.shapes.values());
-    return schema;
-  }
-
-  directive(): boolean {
-    if (this.acceptKeyword('BASE')) {
-      const t = this.peek();
-      if (t.type !== 'IRIREF') this.unexpected('an IRI reference');
-      this.next();
-      this.base = this.resolve(unescapeUchar(t.text.slice(1, -1)));
-      return true;
-    }
-    if (this.acceptKeyword('PREFIX')) {
-      const t = this.peek();
-      if (t.type !== 'PNAME_NS') this.unexpected('a prefix name');
-      this.next();
-      const ns = this.iri();
-      this.prefixes.set(t.text.slice(0, -1), ns);
-      return true;
-    }
-    if (this.acceptKeyword('IMPORT')) {
-      this.imports.push(this.iri());
-      return true;
-    }
-    return false;
-  }
-
-  startDecl(): void {
-    const kw = this.next();
-    this.expectPunct('=');
-    if (this.start !== undefined) this.fail('start already defined', kw.start);
-    const first = this.shapeAnd();
-    const rest: Array<AnyShapeExpr> = [];
-    while (this.acceptKeyword('OR')) rest.push(this.shapeAnd());
-    this.start = this.junction('ShapeOr', first, rest);
-  }
-
-  shapeExprDecl(): void {
-    const abstract = this.acceptKeyword('ABSTRACT');
-    const labelPos = this.peek().start;
-    const label = this.label();
-    const restricts: Array<AnyShapeExpr> = [];
-    while (this.isKeyword('RESTRICTS') || this.isPunct('-')) {
-      this.next();
-      restricts.push(this.shapeOrRef());
-    }
-    let shapeExpr: AnyShapeExpr;
-    if (this.acceptKeyword('EXTERNAL')) {
-      shapeExpr = { type: 'ShapeExternal' };
-    } else if (this.isShapeRefStart()) {
-      const ref = this.shapeRef();
-      const rest = this.shapeOrOpt();
-      if (rest === undefined) shapeExpr = ref;
-      else {
-        rest.needsAtom.unshift(ref);
-        shapeExpr = rest.expr;
-      }
-    } else {
-      shapeExpr = this.nonest(this.shapeExpressionBody());
-    }
-    if (shapeExpr === EMPTY) shapeExpr = { type: 'Shape' };
-    const decl: Mutable<ShExJ.ShapeDecl> = { type: 'ShapeDecl', id: label, shapeExpr };
-    if (abstract) decl.abstract = true;
-    if (restricts.length > 0) decl.restricts = restricts;
-    if (this.productions.has(label)) this.fail(`${label} is a triple expression`, labelPos);
-    if (this.shapes.has(label)) this.fail(`${label} already defined`, labelPos);
-    this.shapes.set(label, decl);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Shape expressions
-  // ---------------------------------------------------------------------------
-
-  nonest<T extends AnyShapeExpr>(e: T): T {
-    if (typeof e === 'object') this.nested.delete(e);
-    return e;
-  }
-
-  isNested(e: AnyShapeExpr): boolean {
-    return typeof e === 'object' && this.nested.has(e);
-  }
-
-  junction(type: 'ShapeAnd' | 'ShapeOr', atom: AnyShapeExpr, juncts: Array<AnyShapeExpr>) {
-    if (juncts.length === 0) return this.nonest(atom);
-    if (typeof atom === 'object' && atom.type === type && !this.isNested(atom)) {
-      const a = atom as Mutable<ShExJ.ShapeAnd>;
-      a.shapeExprs = a.shapeExprs.concat(juncts);
-      return atom;
-    }
-    return { type, shapeExprs: [this.nonest(atom), ...juncts.map((j) => this.nonest(j))] };
-  }
-
-  isShapeRefStart(): boolean {
-    const t = this.peek();
-    return (
-      t.type === 'ATPNAME_LN' || t.type === 'ATPNAME_NS' || (t.type === 'PUNCT' && t.text === '@')
-    );
-  }
-
-  shapeRef(): string {
-    const t = this.next();
-    if (t.type === 'ATPNAME_LN') {
-      const i = t.text.indexOf(':');
-      return this.expandPrefix(t.text.slice(1, i), t.start) + unescapeLocal(t.text.slice(i + 1));
-    }
-    if (t.type === 'ATPNAME_NS') return this.expandPrefix(t.text.slice(1, -1), t.start);
-    return this.label();
-  }
-
-  /**
-   * shapeExpression ::= NOT? shapeAtomNoRef shapeOr? | NOT shapeRef shapeOr? | shapeRef shapeOr
-   */
-  shapeExpressionBody(): AnyShapeExpr {
-    if (this.acceptKeyword('NOT')) {
-      if (this.isShapeRefStart()) {
-        const atom: AnyShapeExpr = { type: 'ShapeNot', shapeExpr: this.shapeRef() };
-        const rest = this.shapeOrOpt();
-        if (rest === undefined) return atom;
-        rest.needsAtom.unshift(atom);
-        return rest.expr;
-      }
-      const atom: AnyShapeExpr = {
-        type: 'ShapeNot',
-        shapeExpr: this.nonest(this.shapeAtom(false)),
-      };
-      return this.prependAtom(atom, this.shapeOrOpt());
-    }
-    if (this.isShapeRefStart()) {
-      const ref = this.shapeRef();
-      const rest = this.shapeOrOpt();
-      if (rest === undefined) return this.unexpected("'AND' or 'OR'");
-      rest.needsAtom.unshift(ref);
-      return rest.expr;
-    }
-    const atom = this.shapeAtom(false);
-    return this.prependAtom(atom, this.shapeOrOpt());
-  }
-
-  prependAtom(
-    atom: AnyShapeExpr,
-    rest: { expr: AnyShapeExpr; needsAtom: Array<AnyShapeExpr> } | undefined,
-  ): AnyShapeExpr {
-    if (rest === undefined) return atom;
-    if (
-      typeof atom === 'object' &&
-      atom.type === 'ShapeAnd' &&
-      typeof rest.expr === 'object' &&
-      rest.expr.type === 'ShapeAnd' &&
-      !this.isNested(atom) &&
-      !this.isNested(rest.expr)
-    ) {
-      rest.needsAtom.unshift(...atom.shapeExprs);
-    } else {
-      rest.needsAtom.unshift(this.nonest(atom));
-    }
-    return rest.expr;
-  }
-
-  /**
-   * shapeOr ::= (OR shapeAnd)+ | (AND shapeNot)+ (OR shapeAnd)*
-   *
-   * Returns the expression and the list into which the leading atom is to be
-   * inserted.
-   */
-  shapeOrOpt(): { expr: AnyShapeExpr; needsAtom: Array<AnyShapeExpr> } | undefined {
-    if (this.isKeyword('OR')) {
-      const shapeExprs: Array<AnyShapeExpr> = [];
-      while (this.acceptKeyword('OR')) shapeExprs.push(this.nonest(this.shapeAnd()));
-      return { expr: { type: 'ShapeOr', shapeExprs }, needsAtom: shapeExprs };
-    }
-    if (this.isKeyword('AND')) {
-      const conjuncts: Array<AnyShapeExpr> = [];
-      while (this.acceptKeyword('AND')) conjuncts.push(this.shapeNot());
-      const shapeExprs: Array<AnyShapeExpr> = [];
-      for (const c of conjuncts) {
-        if (typeof c === 'object' && c.type === 'ShapeAnd' && !this.isNested(c))
-          shapeExprs.push(...c.shapeExprs);
-        else shapeExprs.push(this.nonest(c));
-      }
-      const and: ShExJ.ShapeAnd = { type: 'ShapeAnd', shapeExprs };
-      const ors: Array<AnyShapeExpr> = [];
-      while (this.acceptKeyword('OR')) ors.push(this.nonest(this.shapeAnd()));
-      return {
-        expr: ors.length > 0 ? { type: 'ShapeOr', shapeExprs: [and, ...ors] } : and,
-        needsAtom: shapeExprs,
-      };
-    }
-    return undefined;
-  }
-
-  shapeAnd(): AnyShapeExpr {
-    const first = this.shapeNot();
-    const rest: Array<AnyShapeExpr> = [];
-    while (this.acceptKeyword('AND')) rest.push(this.shapeNot());
-    return this.junction('ShapeAnd', first, rest);
-  }
-
-  shapeNot(): AnyShapeExpr {
-    if (this.acceptKeyword('NOT')) {
-      return { type: 'ShapeNot', shapeExpr: this.nonest(this.shapeAtom(true)) };
-    }
-    return this.shapeAtom(true);
-  }
-
-  isNonLitNodeConstraintStart(): boolean {
-    const t = this.peek();
-    return (
-      this.isKeyword('IRI', 'BNODE', 'NONLITERAL', 'LENGTH', 'MINLENGTH', 'MAXLENGTH') ||
-      t.type === 'REGEXP'
-    );
-  }
-
-  isLitNodeConstraintStart(): boolean {
-    return (
-      this.isKeyword(
-        'LITERAL',
-        'MININCLUSIVE',
-        'MINEXCLUSIVE',
-        'MAXINCLUSIVE',
-        'MAXEXCLUSIVE',
-        'TOTALDIGITS',
-        'FRACTIONDIGITS',
-      ) ||
-      this.isIriStart() ||
-      this.isPunct('[')
-    );
-  }
-
-  isShapeDefinitionStart(): boolean {
-    return this.isPunct('{') || this.isPunct('&') || this.isKeyword('EXTENDS', 'EXTRA', 'CLOSED');
-  }
-
-  /**
-   * shapeAtom (allowRef) / shapeAtomNoRef (!allowRef).
-   */
-  shapeAtom(allowRef: boolean): AnyShapeExpr {
-    if (this.isNonLitNodeConstraintStart()) {
-      const nc = this.withAnnotations(this.nonLitInlineNodeConstraint());
-      if (this.isShapeDefinitionStart() || this.isShapeRefStart()) {
-        const ref = this.shapeOrRef();
-        return { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] };
-      }
-      return nc;
-    }
-    if (this.isLitNodeConstraintStart()) {
-      return this.withAnnotations(this.litInlineNodeConstraint());
-    }
-    if (this.isShapeDefinitionStart() || (allowRef && this.isShapeRefStart())) {
-      const sor = this.shapeOrRef();
-      if (this.isNonLitNodeConstraintStart()) {
-        const nc = this.withAnnotations(this.nonLitInlineNodeConstraint());
-        return this.junction('ShapeAnd', sor, [nc]);
-      }
-      return sor;
-    }
-    if (this.acceptPunct('(')) {
-      const e = this.shapeExpressionBody();
-      this.expectPunct(')');
-      if (typeof e === 'object') this.nested.add(e);
-      return e;
-    }
-    if (this.acceptPunct('.')) return EMPTY;
-    return this.unexpected('a shape expression');
-  }
-
-  shapeOrRef(): AnyShapeExpr {
-    if (this.isShapeRefStart()) return this.shapeRef();
-    return this.shapeDefinition();
-  }
-
-  withAnnotations(nc: ShExJ.NodeConstraint): ShExJ.NodeConstraint {
-    const annotations = this.annotations();
-    const semActs = this.semanticActions();
-    if (annotations.length === 0 && semActs === undefined) return nc;
-    const out: Mutable<ShExJ.NodeConstraint> = nc;
-    if (annotations.length > 0) out.annotations = annotations;
-    if (semActs !== undefined) out.semActs = semActs;
-    return out;
-  }
-
-  // Inline shape expressions -----------------------------------------------------
-
-  inlineShapeExpression(): AnyShapeExpr {
-    const first = this.inlineShapeAnd();
-    const rest: Array<AnyShapeExpr> = [];
-    while (this.acceptKeyword('OR')) rest.push(this.inlineShapeAnd());
-    return this.junction('ShapeOr', first, rest);
-  }
-
-  inlineShapeAnd(): AnyShapeExpr {
-    const first = this.inlineShapeNot();
-    const rest: Array<AnyShapeExpr> = [];
-    while (this.acceptKeyword('AND')) rest.push(this.inlineShapeNot());
-    return this.junction('ShapeAnd', first, rest);
-  }
-
-  inlineShapeNot(): AnyShapeExpr {
-    if (this.acceptKeyword('NOT')) {
-      return { type: 'ShapeNot', shapeExpr: this.nonest(this.inlineShapeAtom()) };
-    }
-    return this.inlineShapeAtom();
-  }
-
-  inlineShapeAtom(): AnyShapeExpr {
-    if (this.isNonLitNodeConstraintStart()) {
-      const nc = this.nonLitInlineNodeConstraint();
-      if (this.isShapeDefinitionStart() || this.isShapeRefStart()) {
-        const ref = this.inlineShapeOrRef();
-        return { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] };
-      }
-      return nc;
-    }
-    if (this.isLitNodeConstraintStart()) return this.litInlineNodeConstraint();
-    if (this.isShapeDefinitionStart() || this.isShapeRefStart()) {
-      const sor = this.inlineShapeOrRef();
-      if (this.isNonLitNodeConstraintStart()) {
-        const nc = this.nonLitInlineNodeConstraint();
-        return { type: 'ShapeAnd', shapeExprs: [sor, nc] };
-      }
-      return sor;
-    }
-    if (this.acceptPunct('(')) {
-      const e = this.shapeExpressionBody();
-      this.expectPunct(')');
-      if (typeof e === 'object') this.nested.add(e);
-      return e;
-    }
-    if (this.acceptPunct('.')) return EMPTY;
-    return this.unexpected('a shape expression');
-  }
-
-  inlineShapeOrRef(): AnyShapeExpr {
-    if (this.isShapeRefStart()) return this.shapeRef();
-    return this.inlineShapeDefinition();
-  }
-
-  // Extends shape expressions ----------------------------------------------------
-
-  extendsShapeOr(): AnyShapeExpr {
-    const first = this.extendsShapeAnd();
-    const rest: Array<AnyShapeExpr> = [];
-    while (this.acceptKeyword('OR')) rest.push(this.extendsShapeAnd());
-    return this.junction('ShapeOr', first, rest);
-  }
-
-  extendsShapeAnd(): AnyShapeExpr {
-    const first = this.extendsShapeNot();
-    const rest: Array<AnyShapeExpr> = [];
-    while (this.acceptKeyword('AND')) rest.push(this.extendsShapeNot());
-    return this.junction('ShapeAnd', first, rest);
-  }
-
-  extendsShapeNot(): AnyShapeExpr {
-    if (this.acceptKeyword('NOT')) {
-      return { type: 'ShapeNot', shapeExpr: this.nonest(this.extendsShapeAtom()) };
-    }
-    return this.extendsShapeAtom();
-  }
-
-  extendsShapeAtom(): AnyShapeExpr {
-    if (this.isNonLitNodeConstraintStart()) {
-      const nc = this.nonLitInlineNodeConstraint();
-      const ref = this.inlineShapeOrRef();
-      return { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] };
-    }
-    if (this.isLitNodeConstraintStart()) return this.litInlineNodeConstraint();
-    if (this.isShapeDefinitionStart() || this.isShapeRefStart()) {
-      const sor = this.inlineShapeOrRef();
-      if (this.isNonLitNodeConstraintStart()) {
-        const nc = this.nonLitInlineNodeConstraint();
-        return { type: 'ShapeAnd', shapeExprs: [sor, nc] };
-      }
-      return sor;
-    }
-    if (this.acceptPunct('(')) {
-      const e = this.shapeExpressionBody();
-      this.expectPunct(')');
-      if (typeof e === 'object') this.nested.add(e);
-      return e;
-    }
-    if (this.acceptPunct('.')) return EMPTY;
-    return this.unexpected('a shape expression');
-  }
-
-  // Node constraints ---------------------------------------------------------------
-
-  litInlineNodeConstraint(): ShExJ.NodeConstraint {
-    if (this.acceptKeyword('LITERAL')) {
-      return { type: 'NodeConstraint', nodeKind: 'literal', ...this.facets(true, true) };
-    }
-    if (this.isIriStart()) {
-      const pos = this.peek().start;
-      const datatype = this.iri();
-      const facets = this.facets(true, true);
-      if (!numericDatatypes.has(datatype)) {
-        for (const f of numericFacetNames) {
-          if (f in facets)
-            this.fail(`facet ${f} not allowed for unknown datatype ${datatype}`, pos);
-        }
-      }
-      return { type: 'NodeConstraint', datatype, ...facets };
-    }
-    if (this.isPunct('[')) {
-      const values = this.valueSet();
-      this.facets(true, true);
-      return { type: 'NodeConstraint', values };
-    }
-    const facets = this.facets(false, true);
-    if (Object.keys(facets).length === 0) this.unexpected('a node constraint');
-    return { type: 'NodeConstraint', ...facets };
-  }
-
-  nonLitInlineNodeConstraint(): ShExJ.NodeConstraint {
-    let kind: ShExJ.NodeKind | undefined;
-    if (this.acceptKeyword('IRI')) kind = 'iri';
-    else if (this.acceptKeyword('BNODE')) kind = 'bnode';
-    else if (this.acceptKeyword('NONLITERAL')) kind = 'nonliteral';
-    const facets = this.facets(true, false);
-    return kind === undefined
-      ? { type: 'NodeConstraint', ...facets }
-      : { type: 'NodeConstraint', nodeKind: kind, ...facets };
-  }
-
-  facets(strings: boolean, numerics: boolean): Mutable<ShExJ.Facets> {
-    const out: Mutable<ShExJ.Facets> = {};
-    const set = (key: keyof ShExJ.Facets, value: number | string, pos: number) => {
-      if (key in out) this.fail(`facet ${key} defined multiple times`, pos);
-      (out as Record<string, unknown>)[key] = value;
+/**
+ * What follows the first atom of a shape expression: `(OR shapeAnd)+` or
+ * `(AND shapeNot)+ (OR shapeAnd)*`. The atom is inserted in front of the
+ * disjuncts or the conjuncts respectively.
+ */
+type Rest =
+  | { readonly _tag: 'Or'; readonly ors: ReadonlyArray<AnyShapeExpr> }
+  | {
+      readonly _tag: 'And';
+      readonly ands: ReadonlyArray<AnyShapeExpr>;
+      readonly ors: ReadonlyArray<AnyShapeExpr>;
     };
-    for (;;) {
-      const t = this.peek();
-      if (strings && t.type === 'REGEXP') {
-        this.next();
-        const end = t.text.lastIndexOf('/');
-        if ('pattern' in out) this.fail('facet pattern defined multiple times', t.start);
-        out.pattern = unescapeRegexp(t.text.slice(1, end));
-        if (end + 1 < t.text.length) out.flags = t.text.slice(end + 1);
-        continue;
-      }
-      if (t.type !== 'KEYWORD') break;
-      if (strings && (t.text === 'LENGTH' || t.text === 'MINLENGTH' || t.text === 'MAXLENGTH')) {
-        this.next();
-        const n = this.peek();
-        if (n.type !== 'INTEGER') this.unexpected('an integer');
-        this.next();
-        set(t.text.toLowerCase() as keyof ShExJ.Facets, parseInt(n.text, 10), t.start);
-        continue;
-      }
-      if (numerics && (t.text === 'TOTALDIGITS' || t.text === 'FRACTIONDIGITS')) {
-        this.next();
-        const n = this.peek();
-        if (n.type !== 'INTEGER') this.unexpected('an integer');
-        this.next();
-        set(t.text.toLowerCase() as keyof ShExJ.Facets, parseInt(n.text, 10), t.start);
-        continue;
-      }
-      if (
-        numerics &&
-        (t.text === 'MININCLUSIVE' ||
-          t.text === 'MINEXCLUSIVE' ||
-          t.text === 'MAXINCLUSIVE' ||
-          t.text === 'MAXEXCLUSIVE')
-      ) {
-        this.next();
-        set(t.text.toLowerCase() as keyof ShExJ.Facets, this.rawNumeric(), t.start);
-        continue;
-      }
-      break;
-    }
-    return out;
+
+const prepend = (rest: Rest, atoms: ReadonlyArray<AnyShapeExpr>): AnyShapeExpr => {
+  if (rest._tag === 'Or') return { type: 'ShapeOr', shapeExprs: [...atoms, ...rest.ors] };
+  const and: ShExJ.ShapeAnd = { type: 'ShapeAnd', shapeExprs: [...atoms, ...rest.ands] };
+  return rest.ors.length > 0 ? { type: 'ShapeOr', shapeExprs: [and, ...rest.ors] } : and;
+};
+
+const prependAtom = (atom: Atom, rest: Rest | undefined): AnyShapeExpr => {
+  if (rest === undefined) return atom.e;
+  const e = atom.e;
+  if (
+    typeof e === 'object' &&
+    e.type === 'ShapeAnd' &&
+    rest._tag === 'And' &&
+    rest.ors.length === 0 &&
+    !atom.nested
+  ) {
+    return prepend(rest, e.shapeExprs);
   }
+  return prepend(rest, [e]);
+};
 
-  rawNumeric(): number {
-    const t = this.peek();
-    switch (t.type) {
-      case 'INTEGER':
-        this.next();
-        return parseInt(t.text, 10);
-      case 'DECIMAL':
-      case 'DOUBLE':
-        this.next();
-        return parseFloat(t.text);
-      case 'STRING': {
-        this.next();
-        const value = this.stringValue(t);
-        this.expectPunct('^^');
-        const pos = this.peek().start;
-        const dt = this.iri();
-        if (dt === XSD_DECIMAL || dt === XSD_FLOAT || dt === XSD_DOUBLE) return parseFloat(value);
-        if (numericDatatypes.has(dt)) return parseInt(value, 10);
-        return this.fail(`numeric range facet expected numeric datatype instead of ${dt}`, pos);
+// -----------------------------------------------------------------------------
+// Annotations, semantic actions and cardinalities
+// -----------------------------------------------------------------------------
+
+const annotations: P<Array<ShExJ.Annotation>> = Parser.repeat(
+  Parser.preceded(
+    tok('//'),
+    Parser.cut(
+      Parser.seq(predicate, select('an IRI or a literal', [[IRI_KINDS, iri]], literal)).pipe(
+        Parser.map(([predicate, object]): ShExJ.Annotation => ({
+          type: 'Annotation',
+          predicate,
+          object,
+        })),
+      ),
+    ),
+  ),
+);
+
+const codeDecls: P<Array<ShExJ.SemAct>> = Parser.repeat(
+  Parser.preceded(
+    tok('%'),
+    Parser.cut(
+      Parser.seq(
+        iri,
+        select('code or %', [
+          [['CODE'], anyToken.pipe(Parser.map((t) => t.text))],
+          [['%'], anyToken.pipe(Parser.as(undefined))],
+        ]),
+      ).pipe(
+        Parser.map(([name, code]): ShExJ.SemAct =>
+          code === undefined ? { type: 'SemAct', name } : { type: 'SemAct', name, code },
+        ),
+      ),
+    ),
+  ),
+  { min: 1 },
+);
+
+const semanticActions: P<Array<ShExJ.SemAct> | undefined> = optional(codeDecls);
+
+const cardinality: P<{ min: number; max: number } | undefined> = optional(
+  select('a cardinality', [
+    [['*'], anyToken.pipe(Parser.as({ min: 0, max: -1 }))],
+    [['+'], anyToken.pipe(Parser.as({ min: 1, max: -1 }))],
+    [['?'], anyToken.pipe(Parser.as({ min: 0, max: 1 }))],
+    [['REPEAT_RANGE'], anyToken.pipe(Parser.map((t) => ({ min: t.min, max: t.max })))],
+  ]),
+);
+
+// -----------------------------------------------------------------------------
+// Node constraints
+// -----------------------------------------------------------------------------
+
+const integer = Parser.cut(tok('INTEGER', 'an integer')).pipe(
+  Parser.map((t) => parseInt(t.text, 10)),
+);
+
+const rawNumeric: P<number> = select('a numeric literal', [
+  [['INTEGER'], anyToken.pipe(Parser.map((t) => parseInt(t.text, 10)))],
+  [['DECIMAL', 'DOUBLE'], anyToken.pipe(Parser.map((t) => parseFloat(t.text)))],
+  [
+    ['STRING'],
+    Parser.seq(
+      anyToken,
+      Parser.cut(Parser.preceded(tok('^^'), Parser.seq(Parser.location, iri))),
+    ).pipe(
+      Parser.tryMap(([t, [at, dt]]) => {
+        const value = t.text;
+        if (dt === XSD_DECIMAL || dt === XSD_FLOAT || dt === XSD_DOUBLE) {
+          return Result.succeed(parseFloat(value));
+        }
+        if (numericDatatypes.has(dt)) return Result.succeed(parseInt(value, 10));
+        return failAt<number>(`numeric range facet expected numeric datatype instead of ${dt}`, at);
+      }),
+      Parser.cut,
+    ),
+  ],
+]);
+
+type Facet = readonly [key: string, value: number | string, at: number, flags?: string];
+
+const STRING_FACETS = ['REGEXP', 'LENGTH', 'MINLENGTH', 'MAXLENGTH'];
+const NUMERIC_FACETS = [
+  'TOTALDIGITS',
+  'FRACTIONDIGITS',
+  'MININCLUSIVE',
+  'MINEXCLUSIVE',
+  'MAXINCLUSIVE',
+  'MAXEXCLUSIVE',
+];
+
+const facetCases: Record<string, P<Facet>> = {
+  REGEXP: Parser.seq(Parser.location, anyToken).pipe(
+    Parser.map(([at, t]): Facet => ['pattern', t.text, at, t.suffix]),
+  ),
+  ...Object.fromEntries(
+    ['LENGTH', 'MINLENGTH', 'MAXLENGTH', 'TOTALDIGITS', 'FRACTIONDIGITS'].map((k) => [
+      k,
+      Parser.seq(Parser.location, anyToken, integer).pipe(
+        Parser.map(([at, t, n]): Facet => [t.text.toLowerCase(), n, at]),
+      ),
+    ]),
+  ),
+  ...Object.fromEntries(
+    ['MININCLUSIVE', 'MINEXCLUSIVE', 'MAXINCLUSIVE', 'MAXEXCLUSIVE'].map((k) => [
+      k,
+      Parser.seq(Parser.location, anyToken, Parser.cut(rawNumeric)).pipe(
+        Parser.map(([at, t, n]): Facet => [t.text.toLowerCase(), n, at]),
+      ),
+    ]),
+  ),
+};
+
+const facets = (strings: boolean, numerics: boolean): P<Mutable<ShExJ.Facets>> =>
+  Parser.repeat(
+    select(
+      'a facet',
+      [...(strings ? STRING_FACETS : []), ...(numerics ? NUMERIC_FACETS : [])].map(
+        (k) => [[k], facetCases[k]!] as const,
+      ),
+    ),
+  ).pipe(
+    Parser.tryMap((list) => {
+      const out: Record<string, unknown> = {};
+      for (const [key, value, at, flags] of list) {
+        if (key in out) {
+          return failAt<Mutable<ShExJ.Facets>>(`facet ${key} defined multiple times`, at);
+        }
+        out[key] = value;
+        if (flags !== undefined && flags !== '') out.flags = flags;
       }
-      default:
-        return this.unexpected('a numeric literal');
+      return Result.succeed(out as Mutable<ShExJ.Facets>);
+    }),
+    Parser.cut,
+  );
+
+// Value sets ---------------------------------------------------------------------
+
+const tilde = accept('~');
+
+const exclusion = <A>(p: P<A>): P<A> => Parser.preceded(tok('-'), Parser.cut(p));
+
+const iriExclusion: P<string | ShExJ.IriStem> = exclusion(
+  Parser.seq(iri, tilde).pipe(
+    Parser.map(([iri, stem]) => (stem ? { type: 'IriStem', stem: iri } : iri)),
+  ),
+);
+
+const literalExclusion: P<string | ShExJ.LiteralStem> = exclusion(
+  Parser.seq(literal, tilde).pipe(
+    Parser.map(([lit, stem]) => (stem ? { type: 'LiteralStem', stem: lit.value } : lit.value)),
+  ),
+);
+
+const langTag = tok('LANGTAG', 'a language tag').pipe(Parser.map((t) => t.text));
+
+const languageExclusion: P<string | ShExJ.LanguageStem> = exclusion(
+  Parser.seq(langTag, tilde).pipe(
+    Parser.map(([tag, stem]) => (stem ? { type: 'LanguageStem', stem: tag } : tag)),
+  ),
+);
+
+const stemmed = <A, X>(
+  head: P<A>,
+  exclusion: P<X>,
+  build: (head: A, stem: boolean, exclusions: Array<X>) => ShExJ.ValueSetValue,
+): P<ShExJ.ValueSetValue> =>
+  Parser.seq(head, optional(Parser.preceded(tok('~'), Parser.repeat(exclusion)))).pipe(
+    Parser.map(([h, exclusions]) => build(h, exclusions !== undefined, exclusions ?? [])),
+  );
+
+/** The exclusions after a `.` wildcard: their kind is chosen by the first one. */
+const wildcardExclusions: P<ShExJ.ValueSetValue> = Parser.preceded(
+  Parser.peek(tok('-')),
+  Parser.dispatch(
+    Parser.peek(Parser.preceded(anyToken, anyToken)).pipe(Parser.map((t) => t.kind)),
+    {
+      LANGTAG: Parser.repeat(languageExclusion).pipe(
+        Parser.map((exclusions): ShExJ.ValueSetValue => ({
+          type: 'LanguageStemRange',
+          stem: { type: 'Wildcard' },
+          exclusions,
+        })),
+      ),
+      ...Object.fromEntries(
+        IRI_KINDS.map((k) => [
+          k,
+          Parser.repeat(iriExclusion).pipe(
+            Parser.map((exclusions): ShExJ.ValueSetValue => ({
+              type: 'IriStemRange',
+              stem: { type: 'Wildcard' },
+              exclusions,
+            })),
+          ),
+        ]),
+      ),
+    },
+    Parser.repeat(literalExclusion).pipe(
+      Parser.map((exclusions): ShExJ.ValueSetValue => ({
+        type: 'LiteralStemRange',
+        stem: { type: 'Wildcard' },
+        exclusions,
+      })),
+    ),
+  ),
+).pipe(Parser.expected("'-'")) as P<ShExJ.ValueSetValue>;
+
+const valueSetValue: P<ShExJ.ValueSetValue> = select('a value set value', [
+  [
+    IRI_KINDS,
+    Parser.cut(
+      stemmed(iri, iriExclusion, (stem, isStem, exclusions) =>
+        !isStem
+          ? stem
+          : exclusions.length > 0
+            ? { type: 'IriStemRange', stem, exclusions }
+            : { type: 'IriStem', stem },
+      ),
+    ),
+  ],
+  [
+    LITERAL_KINDS,
+    Parser.cut(
+      stemmed(literal, literalExclusion, (lit, isStem, exclusions) =>
+        !isStem
+          ? lit
+          : exclusions.length > 0
+            ? { type: 'LiteralStemRange', stem: lit.value, exclusions }
+            : { type: 'LiteralStem', stem: lit.value },
+      ),
+    ),
+  ],
+  [
+    ['LANGTAG'],
+    Parser.cut(
+      stemmed(langTag, languageExclusion, (tag, isStem, exclusions) =>
+        !isStem
+          ? { type: 'Language', languageTag: tag }
+          : exclusions.length > 0
+            ? { type: 'LanguageStemRange', stem: tag, exclusions }
+            : { type: 'LanguageStem', stem: tag },
+      ),
+    ),
+  ],
+  [
+    ['@'],
+    Parser.preceded(
+      anyToken,
+      Parser.cut(Parser.preceded(tok('~'), Parser.repeat(languageExclusion))),
+    ).pipe(
+      Parser.map((exclusions): ShExJ.ValueSetValue =>
+        exclusions.length > 0
+          ? { type: 'LanguageStemRange', stem: '', exclusions }
+          : { type: 'LanguageStem', stem: '' },
+      ),
+    ),
+  ],
+  [['.'], Parser.preceded(anyToken, Parser.cut(wildcardExclusions))],
+]);
+
+const valueSet: P<Array<ShExJ.ValueSetValue>> = Parser.delimited(
+  tok('['),
+  Parser.cut(Parser.repeat(valueSetValue)),
+  Parser.cut(tok(']')),
+);
+
+const litInlineNodeConstraint: P<ShExJ.NodeConstraint> = select('a node constraint', [
+  [
+    ['LITERAL'],
+    Parser.preceded(anyToken, facets(true, true)).pipe(
+      Parser.map((f): ShExJ.NodeConstraint => ({
+        type: 'NodeConstraint',
+        nodeKind: 'literal',
+        ...f,
+      })),
+    ),
+  ],
+  [
+    IRI_KINDS,
+    Parser.seq(Parser.location, iri, facets(true, true)).pipe(
+      Parser.tryMap(([at, datatype, f]) => {
+        if (!numericDatatypes.has(datatype)) {
+          for (const name of numericFacetNames) {
+            if (name in f) {
+              return failAt<ShExJ.NodeConstraint>(
+                `facet ${name} not allowed for unknown datatype ${datatype}`,
+                at,
+              );
+            }
+          }
+        }
+        return Result.succeed<ShExJ.NodeConstraint>({ type: 'NodeConstraint', datatype, ...f });
+      }),
+      Parser.cut,
+    ),
+  ],
+  [
+    ['['],
+    Parser.terminated(valueSet, facets(true, true)).pipe(
+      Parser.map((values): ShExJ.NodeConstraint => ({ type: 'NodeConstraint', values })),
+    ),
+  ],
+  [
+    NUMERIC_FACETS,
+    facets(false, true).pipe(
+      Parser.map((f): ShExJ.NodeConstraint => ({ type: 'NodeConstraint', ...f })),
+    ),
+  ],
+]);
+
+const NODE_KINDS = ['IRI', 'BNODE', 'NONLITERAL'];
+const NON_LIT_KINDS = [...NODE_KINDS, 'LENGTH', 'MINLENGTH', 'MAXLENGTH', 'REGEXP'];
+const LIT_KINDS = ['LITERAL', ...NUMERIC_FACETS, ...IRI_KINDS, '['];
+
+const nonLitInlineNodeConstraint: P<ShExJ.NodeConstraint> = Parser.seq(
+  optional(select('a node kind', [[NODE_KINDS, anyToken.pipe(Parser.map((t) => t.text))]])),
+  facets(true, false),
+).pipe(
+  Parser.map(([kind, f]): ShExJ.NodeConstraint => {
+    const nodeKind: ShExJ.NodeKind | undefined =
+      kind === undefined
+        ? undefined
+        : kind === 'IRI'
+          ? 'iri'
+          : kind === 'BNODE'
+            ? 'bnode'
+            : 'nonliteral';
+    return nodeKind === undefined
+      ? { type: 'NodeConstraint', ...f }
+      : { type: 'NodeConstraint', nodeKind, ...f };
+  }),
+);
+
+/** A non-literal node constraint, if one starts here. */
+const nonLitNodeConstraintOpt: P<ShExJ.NodeConstraint | undefined> = optional(
+  select('a node constraint', [[NON_LIT_KINDS, Parser.cut(nonLitInlineNodeConstraint)]]),
+);
+
+const withAnnotations = (nc: P<ShExJ.NodeConstraint>): P<ShExJ.NodeConstraint> =>
+  Parser.seq(nc, annotations, semanticActions).pipe(
+    Parser.map(([nc, annotations, semActs]) => {
+      if (annotations.length === 0 && semActs === undefined) return nc;
+      const out: Mutable<ShExJ.NodeConstraint> = nc;
+      if (annotations.length > 0) out.annotations = annotations;
+      if (semActs !== undefined) out.semActs = semActs;
+      return out;
+    }),
+  );
+
+/** A non-literal node constraint with its annotations, if one starts here. */
+const annotatedNonLitNodeConstraintOpt: P<ShExJ.NodeConstraint | undefined> = optional(
+  select('a node constraint', [
+    [NON_LIT_KINDS, Parser.cut(withAnnotations(nonLitInlineNodeConstraint))],
+  ]),
+);
+
+// -----------------------------------------------------------------------------
+// Shape expressions
+// -----------------------------------------------------------------------------
+
+const REF_KINDS = ['ATPNAME', '@'];
+const SHAPE_DEF_KINDS = ['{', '&', 'EXTENDS', 'EXTRA', 'CLOSED'];
+
+const shapeRef: P<string> = select('a shape reference', [
+  [
+    ['ATPNAME'],
+    Parser.seq(Parser.location, anyToken).pipe(
+      Parser.tryMap(([at, t]) =>
+        t.error === undefined ? Result.succeed(t.iri) : failAt<string>(t.error, at),
+      ),
+      Parser.cut,
+    ),
+  ],
+  [['@'], Parser.preceded(anyToken, Parser.cut(label))],
+]);
+
+const shapeExpressionBody: P<AnyShapeExpr> = Parser.suspend(() => shapeExpressionBody_);
+const tripleExpression: P<ShExJ.TripleExprOrRef> = Parser.suspend(() => tripleExpression_);
+const extendsShapeOr: P<AnyShapeExpr> = Parser.suspend(() => extendsShapeOr_);
+const inlineShapeExpression: P<AnyShapeExpr> = Parser.suspend(() => inlineShapeExpression_);
+
+const parenthesised: P<Atom> = Parser.delimited(
+  anyToken,
+  Parser.cut(shapeExpressionBody),
+  Parser.cut(tok(')')),
+).pipe(Parser.map((e) => ({ e, nested: true })));
+
+const empty: P<Atom> = anyToken.pipe(Parser.as(plain(EMPTY)));
+
+type Qualifier =
+  | { readonly _tag: 'Extends'; readonly e: AnyShapeExpr }
+  | { readonly _tag: 'Extra'; readonly predicates: Array<string> }
+  | { readonly _tag: 'Closed' };
+
+const inlineShapeDefinition: P<ShExJ.Shape> = Parser.seq(
+  Parser.repeat(
+    select<Qualifier>('a shape qualifier', [
+      [
+        ['EXTENDS', '&'],
+        Parser.preceded(anyToken, Parser.cut(extendsShapeOr)).pipe(
+          Parser.map((e): Qualifier => ({ _tag: 'Extends', e })),
+        ),
+      ],
+      [
+        ['EXTRA'],
+        Parser.preceded(anyToken, Parser.cut(Parser.repeat(predicate, { min: 1 }))).pipe(
+          Parser.map((predicates): Qualifier => ({ _tag: 'Extra', predicates })),
+        ),
+      ],
+      [['CLOSED'], anyToken.pipe(Parser.as<Qualifier>({ _tag: 'Closed' }))],
+    ]),
+  ),
+  Parser.delimited(
+    Parser.cut(tok('{')),
+    select(
+      'a triple expression',
+      [[['}'], Parser.succeed(undefined)]],
+      Parser.cut(tripleExpression),
+    ),
+    Parser.cut(tok('}')),
+  ),
+).pipe(
+  Parser.map(([qualifiers, expression]): ShExJ.Shape => {
+    if (expression === undefined && qualifiers.length === 0) return EMPTY;
+    let extendsList: Array<AnyShapeExpr> | undefined;
+    let extra: Array<string> | undefined;
+    let closed: boolean | undefined;
+    for (const q of qualifiers) {
+      if (q._tag === 'Extends') (extendsList ??= []).push(q.e);
+      else if (q._tag === 'Extra') (extra ??= []).push(...q.predicates);
+      else closed = true;
     }
-  }
+    const shape: Mutable<ShExJ.Shape> = { type: 'Shape' };
+    if (expression !== undefined) shape.expression = expression;
+    if (extendsList !== undefined) shape.extends = extendsList;
+    if (extra !== undefined) shape.extra = extra;
+    if (closed !== undefined) shape.closed = closed;
+    return shape;
+  }),
+);
 
-  // Value sets ---------------------------------------------------------------------
-
-  valueSet(): Array<ShExJ.ValueSetValue> {
-    this.expectPunct('[');
-    const values: Array<ShExJ.ValueSetValue> = [];
-    while (!this.acceptPunct(']')) values.push(this.valueSetValue());
-    return values;
-  }
-
-  valueSetValue(): ShExJ.ValueSetValue {
-    const t = this.peek();
-    if (this.isIriStart()) {
-      const stem = this.iri();
-      if (!this.acceptPunct('~')) return stem;
-      const exclusions: Array<string | ShExJ.IriStem> = [];
-      while (this.isPunct('-')) exclusions.push(this.iriExclusion());
-      return exclusions.length > 0
-        ? { type: 'IriStemRange', stem, exclusions }
-        : { type: 'IriStem', stem };
-    }
-    if (this.isLiteralStart()) {
-      const lit = this.literal();
-      if (!this.acceptPunct('~')) return lit;
-      const exclusions: Array<string | ShExJ.LiteralStem> = [];
-      while (this.isPunct('-')) exclusions.push(this.literalExclusion());
-      return exclusions.length > 0
-        ? { type: 'LiteralStemRange', stem: lit.value, exclusions }
-        : { type: 'LiteralStem', stem: lit.value };
-    }
-    if (t.type === 'LANGTAG') {
-      this.next();
-      const tag = t.text.slice(1);
-      if (!this.acceptPunct('~')) return { type: 'Language', languageTag: tag };
-      const exclusions: Array<string | ShExJ.LanguageStem> = [];
-      while (this.isPunct('-')) exclusions.push(this.languageExclusion());
-      return exclusions.length > 0
-        ? { type: 'LanguageStemRange', stem: tag, exclusions }
-        : { type: 'LanguageStem', stem: tag };
-    }
-    if (this.acceptPunct('@')) {
-      this.expectPunct('~');
-      const exclusions: Array<string | ShExJ.LanguageStem> = [];
-      while (this.isPunct('-')) exclusions.push(this.languageExclusion());
-      return exclusions.length > 0
-        ? { type: 'LanguageStemRange', stem: '', exclusions }
-        : { type: 'LanguageStem', stem: '' };
-    }
-    if (this.acceptPunct('.')) {
-      if (!this.isPunct('-')) this.unexpected("'-'");
-      this.next();
-      const kind = this.peek();
-      this.pos = t.end;
-      this.tok = undefined;
-      // Re-scan from after the '.', choosing the exclusion kind from the first one.
-      if (kind.type === 'LANGTAG') {
-        const exclusions: Array<string | ShExJ.LanguageStem> = [];
-        while (this.isPunct('-')) exclusions.push(this.languageExclusion());
-        return { type: 'LanguageStemRange', stem: { type: 'Wildcard' }, exclusions };
-      }
-      if (kind.type === 'IRIREF' || kind.type === 'PNAME_LN' || kind.type === 'PNAME_NS') {
-        const exclusions: Array<string | ShExJ.IriStem> = [];
-        while (this.isPunct('-')) exclusions.push(this.iriExclusion());
-        return { type: 'IriStemRange', stem: { type: 'Wildcard' }, exclusions };
-      }
-      const exclusions: Array<string | ShExJ.LiteralStem> = [];
-      while (this.isPunct('-')) exclusions.push(this.literalExclusion());
-      return { type: 'LiteralStemRange', stem: { type: 'Wildcard' }, exclusions };
-    }
-    return this.unexpected('a value set value');
-  }
-
-  iriExclusion(): string | ShExJ.IriStem {
-    this.expectPunct('-');
-    const iri = this.iri();
-    return this.acceptPunct('~') ? { type: 'IriStem', stem: iri } : iri;
-  }
-
-  literalExclusion(): string | ShExJ.LiteralStem {
-    this.expectPunct('-');
-    const lit = this.literal();
-    return this.acceptPunct('~') ? { type: 'LiteralStem', stem: lit.value } : lit.value;
-  }
-
-  languageExclusion(): string | ShExJ.LanguageStem {
-    this.expectPunct('-');
-    const t = this.peek();
-    if (t.type !== 'LANGTAG') this.unexpected('a language tag');
-    this.next();
-    const tag = t.text.slice(1);
-    return this.acceptPunct('~') ? { type: 'LanguageStem', stem: tag } : tag;
-  }
-
-  // Shape definitions --------------------------------------------------------------
-
-  shapeDefinition(): AnyShapeExpr {
-    const def = this.inlineShapeDefinition();
-    const annotations = this.annotations();
-    const semActs = this.semanticActions();
+const shapeDefinition: P<AnyShapeExpr> = Parser.seq(
+  inlineShapeDefinition,
+  annotations,
+  semanticActions,
+).pipe(
+  Parser.map(([def, annotations, semActs]) => {
     const out: Mutable<ShExJ.Shape> = def === EMPTY ? { type: 'Shape' } : def;
     if (annotations.length > 0) out.annotations = annotations;
     if (semActs !== undefined) out.semActs = semActs;
     return out;
-  }
+  }),
+);
 
-  inlineShapeDefinition(): ShExJ.Shape {
-    const qualifiers: {
-      extends?: Array<AnyShapeExpr>;
-      extra?: Array<string>;
-      closed?: boolean;
-    } = {};
-    let any = false;
-    for (;;) {
-      if (this.isKeyword('EXTENDS') || this.isPunct('&')) {
-        this.next();
-        (qualifiers.extends ??= []).push(this.extendsShapeOr());
-        any = true;
-      } else if (this.acceptKeyword('EXTRA')) {
-        const extra = (qualifiers.extra ??= []);
-        extra.push(this.predicate());
-        while (this.isIriStart() || this.isPunct('a')) extra.push(this.predicate());
-        any = true;
-      } else if (this.acceptKeyword('CLOSED')) {
-        qualifiers.closed = true;
-        any = true;
-      } else break;
-    }
-    this.expectPunct('{');
-    let expression: ShExJ.TripleExprOrRef | undefined;
-    if (!this.isPunct('}')) expression = this.tripleExpression();
-    this.expectPunct('}');
-    if (expression === undefined && !any) return EMPTY;
-    const shape: Mutable<ShExJ.Shape> = { type: 'Shape' };
-    if (expression !== undefined) shape.expression = expression;
-    if (qualifiers.extends !== undefined) shape.extends = qualifiers.extends;
-    if (qualifiers.extra !== undefined) shape.extra = qualifiers.extra;
-    if (qualifiers.closed !== undefined) shape.closed = qualifiers.closed;
-    return shape;
-  }
+const shapeOrRef: P<AnyShapeExpr> = select(
+  'a shape definition or reference',
+  [[REF_KINDS, shapeRef]],
+  shapeDefinition,
+);
 
-  // Triple expressions -------------------------------------------------------------
+const inlineShapeOrRef: P<AnyShapeExpr> = select(
+  'a shape definition or reference',
+  [[REF_KINDS, shapeRef]],
+  inlineShapeDefinition,
+);
 
-  tripleExpression(): ShExJ.TripleExprOrRef {
-    const first = this.groupTripleExpr();
-    if (!this.isPunct('|')) return first;
-    const expressions = [first];
-    while (this.acceptPunct('|')) expressions.push(this.groupTripleExpr());
-    return { type: 'OneOf', expressions };
-  }
+/** A shape definition or reference, if one starts here. */
+const shapeOrRefOpt = (p: P<AnyShapeExpr>): P<AnyShapeExpr | undefined> =>
+  optional(
+    select('a shape definition or reference', [
+      [[...SHAPE_DEF_KINDS, ...REF_KINDS], Parser.cut(p)],
+    ]),
+  );
 
-  isUnaryTripleExprStart(): boolean {
-    return (
-      this.isPunct('$') ||
-      this.isPunct('&') ||
-      this.isPunct('(') ||
-      this.isPunct('^') ||
-      this.isPunct('a') ||
-      this.isIriStart()
-    );
-  }
+/** shapeAtom (with `allowRef`) and shapeAtomNoRef. */
+const shapeAtom = (allowRef: boolean): P<Atom> =>
+  select('a shape expression', [
+    [
+      NON_LIT_KINDS,
+      Parser.cut(
+        Parser.seq(withAnnotations(nonLitInlineNodeConstraint), shapeOrRefOpt(shapeOrRef)).pipe(
+          Parser.map(([nc, ref]) =>
+            plain(ref === undefined ? nc : { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] }),
+          ),
+        ),
+      ),
+    ],
+    [LIT_KINDS, Parser.cut(withAnnotations(litInlineNodeConstraint)).pipe(Parser.map(plain))],
+    [
+      allowRef ? [...SHAPE_DEF_KINDS, ...REF_KINDS] : SHAPE_DEF_KINDS,
+      Parser.cut(
+        Parser.seq(shapeOrRef, annotatedNonLitNodeConstraintOpt).pipe(
+          Parser.map(([sor, nc]) =>
+            plain(nc === undefined ? sor : junction('ShapeAnd', plain(sor), [nc])),
+          ),
+        ),
+      ),
+    ],
+    [['('], parenthesised],
+    [['.'], empty],
+  ]);
 
-  groupTripleExpr(): ShExJ.TripleExprOrRef {
-    const first = this.unaryTripleExpr();
-    const expressions = [first];
-    for (;;) {
-      if (this.isPunct(';') || this.isPunct(',')) {
-        this.next();
-        if (this.isUnaryTripleExprStart()) {
-          expressions.push(this.unaryTripleExpr());
-          continue;
+const shapeNot: P<Atom> = select(
+  'a shape expression',
+  [
+    [
+      ['NOT'],
+      Parser.preceded(anyToken, Parser.cut(shapeAtom(true))).pipe(
+        Parser.map((a) => plain({ type: 'ShapeNot', shapeExpr: a.e })),
+      ),
+    ],
+  ],
+  shapeAtom(true),
+);
+
+const shapeAnd: P<AnyShapeExpr> = Parser.seq(
+  shapeNot,
+  Parser.repeat(Parser.preceded(tok('AND'), Parser.cut(shapeNot))),
+).pipe(
+  Parser.map(([first, rest]) =>
+    junction(
+      'ShapeAnd',
+      first,
+      rest.map((a) => a.e),
+    ),
+  ),
+);
+
+const ors = Parser.repeat(Parser.preceded(tok('OR'), Parser.cut(shapeAnd)));
+
+const shapeOrRest: P<Rest> = select("'AND' or 'OR'", [
+  [['OR'], ors.pipe(Parser.map((ors): Rest => ({ _tag: 'Or', ors })))],
+  [
+    ['AND'],
+    Parser.seq(Parser.repeat(Parser.preceded(tok('AND'), Parser.cut(shapeNot))), ors).pipe(
+      Parser.map(([conjuncts, ors]): Rest => {
+        const ands: Array<AnyShapeExpr> = [];
+        for (const c of conjuncts) {
+          if (typeof c.e === 'object' && c.e.type === 'ShapeAnd' && !c.nested) {
+            ands.push(...c.e.shapeExprs);
+          } else ands.push(c.e);
         }
-      }
-      break;
-    }
-    return expressions.length === 1 ? first : { type: 'EachOf', expressions };
-  }
+        return { _tag: 'And', ands, ors };
+      }),
+    ),
+  ],
+]);
 
-  unaryTripleExpr(): ShExJ.TripleExprOrRef {
-    if (this.acceptPunct('&')) return this.label();
-    let id: string | undefined;
-    let idPos = 0;
-    if (this.acceptPunct('$')) {
-      idPos = this.peek().start;
-      id = this.label();
-    }
-    const expr = this.isPunct('(') ? this.bracketedTripleExpr() : this.tripleConstraint();
-    if (id === undefined) return expr;
-    if (typeof expr === 'string')
-      this.fail(`a group containing only the inclusion &<${expr}> can't take a label`, idPos);
-    if (this.shapes.has(id)) this.fail(`${id} is a shape expression`, idPos);
-    if (this.productions.has(id)) this.fail(`${id} already defined`, idPos);
-    this.productions.add(id);
-    return { id, ...expr };
-  }
+/**
+ * shapeExpression ::= NOT? shapeAtomNoRef shapeOr? | NOT shapeRef shapeOr? | shapeRef shapeOr
+ */
+const shapeExpressionBody_: P<AnyShapeExpr> = select(
+  'a shape expression',
+  [
+    [
+      ['NOT'],
+      Parser.preceded(
+        anyToken,
+        Parser.cut(
+          select(
+            'a shape expression',
+            [
+              [
+                REF_KINDS,
+                Parser.seq(shapeRef, optional(shapeOrRest)).pipe(
+                  Parser.map(([ref, rest]) =>
+                    prependAtom(plain({ type: 'ShapeNot', shapeExpr: ref }), rest),
+                  ),
+                ),
+              ],
+            ],
+            Parser.seq(shapeAtom(false), optional(shapeOrRest)).pipe(
+              Parser.map(([a, rest]) =>
+                prependAtom(plain({ type: 'ShapeNot', shapeExpr: a.e }), rest),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+    [
+      REF_KINDS,
+      Parser.seq(shapeRef, Parser.cut(shapeOrRest)).pipe(
+        Parser.map(([ref, rest]) => prepend(rest, [ref])),
+      ),
+    ],
+  ],
+  Parser.seq(shapeAtom(false), optional(shapeOrRest)).pipe(
+    Parser.map(([a, rest]) => prependAtom(a, rest)),
+  ),
+);
 
-  bracketedTripleExpr(): ShExJ.TripleExprOrRef {
-    const open = this.expectPunct('(');
-    let expr = this.tripleExpression();
-    this.expectPunct(')');
-    const card = this.cardinality();
-    const annotations = this.annotations();
-    const semActs = this.semanticActions();
-    if (card !== undefined || annotations.length > 0 || semActs !== undefined) {
-      if (typeof expr === 'string')
-        this.fail(
-          `a group containing only the inclusion &<${expr}> can't take a cardinality, an annotation or a semantic action`,
-          open.start,
-        );
-      if (
-        card !== undefined &&
-        expr.type === 'TripleConstraint' &&
-        (expr.min !== undefined || expr.max !== undefined)
-      ) {
-        expr = { type: 'EachOf', expressions: [expr] };
-      }
-      const out = expr as Mutable<ShExJ.EachOf>;
-      if (card !== undefined) {
-        out.min = card.min;
-        out.max = card.max;
-      }
-      if (annotations.length > 0) out.annotations = annotations;
-      if (semActs !== undefined) out.semActs = [...(out.semActs ?? []), ...semActs];
-    }
-    return expr;
-  }
+// Inline shape expressions -----------------------------------------------------
 
-  tripleConstraint(): ShExJ.TripleConstraint {
-    const inverse = this.acceptPunct('^');
-    const predicate = this.predicate();
-    const valueExpr = this.inlineShapeExpression();
-    const card = this.cardinality();
-    const annotations = this.annotations();
-    const semActs = this.semanticActions();
+/** The atoms of inline and EXTENDS shape expressions, which differ in one case. */
+const inlineAtom = (extendsAtom: boolean): P<Atom> =>
+  select('a shape expression', [
+    [
+      NON_LIT_KINDS,
+      Parser.cut(
+        extendsAtom
+          ? Parser.seq(nonLitInlineNodeConstraint, inlineShapeOrRef).pipe(
+              Parser.map(([nc, ref]) => plain({ type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] })),
+            )
+          : Parser.seq(nonLitInlineNodeConstraint, shapeOrRefOpt(inlineShapeOrRef)).pipe(
+              Parser.map(([nc, ref]) =>
+                plain(ref === undefined ? nc : { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] }),
+              ),
+            ),
+      ),
+    ],
+    [LIT_KINDS, Parser.cut(litInlineNodeConstraint).pipe(Parser.map(plain))],
+    [
+      [...SHAPE_DEF_KINDS, ...REF_KINDS],
+      Parser.cut(
+        Parser.seq(inlineShapeOrRef, nonLitNodeConstraintOpt).pipe(
+          Parser.map(([sor, nc]) =>
+            plain(nc === undefined ? sor : { type: 'ShapeAnd', shapeExprs: [sor, nc] }),
+          ),
+        ),
+      ),
+    ],
+    [['('], parenthesised],
+    [['.'], empty],
+  ]);
+
+const junctions = (atom: P<Atom>) => {
+  const not: P<Atom> = select(
+    'a shape expression',
+    [
+      [
+        ['NOT'],
+        Parser.preceded(anyToken, Parser.cut(atom)).pipe(
+          Parser.map((a) => plain({ type: 'ShapeNot', shapeExpr: a.e })),
+        ),
+      ],
+    ],
+    atom,
+  );
+  const and: P<AnyShapeExpr> = Parser.seq(
+    not,
+    Parser.repeat(Parser.preceded(tok('AND'), Parser.cut(not))),
+  ).pipe(
+    Parser.map(([first, rest]) =>
+      junction(
+        'ShapeAnd',
+        first,
+        rest.map((a) => a.e),
+      ),
+    ),
+  );
+  return Parser.seq(and, Parser.repeat(Parser.preceded(tok('OR'), Parser.cut(and)))).pipe(
+    Parser.map(([first, rest]) => junction('ShapeOr', plain(first), rest)),
+  );
+};
+
+const inlineShapeExpression_: P<AnyShapeExpr> = junctions(inlineAtom(false));
+const extendsShapeOr_: P<AnyShapeExpr> = junctions(inlineAtom(true));
+
+// -----------------------------------------------------------------------------
+// Triple expressions
+// -----------------------------------------------------------------------------
+
+/** The token index of the label of each labelled triple expression. */
+const labelAt = new WeakMap<object, number>();
+
+const tripleConstraint: P<ShExJ.TripleConstraint> = Parser.seq(
+  accept('^'),
+  predicate,
+  inlineShapeExpression,
+  cardinality,
+  annotations,
+  semanticActions,
+).pipe(
+  Parser.map(([inverse, predicate, valueExpr, card, annotations, semActs]) => {
     const tc: Mutable<ShExJ.TripleConstraint> = inverse
       ? { type: 'TripleConstraint', inverse: true, predicate }
       : { type: 'TripleConstraint', predicate };
@@ -1195,56 +927,325 @@ class Parser {
     if (semActs !== undefined) tc.semActs = semActs;
     if (annotations.length > 0) tc.annotations = annotations;
     return tc;
-  }
+  }),
+);
 
-  cardinality(): { min: number; max: number } | undefined {
-    if (this.acceptPunct('*')) return { min: 0, max: -1 };
-    if (this.acceptPunct('+')) return { min: 1, max: -1 };
-    if (this.acceptPunct('?')) return { min: 0, max: 1 };
-    const range = this.scanRepeatRange();
-    if (range === undefined) return undefined;
-    const body = range.slice(1, -1);
-    const nums = body.match(/\d+/g)!;
-    const min = parseInt(nums[0]!, 10);
-    if (nums.length === 2) return { min, max: parseInt(nums[1]!, 10) };
-    if (body.indexOf(',') === -1) return { min, max: min };
-    return { min, max: -1 };
-  }
-
-  annotations(): Array<ShExJ.Annotation> {
-    const out: Array<ShExJ.Annotation> = [];
-    while (this.acceptPunct('//')) {
-      const predicate = this.predicate();
-      const object: ShExJ.ObjectValue = this.isIriStart() ? this.iri() : this.literal();
-      out.push({ type: 'Annotation', predicate, object });
+const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
+  Parser.location,
+  Parser.delimited(anyToken, Parser.cut(tripleExpression), Parser.cut(tok(')'))),
+  cardinality,
+  annotations,
+  semanticActions,
+).pipe(
+  Parser.tryMap(([at, expr, card, annotations, semActs]) => {
+    if (card === undefined && annotations.length === 0 && semActs === undefined) {
+      return Result.succeed(expr);
     }
-    return out;
-  }
-
-  semanticActions(): Array<ShExJ.SemAct> | undefined {
-    if (!this.isPunct('%')) return undefined;
-    return this.codeDecls();
-  }
-
-  codeDecls(): Array<ShExJ.SemAct> {
-    const out: Array<ShExJ.SemAct> = [];
-    while (this.acceptPunct('%')) {
-      const name = this.iri();
-      const code = this.scanCode();
-      if (code !== undefined) {
-        out.push({ type: 'SemAct', name, code: unescapeCode(code.slice(1, -2)) });
-      } else {
-        this.expectPunct('%');
-        out.push({ type: 'SemAct', name });
-      }
+    if (typeof expr === 'string') {
+      return failAt<ShExJ.TripleExprOrRef>(
+        `a group containing only the inclusion &<${expr}> can't take a cardinality, an annotation or a semantic action`,
+        at,
+      );
     }
-    return out;
-  }
-}
+    let out = expr as Mutable<ShExJ.EachOf>;
+    if (
+      card !== undefined &&
+      expr.type === 'TripleConstraint' &&
+      (expr.min !== undefined || expr.max !== undefined)
+    ) {
+      out = { type: 'EachOf', expressions: [expr] };
+    }
+    if (card !== undefined) {
+      out.min = card.min;
+      out.max = card.max;
+    }
+    if (annotations.length > 0) out.annotations = annotations;
+    if (semActs !== undefined) out.semActs = [...(out.semActs ?? []), ...semActs];
+    return Result.succeed<ShExJ.TripleExprOrRef>(out);
+  }),
+  Parser.cut,
+);
 
-/** Parses a ShExC document, throwing `Failure` on errors. */
-export const parseShExC = (input: string, options: ParserOptions = {}): ParserResult => {
-  const parser = new Parser(input, options);
-  const schema = parser.document();
-  return { schema, prefixes: parser.prefixes, baseIri: parser.base };
+const bracketedOrConstraint: P<ShExJ.TripleExprOrRef> = select(
+  'a triple expression',
+  [[['('], bracketedTripleExpr]],
+  tripleConstraint,
+);
+
+const UNARY_KINDS = ['$', '&', '(', '^', 'a', ...IRI_KINDS];
+
+const unaryTripleExpr: P<ShExJ.TripleExprOrRef> = select('a triple expression', [
+  [['&'], Parser.preceded(anyToken, Parser.cut(label))],
+  [
+    ['$'],
+    Parser.seq(
+      Parser.preceded(anyToken, Parser.cut(Parser.seq(Parser.location, label))),
+      Parser.cut(bracketedOrConstraint),
+    ).pipe(
+      Parser.tryMap(([[at, id], expr]) => {
+        if (typeof expr === 'string') {
+          return failAt<ShExJ.TripleExprOrRef>(
+            `a group containing only the inclusion &<${expr}> can't take a label`,
+            at,
+          );
+        }
+        const labelled = { id, ...expr };
+        labelAt.set(labelled, at);
+        return Result.succeed<ShExJ.TripleExprOrRef>(labelled);
+      }),
+      Parser.cut,
+    ),
+  ],
+  [['(', '^', 'a', ...IRI_KINDS], Parser.cut(bracketedOrConstraint)],
+]);
+
+const separator = select('; or ,', [[[';', ','], anyToken]]);
+
+const groupTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.terminated(
+  Parser.seq(
+    unaryTripleExpr,
+    Parser.repeat(
+      Parser.preceded(separator, select('a triple expression', [[UNARY_KINDS, unaryTripleExpr]])),
+    ),
+  ),
+  Parser.opt(separator),
+).pipe(
+  Parser.map(([first, rest]) =>
+    rest.length === 0 ? first : { type: 'EachOf', expressions: [first, ...rest] },
+  ),
+);
+
+const tripleExpression_: P<ShExJ.TripleExprOrRef> = Parser.seq(
+  groupTripleExpr,
+  Parser.repeat(Parser.preceded(tok('|'), Parser.cut(groupTripleExpr))),
+).pipe(
+  Parser.map(([first, rest]) =>
+    rest.length === 0 ? first : { type: 'OneOf', expressions: [first, ...rest] },
+  ),
+);
+
+// -----------------------------------------------------------------------------
+// Document
+// -----------------------------------------------------------------------------
+
+type Statement =
+  | { readonly _tag: 'Import'; readonly iri: string }
+  | { readonly _tag: 'Start'; readonly expr: AnyShapeExpr; readonly at: number }
+  | { readonly _tag: 'Decl'; readonly decl: ShExJ.ShapeDecl; readonly at: number };
+
+const directiveCases: ReadonlyArray<readonly [ReadonlyArray<string>, P<Statement | undefined>]> = [
+  [
+    ['BASE'],
+    Parser.preceded(anyToken, Parser.cut(tok('IRIREF', 'an IRI reference'))).pipe(
+      Parser.as(undefined),
+    ),
+  ],
+  [
+    ['PREFIX'],
+    Parser.preceded(
+      anyToken,
+      Parser.cut(
+        Parser.seq(
+          Token.oneOf<ReadonlyArray<Tok>>((t) => t.type === 'PNAME' && t.iri === '').pipe(
+            Parser.expected('a prefix name'),
+          ),
+          iri,
+        ),
+      ),
+    ).pipe(Parser.as(undefined)),
+  ],
+  [
+    ['IMPORT'],
+    Parser.preceded(anyToken, Parser.cut(iri)).pipe(
+      Parser.map((iri): Statement => ({ _tag: 'Import', iri })),
+    ),
+  ],
+];
+
+const directive: P<Statement | undefined> = select('a directive', directiveCases);
+
+const startDecl: P<Statement> = Parser.seq(
+  Parser.location,
+  Parser.preceded(anyToken, Parser.cut(Parser.preceded(tok('='), Parser.seq(shapeAnd, ors)))),
+).pipe(
+  Parser.map(([at, [first, rest]]): Statement => ({
+    _tag: 'Start',
+    expr: junction('ShapeOr', plain(first), rest),
+    at,
+  })),
+);
+
+const shapeExprDecl: P<Statement> = Parser.seq(
+  accept('ABSTRACT'),
+  Parser.location,
+  label,
+  Parser.repeat(
+    Parser.preceded(
+      select("'RESTRICTS' or '-'", [[['RESTRICTS', '-'], anyToken]]),
+      Parser.cut(shapeOrRef),
+    ),
+  ),
+  select(
+    'a shape expression',
+    [
+      [['EXTERNAL'], anyToken.pipe(Parser.as<AnyShapeExpr>({ type: 'ShapeExternal' }))],
+      [
+        REF_KINDS,
+        Parser.seq(shapeRef, optional(shapeOrRest)).pipe(
+          Parser.map(([ref, rest]) => (rest === undefined ? ref : prepend(rest, [ref]))),
+        ),
+      ],
+    ],
+    shapeExpressionBody,
+  ),
+).pipe(
+  Parser.map(([abstract, at, label, restricts, body]): Statement => {
+    const shapeExpr = body === EMPTY ? { type: 'Shape' as const } : body;
+    const decl: Mutable<ShExJ.ShapeDecl> = { type: 'ShapeDecl', id: label, shapeExpr };
+    if (abstract) decl.abstract = true;
+    if (restricts.length > 0) decl.restricts = restricts;
+    return { _tag: 'Decl', decl, at };
+  }),
+);
+
+const statement: P<Statement | undefined> = select('a directive or shape declaration', [
+  ...directiveCases,
+  [['START'], startDecl],
+  [['ABSTRACT', 'BLANK_NODE_LABEL', ...IRI_KINDS], Parser.cut(shapeExprDecl)],
+]);
+
+const document = Parser.compile(
+  Parser.terminated(
+    Parser.seq(Parser.repeat(directive), optional(codeDecls), Parser.repeat(statement)),
+    Parser.eof,
+  ),
+);
+
+// -----------------------------------------------------------------------------
+// Checks in document order
+// -----------------------------------------------------------------------------
+
+/**
+ * Calls `f` on each labelled triple expression of a shape expression, in
+ * document order (each after the labelled expressions it contains).
+ */
+const eachLabelled = (e: AnyShapeExpr, f: (t: ShExJ.TripleExpr) => void): void => {
+  const shape = (s: AnyShapeExpr): void => {
+    if (typeof s === 'string') return;
+    switch (s.type) {
+      case 'ShapeOr':
+      case 'ShapeAnd':
+        s.shapeExprs.forEach(shape);
+        break;
+      case 'ShapeNot':
+        shape(s.shapeExpr);
+        break;
+      case 'Shape':
+        s.extends?.forEach(shape);
+        if (s.expression !== undefined) triple(s.expression);
+        break;
+      default:
+        break;
+    }
+  };
+  const triple = (t: ShExJ.TripleExprOrRef): void => {
+    if (typeof t === 'string') return;
+    if (t.type === 'TripleConstraint') {
+      if (t.valueExpr !== undefined) shape(t.valueExpr);
+    } else t.expressions.forEach(triple);
+    if (t.id !== undefined) f(t);
+  };
+  shape(e);
+};
+
+const assemble = (
+  statements: ReadonlyArray<Statement | undefined>,
+  startActs: ReadonlyArray<ShExJ.SemAct> | undefined,
+): Result.Result<ShExJ.Schema, SemanticError> => {
+  const imports: Array<string> = [];
+  const shapes = new Map<string, ShExJ.ShapeDecl>();
+  const productions = new Set<string>();
+  let start: AnyShapeExpr | undefined;
+  let error: SemanticError | undefined;
+  const production = (t: ShExJ.TripleExpr) => {
+    if (error !== undefined) return;
+    const id = t.id!;
+    const at = labelAt.get(t) ?? 0;
+    if (shapes.has(id)) error = { message: `${id} is a shape expression`, at };
+    else if (productions.has(id)) error = { message: `${id} already defined`, at };
+    else productions.add(id);
+  };
+  for (const s of statements) {
+    if (s === undefined) continue;
+    if (s._tag === 'Import') imports.push(s.iri);
+    else if (s._tag === 'Start') {
+      if (start !== undefined) return failAt('start already defined', s.at);
+      eachLabelled(s.expr, production);
+      if (error !== undefined) return Result.fail(error);
+      start = s.expr;
+    } else {
+      const { decl, at } = s;
+      decl.restricts?.forEach((r) => eachLabelled(r, production));
+      eachLabelled(decl.shapeExpr, production);
+      if (error !== undefined) return Result.fail(error);
+      if (productions.has(decl.id)) return failAt(`${decl.id} is a triple expression`, at);
+      if (shapes.has(decl.id)) return failAt(`${decl.id} already defined`, at);
+      shapes.set(decl.id, decl);
+    }
+  }
+  const schema: Mutable<ShExJ.Schema> = { type: 'Schema' };
+  if (imports.length > 0) schema.imports = imports;
+  if (startActs !== undefined) schema.startActs = startActs;
+  if (start !== undefined) schema.start = start;
+  if (shapes.size > 0) schema.shapes = Array.from(shapes.values());
+  return Result.succeed(schema);
+};
+
+// -----------------------------------------------------------------------------
+// Entry point
+// -----------------------------------------------------------------------------
+
+const offsetOf = (tokens: ReadonlyArray<Tok>, input: string, at: number): number =>
+  tokens[at]?.start ?? input.length;
+
+const grammarError = (
+  input: string,
+  tokens: ReadonlyArray<Tok>,
+  error: ParseError.ParseError<SemanticError>,
+): ShExCError => {
+  if (error.cause !== undefined) {
+    return { message: error.cause.message, offset: offsetOf(tokens, input, error.cause.at) };
+  }
+  const t = tokens[error.offset];
+  if (t?.type === 'ERROR') return { message: t.text, offset: t.start };
+  const found = t === undefined ? 'end of input' : JSON.stringify(input.slice(t.start, t.end));
+  const expected = ParseError.formatExpected(error.expected);
+  return {
+    message: expected === '' ? `unexpected ${found}` : `expected ${expected}, found ${found}`,
+    offset: offsetOf(tokens, input, error.offset),
+  };
+};
+
+/** Parses a ShExC document. Errors carry the character offset. */
+export const parseShExC = (
+  input: string,
+  options: ParserOptions = {},
+): Result.Result<ParserResult, ShExCError> => {
+  const tokens = tokenize(input);
+  const resolved = resolve(tokens, options.baseIri, options.prefixes);
+  const parsed = Parser.parse(document, tokens);
+  if (Result.isFailure(parsed)) return Result.fail(grammarError(input, tokens, parsed.failure));
+  const [directives, startActs, statements] = parsed.success;
+  const schema = assemble([...directives, ...statements], startActs);
+  if (Result.isFailure(schema)) {
+    return Result.fail({
+      message: schema.failure.message,
+      offset: offsetOf(tokens, input, schema.failure.at),
+    });
+  }
+  return Result.succeed({
+    schema: schema.success,
+    prefixes: resolved.prefixes,
+    baseIri: resolved.baseIri,
+  });
 };

@@ -5,10 +5,11 @@
  * @since 0.1.0
  */
 import * as Effect from 'effect/Effect';
+import * as Result from 'effect/Result';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import { RdfParseError } from '@thomasfosterau/effect-rdf/Serialization';
-import { Failure, lineColumn } from './internal/lexer.ts';
+import { lineColumn } from './internal/lexer.ts';
 import { parseShExC } from './internal/shexcParser.ts';
 import type * as ShExJ from './ShExJ.ts';
 
@@ -58,25 +59,21 @@ export const parseWithMetadata = (
   options: ParseOptions = {},
 ): Effect.Effect<ParseResult, RdfParseError> =>
   Effect.suspend(() => {
-    try {
-      const result = parseShExC(input, {
-        baseIri: options.baseIri,
-        prefixes: toRecord(options.prefixes),
-      });
-      return Effect.succeed({
-        schema: result.schema,
-        prefixes: PrefixMap.make(result.prefixes),
-        baseIri: result.baseIri,
-      });
-    } catch (e) {
-      if (e instanceof Failure) {
-        const { line, column } = lineColumn(input, e.pos);
-        return Effect.fail(
-          new RdfParseError({ format: 'ShExC', message: e.message, line, column }),
-        );
-      }
-      return Effect.fail(new RdfParseError({ format: 'ShExC', message: String(e) }));
+    const result = parseShExC(input, {
+      baseIri: options.baseIri,
+      prefixes: toRecord(options.prefixes),
+    });
+    if (Result.isFailure(result)) {
+      const { line, column } = lineColumn(input, result.failure.offset);
+      return Effect.fail(
+        new RdfParseError({ format: 'ShExC', message: result.failure.message, line, column }),
+      );
     }
+    return Effect.succeed({
+      schema: result.success.schema,
+      prefixes: PrefixMap.make(result.success.prefixes),
+      baseIri: result.success.baseIri,
+    });
   });
 
 /**
