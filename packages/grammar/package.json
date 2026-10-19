@@ -1,0 +1,41 @@
+{
+  "name": "@thomasfosterau/effect-rdf-grammar",
+  "version": "0.0.0",
+  "description": "Building blocks for the RDF syntaxes as effect-parse parsers: the terminals shared by Turtle, TriG, SPARQL, N3 and ShEx",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./*": {
+        "types": "./dist/*.d.mts",
+        "default": "./dist/*.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "vp pack"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-parse": "catalog:",
+    "effect": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@thomasfosterau/effect-parse": "catalog:",
+    "effect": "catalog:"
+  }
+}
