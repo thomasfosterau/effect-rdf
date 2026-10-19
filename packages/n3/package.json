@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@thomasfosterau/effect-rdf": "workspace:*",
-    "@thomasfosterau/effect-rdf-grammar": "workspace:*"
+    "@thomasfosterau/effect-turtle": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

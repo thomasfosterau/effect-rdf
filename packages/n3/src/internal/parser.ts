@@ -3,7 +3,7 @@
  *
  * 1. A compiled `@thomasfosterau/effect-parse` grammar over the input string
  *    (no separate lexer) produces a syntax tree. It is built on the Turtle
- *    terminals of `effect-rdf-grammar`, as the N3 grammar is: N3 extends
+ *    terminals of `effect-turtle` (`Grammar`), as the N3 grammar is: N3 extends
  *    Turtle with formulas, paths, quick variables, `=`, `=>`, `<=`, `has`,
  *    `is … of` and the legacy `@forAll` / `@forSome`.
  * 2. A builder walks the tree in document order and does everything that
@@ -18,7 +18,7 @@
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
-import * as Terminals from '@thomasfosterau/effect-rdf-grammar/Terminals';
+import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -199,13 +199,13 @@ const endOf = (chars: string): P<unknown> =>
 
 /** An `@` keyword: `@` followed by letters. */
 const atWord: P<string> = Parser.taken(
-  Parser.preceded(lit('@'), Token.takeWhile(Terminals.alpha, { min: 1 })),
+  Parser.preceded(lit('@'), Token.takeWhile(TurtleGrammar.alpha, { min: 1 })),
 );
 
 const atKeyword = (word: string): P<string> => atWord.pipe(Parser.filter((w) => w === word));
 
 /** A `PN_PREFIX` not followed by `:` (a bare word such as `a`, `is`, `true`). */
-const bareWord: P<string> = Parser.terminated(Terminals.pnPrefix, Parser.not(lit(':')));
+const bareWord: P<string> = Parser.terminated(TurtleGrammar.pnPrefix, Parser.not(lit(':')));
 
 const word = (w: string): P<string> => bareWord.pipe(Parser.filter((x) => x === w));
 
@@ -213,7 +213,7 @@ const word = (w: string): P<string> => bareWord.pipe(Parser.filter((x) => x === 
 const forbiddenInIri = /[\u0000- <>"{}|^`\\]/u;
 
 /** IRIREF (escapes of characters not allowed in IRIs are rejected by the builder). */
-const iriRef: P<IriNode> = Parser.seq(Parser.location, Terminals.iriRef, Parser.location).pipe(
+const iriRef: P<IriNode> = Parser.seq(Parser.location, TurtleGrammar.iriRef, Parser.location).pipe(
   Parser.map(([at, value, end]): IriNode => ({
     _tag: 'IriRef',
     value,
@@ -222,7 +222,7 @@ const iriRef: P<IriNode> = Parser.seq(Parser.location, Terminals.iriRef, Parser.
   })),
 );
 
-const pname: P<IriNode> = Parser.seq(Parser.location, Terminals.prefixedName).pipe(
+const pname: P<IriNode> = Parser.seq(Parser.location, TurtleGrammar.prefixedName).pipe(
   Parser.map(([at, { prefix, local }]): IriNode => ({ _tag: 'PName', prefix, local, at })),
 );
 
@@ -260,7 +260,7 @@ const numberStart: P<void> = Parser.make<void>((state) => {
 
 const expectedNumber = ['a number'];
 
-const numeric: P<Item> = Parser.preceded(numberStart, Terminals.numericLiteral).pipe(
+const numeric: P<Item> = Parser.preceded(numberStart, TurtleGrammar.numericLiteral).pipe(
   Parser.map(([lexical, type]): Item => ({
     _tag: 'Literal',
     value: Term.literal(
@@ -271,9 +271,9 @@ const numeric: P<Item> = Parser.preceded(numberStart, Terminals.numericLiteral).
 );
 
 const rdfLiteral: P<Item> = Parser.seq(
-  Terminals.stringLiteral,
+  TurtleGrammar.stringLiteral,
   Parser.alt(
-    Parser.preceded(Parser.peek(lit('@')), Parser.cut(Terminals.langTag)).pipe(
+    Parser.preceded(Parser.peek(lit('@')), Parser.cut(TurtleGrammar.langTag)).pipe(
       Parser.map((language) => ({ language, datatype: undefined })),
     ),
     Parser.preceded(sym('^^'), Parser.cut(Parser.preceded(ws, iri))).pipe(
@@ -293,13 +293,15 @@ const rdfLiteral: P<Item> = Parser.seq(
 const quickVar: P<Item> = Parser.preceded(
   lit('?'),
   Parser.cut(
-    Parser.taken(Parser.seq(Token.oneOf(Terminals.pnCharsU), Token.takeWhile(Terminals.pnChars))),
+    Parser.taken(
+      Parser.seq(Token.oneOf(TurtleGrammar.pnCharsU), Token.takeWhile(TurtleGrammar.pnChars)),
+    ),
   ).pipe(Parser.expected('a variable name')),
 ).pipe(Parser.map((name): Item => ({ _tag: 'Var', name })));
 
 const blank: P<Item> = Parser.preceded(
   Parser.peek(lit('_:')),
-  Parser.cut(Terminals.blankNodeLabel.pipe(Parser.expected('a blank node label'))),
+  Parser.cut(TurtleGrammar.blankNodeLabel.pipe(Parser.expected('a blank node label'))),
 ).pipe(Parser.map((label): Item => ({ _tag: 'Blank', label })));
 
 /** `[ … ]`: an anonymous node, or `[ id <iri> … ]`. */
@@ -458,7 +460,7 @@ const prefixBody: P<Statement> = Parser.seq(
   Parser.preceded(
     ws,
     Parser.terminated(
-      Parser.opt(Terminals.pnPrefix),
+      Parser.opt(TurtleGrammar.pnPrefix),
       lit(':').pipe(Parser.expected('a prefix name ending in ":"')),
     ),
   ),
@@ -489,14 +491,14 @@ const sparqlDirective: P<Statement> = rule(
       Parser.preceded(
         Parser.terminated(
           Ascii.caseless('PREFIX'),
-          Parser.not(Token.oneOf([':.', Terminals.pnChars])),
+          Parser.not(Token.oneOf([':.', TurtleGrammar.pnChars])),
         ),
         Parser.cut(prefixBody),
       ),
       Parser.preceded(
         Parser.terminated(
           Ascii.caseless('BASE'),
-          Parser.not(Token.oneOf([':.', Terminals.pnChars])),
+          Parser.not(Token.oneOf([':.', TurtleGrammar.pnChars])),
         ),
         Parser.cut(baseBody),
       ),

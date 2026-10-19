@@ -35,6 +35,39 @@ const program = Effect.gen(function* () {
 });
 ```
 
+## Grammar
+
+`Grammar` exposes the Turtle grammar's terminals as
+[`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+parsers (a peer dependency, next to `effect`), for the grammars that include
+them: N3 (`effect-n3`) and ShExC (`effect-shex`) are built on them.
+
+| Parser                                           | Terminal                           | Value                                        |
+| ------------------------------------------------ | ---------------------------------- | -------------------------------------------- |
+| `iriRef`                                         | `IRIREF`                           | the IRI, `UCHAR`s decoded (not resolved)     |
+| `prefixedName`                                   | `PNAME_LN`, `PNAME_NS`             | `{ prefix, local }`, `PN_LOCAL_ESC`s decoded |
+| `pnPrefix`, `pnLocal`, `plx`                     | `PN_PREFIX`, `PN_LOCAL`, `PLX`     | the text                                     |
+| `blankNodeLabel`                                 | `BLANK_NODE_LABEL`                 | the label after `_:`                         |
+| `langTag`, `langDir`                             | `LANGTAG`, `LANG_DIR`              | the tag, or `{ language, direction }`        |
+| `stringLiteral` (and the four forms)             | `STRING_LITERAL_QUOTE`, …          | the value, escapes decoded                   |
+| `integer`, `decimal`, `double`, `numericLiteral` | `INTEGER`, `DECIMAL`, `DOUBLE`     | the lexical form (and datatype)              |
+| `uchar`, `echar`, `booleanLiteral`               | `UCHAR`, `ECHAR`, `true` / `false` | the character or keyword                     |
+| `ws`, `comment`, `skip`                          | `WS`, comments                     | —                                            |
+
+The character classes (`pnCharsBase`, `pnCharsU`, `pnChars`, `hex`, …) are
+token sets for `Token.oneOf` / `Token.takeWhile`. The parsers neither skip
+whitespace (except `skip`) nor resolve IRIs: a grammar adds its own
+whitespace and resolves names, typically after parsing so that it can be
+compiled.
+
+```ts
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import { Grammar } from '@thomasfosterau/effect-turtle';
+
+const iri = Parser.preceded(Grammar.skip, Parser.alt(Grammar.iriRef, Grammar.prefixedName));
+Parser.parse(iri, '  ex:alice'); // Result.succeed({ prefix: 'ex', local: 'alice' })
+```
+
 ## Test manifests
 
 `Manifest` reads W3C test manifests (following `mf:include`) and is meant for

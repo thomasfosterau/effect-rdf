@@ -100,9 +100,9 @@ Following the current CG specification and its test suite:
 
 The parser is a compiled
 [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
-grammar (a peer dependency, next to `effect`) built on the Turtle terminals
-of `@thomasfosterau/effect-rdf-grammar`, as the N3 grammar is built on
-Turtle's. `pnpm bench` times it on every `.n3` and `.ttl` file of the N3
+grammar (a peer dependency, next to `effect`) that includes the Turtle
+grammar's terminals from `@thomasfosterau/effect-turtle` (`Grammar`), as the
+N3 grammar is defined on Turtle's. `pnpm bench` times it on every `.n3` and `.ttl` file of the N3
 suites and on a large synthetic document.
 
 ## Conformance

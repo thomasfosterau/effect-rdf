@@ -76,21 +76,6 @@ importers:
         specifier: 'catalog:'
         version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
 
-  packages/grammar:
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
-      '@thomasfosterau/effect-parse':
-        specifier: 'catalog:'
-        version: 0.1.0(effect@4.0.5)
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.5
-      vite-plus:
-        specifier: 'catalog:'
-        version: 1.2.0(@types/node@24.19.2)(@vitest/ui@5.0.4(vitest@5.0.4))(typescript@7.0.2)
-
   packages/jsonld:
     dependencies:
       '@thomasfosterau/effect-rdf':
@@ -112,9 +97,9 @@ importers:
       '@thomasfosterau/effect-rdf':
         specifier: workspace:*
         version: link:../core
-      '@thomasfosterau/effect-rdf-grammar':
+      '@thomasfosterau/effect-turtle':
         specifier: workspace:*
-        version: link:../grammar
+        version: link:../turtle
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
@@ -229,9 +214,9 @@ importers:
       '@thomasfosterau/effect-rdf':
         specifier: workspace:*
         version: link:../core
-      '@thomasfosterau/effect-rdf-grammar':
+      '@thomasfosterau/effect-turtle':
         specifier: workspace:*
-        version: link:../grammar
+        version: link:../turtle
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
@@ -239,9 +224,6 @@ importers:
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.1.0(effect@4.0.5)
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -406,6 +388,9 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(vitest@5.0.4)
+      '@thomasfosterau/effect-parse':
+        specifier: 'catalog:'
+        version: 0.1.0(effect@4.0.5)
       effect:
         specifier: 'catalog:'
         version: 4.0.5
