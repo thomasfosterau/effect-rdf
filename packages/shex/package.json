@@ -30,7 +30,8 @@
     "bench": "node --experimental-strip-types --no-warnings bench/shexc.ts"
   },
   "dependencies": {
-    "@thomasfosterau/effect-rdf": "workspace:*"
+    "@thomasfosterau/effect-rdf": "workspace:*",
+    "@thomasfosterau/effect-rdf-grammar": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

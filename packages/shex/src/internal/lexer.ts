@@ -1,7 +1,7 @@
 /**
  * Lexical helpers shared by the ShExC lexer and the error reporting: the
  * unescaping of `REGEXP` and `CODE` bodies, and offset-to-position
- * conversion. The terminals themselves are `tokens.ts`.
+ * conversion. The terminals are in `effect-rdf-grammar` and `tokens.ts`.
  *
  * @internal
  */
