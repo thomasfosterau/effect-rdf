@@ -15,14 +15,17 @@ import * as Token from '@thomasfosterau/effect-parse/Token';
 // Character classes
 // -----------------------------------------------------------------------------
 
-const digit = Token.range('0', '9');
-const hexDigit = [digit, Token.range('a', 'f'), Token.range('A', 'F')];
-const alpha = [Token.range('a', 'z'), Token.range('A', 'Z')];
-const alphanumeric = [...alpha, digit];
+/** `[0-9]` */
+export const digit = Token.range('0', '9');
+/** `[0-9A-Fa-f]` */
+export const hexDigit: Token.StringTokenSet = [digit, Token.range('a', 'f'), Token.range('A', 'F')];
+/** `[A-Za-z]` */
+export const alpha: Token.StringTokenSet = [Token.range('a', 'z'), Token.range('A', 'Z')];
+const alphanumeric: Token.StringTokenSet = [alpha, digit];
 
 /** `PN_CHARS_BASE` */
 export const pnCharsBase: Token.StringTokenSet = [
-  ...alpha,
+  alpha,
   Token.range('À', 'Ö'),
   Token.range('Ø', 'ö'),
   Token.range('ø', '˿'),
@@ -258,5 +261,5 @@ export const numericLiteral: Parser.Parser<readonly [string, NumericType]> = Par
 /** `true` or `false`, not followed by a word character. */
 export const booleanLiteral: Parser.Parser<'true' | 'false'> = Parser.terminated(
   Parser.alt(Token.literal('true'), Token.literal('false')),
-  Parser.not(Token.oneOf([...alphanumeric, '_'])),
+  Parser.not(Token.oneOf([alphanumeric, '_'])),
 );

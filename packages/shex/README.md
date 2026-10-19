@@ -13,7 +13,10 @@
   exclusions, `$label` and `&include`, inverse `^`, every cardinality form,
   annotations `//`, semantic actions `%iri{ code %}`, and the ShEx 2.2
   `ABSTRACT`, `EXTENDS` and `RESTRICTS`. Errors are `RdfParseError`s with line
-  and column. `ShExC.print` writes a schema back as ShExC.
+  and column. The lexer and the grammar (over the lexer's tokens) are
+  compiled `@thomasfosterau/effect-parse` parsers; `pnpm bench` times them on
+  the shexTest schemas and a large synthetic schema. `ShExC.print` writes a
+  schema back as ShExC.
 - **ShExR** (`ShExR`): reads a schema from a core `Dataset` that holds its RDF
   representation, and writes one (`toQuads` / `toDataset`).
 - **Structural checks** (`Structure`): every reference resolves, inclusions
