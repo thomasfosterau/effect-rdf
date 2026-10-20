@@ -15,7 +15,7 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import { RdfParseError } from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Terminals from '@thomasfosterau/effect-rdf-grammar/Terminals';
+import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Tokens from './internal/tokens.ts';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
@@ -131,16 +131,16 @@ const iri = (
   prefixes: (options: ParseOptions) => Readonly<Record<string, string>> | undefined,
 ): Parser.Parser<string, string, Options> =>
   Parser.alt(
-    Parser.seq(Parser.service(Options), Terminals.iriRef).pipe(
+    Parser.seq(Parser.service(Options), TurtleGrammar.iriRef).pipe(
       Parser.map(([{ baseIri }, iri]) =>
         baseIri === undefined || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, baseIri),
       ),
     ),
     // Once a prefixed name has matched, an unknown prefix is an error.
     Parser.preceded(
-      Parser.peek(Terminals.prefixedName),
+      Parser.peek(TurtleGrammar.prefixedName),
       Parser.cut(
-        Parser.seq(Parser.service(Options), Terminals.prefixedName).pipe(
+        Parser.seq(Parser.service(Options), TurtleGrammar.prefixedName).pipe(
           Parser.tryMap(([options, { prefix, local }]) => {
             const ns = prefixes(options)?.[prefix] ?? options.prefixes?.[prefix];
             return ns === undefined
@@ -157,10 +157,10 @@ const noPrefixes = () => undefined;
 const namedNode = iri(noPrefixes).pipe(Parser.map((value) => Term.namedNode(value)));
 
 const literal = Parser.seq(
-  Terminals.stringLiteral,
+  TurtleGrammar.stringLiteral,
   Parser.opt(
     Parser.alt(
-      Terminals.langTag,
+      TurtleGrammar.langTag,
       Parser.preceded(
         Token.literal('^^'),
         Parser.cut(lex(namedNode).pipe(Parser.expected('a datatype IRI'))),
@@ -178,12 +178,12 @@ const literal = Parser.seq(
 const term: Parser.Parser<Term.GroundTerm, string, Options> = lex(
   Parser.alt(
     namedNode,
-    Terminals.blankNodeLabel.pipe(Parser.map((label) => Term.blankNode(label))),
+    TurtleGrammar.blankNodeLabel.pipe(Parser.map((label) => Term.blankNode(label))),
     literal,
-    Terminals.numericLiteral.pipe(
+    TurtleGrammar.numericLiteral.pipe(
       Parser.map(([value, type]) => Term.literal(value, Term.namedNode(XSD + type))),
     ),
-    Terminals.booleanLiteral.pipe(
+    TurtleGrammar.booleanLiteral.pipe(
       Parser.map((value) => Term.literal(value, Term.namedNode(`${XSD}boolean`))),
     ),
   ),
@@ -191,9 +191,10 @@ const term: Parser.Parser<Term.GroundTerm, string, Options> = lex(
 
 const predicate = lex(
   Parser.alt(
-    Parser.terminated(Token.literal('a'), Parser.not(Token.oneOf([Terminals.pnChars, ':']))).pipe(
-      Parser.as(Term.namedNode(RDF_TYPE)),
-    ),
+    Parser.terminated(
+      Token.literal('a'),
+      Parser.not(Token.oneOf([TurtleGrammar.pnChars, ':'])),
+    ).pipe(Parser.as(Term.namedNode(RDF_TYPE))),
     namedNode,
   ),
 ).pipe(Parser.expected('a predicate'));
@@ -239,7 +240,7 @@ const shapeSelector: Parser.Parser<ShapeSelector, string, Options> = Parser.prec
     Parser.alt(
       lex(Tokens.keyword('START')).pipe(Parser.as(start)),
       lex(iri((options) => options.shapePrefixes)),
-      lex(Terminals.blankNodeLabel).pipe(Parser.map((label) => `_:${label}`)),
+      lex(TurtleGrammar.blankNodeLabel).pipe(Parser.map((label) => `_:${label}`)),
     ).pipe(Parser.expected('a shape label')),
   ),
 );

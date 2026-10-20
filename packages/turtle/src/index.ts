@@ -5,6 +5,8 @@
  */
 
 /** @since 0.1.0 */
+export * as Grammar from './Grammar.ts';
+/** @since 0.1.0 */
 export * as Manifest from './Manifest.ts';
 /** @since 0.1.0 */
 export * as TriG from './TriG.ts';

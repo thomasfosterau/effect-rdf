@@ -12,7 +12,6 @@ and community conformance suites.
 | Package                                                        | Purpose                                                                                                                                                         | Specification                                                                                                                                                     | Conformance                                                                                                                         |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | [`@thomasfosterau/effect-rdf`](packages/core)                  | Core: terms, quads, immutable indexed `Dataset`, IRIs, prefix maps, vocabularies, XSD, RDFS, isomorphism, serialisation interfaces                              | [RDF 1.2 Concepts](https://www.w3.org/TR/rdf12-concepts/), [RDF Schema](https://www.w3.org/TR/rdf12-schema/)                                                      | Unit tests (the syntax packages exercise it against the RDF suites)                                                                 |
-| [`@thomasfosterau/effect-rdf-grammar`](packages/grammar)       | The terminals shared by the Turtle-family grammars (Turtle, TriG, SPARQL, N3, ShExC) as `effect-parse` parsers                                                  | [Turtle](https://www.w3.org/TR/rdf12-turtle/#sec-grammar), [SPARQL](https://www.w3.org/TR/sparql12-query/#grammar)                                                | Unit tests (exercised by the ShEx and N3 suites)                                                                                    |
 | [`@thomasfosterau/effect-ntriples`](packages/ntriples)         | N-Triples and N-Quads: strict and streaming parsers, canonical serialisers                                                                                      | [N-Triples](https://www.w3.org/TR/rdf12-n-triples/), [N-Quads](https://www.w3.org/TR/rdf12-n-quads/)                                                              | Full W3C rdf11 / rdf12 suites (syntax and canonicalisation)                                                                         |
 | [`@thomasfosterau/effect-turtle`](packages/turtle)             | Turtle and TriG parsers / pretty-printers (RDF 1.2 triple terms, reifiers, annotations); test-manifest reader                                                   | [Turtle](https://www.w3.org/TR/rdf12-turtle/), [TriG](https://www.w3.org/TR/rdf12-trig/)                                                                          | Every W3C rdf11 / rdf12 syntax and evaluation test; positive tests round-trip                                                       |
 | [`@thomasfosterau/effect-n3`](packages/n3)                     | Notation3 model, parser, serialiser, dataset mapping and a forward-chaining reasoner                                                                            | [Notation3](https://w3c.github.io/N3/spec/)                                                                                                                       | W3C N3 CG syntax suites (documented skip list); reasoner suite 76 / 89                                                              |
@@ -32,12 +31,12 @@ Each package has a README with its API and usage examples.
 ## Install
 
 The packages are published under the `@thomasfosterau` scope and have
-`effect` (4.x) as a peer dependency (`effect-sparql` and `effect-shex`
-also have `@thomasfosterau/effect-parse`):
+`effect` (4.x) as a peer dependency (`effect-turtle`, `effect-sparql`,
+`effect-shex` and `effect-n3` also have `@thomasfosterau/effect-parse`):
 
 ```sh
-pnpm add effect @thomasfosterau/effect-rdf @thomasfosterau/effect-turtle
-pnpm add @thomasfosterau/effect-parse @thomasfosterau/effect-sparql @thomasfosterau/effect-shacl @thomasfosterau/effect-shacl-sparql
+pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-rdf @thomasfosterau/effect-turtle
+pnpm add @thomasfosterau/effect-sparql @thomasfosterau/effect-shacl @thomasfosterau/effect-shacl-sparql
 ```
 
 ## Quick tour

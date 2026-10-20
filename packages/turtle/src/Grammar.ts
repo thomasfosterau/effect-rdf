@@ -1,14 +1,15 @@
 /**
- * The terminals shared by the RDF syntaxes of the Turtle family, as
- * `@thomasfosterau/effect-parse` parsers over strings. Turtle and TriG
- * define them; SPARQL, N3, ShExC and the SPARQL results TSV format reuse
- * them (each with a few additions of its own). Names follow the grammars:
- * `iriRef` is `IRIREF`, `pnLocal` is `PN_LOCAL`, and so on.
+ * The Turtle grammar's terminals as `@thomasfosterau/effect-parse` parsers
+ * over strings, for the grammars that include them: TriG, SPARQL, N3, ShExC
+ * and the SPARQL results TSV format all reuse Turtle's terminals, each with
+ * a few additions of its own. Names follow the grammar: `iriRef` is
+ * `IRIREF`, `pnLocal` is `PN_LOCAL`, and so on.
  *
  * String-valued terminals return their *value*: escapes are decoded and
  * delimiters removed. The parsers neither skip whitespace nor resolve IRIs;
  * a grammar adds its own whitespace (`skip` here, for Turtle) and resolves
- * prefixed names and relative IRIs, typically after parsing.
+ * prefixed names and relative IRIs, typically after parsing so that the
+ * grammar itself can be compiled with `Parser.compile`.
  *
  * @since 0.1.0
  */

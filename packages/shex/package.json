@@ -31,12 +31,11 @@
   },
   "dependencies": {
     "@thomasfosterau/effect-rdf": "workspace:*",
-    "@thomasfosterau/effect-rdf-grammar": "workspace:*"
+    "@thomasfosterau/effect-turtle": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
-    "@thomasfosterau/effect-turtle": "workspace:*",
     "effect": "catalog:",
     "vite-plus": "catalog:"
   },

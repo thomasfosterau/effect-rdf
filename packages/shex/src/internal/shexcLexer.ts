@@ -14,7 +14,7 @@ import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import { unescapeCode, unescapeRegexp } from './lexer.ts';
-import * as Terminals from '@thomasfosterau/effect-rdf-grammar/Terminals';
+import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Tokens from './tokens.ts';
 
 /** The kinds of ShExC tokens. */
@@ -119,19 +119,19 @@ const KEYWORDS = new Set([
 ]);
 
 const pname = (type: 'PNAME' | 'ATPNAME') =>
-  Parser.map(Terminals.prefixedName, ({ prefix, local }): Partial => ({
+  Parser.map(TurtleGrammar.prefixedName, ({ prefix, local }): Partial => ({
     type,
     text: prefix,
     iri: local,
   }));
 
-const numeric = Parser.map(Terminals.numericLiteral, ([text, type]): Partial => ({
+const numeric = Parser.map(TurtleGrammar.numericLiteral, ([text, type]): Partial => ({
   type: type === 'integer' ? 'INTEGER' : type === 'decimal' ? 'DECIMAL' : 'DOUBLE',
   text,
 }));
 
 const string = Parser.map(
-  Parser.seq(Terminals.stringLiteral, Parser.opt(Terminals.langTag)),
+  Parser.seq(TurtleGrammar.stringLiteral, Parser.opt(TurtleGrammar.langTag)),
   ([text, lang]): Partial =>
     lang._tag === 'Some'
       ? { type: 'LANG_STRING', text, suffix: lang.value }
@@ -146,8 +146,8 @@ const regexp = Parser.preceded(
         Parser.alt(
           Token.takeTill('/\\\n\r', { min: 1 }),
           Parser.seq(Token.literal('\\'), Token.oneOf('nrt\\|.?*+(){}$-[]^/')),
-          Parser.seq(Token.literal('\\u'), Token.takeWhile(Terminals.hex, 4)),
-          Parser.seq(Token.literal('\\U'), Token.takeWhile(Terminals.hex, 8)),
+          Parser.seq(Token.literal('\\u'), Token.takeWhile(TurtleGrammar.hex, 4)),
+          Parser.seq(Token.literal('\\U'), Token.takeWhile(TurtleGrammar.hex, 8)),
         ),
         { min: 1 },
       ),
@@ -169,8 +169,8 @@ const code = Parser.delimited(
       Parser.alt(
         Token.takeTill('%\\', { min: 1 }),
         Parser.seq(Token.literal('\\'), Token.oneOf('%\\')),
-        Parser.seq(Token.literal('\\u'), Token.takeWhile(Terminals.hex, 4)),
-        Parser.seq(Token.literal('\\U'), Token.takeWhile(Terminals.hex, 8)),
+        Parser.seq(Token.literal('\\u'), Token.takeWhile(TurtleGrammar.hex, 4)),
+        Parser.seq(Token.literal('\\U'), Token.takeWhile(TurtleGrammar.hex, 8)),
       ),
     ),
   ),
@@ -179,7 +179,7 @@ const code = Parser.delimited(
 
 const bound = Parser.preceded(
   Parser.opt(Token.oneOf('+-')),
-  Token.takeWhile(Terminals.digit, { min: 1 }),
+  Token.takeWhile(TurtleGrammar.digit, { min: 1 }),
 );
 
 const repeatRange = Parser.delimited(
@@ -204,7 +204,7 @@ const repeatRange = Parser.delimited(
   }),
 );
 
-const word = Token.takeWhile(Terminals.alpha, { min: 1 }).pipe(
+const word = Token.takeWhile(TurtleGrammar.alpha, { min: 1 }).pipe(
   Parser.filterMap((w): Option.Option<Partial> => {
     if (w === 'a' || w === 'true' || w === 'false') return Option.some({ type: 'PUNCT', text: w });
     const upper = w.toUpperCase();
@@ -231,12 +231,14 @@ const token: Parser.Parser<Partial> = Parser.dispatch(
   {
     '@': Parser.alt(
       Parser.preceded(Token.literal('@'), pname('ATPNAME')),
-      Terminals.langTag.pipe(Parser.map((text): Partial => ({ type: 'LANGTAG', text }))),
+      TurtleGrammar.langTag.pipe(Parser.map((text): Partial => ({ type: 'LANGTAG', text }))),
       punctuation('@'),
     ),
-    '<': Terminals.iriRef.pipe(Parser.map((iri): Partial => ({ type: 'IRIREF', text: '', iri }))),
+    '<': TurtleGrammar.iriRef.pipe(
+      Parser.map((iri): Partial => ({ type: 'IRIREF', text: '', iri })),
+    ),
     '/': Parser.alt(punctuation('//'), regexp),
-    _: Terminals.blankNodeLabel.pipe(
+    _: TurtleGrammar.blankNodeLabel.pipe(
       Parser.map((label): Partial => ({ type: 'BLANK_NODE_LABEL', text: `_:${label}` })),
     ),
     '"': string,
