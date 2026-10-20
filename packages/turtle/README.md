@@ -11,6 +11,15 @@ RDF 1.2 [Turtle](https://www.w3.org/TR/rdf12-turtle/) and
   `parseQuads` returns statements in document order.
 - `parseStream` is incremental: statements are emitted as soon as they are
   complete, whatever the chunk boundaries.
+- The parsers are a compiled
+  [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+  grammar built on the `Grammar` terminals below, emitting quads as it reads.
+  `pnpm bench` times them on the W3C suites (7.6 MB) and on synthetic Turtle,
+  TriG and N-Triples-like documents (10–29 MB), whole and in 64 kB chunks:
+  15–32 MB/s on Node 22, 1.1–1.25× the time of the hand-written parser they
+  replaced, with the same quads, errors and error positions on every suite
+  file, on 6,000 mutated copies of them, and when streamed in chunks of 1 to
+  1,000 characters. Nesting is limited to about 900 levels of `[ … ]`.
 - Pretty serializers: prefixed names (from `prefixes`, optionally
   `autoPrefixes`), `@base` relativisation, `;`/`,` grouping, `a`, inline `[]`
   blank nodes, `( ... )` collections, numeric/boolean shorthand, annotation

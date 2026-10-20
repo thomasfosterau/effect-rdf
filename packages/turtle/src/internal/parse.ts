@@ -4,7 +4,7 @@ import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
 import * as Stream from 'effect/Stream';
-import { Parser, SyntaxFailure } from './parser.ts';
+import { SyntaxFailure, TurtleParser } from './parser.ts';
 
 /** @internal */
 export interface Syntax {
@@ -23,8 +23,8 @@ export interface QuadsResult {
   readonly baseIri: string | undefined;
 }
 
-const makeParser = (syntax: Syntax, options?: Serialization.ParseOptions): Parser =>
-  new Parser({
+const makeParser = (syntax: Syntax, options?: Serialization.ParseOptions): TurtleParser =>
+  new TurtleParser({
     trig: syntax.trig,
     baseIri: options?.baseIri,
     blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
