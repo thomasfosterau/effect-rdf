@@ -27,17 +27,17 @@
   },
   "scripts": {
     "build": "vp pack",
-    "bench": "node --experimental-strip-types --no-warnings bench/results-text.ts"
+    "bench": "node --experimental-strip-types --no-warnings bench/results-text.ts && node --experimental-strip-types --no-warnings bench/parser.ts"
   },
   "dependencies": {
     "@thomasfosterau/effect-rdf": "workspace:*",
-    "@thomasfosterau/effect-rdfxml": "workspace:*"
+    "@thomasfosterau/effect-rdfxml": "workspace:*",
+    "@thomasfosterau/effect-turtle": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-ntriples": "workspace:*",
     "@thomasfosterau/effect-parse": "catalog:",
-    "@thomasfosterau/effect-turtle": "workspace:*",
     "effect": "catalog:",
     "vite-plus": "catalog:"
   },
