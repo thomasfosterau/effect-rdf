@@ -26,6 +26,7 @@
     }
   },
   "scripts": {
+    "bench": "node --experimental-strip-types --no-warnings bench/parser.ts",
     "build": "vp pack"
   },
   "dependencies": {
