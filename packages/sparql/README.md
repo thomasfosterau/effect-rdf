@@ -6,8 +6,10 @@ SPARQL algebra with an optimizer, a streaming query and update engine over a
 pluggable storage service, the standard results formats, and a strongly-typed
 query builder.
 
-- **`Parser`** — hand-written recursive-descent parser for SPARQL 1.1 Query and
-  Update plus SPARQL 1.2 (triple terms `<<( s p o )>>`, reified triples
+- **`Parser`** — a compiled LL(1) grammar (on
+  [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse),
+  reusing the Turtle terminals of `@thomasfosterau/effect-turtle/Grammar`) for
+  SPARQL 1.1 Query and Update plus SPARQL 1.2 (triple terms `<<( s p o )>>`, reified triples
   `<< s p o ~ r >>`, annotations `{| … |}`, `VERSION`, `@lang--dir`), with all
   static checks (blank node scoping, grouping, `BIND`/`AS` scoping, `VALUES`
   arity, `DELETE` blank nodes, …) and `SparqlParseError`s carrying
@@ -142,6 +144,14 @@ The TSV term syntax and CSV rows are parsed with
 and `column` of the error. `pnpm bench` times both parsers on every
 SRX/SRJ result in the conformance suites, re-serialised as TSV and CSV,
 plus a synthetic 20,000-row document.
+
+`pnpm bench` also times the query and update parser on every `.rq` and `.ru`
+file of the conformance suites (188 kB) and on two synthetic documents (a
+222 kB query and a 117 kB update). On Node 22 it reads 4–6 MB/s (the suite in
+about 40–50 ms, the query in about 55 ms and the update in about 20 ms),
+1.4–1.8× slower than the hand-written parser it replaced, with identical
+ASTs, errors and error positions on every suite file and on 8,000 mutated
+copies of them.
 
 ## Extension points
 

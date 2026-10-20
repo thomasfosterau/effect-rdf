@@ -239,6 +239,9 @@ importers:
       '@thomasfosterau/effect-rdfxml':
         specifier: workspace:*
         version: link:../rdfxml
+      '@thomasfosterau/effect-turtle':
+        specifier: workspace:*
+        version: link:../turtle
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
@@ -249,9 +252,6 @@ importers:
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.1.0(effect@4.0.5)
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
       effect:
         specifier: 'catalog:'
         version: 4.0.5
