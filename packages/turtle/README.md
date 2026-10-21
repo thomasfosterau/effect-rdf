@@ -49,7 +49,10 @@ const program = Effect.gen(function* () {
 `Grammar` exposes the Turtle grammar's terminals as
 [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
 parsers (a peer dependency, next to `effect`), for the grammars that include
-them: N3 (`effect-n3`) and ShExC (`effect-shex`) are built on them.
+them: N3 (`effect-n3`) and ShExC (`effect-shex`) are built on them. The
+terminals Turtle shares with N-Triples (`iriRef`, `blankNodeLabel`, `langTag`,
+`langDir`, `stringLiteralQuote`, `uchar`, `echar` and the character classes)
+come from `effect-ntriples`' `Grammar` and are re-exported here.
 
 | Parser                                           | Terminal                           | Value                                        |
 | ------------------------------------------------ | ---------------------------------- | -------------------------------------------- |

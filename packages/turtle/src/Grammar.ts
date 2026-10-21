@@ -16,113 +16,27 @@
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
-
-// -----------------------------------------------------------------------------
-// Character classes
-// -----------------------------------------------------------------------------
-
-/**
- * `[0-9]`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const digit: Token.StringTokenSet = Token.range('0', '9');
-
-/**
- * `HEX`: `[0-9A-Fa-f]`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const hex: Token.StringTokenSet = [digit, Token.range('a', 'f'), Token.range('A', 'F')];
-
-/**
- * `[A-Za-z]`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const alpha: Token.StringTokenSet = [Token.range('a', 'z'), Token.range('A', 'Z')];
-
-/**
- * `[A-Za-z0-9]`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const alphanumeric: Token.StringTokenSet = [alpha, digit];
-
-/**
- * `PN_CHARS_BASE`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const pnCharsBase: Token.StringTokenSet = [
-  alpha,
-  Token.range('À', 'Ö'),
-  Token.range('Ø', 'ö'),
-  Token.range('ø', '˿'),
-  Token.range('Ͱ', 'ͽ'),
-  Token.range('Ϳ', '῿'),
-  Token.range('‌', '‍'),
-  Token.range('⁰', '↏'),
-  Token.range('Ⰰ', '⿯'),
-  Token.range('、', '퟿'),
-  Token.range('豈', '﷏'),
-  Token.range('ﷰ', '�'),
-  Token.range('\u{10000}', '\u{effff}'),
-];
-
-/**
- * `PN_CHARS_U`: `PN_CHARS_BASE | '_'`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const pnCharsU: Token.StringTokenSet = [pnCharsBase, '_'];
-
-/**
- * `PN_CHARS`
- *
- * @since 0.1.0
- * @category character classes
- */
-export const pnChars: Token.StringTokenSet = [
-  pnCharsU,
-  '-·',
+import {
+  alphanumeric,
   digit,
-  Token.range('̀', 'ͯ'),
-  Token.range('‿', '⁀'),
-];
+  dottedTail,
+  hex,
+  pnChars,
+  pnCharsBase,
+  pnCharsU,
+  stringEscape,
+  stringLiteralQuote,
+} from '@thomasfosterau/effect-ntriples/Grammar';
 
 /**
- * The characters `IRIREF` excludes (besides `\`, which starts a `UCHAR`):
- * `[#x00-#x20<>"{}|^`]`.
+ * The N-Triples terminals and character classes (`iriRef`,
+ * `blankNodeLabel`, `langTag`, `langDir`, `stringLiteralQuote`, `uchar`,
+ * `echar`, `pnChars`, …), which Turtle includes.
  *
  * @since 0.1.0
- * @category character classes
+ * @category terminals
  */
-export const iriExcluded: Token.StringTokenSet = [Token.range('\u0000', ' '), '<>"{}|^`'];
-
-/**
- * Runs of `chars` in which dots may appear, but not at the end: the
- * `((chars | '.')* chars)?` tail of `PN_PREFIX`, `PN_LOCAL` and
- * `BLANK_NODE_LABEL`.
- *
- * @since 0.1.0
- * @category combinators
- */
-export const dottedTail = <E, R>(chars: Parser.Parser<unknown, E, R>): Parser.Parser<void, E, R> =>
-  Parser.asVoid(
-    Parser.repeat(
-      Parser.alt(
-        Parser.repeat(chars, { min: 1 }),
-        Parser.seq(Token.takeWhile('.', { min: 1 }), Parser.peek(chars)),
-      ),
-    ),
-  );
+export * from '@thomasfosterau/effect-ntriples/Grammar';
 
 // -----------------------------------------------------------------------------
 // Whitespace and comments
@@ -162,93 +76,8 @@ export const skip: Parser.Parser<void> = Parser.asVoid(
 );
 
 // -----------------------------------------------------------------------------
-// Escapes
-// -----------------------------------------------------------------------------
-
-const codePoint = (digits: number): Parser.Parser<string> =>
-  Token.takeWhile(hex, digits).pipe(
-    Parser.expected(`${digits} hex digits`),
-    Parser.map((h) => parseInt(h, 16)),
-    Parser.filter((cp) => cp <= 0x10ffff),
-    Parser.map((cp) => String.fromCodePoint(cp)),
-  );
-
-/**
- * What follows the backslash of a `UCHAR` (`uXXXX` or `UXXXXXXXX`),
- * returning the character. For use as the escape of `Ascii.escaped`.
- *
- * @since 0.1.0
- * @category escapes
- */
-export const ucharEscape: Parser.Parser<string> = Parser.dispatch(Token.any, {
-  u: Parser.cut(codePoint(4)),
-  U: Parser.cut(codePoint(8)),
-}).pipe(Parser.expected('a unicode escape'));
-
-/**
- * What follows the backslash of an `ECHAR` or a `UCHAR`, returning the
- * character. For use as the escape of `Ascii.escaped`.
- *
- * @since 0.1.0
- * @category escapes
- */
-export const stringEscape: Parser.Parser<string> = Parser.dispatch(Token.any, {
-  t: Parser.succeed('\t'),
-  b: Parser.succeed('\b'),
-  n: Parser.succeed('\n'),
-  r: Parser.succeed('\r'),
-  f: Parser.succeed('\f'),
-  '"': Parser.succeed('"'),
-  "'": Parser.succeed("'"),
-  '\\': Parser.succeed('\\'),
-  u: Parser.cut(codePoint(4)),
-  U: Parser.cut(codePoint(8)),
-}).pipe(Parser.expected('an escape sequence'));
-
-/**
- * `UCHAR`: `\uXXXX` or `\UXXXXXXXX`, returning the character.
- *
- * @since 0.1.0
- * @category escapes
- */
-export const uchar: Parser.Parser<string> = Parser.preceded(Token.literal('\\'), ucharEscape);
-
-/**
- * `ECHAR`: `\` followed by one of `tbnrf"'\`, returning the character.
- *
- * @since 0.1.0
- * @category escapes
- */
-export const echar: Parser.Parser<string> = Parser.preceded(
-  Token.literal('\\'),
-  Parser.dispatch(Token.any, {
-    t: Parser.succeed('\t'),
-    b: Parser.succeed('\b'),
-    n: Parser.succeed('\n'),
-    r: Parser.succeed('\r'),
-    f: Parser.succeed('\f'),
-    '"': Parser.succeed('"'),
-    "'": Parser.succeed("'"),
-    '\\': Parser.succeed('\\'),
-  }),
-);
-
-// -----------------------------------------------------------------------------
 // IRIs and names
 // -----------------------------------------------------------------------------
-
-/**
- * `IRIREF`, returning the IRI between the angle brackets with its `UCHAR`s
- * decoded (not resolved against a base).
- *
- * @since 0.1.0
- * @category terminals
- */
-export const iriRef: Parser.Parser<string> = Parser.delimited(
-  Token.literal('<'),
-  Ascii.escaped(Token.takeTill([iriExcluded, '\\'], { min: 1 }), '\\', ucharEscape),
-  Token.literal('>'),
-);
 
 /**
  * `PN_PREFIX`
@@ -315,65 +144,9 @@ export const prefixedName: Parser.Parser<PrefixedName> = Parser.seq(
   })),
 );
 
-/**
- * `BLANK_NODE_LABEL`, returning the label after `_:`.
- *
- * @since 0.1.0
- * @category terminals
- */
-export const blankNodeLabel: Parser.Parser<string> = Parser.preceded(
-  Token.literal('_:'),
-  Parser.taken(Parser.seq(Token.oneOf([pnCharsU, digit]), dottedTail(Token.oneOf(pnChars)))),
-);
-
 // -----------------------------------------------------------------------------
 // Literals
 // -----------------------------------------------------------------------------
-
-const languageTag = Parser.taken(
-  Parser.seq(
-    Token.takeWhile(alpha, { min: 1 }),
-    Parser.repeat(Parser.preceded(Token.literal('-'), Token.takeWhile(alphanumeric, { min: 1 }))),
-  ),
-);
-
-/**
- * `LANGTAG` (RDF 1.1), returning the tag after `@`.
- *
- * @since 0.1.0
- * @category terminals
- */
-export const langTag: Parser.Parser<string> = Parser.preceded(Token.literal('@'), languageTag);
-
-/**
- * A language tag with its base direction.
- *
- * @since 0.1.0
- * @category models
- */
-export interface LangDir {
-  readonly language: string;
-  readonly direction: 'ltr' | 'rtl' | undefined;
-}
-
-/**
- * `LANG_DIR` (RDF 1.2): a language tag optionally followed by `--ltr` or
- * `--rtl`.
- *
- * @since 0.1.0
- * @category terminals
- */
-export const langDir: Parser.Parser<LangDir> = Parser.seq(
-  langTag,
-  Parser.opt(
-    Parser.preceded(Token.literal('--'), Parser.alt(Token.literal('ltr'), Token.literal('rtl'))),
-  ),
-).pipe(
-  Parser.map(([language, direction]) => ({
-    language,
-    direction: direction._tag === 'Some' ? direction.value : undefined,
-  })),
-);
 
 const shortString = (q: '"' | "'"): Parser.Parser<string> =>
   Parser.delimited(
@@ -397,14 +170,6 @@ const longString = (q: '"' | "'"): Parser.Parser<string> =>
     ),
     Parser.cut(Token.literal(q.repeat(3))),
   );
-
-/**
- * `STRING_LITERAL_QUOTE` (`STRING_LITERAL2` in SPARQL), returning the value.
- *
- * @since 0.1.0
- * @category terminals
- */
-export const stringLiteralQuote: Parser.Parser<string> = shortString('"');
 
 /**
  * `STRING_LITERAL_SINGLE_QUOTE` (`STRING_LITERAL1`), returning the value.

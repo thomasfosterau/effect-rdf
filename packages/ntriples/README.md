@@ -37,3 +37,13 @@ Each module exports `format`, `parser`, `serializer`, `codec` (with a
 `parseStream`, `serialize` and `serializeStream`. The `Lexical` module holds
 the character classes, escape decoding, language-tag validation and canonical
 term formatting shared with the Turtle package.
+
+`Grammar` holds the N-Triples terminals (`iriRef`, `blankNodeLabel`, `langTag`,
+`langDir`, `stringLiteralQuote`, `uchar`, `echar`) and character classes
+(`pnCharsBase`, `pnCharsU`, `pnChars`, `hex`, …) as
+[`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+parsers and token sets (a peer dependency, next to `effect`). The token sets
+accept exactly the code points of the `Lexical` predicates. Turtle's `Grammar`
+re-exports them and adds its own terminals. The N-Triples and N-Quads parsers
+themselves stay hand-written line parsers, which are simpler and faster for a
+one-statement-per-line format.

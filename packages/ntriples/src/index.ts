@@ -5,6 +5,8 @@
  */
 
 /** @since 0.1.0 */
+export * as Grammar from './Grammar.ts';
+/** @since 0.1.0 */
 export * as Lexical from './Lexical.ts';
 /** @since 0.1.0 */
 export * as NQuads from './NQuads.ts';
