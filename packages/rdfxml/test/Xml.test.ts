@@ -144,6 +144,42 @@ describe('Xml.parse', () => {
     }),
   );
 
+  it('rejects hostile documents with parse errors', () => {
+    const laughs = (body: string) =>
+      `<!DOCTYPE a [<!ENTITY l0 "${body}">${Array.from(
+        { length: 9 },
+        (_, i) => `<!ENTITY l${i + 1} "${`&l${i};`.repeat(10)}">`,
+      ).join('')}]><a>&l9;</a>`;
+    expect(parseErr(laughs('ha')).message).toContain('Entity expansion limit exceeded');
+    expect(parseErr(laughs('<b/>')).message).toContain('Entity expansion limit exceeded');
+    expect(
+      parseErr(`<!DOCTYPE a [<!ENTITY x SYSTEM "file:///etc/passwd">]><a>&x;</a>`).message,
+    ).toBe('External entity "x" is not supported');
+    const deep = (n: number) => '<a>'.repeat(n) + '</a>'.repeat(n);
+    expect(parseOk(deep(1024)).root.localName).toBe('a');
+    expect(parseErr(deep(100_000)).message).toBe('Elements are nested too deeply');
+    const chain = (n: number, open: string, close: string) =>
+      `<!DOCTYPE a [${Array.from(
+        { length: n },
+        (_, i) => `<!ENTITY e${i} "${open}${i + 1 < n ? `&e${i + 1};` : ''}${close}">`,
+      ).join('')}]>`;
+    expect(parseOk(`${chain(60, '<b>', '</b>')}<a>&e0;</a>`).root.children).toHaveLength(1);
+    expect(parseErr(`${chain(2000, '<b>', '</b>')}<a>&e0;</a>`).message).toContain(
+      'Entity references are nested too deeply',
+    );
+    expect(parseErr(`${chain(2000, 'x', '')}<a b="&e0;"/>`).message).toBe(
+      'Entity references are nested too deeply',
+    );
+  });
+
+  it('parses many references to entities with markup in linear time', () => {
+    const entities = Array.from({ length: 3000 }, (_, i) => `<!ENTITY e${i} "<b/>">`).join('');
+    const start = performance.now();
+    const doc = parseOk(`<!DOCTYPE a [${entities}]><a>${'&e0;'.repeat(20_000)}</a>`);
+    expect(doc.root.children).toHaveLength(20_000);
+    expect(performance.now() - start).toBeLessThan(5_000);
+  });
+
   it('validates names', () => {
     expect(Xml.isNCName('abc')).toBe(true);
     expect(Xml.isNCName('_a-b.c')).toBe(true);

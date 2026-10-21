@@ -8,6 +8,14 @@ for [`@thomasfosterau/effect-rdf`](../core).
   (internal DTD entities and attribute defaults, CDATA, comments, PIs) plus Exclusive XML
   Canonicalization, usable on its own.
 
+The XML parser is a compiled
+[`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
+grammar (a peer dependency, next to `effect`). It never loads external entities, caps entity
+expansion at 1,000,000 characters (defeating "billion laughs"), and limits entity references to
+64 levels of nesting and elements to 1,024, reporting an `XmlParseError` rather than exhausting
+the stack. `pnpm bench` times it on every RDF/XML and SPARQL XML results file of the W3C suites
+(about 38 MB/s) and on a 10.8 MB synthetic RDF/XML document (about 15 MB/s).
+
 The parser passes every test of the W3C RDF 1.1 and RDF 1.2 RDF/XML test suites, including
 `rdf:version`, base direction via `its:dir`, triple terms via `rdf:parseType="Triple"` and
 annotations via `rdf:annotation` / `rdf:annotationNodeID`.
