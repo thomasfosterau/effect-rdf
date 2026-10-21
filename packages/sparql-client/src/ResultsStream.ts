@@ -9,8 +9,8 @@
  *   cut from the input and parsed with `Results.Xml.parse`;
  * - TSV (`text/tab-separated-values`): line by line with
  *   `Results.parseTerm`;
- * - CSV (`text/csv`): buffered and parsed with `Results.Csv.parse` (CSV
- *   cells may span lines).
+ * - CSV (`text/csv`): complete records (whose quoted cells may span lines)
+ *   are parsed with `Results.Csv.parse` as they arrive.
  *
  * @since 0.1.0
  */
@@ -483,6 +483,110 @@ export const xml = (): Incremental => {
 // -----------------------------------------------------------------------------
 
 /**
+ * An incremental parser for SPARQL CSV results: records are parsed (with the
+ * header, by `Results.Csv.parse`) once they are complete, that is, once a line
+ * break outside quotes has arrived.
+ *
+ * @since 0.1.0
+ * @category parsers
+ */
+export const csv = (): Incremental => {
+  let buffer = '';
+  /** How far `buffer` has been scanned for record ends, and whether that is inside quotes. */
+  let scanned = 0;
+  let quoted = false;
+  let header: string | undefined;
+  let boolean = false;
+  /** The lines of the header, and of the records parsed so far (header included). */
+  let headerLines = 0;
+  let lines = 0;
+  const parse = (records: string): Results.ParsedResult => {
+    try {
+      return runSyncParse(Results.Csv.parse(header === undefined ? records : header + records));
+    } catch (e) {
+      // Report lines of the whole document, not of the records parsed
+      if (e instanceof Results.ResultsParseError && e.line !== undefined && header !== undefined) {
+        throw new Results.ResultsParseError({
+          format: e.format,
+          message: e.message,
+          line: e.line - headerLines + lines,
+          ...(e.column !== undefined ? { column: e.column } : {}),
+        });
+      }
+      throw e;
+    }
+  };
+  const records = (text: string, out: Array<ResultEvent>) => {
+    if (boolean || text === '') return;
+    if (header === undefined) {
+      // The first record is the header (or a boolean)
+      const end = recordEnd(text);
+      const first = text.slice(0, end);
+      const parsed = parse(first);
+      if (parsed._tag === 'Boolean') {
+        boolean = true;
+        out.push({ _tag: 'Boolean', value: parsed.value });
+        return;
+      }
+      out.push(variablesEvent(parsed.variables));
+      header = first;
+      headerLines = countLines(first);
+      lines = headerLines;
+      text = text.slice(end);
+      if (text === '') return;
+    }
+    const parsed = parse(text);
+    if (parsed._tag === 'ResultSet') {
+      for (const bindings of parsed.bindings) out.push({ _tag: 'Solution', bindings });
+    }
+    lines += countLines(text);
+  };
+  return {
+    push: (chunk) => {
+      const out: Array<ResultEvent> = [];
+      buffer += chunk;
+      let last = -1;
+      for (let i = scanned; i < buffer.length; i++) {
+        const c = buffer.charCodeAt(i);
+        if (c === 0x22) quoted = !quoted;
+        else if (c === 0x0a && !quoted) last = i;
+      }
+      scanned = buffer.length;
+      if (last >= 0) {
+        records(buffer.slice(0, last + 1), out);
+        buffer = buffer.slice(last + 1);
+        scanned = buffer.length;
+      }
+      return out;
+    },
+    end: () => {
+      const out: Array<ResultEvent> = [];
+      if (header === undefined && !boolean) return fromParsed(parse(buffer));
+      records(buffer, out);
+      buffer = '';
+      return out;
+    },
+  };
+};
+
+/** The end of the first record of complete records (after its line break). */
+const recordEnd = (text: string): number => {
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 0x22) quoted = !quoted;
+    else if (c === 0x0a && !quoted) return i + 1;
+  }
+  return text.length;
+};
+
+const countLines = (text: string): number => {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 0x0a) n++;
+  return n;
+};
+
+/**
  * A parser that buffers the whole document and parses it with a complete
  * results codec (used for CSV).
  *
@@ -551,6 +655,8 @@ export const parserFor = (
       return Option.some({ make: xml, format: 'xml' });
     case Results.Tsv:
       return Option.some({ make: tsv, format: 'tsv' });
+    case Results.Csv:
+      return Option.some({ make: csv, format: 'csv' });
     default: {
       const c = codec.value;
       return Option.some({ make: () => buffered(c), format: c.format.extensions[0] ?? 'csv' });

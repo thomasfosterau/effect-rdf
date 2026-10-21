@@ -26,6 +26,7 @@
     }
   },
   "scripts": {
+    "bench": "node --experimental-strip-types --no-warnings bench/xml.ts",
     "build": "vp pack"
   },
   "dependencies": {
@@ -33,10 +34,12 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@thomasfosterau/effect-parse": "catalog:",
     "effect": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
+    "@thomasfosterau/effect-parse": "catalog:",
     "effect": "catalog:"
   }
 }

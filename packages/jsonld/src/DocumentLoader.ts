@@ -17,6 +17,7 @@ import * as Headers from 'effect/http/Headers';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
+import * as LinkHeader from './internal/linkHeader.ts';
 import * as JsonLdError from './JsonLdError.ts';
 
 /**
@@ -108,27 +109,8 @@ export interface Link {
  * @since 0.1.0
  * @category utils
  */
-export const parseLinkHeader = (header: string | ReadonlyArray<string>): ReadonlyArray<Link> => {
-  const values = typeof header === 'string' ? [header] : header;
-  const links: Array<Link> = [];
-  for (const value of values) {
-    const re =
-      /\s*<([^>]*)>((?:\s*;\s*[^;,=\s]+\s*(?:=\s*(?:"(?:[^"\\]|\\.)*"|[^;,\s]*))?)*)\s*,?/gy;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(value)) !== null && m[0] !== '') {
-      const params: Record<string, string> = {};
-      const paramRe = /;\s*([^;,=\s]+)\s*(?:=\s*("(?:[^"\\]|\\.)*"|[^;,\s]*))?/g;
-      let p: RegExpExecArray | null;
-      while ((p = paramRe.exec(m[2] ?? '')) !== null) {
-        let v = p[2] ?? '';
-        if (v.startsWith('"')) v = v.slice(1, -1).replace(/\\(.)/g, '$1');
-        params[p[1]!.toLowerCase()] = v;
-      }
-      links.push({ target: m[1]!, params });
-    }
-  }
-  return links;
-};
+export const parseLinkHeader = (header: string | ReadonlyArray<string>): ReadonlyArray<Link> =>
+  (typeof header === 'string' ? [header] : header).flatMap(LinkHeader.parse);
 
 const mediaTypeOf = (contentType: string | undefined): string | undefined =>
   contentType === undefined ? undefined : contentType.split(';')[0]!.trim().toLowerCase();

@@ -9,8 +9,8 @@ client for [Effect](https://effect.website), built on the `effect/http`
 - **Queries** as strings, parsed `Ast` values or `QueryBuilder` builders —
   the typed rows of `QueryBuilder.select(…)` flow through to `select`, and
   rows can be decoded with an Effect `Schema`.
-- **Streaming**: `SELECT` results are parsed incrementally (JSON, XML and
-  TSV; CSV is buffered) and emitted as a `Stream`; `CONSTRUCT` / `DESCRIBE`
+- **Streaming**: `SELECT` results are parsed incrementally (JSON, XML,
+  TSV and CSV) and emitted as a `Stream`; `CONSTRUCT` / `DESCRIBE`
   results are parsed with the `Serialization.Formats` parser for the response
   media type (N-Triples is preferred and parsed incrementally).
 - **Updates** with `using-graph-uri` / `using-named-graph-uri`, and the

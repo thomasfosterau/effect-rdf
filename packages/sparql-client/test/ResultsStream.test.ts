@@ -66,13 +66,31 @@ describe('ResultsStream', () => {
     );
   }
 
-  it.effect('parses CSV (buffered)', () =>
+  it.effect('parses CSV incrementally', () =>
     Effect.gen(function* () {
-      const text = 'x,y\r\nhttp://example.org/a,"multi\r\nline"\r\n';
-      const events = yield* collect('text/csv', text, 4);
-      const got = solutions(events);
-      expect(got).toHaveLength(1);
-      expect(got[0]!.map.get('y')?.key).toBe(Term.literal('multi\r\nline').key);
+      const text =
+        'x,y\r\nhttp://example.org/a,"multi\r\nline ""quoted"""\r\n_:b,42\r\n,plain\r\nhttp://example.org/c,';
+      const whole = yield* Results.Csv.parse(text);
+      const expected = whole._tag === 'ResultSet' ? whole.bindings.map((b) => b.key) : [];
+      expect(expected).toHaveLength(4);
+      for (const size of [1, 2, 3, 7, 1000]) {
+        const events = yield* collect('text/csv', text, size);
+        expect(events[0]).toEqual({ _tag: 'Variables', variables: ['x', 'y'] });
+        expect(solutions(events).map((b) => b.key)).toEqual(expected);
+      }
+      expect(solutions(yield* collect('text/csv', text, 4))[0]!.map.get('y')?.key).toBe(
+        Term.literal('multi\r\nline "quoted"').key,
+      );
+      expect(yield* collect('text/csv', 'true\r\n', 1)).toEqual([{ _tag: 'Boolean', value: true }]);
+
+      const parser = ResultsStream.csv();
+      expect(parser.push('x\r\nhttp://a\r\nhttp://b')).toHaveLength(2);
+      expect(parser.end()).toHaveLength(1);
+      for (const bad of ['x\r\na\r\nb\r\n"c\r\n', 'x\r\na\r\n"b"c\r\nd\r\n']) {
+        const streamed = yield* Effect.flip(collect('text/csv', bad, 3));
+        const buffered = yield* Effect.flip(Results.Csv.parse(bad));
+        expect([streamed.line, streamed.column]).toEqual([buffered.line, buffered.column]);
+      }
     }),
   );
 

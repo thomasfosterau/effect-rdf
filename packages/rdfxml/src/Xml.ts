@@ -10,14 +10,20 @@
  * entity references. External entities and parameter entities are not
  * loaded (they are reported as errors when referenced).
  *
- * The parser is pure and synchronous internally; the public `parse` API
- * returns an `Effect` failing with `XmlParseError`.
+ * The parser is a compiled `@thomasfosterau/effect-parse` grammar; it is
+ * pure and synchronous internally, and the public `parse` API returns an
+ * `Effect` failing with `XmlParseError`. It is safe on hostile input:
+ * entity replacement text may add at most 1,000,000 characters to a
+ * document, entity references nest at most 64 deep and elements at most
+ * 1,024 deep, and the time it takes grows with the text it expands.
  *
  * @since 0.1.0
  */
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
+import * as Chars from './internal/chars.ts';
+import * as Internal from './internal/parser.ts';
 
 /**
  * The XML namespace, bound to the `xml` prefix.
@@ -214,8 +220,7 @@ export class XmlParseError extends Schema.TaggedError<XmlParseError>()('XmlParse
  * @since 0.1.0
  * @category constants
  */
-export const NAME_START =
-  'A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}';
+export const NAME_START: string = Chars.NAME_START;
 /**
  * The XML `NameChar` production as a regular expression character class
  * body (without brackets), excluding `:`. Requires the `u` flag.
@@ -223,17 +228,7 @@ export const NAME_START =
  * @since 0.1.0
  * @category constants
  */
-export const NAME_CHAR = `${NAME_START}\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040`;
-
-const NAME_RE = new RegExp(`[:${NAME_START}][:${NAME_CHAR}]*`, 'uy');
-const NCNAME_RE = new RegExp(`^[${NAME_START}][${NAME_CHAR}]*$`, 'u');
-const NMTOKEN_RE = new RegExp(`^[:${NAME_CHAR}]+$`, 'u');
-
-const INVALID_CHAR_RE = new RegExp(
-  '[^\\t\\n\\r\\u0020-\\uD7FF\\uE000-\\uFFFD\\u{10000}-\\u{10FFFF}]',
-  'u',
-);
-const PUBID_RE = /^[ \r\na-zA-Z0-9\-'()+,./:=?;!*#@$_%]*$/;
+export const NAME_CHAR: string = Chars.NAME_CHAR;
 
 /**
  * Whether a string is an XML `NCName` (a name without colons), as required
@@ -242,7 +237,7 @@ const PUBID_RE = /^[ \r\na-zA-Z0-9\-'()+,./:=?;!*#@$_%]*$/;
  * @since 0.1.0
  * @category predicates
  */
-export const isNCName = (value: string): boolean => NCNAME_RE.test(value);
+export const isNCName: (value: string) => boolean = Chars.isNCName;
 
 /**
  * Whether a string is an XML `Name`.
@@ -250,11 +245,7 @@ export const isNCName = (value: string): boolean => NCNAME_RE.test(value);
  * @since 0.1.0
  * @category predicates
  */
-export const isName = (value: string): boolean => {
-  NAME_RE.lastIndex = 0;
-  const m = NAME_RE.exec(value);
-  return m !== null && m[0].length === value.length;
-};
+export const isName: (value: string) => boolean = Chars.isName;
 
 /**
  * Whether a string consists only of characters allowed in XML 1.0 documents.
@@ -262,10 +253,7 @@ export const isName = (value: string): boolean => {
  * @since 0.1.0
  * @category predicates
  */
-export const isValidText = (value: string): boolean => !INVALID_CHAR_RE.test(value);
-
-const isWs = (c: string | undefined): boolean =>
-  c === ' ' || c === '\n' || c === '\t' || c === '\r';
+export const isValidText: (value: string) => boolean = Chars.isValidText;
 
 /**
  * Whether a string consists only of XML white space (`S`).
@@ -279,695 +267,16 @@ export const isWhitespace = (value: string): boolean => /^[ \t\r\n]*$/.test(valu
 // Parser
 // -----------------------------------------------------------------------------
 
-class Failure {
-  readonly message: string;
-  readonly offset: number;
-  constructor(message: string, offset: number) {
-    this.message = message;
-    this.offset = offset;
+const position = (lineStarts: ReadonlyArray<number>, offset: number): Position => {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid]! <= offset) lo = mid;
+    else hi = mid - 1;
   }
-}
-
-interface AttributeDefault {
-  readonly name: string;
-  readonly value: string;
-  readonly tokenized: boolean;
-}
-
-interface RawAttribute {
-  readonly name: string;
-  value: string;
-  readonly offset: number;
-  readonly defaulted: boolean;
-}
-
-const PREDEFINED: Record<string, string> = { lt: '<', gt: '>', amp: '&', apos: "'", quot: '"' };
-
-const MAX_ENTITY_EXPANSION = 1_000_000;
-
-class Parser {
-  pos = 0;
-  readonly entities = new Map<string, string>();
-  readonly externalEntities = new Set<string>();
-  readonly attributeDefaults = new Map<string, Array<AttributeDefault>>();
-  readonly attributeTypes = new Map<string, Map<string, boolean>>();
-  expanded = 0;
-  hasExternalSubset = false;
-
-  readonly src: string;
-  private readonly lineStarts: Array<number>;
-  constructor(src: string, lineStarts: Array<number>) {
-    this.src = src;
-    this.lineStarts = lineStarts;
-  }
-
-  fail(message: string, offset = this.pos): never {
-    throw new Failure(message, offset);
-  }
-
-  position(offset: number): Position {
-    // binary search over line starts
-    let lo = 0;
-    let hi = this.lineStarts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (this.lineStarts[mid]! <= offset) lo = mid;
-      else hi = mid - 1;
-    }
-    return { offset, line: lo + 1, column: offset - this.lineStarts[lo]! + 1 };
-  }
-
-  startsWith(s: string): boolean {
-    return this.src.startsWith(s, this.pos);
-  }
-
-  expect(s: string): void {
-    if (!this.startsWith(s)) this.fail(`Expected "${s}"`);
-    this.pos += s.length;
-  }
-
-  skipWs(): boolean {
-    const start = this.pos;
-    while (isWs(this.src[this.pos])) this.pos++;
-    return this.pos > start;
-  }
-
-  requireWs(): void {
-    if (!this.skipWs()) this.fail('Expected white space');
-  }
-
-  name(): string {
-    NAME_RE.lastIndex = this.pos;
-    const m = NAME_RE.exec(this.src);
-    if (m === null) this.fail('Expected a name');
-    this.pos += m[0].length;
-    return m[0];
-  }
-
-  quoted(): string {
-    const q = this.src[this.pos];
-    if (q !== '"' && q !== "'") this.fail('Expected a quoted string');
-    const end = this.src.indexOf(q, this.pos + 1);
-    if (end === -1) this.fail('Unterminated quoted string');
-    const value = this.src.slice(this.pos + 1, end);
-    this.pos = end + 1;
-    return value;
-  }
-
-  // --- Document ------------------------------------------------------------
-
-  document(): Document {
-    let version: string | undefined;
-    let encoding: string | undefined;
-    let standalone: boolean | undefined;
-    if (this.startsWith('<?xml') && isWs(this.src[this.pos + 5])) {
-      this.pos += 5;
-      this.requireWs();
-      this.expect('version');
-      this.eq();
-      version = this.quoted();
-      if (!/^1\.[0-9]+$/.test(version)) this.fail(`Unsupported XML version "${version}"`);
-      let ws = this.skipWs();
-      if (this.startsWith('encoding')) {
-        if (!ws) this.fail('Expected white space');
-        this.pos += 8;
-        this.eq();
-        encoding = this.quoted();
-        if (!/^[A-Za-z][A-Za-z0-9._-]*$/.test(encoding)) this.fail('Invalid encoding name');
-        ws = this.skipWs();
-      }
-      if (this.startsWith('standalone')) {
-        if (!ws) this.fail('Expected white space');
-        this.pos += 10;
-        this.eq();
-        const sd = this.quoted();
-        if (sd !== 'yes' && sd !== 'no') this.fail('standalone must be "yes" or "no"');
-        standalone = sd === 'yes';
-        this.skipWs();
-      }
-      this.expect('?>');
-    }
-    const prolog: Array<Comment | ProcessingInstruction> = [];
-    let doctype: DocumentType | undefined;
-    let root: Element | undefined;
-    const epilog: Array<Comment | ProcessingInstruction> = [];
-    while (this.pos < this.src.length) {
-      if (this.skipWs()) continue;
-      if (this.startsWith('<!--')) {
-        (root === undefined ? prolog : epilog).push(this.comment());
-      } else if (this.startsWith('<?')) {
-        (root === undefined ? prolog : epilog).push(this.pi());
-      } else if (this.startsWith('<!DOCTYPE')) {
-        if (doctype !== undefined || root !== undefined) this.fail('Unexpected DOCTYPE');
-        doctype = this.doctype();
-      } else if (this.startsWith('<')) {
-        if (root !== undefined) this.fail('Only one root element is allowed');
-        root = this.element(new Map());
-      } else {
-        this.fail(
-          root === undefined ? 'Expected the root element' : 'Content after the root element',
-        );
-      }
-    }
-    if (root === undefined) this.fail('No root element');
-    return { _tag: 'Document', version, encoding, standalone, doctype, prolog, root, epilog };
-  }
-
-  eq(): void {
-    this.skipWs();
-    this.expect('=');
-    this.skipWs();
-  }
-
-  comment(): Comment {
-    const start = this.pos;
-    this.pos += 4;
-    const end = this.src.indexOf('--', this.pos);
-    if (end === -1) this.fail('Unterminated comment', start);
-    if (this.src[end + 2] !== '>') this.fail('"--" is not allowed in comments', end);
-    const value = this.src.slice(this.pos, end);
-    this.pos = end + 3;
-    return { _tag: 'Comment', value, position: this.position(start) };
-  }
-
-  pi(): ProcessingInstruction {
-    const start = this.pos;
-    this.pos += 2;
-    const target = this.name();
-    if (target.toLowerCase() === 'xml') this.fail('Reserved processing instruction target', start);
-    if (target.includes(':')) this.fail('Processing instruction targets cannot contain ":"');
-    let data = '';
-    if (!this.startsWith('?>')) {
-      this.requireWs();
-      const end = this.src.indexOf('?>', this.pos);
-      if (end === -1) this.fail('Unterminated processing instruction', start);
-      data = this.src.slice(this.pos, end);
-      this.pos = end;
-    }
-    this.pos += 2;
-    return { _tag: 'ProcessingInstruction', target, data, position: this.position(start) };
-  }
-
-  // --- DTD -----------------------------------------------------------------
-
-  doctype(): DocumentType {
-    this.pos += 9;
-    this.requireWs();
-    const name = this.name();
-    const ws = this.skipWs();
-    let publicId: string | undefined;
-    let systemId: string | undefined;
-    if (this.startsWith('SYSTEM') || this.startsWith('PUBLIC')) {
-      if (!ws) this.fail('Expected white space');
-      [publicId, systemId] = this.externalId(false);
-      this.hasExternalSubset = true;
-      this.skipWs();
-    }
-    if (this.startsWith('[')) {
-      this.pos++;
-      this.internalSubset();
-      this.skipWs();
-    }
-    this.expect('>');
-    return { name, publicId, systemId, entities: new Map(this.entities) };
-  }
-
-  externalId(allowPublicOnly: boolean): [string | undefined, string | undefined] {
-    if (this.startsWith('SYSTEM')) {
-      this.pos += 6;
-      this.requireWs();
-      return [undefined, this.quoted()];
-    }
-    this.expect('PUBLIC');
-    this.requireWs();
-    const pub = this.quoted();
-    if (!PUBID_RE.test(pub)) this.fail('Invalid public identifier');
-    const ws = this.skipWs();
-    if (allowPublicOnly && (this.startsWith('>') || !ws)) return [pub, undefined];
-    if (!ws) this.fail('Expected white space');
-    return [pub, this.quoted()];
-  }
-
-  internalSubset(): void {
-    for (;;) {
-      this.skipWs();
-      if (this.startsWith(']')) {
-        this.pos++;
-        return;
-      }
-      if (this.pos >= this.src.length) this.fail('Unterminated internal subset');
-      if (this.startsWith('<!ENTITY')) this.entityDecl();
-      else if (this.startsWith('<!ATTLIST')) this.attlistDecl();
-      else if (this.startsWith('<!ELEMENT') || this.startsWith('<!NOTATION')) this.skipDecl();
-      else if (this.startsWith('<!--')) this.comment();
-      else if (this.startsWith('<?')) this.pi();
-      else if (this.startsWith('%')) {
-        this.fail('Parameter entity references are not supported');
-      } else this.fail('Invalid markup in the internal subset');
-    }
-  }
-
-  skipDecl(): void {
-    while (this.pos < this.src.length) {
-      const c = this.src[this.pos]!;
-      if (c === '>') {
-        this.pos++;
-        return;
-      }
-      if (c === '"' || c === "'") this.quoted();
-      else this.pos++;
-    }
-    this.fail('Unterminated markup declaration');
-  }
-
-  entityDecl(): void {
-    this.pos += 8;
-    this.requireWs();
-    let parameter = false;
-    if (this.startsWith('%')) {
-      parameter = true;
-      this.pos++;
-      this.requireWs();
-    }
-    const name = this.name();
-    if (name.includes(':')) this.fail('Entity names cannot contain ":"');
-    this.requireWs();
-    let value: string | undefined;
-    if (this.startsWith('"') || this.startsWith("'")) {
-      const start = this.pos + 1;
-      const raw = this.quoted();
-      if (raw.includes('%')) this.fail('Parameter entity references are not supported', start);
-      value = this.expandCharRefs(raw, start);
-    } else {
-      this.externalId(false);
-      if (this.skipWs() && this.startsWith('NDATA')) {
-        this.pos += 5;
-        this.requireWs();
-        this.name();
-      }
-    }
-    this.skipWs();
-    this.expect('>');
-    if (parameter) return;
-    if (this.entities.has(name) || this.externalEntities.has(name)) return; // first wins
-    if (value === undefined) this.externalEntities.add(name);
-    else this.entities.set(name, value);
-  }
-
-  /** Expands character references in an entity value, leaving entity references. */
-  expandCharRefs(raw: string, offset: number): string {
-    return raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[^;]*);|&/g, (m, body: string | undefined, i) => {
-      if (body === undefined) this.fail('Invalid reference', offset + i);
-      if (body.startsWith('#')) return this.charRef(body, offset + i);
-      if (!isName(body)) this.fail('Invalid entity reference', offset + i);
-      return m;
-    });
-  }
-
-  charRef(body: string, offset: number): string {
-    const code = body.startsWith('#x') ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-    if (!(code <= 0x10ffff)) this.fail('Invalid character reference', offset);
-    const ch = String.fromCodePoint(code);
-    if (!isValidText(ch)) this.fail('Character reference to an invalid character', offset);
-    return ch;
-  }
-
-  attlistDecl(): void {
-    this.pos += 9;
-    this.requireWs();
-    const element = this.name();
-    let defaults = this.attributeDefaults.get(element);
-    if (defaults === undefined) this.attributeDefaults.set(element, (defaults = []));
-    let types = this.attributeTypes.get(element);
-    if (types === undefined) this.attributeTypes.set(element, (types = new Map()));
-    for (;;) {
-      const ws = this.skipWs();
-      if (this.startsWith('>')) {
-        this.pos++;
-        return;
-      }
-      if (!ws) this.fail('Expected white space');
-      const name = this.name();
-      this.requireWs();
-      let tokenized = true;
-      if (this.startsWith('(')) {
-        this.skipParens();
-      } else {
-        const type = this.name();
-        if (type === 'CDATA') tokenized = false;
-        else if (type === 'NOTATION') {
-          this.requireWs();
-          this.skipParens();
-        } else if (
-          !['ID', 'IDREF', 'IDREFS', 'ENTITY', 'ENTITIES', 'NMTOKEN', 'NMTOKENS'].includes(type)
-        ) {
-          this.fail(`Unknown attribute type "${type}"`);
-        }
-      }
-      this.requireWs();
-      let value: string | undefined;
-      if (this.startsWith('#REQUIRED')) this.pos += 9;
-      else if (this.startsWith('#IMPLIED')) this.pos += 8;
-      else {
-        if (this.startsWith('#FIXED')) {
-          this.pos += 6;
-          this.requireWs();
-        }
-        value = this.attributeValue();
-      }
-      if (!types.has(name)) {
-        types.set(name, tokenized);
-        if (value !== undefined) {
-          defaults.push({
-            name,
-            value: tokenized ? collapse(value) : value,
-            tokenized,
-          });
-        }
-      }
-    }
-  }
-
-  skipParens(): void {
-    this.expect('(');
-    const end = this.src.indexOf(')', this.pos);
-    if (end === -1) this.fail('Unterminated enumeration');
-    const tokens = this.src.slice(this.pos, end).split('|');
-    for (const t of tokens) {
-      if (!NMTOKEN_RE.test(t.trim())) this.fail('Invalid enumeration');
-    }
-    this.pos = end + 1;
-  }
-
-  // --- Elements ------------------------------------------------------------
-
-  /** Parses an attribute value literal, normalising it (XML 1.0 §3.3.3). */
-  attributeValue(): string {
-    const q = this.src[this.pos];
-    if (q !== '"' && q !== "'") this.fail('Expected a quoted attribute value');
-    const start = this.pos + 1;
-    const end = this.src.indexOf(q, start);
-    if (end === -1) this.fail('Unterminated attribute value');
-    const raw = this.src.slice(start, end);
-    this.pos = end + 1;
-    return this.normalizeAttribute(raw, start, new Set());
-  }
-
-  normalizeAttribute(raw: string, offset: number, stack: Set<string>): string {
-    let out = '';
-    let i = 0;
-    while (i < raw.length) {
-      const c = raw[i]!;
-      if (c === '<') this.fail('"<" is not allowed in attribute values', offset + i);
-      if (c === '&') {
-        const semi = raw.indexOf(';', i);
-        if (semi === -1) this.fail('Unterminated reference', offset + i);
-        const body = raw.slice(i + 1, semi);
-        if (body.startsWith('#')) {
-          if (!/^#(x[0-9a-fA-F]+|[0-9]+)$/.test(body)) {
-            this.fail('Invalid character reference', offset + i);
-          }
-          out += this.charRef(body, offset + i);
-        } else {
-          const replacement = this.entityText(body, offset + i, stack);
-          out += this.normalizeAttribute(replacement, offset + i, withEntry(stack, body));
-        }
-        i = semi + 1;
-      } else {
-        out += c === '\t' || c === '\n' || c === '\r' ? ' ' : c;
-        i++;
-      }
-    }
-    return out;
-  }
-
-  entityText(name: string, offset: number, stack: Set<string>): string {
-    if (!isName(name)) this.fail('Invalid entity reference', offset);
-    const predefined = PREDEFINED[name];
-    if (predefined !== undefined)
-      return predefined === '<' ? '&#60;' : predefined === '&' ? '&#38;' : predefined;
-    if (this.externalEntities.has(name)) {
-      this.fail(`External entity "${name}" is not supported`, offset);
-    }
-    const value = this.entities.get(name);
-    if (value === undefined) this.fail(`Undefined entity "${name}"`, offset);
-    if (stack.has(name)) this.fail(`Recursive entity "${name}"`, offset);
-    this.expanded += value.length;
-    if (this.expanded > MAX_ENTITY_EXPANSION) this.fail('Entity expansion limit exceeded', offset);
-    return value;
-  }
-
-  element(parentNs: ReadonlyMap<string, string>): Element {
-    const start = this.pos;
-    this.pos++; // <
-    const qname = this.name();
-    const raw: Array<RawAttribute> = [];
-    const seen = new Set<string>();
-    for (;;) {
-      const ws = this.skipWs();
-      if (this.startsWith('>') || this.startsWith('/>')) break;
-      if (!ws) this.fail('Expected white space between attributes');
-      const offset = this.pos;
-      const name = this.name();
-      this.eq();
-      const value = this.attributeValue();
-      if (seen.has(name)) this.fail(`Duplicate attribute "${name}"`, offset);
-      seen.add(name);
-      raw.push({ name, value, offset, defaulted: false });
-    }
-    // attribute types and defaults from the internal subset
-    const types = this.attributeTypes.get(qname);
-    if (types !== undefined) {
-      for (const a of raw) if (types.get(a.name) === true) a.value = collapse(a.value);
-    }
-    for (const d of this.attributeDefaults.get(qname) ?? []) {
-      if (!seen.has(d.name))
-        raw.push({ name: d.name, value: d.value, offset: start, defaulted: true });
-    }
-
-    // namespace declarations
-    let inScope = parentNs;
-    const declarations: Array<NamespaceDeclaration> = [];
-    for (const a of raw) {
-      let prefix: string | undefined;
-      if (a.name === 'xmlns') prefix = '';
-      else if (a.name.startsWith('xmlns:')) prefix = a.name.slice(6);
-      if (prefix === undefined) continue;
-      if (prefix !== '' && !isNCName(prefix)) this.fail('Invalid namespace prefix', a.offset);
-      if (prefix === 'xmlns') this.fail('The "xmlns" prefix cannot be declared', a.offset);
-      if (prefix === 'xml' && a.value !== XML_NAMESPACE) {
-        this.fail('The "xml" prefix cannot be rebound', a.offset);
-      }
-      if (prefix !== 'xml' && a.value === XML_NAMESPACE) {
-        this.fail('The XML namespace cannot be bound to another prefix', a.offset);
-      }
-      if (a.value === XMLNS_NAMESPACE) {
-        this.fail('The xmlns namespace cannot be declared', a.offset);
-      }
-      if (prefix !== '' && a.value === '') {
-        this.fail('Prefixed namespace declarations cannot be empty', a.offset);
-      }
-      if (prefix === 'xml') continue;
-      if (inScope === parentNs) inScope = new Map(parentNs);
-      if (a.value === '') (inScope as Map<string, string>).delete('');
-      else (inScope as Map<string, string>).set(prefix, a.value);
-      declarations.push({ prefix, namespace: a.value });
-    }
-
-    const [prefix, localName, namespace] = this.resolveName(qname, inScope, true, start + 1);
-    const attributes: Array<Attribute> = [];
-    const expanded = new Set<string>();
-    for (const a of raw) {
-      if (a.name === 'xmlns' || a.name.startsWith('xmlns:')) continue;
-      const [ap, al, ans] = this.resolveName(a.name, inScope, false, a.offset);
-      const key = `${ans ?? ''} ${al}`;
-      if (expanded.has(key)) this.fail(`Duplicate attribute "{${ans ?? ''}}${al}"`, a.offset);
-      expanded.add(key);
-      attributes.push({
-        _tag: 'Attribute',
-        name: a.name,
-        prefix: ap,
-        localName: al,
-        namespace: ans,
-        value: a.value,
-        defaulted: a.defaulted,
-        position: this.position(a.offset),
-      });
-    }
-
-    let children: Array<Node> = [];
-    if (this.startsWith('/>')) {
-      this.pos += 2;
-    } else {
-      this.pos++;
-      children = this.content(inScope, new Set(), false);
-      const endOffset = this.pos;
-      this.expect('</');
-      const endName = this.name();
-      if (endName !== qname) {
-        this.fail(`Mismatched end tag: expected </${qname}> but found </${endName}>`, endOffset);
-      }
-      this.skipWs();
-      this.expect('>');
-    }
-    return {
-      _tag: 'Element',
-      name: qname,
-      prefix,
-      localName,
-      namespace,
-      attributes,
-      namespaceDeclarations: declarations,
-      inScopeNamespaces: inScope,
-      children,
-      position: this.position(start),
-    };
-  }
-
-  resolveName(
-    qname: string,
-    ns: ReadonlyMap<string, string>,
-    isElement: boolean,
-    offset: number,
-  ): [string, string, string | undefined] {
-    const i = qname.indexOf(':');
-    if (i === -1) {
-      if (!isNCName(qname)) this.fail(`Invalid name "${qname}"`, offset);
-      return ['', qname, isElement ? ns.get('') : undefined];
-    }
-    const prefix = qname.slice(0, i);
-    const local = qname.slice(i + 1);
-    if (!isNCName(prefix) || !isNCName(local))
-      this.fail(`Invalid qualified name "${qname}"`, offset);
-    if (prefix === 'xmlns')
-      this.fail('Elements and attributes cannot use the "xmlns" prefix', offset);
-    if (prefix === 'xml') return [prefix, local, XML_NAMESPACE];
-    const uri = ns.get(prefix);
-    if (uri === undefined) this.fail(`Unbound namespace prefix "${prefix}"`, offset);
-    return [prefix, local, uri];
-  }
-
-  /**
-   * Parses element content until an end tag (or end of input when
-   * `toEnd`, used for entity replacement text).
-   */
-  content(ns: ReadonlyMap<string, string>, stack: Set<string>, toEnd: boolean): Array<Node> {
-    const children: Array<Node> = [];
-    let text = '';
-    let textStart = -1;
-    const pushText = (s: string, at: number) => {
-      if (s === '') return;
-      if (textStart === -1) textStart = at;
-      text += s;
-    };
-    const flush = () => {
-      if (text !== '') {
-        const prev = children[children.length - 1];
-        if (prev !== undefined && prev._tag === 'Text') {
-          children[children.length - 1] = { ...prev, value: prev.value + text };
-        } else {
-          children.push({ _tag: 'Text', value: text, position: this.position(textStart) });
-        }
-      }
-      text = '';
-      textStart = -1;
-    };
-    for (;;) {
-      if (this.pos >= this.src.length) {
-        if (toEnd) break;
-        this.fail('Unexpected end of input: unclosed element');
-      }
-      const c = this.src[this.pos]!;
-      if (c === '<') {
-        if (this.startsWith('</')) {
-          if (toEnd) this.fail('Unbalanced end tag in entity replacement text');
-          break;
-        }
-        if (this.startsWith('<!--')) {
-          flush();
-          children.push(this.comment());
-        } else if (this.startsWith('<![CDATA[')) {
-          const start = this.pos;
-          const end = this.src.indexOf(']]>', this.pos + 9);
-          if (end === -1) this.fail('Unterminated CDATA section');
-          pushText(this.src.slice(this.pos + 9, end), start);
-          this.pos = end + 3;
-        } else if (this.startsWith('<?')) {
-          flush();
-          children.push(this.pi());
-        } else if (this.startsWith('<!')) {
-          this.fail('Unexpected markup declaration in content');
-        } else {
-          flush();
-          children.push(this.element(ns));
-        }
-      } else if (c === '&') {
-        const start = this.pos;
-        const semi = this.src.indexOf(';', this.pos);
-        if (semi === -1) this.fail('Unterminated reference');
-        const body = this.src.slice(this.pos + 1, semi);
-        this.pos = semi + 1;
-        if (body.startsWith('#')) {
-          if (!/^#(x[0-9a-fA-F]+|[0-9]+)$/.test(body))
-            this.fail('Invalid character reference', start);
-          pushText(this.charRef(body, start), start);
-        } else if (PREDEFINED[body] !== undefined) {
-          pushText(PREDEFINED[body], start);
-        } else {
-          const replacement = this.entityText(body, start, stack);
-          if (!replacement.includes('<') && !replacement.includes('&')) {
-            pushText(replacement, start);
-          } else {
-            flush();
-            const sub = new Parser(replacement, [0]);
-            sub.entities.clear();
-            for (const [k, v] of this.entities) sub.entities.set(k, v);
-            for (const k of this.externalEntities) sub.externalEntities.add(k);
-            for (const [k, v] of this.attributeDefaults) sub.attributeDefaults.set(k, v);
-            for (const [k, v] of this.attributeTypes) sub.attributeTypes.set(k, v);
-            sub.expanded = this.expanded;
-            let nodes: Array<Node>;
-            try {
-              nodes = sub.content(ns, withEntry(stack, body), true);
-            } catch (e) {
-              if (e instanceof Failure) this.fail(`In entity "${body}": ${e.message}`, start);
-              throw e;
-            }
-            this.expanded = sub.expanded;
-            for (const n of nodes) {
-              const positioned = { ...n, position: this.position(start) } as Node;
-              if (positioned._tag === 'Text') {
-                pushText(positioned.value, start);
-              } else {
-                flush();
-                children.push(positioned);
-              }
-            }
-          }
-        }
-      } else {
-        const start = this.pos;
-        let end = this.pos;
-        while (end < this.src.length && this.src[end] !== '<' && this.src[end] !== '&') end++;
-        const chunk = this.src.slice(start, end);
-        const bad = chunk.indexOf(']]>');
-        if (bad !== -1) this.fail('"]]>" is not allowed in character data', start + bad);
-        pushText(chunk, start);
-        this.pos = end;
-      }
-    }
-    flush();
-    return children;
-  }
-}
-
-const withEntry = (set: ReadonlySet<string>, entry: string): Set<string> => {
-  const next = new Set(set);
-  next.add(entry);
-  return next;
+  return { offset, line: lo + 1, column: offset - lineStarts[lo]! + 1 };
 };
-
-const collapse = (value: string): string => value.replace(/ +/g, ' ').replace(/^ | $/g, '');
 
 const lineStartsOf = (text: string): Array<number> => {
   const starts = [0];
@@ -996,14 +305,13 @@ export const normalizeInput = (input: string): string => {
 export const parseResult = (input: string): Result.Result<Document, XmlParseError> => {
   const text = normalizeInput(input);
   const lineStarts = lineStartsOf(text);
-  const parser = new Parser(text, lineStarts);
   try {
-    const bad = INVALID_CHAR_RE.exec(text);
-    if (bad !== null) parser.fail('Invalid XML character', bad.index);
-    return Result.succeed(parser.document());
+    const bad = Chars.INVALID_CHAR_RE.exec(text);
+    if (bad !== null) throw new Internal.Failure('Invalid XML character', bad.index);
+    return Result.succeed(Internal.parse(text, lineStarts));
   } catch (e) {
-    if (e instanceof Failure) {
-      const p = parser.position(Math.min(e.offset, text.length));
+    if (e instanceof Internal.Failure) {
+      const p = position(lineStarts, Math.min(e.offset, text.length));
       return Result.fail(
         new XmlParseError({ message: e.message, offset: p.offset, line: p.line, column: p.column }),
       );
