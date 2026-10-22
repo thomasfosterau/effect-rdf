@@ -99,11 +99,11 @@ export default defineConfig({
       // the issue lists them. A new site is a defect, not headroom. Once a
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
-      'effect/imperative-loops': 'warn', // 911
-      'effect/avoid-direct-tag-checks': 'warn', // 729
+      'effect/imperative-loops': 'warn', // 899
+      'effect/avoid-direct-tag-checks': 'warn', // 722
       'effect/avoid-non-null-assertion': 'warn', // 640
-      'effect/avoid-native-object-helpers': 'warn', // 548
-      'effect/require-safety-comment-for-type-assertion': 'warn', // 304
+      'effect/avoid-native-object-helpers': 'warn', // 544
+      'effect/require-safety-comment-for-type-assertion': 'warn', // 299
       'effect/no-length-comparison': 'warn', // 261
       'effect/prefer-arr-match': 'warn', // 261
       'effect/prefer-match-over-switch': 'warn', // 179
@@ -113,7 +113,7 @@ export default defineConfig({
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
       // lets a caller forward an optional of its own into. A bare `null` /
-      // `undefined` in a return type is still a finding to read (702 at
+      // `undefined` in a return type is still a finding to read (692 at
       // adoption, listed in the issue above).
       'effect/prefer-option-over-null': 'warn',
       // `typeof` is how a JSON-LD / RDF/JSON / SPARQL-JSON processor reads
