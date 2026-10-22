@@ -124,30 +124,31 @@ export class Engine {
 
   /** Validates `n` against a shape label (or a descendant) on its full neighbourhood. */
   validateLabel(n: Term.Term, label: string, deps: Set<string>): Outcome {
-    const key = `${n.key}\u0000${label}`;
-    const cached = this.cache.get(key);
-    if (cached !== undefined) return cached === OK ? undefined : cached;
-    if (this.inProgress.has(key)) {
-      deps.add(key);
-      return undefined;
-    }
-    this.inProgress.add(key);
-    const local = new Set<string>();
-    const result = Result.try(() => this.satisfiesDescendant(n, label, local));
-    this.inProgress.delete(key);
-    if (Result.isFailure(result)) throw result.failure;
-    const r = result.success;
-    local.delete(key);
-    if (r !== undefined || local.size === 0) this.cache.set(key, r ?? OK);
-    for (const d of local) deps.add(d);
-    return r;
+    return this.memoized(`${n.key}\u0000${label}`, deps, (local) =>
+      this.satisfiesDescendant(n, label, local),
+    );
   }
 
   /** Validates `n` against the start shape expression. */
   validateStart(n: Term.Term, deps: Set<string>): Outcome {
     const start = this.index.schema.start;
     if (start === undefined) return 'the schema has no start shape';
-    const key = `${n.key}\u0000\u0000START`;
+    return this.memoized(`${n.key}\u0000\u0000START`, deps, (local) =>
+      this.satisfies(n, start, FULL, local, undefined),
+    );
+  }
+
+  /**
+   * Runs `check` once per `key` (a node and shape pair), caching its outcome.
+   * A key already in progress is a recursive reference: it succeeds for now
+   * and is reported to the caller in `deps`, and an outcome is cached only
+   * once it no longer depends on an unfinished key.
+   */
+  private memoized(
+    key: string,
+    deps: Set<string>,
+    check: (local: Set<string>) => Outcome,
+  ): Outcome {
     const cached = this.cache.get(key);
     if (cached !== undefined) return cached === OK ? undefined : cached;
     if (this.inProgress.has(key)) {
@@ -156,7 +157,7 @@ export class Engine {
     }
     this.inProgress.add(key);
     const local = new Set<string>();
-    const result = Result.try(() => this.satisfies(n, start, FULL, local, undefined));
+    const result = Result.try(() => check(local));
     this.inProgress.delete(key);
     if (Result.isFailure(result)) throw result.failure;
     const r = result.success;

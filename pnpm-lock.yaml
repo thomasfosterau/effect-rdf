@@ -379,15 +379,6 @@ importers:
       '@electric-sql/pglite':
         specifier: 'catalog:'
         version: 0.5.8
-      '@thomasfosterau/effect-ntriples':
-        specifier: workspace:*
-        version: link:../ntriples
-      '@thomasfosterau/effect-rdfxml':
-        specifier: workspace:*
-        version: link:../rdfxml
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
       effect:
         specifier: 4.0.5
         version: 4.0.5

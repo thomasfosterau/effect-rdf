@@ -4,7 +4,7 @@ A SQL storage backend for the SPARQL engine on `effect/sql`: a term dictionary (
 
 ## Boundary
 
-Peers: `effect`. Runtime dependencies: `@effect/sql-sqlite-node`. Imports from this workspace: core, sparql (tests also use ntriples, rdfxml, turtle) — `.fallowrc.json` zone `sparql-sql`.
+Peers: `effect`. Runtime dependencies: `@effect/sql-sqlite-node`. Imports from this workspace: core, sparql (tests reuse `packages/sparql/test/support`) — `.fallowrc.json` zone `sparql-sql`.
 
 ## Invariants
 

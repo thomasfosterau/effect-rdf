@@ -128,6 +128,35 @@ const cloneContext = (ctx: ActiveContext): ActiveContext => {
 
 const MAX_REMOTE_CONTEXTS = 32;
 
+/** Loads a remote context document, failing with `loading remote context failed`. */
+const loadContextDocument = (env: Env, url: string): LoadedDocument =>
+  mapJsonLdError(
+    () => env.load(url, 'http://www.w3.org/ns/json-ld#context'),
+    (e) => fail('loading remote context failed', `${url}: ${e.message}`),
+  );
+
+/**
+ * Applies the type-scoped context of each term (in the given order) that
+ * defines one, as expansion step 11 and compaction step 11 do.
+ *
+ * @internal
+ */
+export const applyTypeScopedContexts = (
+  env: Env,
+  active: ActiveContext,
+  typeScoped: ActiveContext,
+  terms: Iterable<string>,
+): ActiveContext => {
+  let result = active;
+  for (const term of terms) {
+    const def = typeScoped.terms.get(term);
+    if (def?.hasContext === true) {
+      result = processContext(env, result, def.context, def.baseUrl ?? null, [], false, false);
+    }
+  }
+  return result;
+};
+
 /**
  * Context Processing Algorithm.
  *
@@ -178,10 +207,7 @@ export const processContext = (
       let loaded = env.contextCache.get(url);
       let documentUrl = url;
       if (loaded === undefined) {
-        const doc: LoadedDocument = mapJsonLdError(
-          () => env.load(url, 'http://www.w3.org/ns/json-ld#context'),
-          (e) => fail('loading remote context failed', `${url}: ${e.message}`),
-        );
+        const doc = loadContextDocument(env, url);
         if (!isObject(doc.document) || !('@context' in doc.document)) {
           fail('invalid remote context', url);
         }
@@ -214,10 +240,7 @@ export const processContext = (
       const imp = context['@import'];
       if (!isString(imp)) fail('invalid @import value');
       const url = resolveIri(imp, baseUrl);
-      const doc: LoadedDocument = mapJsonLdError(
-        () => env.load(url, 'http://www.w3.org/ns/json-ld#context'),
-        (e) => fail('loading remote context failed', `${url}: ${e.message}`),
-      );
+      const doc = loadContextDocument(env, url);
       if (!isObject(doc.document) || !isObject(doc.document['@context'])) {
         fail('invalid remote context', url);
       }

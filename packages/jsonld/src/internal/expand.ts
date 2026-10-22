@@ -4,7 +4,13 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
-import { type ActiveContext, type Env, expandIri, processContext } from './context.ts';
+import {
+  type ActiveContext,
+  applyTypeScopedContexts,
+  type Env,
+  expandIri,
+  processContext,
+} from './context.ts';
 import {
   type Json,
   type JsonObject,
@@ -106,12 +112,12 @@ export const expandElement = (
   for (const key of keys) {
     if (expandIri(env, active, key, true) !== '@type') continue;
     const values = asArray(element[key]);
-    for (const term of Arr.sort(Arr.filter(values, isString), compareStrings)) {
-      const def = typeScoped.terms.get(term);
-      if (def?.hasContext === true) {
-        active = processContext(env, active, def.context, def.baseUrl ?? null, [], false, false);
-      }
-    }
+    active = applyTypeScopedContexts(
+      env,
+      active,
+      typeScoped,
+      Arr.sort(Arr.filter(values, isString), compareStrings),
+    );
   }
   // 12
   for (const key of keys) {

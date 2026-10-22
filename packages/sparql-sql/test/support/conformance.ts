@@ -19,9 +19,9 @@ import * as Parser from '@thomasfosterau/effect-sparql/Parser';
 import * as Results from '@thomasfosterau/effect-sparql/Results';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
 import type * as SqlStore from '../../src/SqlStore.ts';
-import { fromRdf, normalize, sameResults } from './compare.ts';
-import { readManifest, suitesDir, type TestCase } from './manifest.ts';
-import { parseFile } from './rdf.ts';
+import { fromRdf, normalize, sameResults } from '../../../sparql/test/support/compare.ts';
+import { readManifest, suitesDir, type TestCase } from '../../../sparql/test/support/manifest.ts';
+import { parseFile } from '../../../sparql/test/support/rdf.ts';
 
 const sparqlDir = path.join(suitesDir, 'rdf-tests', 'sparql');
 const exists = fs.existsSync(sparqlDir);

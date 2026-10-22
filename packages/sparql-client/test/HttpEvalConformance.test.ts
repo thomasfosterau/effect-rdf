@@ -17,7 +17,7 @@ import * as Order from 'effect/Order';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
-import { type Ast, Parser, Results, Store } from '@thomasfosterau/effect-sparql';
+import { type Ast, type Bindings, Parser, Results, Store } from '@thomasfosterau/effect-sparql';
 import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
 import * as SparqlClient from '../src/SparqlClient.ts';
 import { fromRdf, normalize, sameResults } from '../../sparql/test/support/compare.ts';
@@ -125,6 +125,35 @@ const FORMATS = [
   'text/tab-separated-values',
 ] as const;
 
+/** Fails with an N-Quads diff unless the graphs are isomorphic. */
+const expectIsomorphic = (actual: Dataset.Dataset, exp: Dataset.Dataset): void => {
+  const isomorphic = Isomorphism.isomorphic(actual, exp);
+  expect(isomorphic ? '' : Dataset.toNQuads(actual)).toBe(isomorphic ? '' : Dataset.toNQuads(exp));
+};
+
+/** The `ORDER BY` variables of a query, when every key is a plain variable. */
+const orderVariables = (query: Ast.Query): ReadonlyArray<string> =>
+  query.orderBy.every((o) => Term.isVariable(o.expression))
+    ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
+    : [];
+
+/**
+ * Fails unless the solutions match (as multisets, or as sets when `lax`), and
+ * in `ORDER BY` order when the query has one and the test is not lax.
+ */
+const expectSameSolutions = (
+  actual: ReadonlyArray<Bindings.Bindings>,
+  exp: ReadonlyArray<Bindings.Bindings>,
+  vars: ReadonlyArray<string>,
+  lax: boolean,
+): void => {
+  const same = sameResults(actual, exp, { lax });
+  expect(same ? [] : sortedStrings(actual)).toEqual(same ? [] : sortedStrings(exp));
+  expect(same, 'Results differ only in blank node structure').toBe(true);
+  if (vars.length === 0 || lax) return;
+  expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
+};
+
 const runQueryTest = (t: TestCase, accept: string) =>
   Effect.gen(function* () {
     const text = fs.readFileSync(t.query!, 'utf8');
@@ -142,11 +171,7 @@ const runQueryTest = (t: TestCase, accept: string) =>
         case 'Construct':
         case 'Describe': {
           const actual = yield* client.constructDataset(text);
-          const exp = expected as Dataset.Dataset;
-          const isomorphic = Isomorphism.isomorphic(actual, exp);
-          expect(isomorphic ? '' : Dataset.toNQuads(actual)).toBe(
-            isomorphic ? '' : Dataset.toNQuads(exp),
-          );
+          expectIsomorphic(actual, expected as Dataset.Dataset);
           return;
         }
         case 'Select': {
@@ -156,16 +181,11 @@ const runQueryTest = (t: TestCase, accept: string) =>
             const csv = Results.Csv.serializeString(set);
             actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
           }
-          const exp = (expected as Results.ResultSet).bindings;
-          const same = sameResults(actual, exp, { lax: t.laxCardinality });
-          expect(same ? [] : sortedStrings(actual)).toEqual(same ? [] : sortedStrings(exp));
-          expect(same, 'Results differ only in blank node structure').toBe(true);
-          const vars = query.orderBy.every((o) => o.expression._tag === 'Variable')
-            ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
-            : [];
-          const ordered = vars.length > 0 && !t.laxCardinality;
-          expect(ordered ? actual.map((b) => orderKey(b, vars)) : []).toEqual(
-            ordered ? exp.map((b) => orderKey(b, vars)) : [],
+          expectSameSolutions(
+            actual,
+            (expected as Results.ResultSet).bindings,
+            orderVariables(query),
+            t.laxCardinality,
           );
           return;
         }

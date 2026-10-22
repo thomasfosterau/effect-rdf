@@ -151,6 +151,13 @@ const evalBgp = (patterns: ReadonlyArray<Ast.TriplePattern>, env: Env, initial: 
 
 type E<A> = Effect.Effect<A, Store.StoreError>;
 
+/** `Effect.forEach` in order, concatenating each element's results. */
+const forEachFlat = <A, B>(
+  items: Iterable<A>,
+  f: (a: A) => E<ReadonlyArray<B>>,
+): E<ReadonlyArray<B>> =>
+  Effect.map(Effect.forEach(items, f, { concurrency: 1 }), (lists) => lists.flat());
+
 const collect = (
   env: Env,
   pattern: Omit<Store.QuadPattern, 'graph'>,
@@ -187,18 +194,11 @@ const pathFrom = (
       return Effect.reduce(
         steps,
         (): ReadonlyArray<Term.GroundTerm> => [start],
-        (frontier, step) =>
-          Effect.map(
-            Effect.forEach(frontier, (n) => pathFrom(env, step, n, forward), { concurrency: 1 }),
-            (lists) => lists.flat(),
-          ),
+        (frontier, step) => forEachFlat(frontier, (n) => pathFrom(env, step, n, forward)),
       );
     }
     case 'PathAlternative':
-      return Effect.map(
-        Effect.forEach(path.paths, (p) => pathFrom(env, p, start, forward), { concurrency: 1 }),
-        (lists) => lists.flat(),
-      );
+      return forEachFlat(path.paths, (p) => pathFrom(env, p, start, forward));
     case 'PathZeroOrOne':
       return Effect.map(pathFrom(env, path.path, start, forward), (ns) =>
         distinctTerms([start, ...ns]),
@@ -281,27 +281,18 @@ const pathAll = (
     case 'PathSequence': {
       const [first, ...rest] = path.paths;
       return Effect.flatMap(pathAll(env, first!), (pairs) =>
-        Effect.map(
-          Effect.forEach(
-            pairs,
-            ([x, m]) =>
-              Effect.map(
-                rest.length === 0
-                  ? Effect.succeed([m])
-                  : pathFrom(env, { _tag: 'PathSequence', paths: rest }, m, true),
-                (ys) => ys.map((y) => [x, y] as const),
-              ),
-            { concurrency: 1 },
+        forEachFlat(pairs, ([x, m]) =>
+          Effect.map(
+            rest.length === 0
+              ? Effect.succeed([m])
+              : pathFrom(env, { _tag: 'PathSequence', paths: rest }, m, true),
+            (ys) => ys.map((y) => [x, y] as const),
           ),
-          (lists) => lists.flat(),
         ),
       );
     }
     case 'PathAlternative':
-      return Effect.map(
-        Effect.forEach(path.paths, (p) => pathAll(env, p), { concurrency: 1 }),
-        (lists) => lists.flat(),
-      );
+      return forEachFlat(path.paths, (p) => pathAll(env, p));
     case 'PathNegated': {
       const out: Array<E<ReadonlyArray<readonly [Term.GroundTerm, Term.GroundTerm]>>> = [];
       if (path.iris.length > 0 || path.inverse.length === 0) {
@@ -324,13 +315,8 @@ const pathAll = (
     }
     default:
       return Effect.flatMap(allNodes(env), (nodes) =>
-        Effect.map(
-          Effect.forEach(
-            nodes,
-            (n) => Effect.map(pathFrom(env, path, n, true), (ys) => ys.map((y) => [n, y] as const)),
-            { concurrency: 1 },
-          ),
-          (lists) => lists.flat(),
+        forEachFlat(nodes, (n) =>
+          Effect.map(pathFrom(env, path, n, true), (ys) => ys.map((y) => [n, y] as const)),
         ),
       );
   }

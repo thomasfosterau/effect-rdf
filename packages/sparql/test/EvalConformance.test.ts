@@ -115,6 +115,24 @@ const rowStrings = (rows: ReadonlyArray<Bindings>): ReadonlyArray<string> =>
     Order.String,
   );
 
+/**
+ * Fails unless the solutions match (as multisets, or as sets when `lax`), and
+ * in `ORDER BY` order when the query has one and the test is not lax.
+ */
+const expectSameSolutions = (
+  actual: ReadonlyArray<Bindings>,
+  exp: ReadonlyArray<Bindings>,
+  vars: ReadonlyArray<string>,
+  lax: boolean,
+): void => {
+  const ok = sameResults(actual, exp, { lax });
+  // On a mismatch, show the rows; equal rows differ only in blank nodes.
+  expect(ok ? [] : rowStrings(actual)).toEqual(ok ? [] : rowStrings(exp));
+  assert.isTrue(ok, 'Results differ only in blank node structure');
+  if (vars.length === 0 || lax) return;
+  expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
+};
+
 const runQueryTest = (t: TestCase, optimize = true) =>
   Effect.gen(function* () {
     const text = fs.readFileSync(t.query!, 'utf8');
@@ -151,15 +169,7 @@ const runQueryTest = (t: TestCase, optimize = true) =>
         if (t.result!.endsWith('.tsv') || t.result!.endsWith('.csv')) {
           exp = exp.map((b) => b);
         }
-        const ok = sameResults(actual, exp, { lax: t.laxCardinality });
-        // On a mismatch, show the rows; equal rows differ only in blank nodes.
-        expect(ok ? [] : rowStrings(actual)).toEqual(ok ? [] : rowStrings(exp));
-        assert.isTrue(ok, 'Results differ only in blank node structure');
-        const vars = orderVariables(query);
-        const ordered = vars.length > 0 && !t.laxCardinality;
-        expect(ordered ? actual.map((b) => orderKey(b, vars)) : []).toEqual(
-          ordered ? exp.map((b) => orderKey(b, vars)) : [],
-        );
+        expectSameSolutions(actual, exp, orderVariables(query), t.laxCardinality);
         return;
       }
     }

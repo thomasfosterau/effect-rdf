@@ -7,6 +7,7 @@ import * as Arr from 'effect/Array';
 import * as Order from 'effect/Order';
 import {
   type ActiveContext,
+  applyTypeScopedContexts,
   type ContainerEntry,
   type Env,
   type InverseContext,
@@ -113,12 +114,7 @@ export const compactElement = (
       ),
       compareStrings,
     );
-    for (const term of compactedTypes) {
-      const def = typeScoped.terms.get(term);
-      if (def?.hasContext === true) {
-        active = processContext(env, active, def.context, def.baseUrl ?? null, [], false, false);
-      }
-    }
+    active = applyTypeScopedContexts(env, active, typeScoped, compactedTypes);
   }
   // 12
   const keys = options.ordered

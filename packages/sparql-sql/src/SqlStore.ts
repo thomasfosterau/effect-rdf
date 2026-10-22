@@ -424,6 +424,17 @@ export const make = (
       else state.known.set(id, t as Term.GroundTerm);
     };
 
+    /** Reads the dictionary rows of `ids` (one chunk) into a decode state. */
+    const fetchTerms = (state: DecodeState, ids: ReadonlyArray<number>) =>
+      Effect.map(
+        run(
+          `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE id IN (${ids.join(', ')})`,
+        ),
+        (rows) => {
+          for (const r of rows) addRow(state, num(r[0]), r, 1);
+        },
+      );
+
     /** Fetches the components of the triple terms of a decode state. */
     const complete = (state: DecodeState) =>
       Effect.gen(function* () {
@@ -441,10 +452,7 @@ export const make = (
           }
           if (missing.size === 0) return;
           for (const chunk of chunks(Array.from(missing), 500)) {
-            const rows = yield* run(
-              `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE id IN (${chunk.join(', ')})`,
-            );
-            for (const r of rows) addRow(state, num(r[0]), r, 1);
+            yield* fetchTerms(state, chunk);
             for (const c of chunk) {
               if (!state.known.has(c) && !state.triples.has(c)) {
                 return yield* new Store.StoreError({ message: `Unknown term id ${c}` });
@@ -652,12 +660,7 @@ export const make = (
     const decodeIds = (ids: ReadonlyArray<number>) =>
       Effect.gen(function* () {
         const state = newState();
-        for (const chunk of chunks(ids, 500)) {
-          const rows = yield* run(
-            `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE id IN (${chunk.join(', ')})`,
-          );
-          for (const r of rows) addRow(state, num(r[0]), r, 1);
-        }
+        for (const chunk of chunks(ids, 500)) yield* fetchTerms(state, chunk);
         yield* complete(state);
         yield* remember(state);
         return ids.map((id) => termOf(state, id));
