@@ -1,11 +1,29 @@
 {
+  "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-ntriples",
   "version": "0.0.0",
   "description": "Effect-idiomatic RDF 1.2 N-Triples and N-Quads parsers and serializers",
+  "keywords": [
+    "effect",
+    "rdf",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/ntriples#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-rdf/issues"
+  },
   "license": "MIT",
+  "author": "Thomas Foster <me@thomasfoster.au>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-rdf.git",
+    "directory": "packages/ntriples"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -23,10 +41,8 @@
         "types": "./dist/*.d.mts",
         "default": "./dist/*.mjs"
       }
-    }
-  },
-  "scripts": {
-    "build": "vp pack"
+    },
+    "access": "public"
   },
   "dependencies": {
     "@thomasfosterau/effect-rdf": "workspace:*"
@@ -34,11 +50,13 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:",
-    "vite-plus": "catalog:"
+    "effect": "catalog:"
   },
   "peerDependencies": {
-    "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:"
+    "@thomasfosterau/effect-parse": "catalog:peers",
+    "effect": "catalog:peers"
+  },
+  "engines": {
+    "node": ">=22.18.0"
   }
 }

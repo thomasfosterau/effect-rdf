@@ -1,23 +1,41 @@
 {
-  "name": "effect-rdf-monorepo",
+  "$schema": "https://www.schemastore.org/package",
+  "name": "effect-rdf-workspace",
   "version": "0.0.0",
   "private": true,
+  "description": "Workspace for the @thomasfosterau/effect-rdf package family: an Effect-native RDF 1.2 toolkit — data model, syntaxes, SPARQL, SHACL and ShEx.",
+  "license": "MIT",
+  "author": "Thomas Foster <me@thomasfoster.au>",
   "type": "module",
   "scripts": {
-    "ready": "vp check && vp test && vp run -r build",
-    "check": "vp check",
-    "test": "vp test"
+    "changeset": "changeset",
+    "version": "changeset version && vp fmt && pnpm install --lockfile-only",
+    "release": "vp run -r build && pnpm -r --filter './packages/*' publish --access public --no-git-checks --ignore-scripts && changeset tag",
+    "fallow": "fallow --summary",
+    "fallow:audit": "fallow audit",
+    "prepare": "vp config && effect-tsgo patch --typescript --oxlint"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "catalog:",
+    "@changesets/cli": "catalog:",
+    "@effect/language-service": "catalog:",
+    "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
+    "@mpsuesser/oxlint-plugin-effect": "catalog:",
     "@types/node": "catalog:",
+    "@typescript/native": "catalog:",
+    "@vitest/coverage-istanbul": "catalog:",
     "effect": "catalog:",
+    "effect-solutions": "catalog:",
+    "fallow": "catalog:",
     "typescript": "catalog:",
-    "vite": "npm:@voidzero-dev/vite-plus-core@1.2.0",
-    "vite-plus": "catalog:"
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
-    "node": ">=22.18.0"
+    "node": ">=22.18.0",
+    "pnpm": ">=11"
   },
-  "packageManager": "pnpm@10.28.0"
+  "packageManager": "pnpm@11.28.6"
 }

@@ -217,5 +217,5 @@ export const run = (
       data,
       engine: { unionDefaultGraph: args.unionDefaultGraph },
     });
-    yield* Layer.launch(server);
+    return yield* Layer.launch(server);
   });
