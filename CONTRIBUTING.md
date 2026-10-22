@@ -4,7 +4,7 @@ Maintained by Thomas Foster, with a workflow meant to be approachable for both h
 
 ## Setup
 
-Node 22.18 or later and pnpm 11 (Corepack or the version pinned by `packageManager`), then:
+Node 22 or later and pnpm 11 (the version pinned by `packageManager`; no npm, yarn or bun), then:
 
 ```sh
 pnpm install                     # dependencies, git hooks, the @effect/tsgo patch
@@ -15,7 +15,7 @@ The conformance tests skip when the suites are absent; set `RDF_TEST_SUITES` to 
 
 ## Branches
 
-Branch off `main`, rebase rather than merge, squash-merge with a conventional prefix: see [AGENTS.md](AGENTS.md#branches-and-pull-requests).
+Branch off `trunk`, rebase rather than merge, squash-merge with a conventional prefix: see [AGENTS.md](AGENTS.md#branches-and-pull-requests).
 
 ## Git hooks
 
@@ -23,13 +23,13 @@ Hooks are managed by Vite+; the editable [.vite-hooks/pre-commit](.vite-hooks/pr
 
 ## CI expectations
 
-[ci.yml](.github/workflows/ci.yml) runs one required job, `ci`, whose steps are the gate list in [AGENTS.md](AGENTS.md#verification). [release.yml](.github/workflows/release.yml) runs changesets/action on `main`: it opens the version PR while unreleased changesets exist and publishes once it merges, via npm OIDC trusted publishing (see [PUBLISHING.md](PUBLISHING.md)).
+[ci.yml](.github/workflows/ci.yml) runs one required job, `ci`, whose steps are the gate list in [AGENTS.md](AGENTS.md#verification). [release.yml](.github/workflows/release.yml) runs changesets/action on `trunk`: it opens the version PR while unreleased changesets exist and publishes once it merges, via npm OIDC trusted publishing (see [PUBLISHING.md](PUBLISHING.md)).
 
 ## Pre-PR checklist
 
 1. The gates in [AGENTS.md](AGENTS.md#verification), each with its final pass/fail.
 2. A changeset (`pnpm changeset`) where [AGENTS.md](AGENTS.md#branches-and-pull-requests) requires one.
-3. `git fetch origin main && git rebase origin/main`
+3. `git fetch origin trunk && git rebase origin/trunk`
 4. Docs: the package `README.md` for any exported change or conformance-rate change; the package `CLAUDE.md` for a new term or invariant.
 
 ## Running individual checks

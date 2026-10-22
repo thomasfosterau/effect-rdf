@@ -1,14 +1,14 @@
 name: Release
 
 # Changesets release flow (copied from the effect-jsonapi library): on every
-# push to `main`, changesets/action either opens/updates the "Version
+# push to `trunk`, changesets/action either opens/updates the "Version
 # Packages" PR (when unreleased changesets exist) or, when that PR has merged
 # and no changesets remain, publishes every package to npm and tags the
 # release.
 
 on:
   push:
-    branches: [main]
+    branches: [trunk]
 
 concurrency:
   group: release-${{ github.ref }}
@@ -40,12 +40,12 @@ jobs:
       # `effect-tsgo patch`) and every `allowBuilds` dependency's build script
       # inside this job, which holds `id-token: write`. It triggers whenever
       # a manifest's mtime moves after the install step, e.g. when the
-      # Changesets action checks out an existing `changeset-release/main`
+      # Changesets action checks out an existing `changeset-release/trunk`
       # and `git reset --hard`s it back before `pnpm run version`. Scoped to
       # this job: CI and local runs keep the default. pnpm 11 reads only the
       # `pnpm_config_*` spelling; `npm_config_verify_deps_before_run` is
       # ignored.
-      pnpm_config_verify_deps_before_run: "false"
+      pnpm_config_verify_deps_before_run: 'false'
     steps:
       - name: Checkout
         # The Changesets action pushes the version branch, so it needs the
@@ -107,7 +107,7 @@ jobs:
         with:
           version-script: pnpm run version
           publish-script: pnpm run release
-          commit-message: "chore: version packages"
-          pr-title: "chore: version packages"
+          commit-message: 'chore: version packages'
+          pr-title: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

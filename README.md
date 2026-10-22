@@ -123,7 +123,7 @@ Effect.runPromise(program()).then(console.log);
 ## Development
 
 The repository is a pnpm 11 workspace driven by [Vite+](https://viteplus.dev)
-(`vp`). Node ≥ 22.18 is required.
+(`vp`). Node ≥ 22 and pnpm 11 are required.
 
 ```sh
 pnpm install                              # dependencies, git hooks, the @effect/tsgo patch

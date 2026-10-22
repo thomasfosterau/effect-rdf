@@ -22,7 +22,6 @@
     "@vitest/coverage-istanbul",
     "@changesets/cli",
     "@changesets/changelog-github",
-    "effect-solutions",
     "fallow"
   ],
   "rules": {
