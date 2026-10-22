@@ -99,26 +99,26 @@ export default defineConfig({
       // the issue lists them. A new site is a defect, not headroom. Once a
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
-      'effect/imperative-loops': 'warn', // 912
-      'effect/avoid-direct-tag-checks': 'warn', // 730
-      'effect/avoid-non-null-assertion': 'warn', // 647
-      'effect/avoid-native-object-helpers': 'warn', // 539
-      'effect/require-safety-comment-for-type-assertion': 'warn', // 359
+      'effect/imperative-loops': 'warn', // 911
+      'effect/avoid-direct-tag-checks': 'warn', // 729
+      'effect/avoid-non-null-assertion': 'warn', // 640
+      'effect/avoid-native-object-helpers': 'warn', // 548
+      'effect/require-safety-comment-for-type-assertion': 'warn', // 304
       'effect/no-length-comparison': 'warn', // 261
       'effect/prefer-arr-match': 'warn', // 261
       'effect/prefer-match-over-switch': 'warn', // 179
-      'effect/prefer-effect-is': 'warn', // 129
-      'effect/yield-in-for-loop': 'warn', // 118
+      'effect/prefer-effect-is': 'warn', // 121
+      'effect/yield-in-for-loop': 'warn', // 113
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
       // lets a caller forward an optional of its own into. A bare `null` /
-      // `undefined` in a return type is still a finding to read (699 at
+      // `undefined` in a return type is still a finding to read (702 at
       // adoption, listed in the issue above).
       'effect/prefer-option-over-null': 'warn',
       // `typeof` is how a JSON-LD / RDF/JSON / SPARQL-JSON processor reads
       // the JSON value it is specified over (the algorithms branch on "is
-      // a string / number / boolean / map"); 130 at adoption, listed in the
+      // a string / number / boolean / map"); 122 at adoption, listed in the
       // issue above.
       'effect/no-runtime-typeof': 'warn',
       'typescript/no-explicit-any': 'off',
@@ -146,6 +146,8 @@ export default defineConfig({
           'effect/use-console-service': 'off',
           'effect/use-filesystem-service': 'off',
           'effect/use-path-service': 'off',
+          // A build script's console output is its report.
+          'no-console': 'off',
           // `...(x === undefined ? {} : { x })` is how a vitest option is left
           // unset under `exactOptionalPropertyTypes`.
           'effect/no-conditional-empty-object-spread': 'off',
@@ -168,6 +170,103 @@ export default defineConfig({
           'effect/use-console-service': 'off',
           'effect/effect-run-in-body': 'off',
         },
+      },
+      // The one native `JSON.parse` per package: `Schema.fromJsonString`
+      // replaces the engine's SyntaxError with "Expected a valid JSON
+      // string", and the parsers' error messages (and the positions in them)
+      // are part of their contract.
+      {
+        files: ['packages/*/src/internal/json.ts'],
+        rules: { 'effect/avoid-direct-json': 'off' },
+      },
+      // Public signatures over arbitrary JSON-LD / ShExJ / N3 JSON: a JSON-LD
+      // `input`, `context` or `frame` is any JSON value (and `Input` admits
+      // `object` so caller interfaces without an index signature are
+      // assignable), the static document loader maps URLs to parsed JSON, and
+      // the processor is written over `JsonObject`. `decode` / `fromJson` are
+      // the parse-at-the-boundary entry points, `equals` takes anything by
+      // contract, and `toJSON` / `toJson` return JSON. Narrowing any of them
+      // is a breaking API change.
+      {
+        files: [
+          'packages/jsonld/src/JsonLd.ts',
+          'packages/jsonld/src/DocumentLoader.ts',
+          'packages/jsonld/src/internal/util.ts',
+          'packages/n3/src/Model.ts',
+          'packages/shex/src/ShExJ.ts',
+          'packages/shex/src/ShapeMap.ts',
+        ],
+        rules: {
+          'effect/no-object-parameters': 'off',
+          'effect/no-unknown-parameters': 'off',
+          'effect/no-unknown-returns': 'off',
+          'effect/no-known-value-widening': 'off',
+          'effect/no-unsafe-dictionary-type': 'off',
+        },
+      },
+      // `Term.Object` is the RDF object-position type this module exports
+      // (it shadows the global name, which is all the rule sees), and
+      // `equals(that: unknown)` is the RDF/JS term-equality contract.
+      {
+        files: ['packages/core/src/Term.ts'],
+        rules: { 'effect/avoid-object-type': 'off', 'effect/no-unknown-parameters': 'off' },
+      },
+      // `Xsd` maps literal values, it never reads the clock: epoch millis come
+      // from `setUTCFullYear` (correct for years 0–99, where `Date.UTC` is
+      // not), and the public `toJs` returns a JS `Date` that may be invalid
+      // where `DateTime` would refuse it.
+      {
+        files: ['packages/core/src/Xsd.ts'],
+        rules: { 'effect/use-clock-service': 'off' },
+      },
+      // `num` / `str` coerce the driver's result cells at the I/O boundary:
+      // `effect/sql` types rows as `unknown`, and pg returns strings where
+      // SQLite returns numbers.
+      {
+        files: ['packages/sparql-sql/src/SqlStore.ts'],
+        rules: { 'effect/no-unknown-parameters': 'off' },
+      },
+      // The SPARQL server's Node runtime boundary: the `bin/` launcher picks
+      // `dist/` or `src/` before any Effect runtime exists, the CLI needs
+      // `node:util` `parseArgs` and reads the files it is given, and the
+      // listener is a `node:http` server handed to `NodeHttpServer.layer`
+      // (a server, not the HTTP client the rule is about).
+      {
+        files: [
+          'packages/sparql-server/bin/**',
+          'packages/sparql-server/src/Cli.ts',
+          'packages/sparql-server/src/SparqlServer.ts',
+        ],
+        rules: {
+          'effect/avoid-node-imports': 'off',
+          'effect/avoid-sync-fs': 'off',
+          'effect/use-filesystem-service': 'off',
+          'effect/use-path-service': 'off',
+          'effect/use-http-client-service': 'off',
+        },
+      },
+      // Synchronous public APIs over a pure, in-memory `Stream`:
+      // `Results.serializeString` and the client's push-based `Incremental`
+      // parser run the Effect-returning serializer / codec to completion.
+      {
+        files: ['packages/sparql/src/Results.ts', 'packages/sparql-client/src/ResultsStream.ts'],
+        rules: { 'effect/effect-run-in-body': 'off' },
+      },
+      // The SPARQL parser's per-token `hook` / `take` combinators catch the
+      // parse failure they throw; a `Result` per token is the per-step
+      // allocation AGENTS.md keeps out of hot loops.
+      {
+        files: ['packages/sparql/src/internal/parser.ts'],
+        rules: { 'effect/avoid-try-catch': 'off' },
+      },
+      // The evaluator hands a built-in its evaluated arguments as the public
+      // `Functions.BuiltInArgs` (a tuple-like array whose first three slots
+      // are typed present); each built-in checks its own arity, so the cast
+      // from the plain array cannot be a single assertion without changing
+      // that public type.
+      {
+        files: ['packages/sparql/src/Expression.ts'],
+        rules: { 'effect/avoid-any': 'off', 'effect/no-chained-type-assertions': 'off' },
       },
       {
         files: ['**/*.test.ts'],
