@@ -402,6 +402,25 @@ importers:
         specifier: 4.0.5
         version: 4.0.5
 
+  packages/xmp:
+    dependencies:
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../core
+      '@thomasfosterau/effect-rdfxml':
+        specifier: workspace:*
+        version: link:../rdfxml
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.5)
+      '@thomasfosterau/effect-parse':
+        specifier: 'catalog:'
+        version: 0.1.0(effect@4.0.5)
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+
 packages:
 
   '@babel/code-frame@7.29.7':

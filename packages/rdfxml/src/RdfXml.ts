@@ -579,6 +579,38 @@ const collectPrefixes = (doc: Xml.Document): PrefixMap.PrefixMap => {
 };
 
 /**
+ * Parses an already-parsed XML document as RDF/XML. The root element is
+ * `rdf:RDF` or a single node element; `xml:base` on it is returned as the
+ * base IRI and namespace declarations on it (and its children) as prefixes.
+ * Formats that embed RDF/XML in a larger XML document (XMP, SVG metadata)
+ * pass a document whose root is the embedded `rdf:RDF` element.
+ *
+ * @since 0.1.0
+ * @category parsing
+ */
+export const parseDocument = (
+  doc: Xml.Document,
+  options?: ParseOptions,
+): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
+  Effect.gen(function* () {
+    const triples = yield* parseTriples(doc, options);
+    const graph = options?.graph ?? Term.defaultGraph;
+    let baseIri = options?.baseIri;
+    const xmlBase = doc.root.attributes.find(
+      (a) => a.namespace === Xml.XML_NAMESPACE && a.localName === 'base',
+    );
+    if (xmlBase !== undefined) baseIri = Iri.resolve(xmlBase.value, baseIri);
+    const prefixes = collectPrefixes(doc);
+    return {
+      dataset: Dataset.mutate(Dataset.empty, (b) => {
+        for (const t of triples) b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
+      }),
+      prefixes,
+      baseIri,
+    };
+  });
+
+/**
  * Parses a complete RDF/XML document. Namespace declarations on the root
  * element (and its children) are returned as prefixes.
  *
@@ -595,21 +627,7 @@ export const parse = (
         toParseError(e.message, { offset: e.offset, line: e.line, column: e.column }),
       ),
     );
-    const triples = yield* parseTriples(doc, options);
-    const graph = options?.graph ?? Term.defaultGraph;
-    let baseIri = options?.baseIri;
-    const xmlBase = doc.root.attributes.find(
-      (a) => a.namespace === Xml.XML_NAMESPACE && a.localName === 'base',
-    );
-    if (xmlBase !== undefined) baseIri = Iri.resolve(xmlBase.value, baseIri);
-    const prefixes = collectPrefixes(doc);
-    return {
-      dataset: Dataset.mutate(Dataset.empty, (b) => {
-        for (const t of triples) b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
-      }),
-      prefixes,
-      baseIri,
-    };
+    return yield* parseDocument(doc, options);
   });
 
 /**

@@ -18,6 +18,7 @@ and community conformance suites.
 | [`@thomasfosterau/effect-jsonld`](packages/jsonld)               | JSON-LD 1.1 processor: expansion, compaction, flattening, framing, RDF conversion, document loaders                                                             | [JSON-LD 1.1 API](https://www.w3.org/TR/json-ld11-api/), [Framing](https://www.w3.org/TR/json-ld11-framing/)                                                      | W3C expand, compact, flatten, toRdf, fromRdf, remote-doc and framing suites (skips only JSON-LD 1.0-only and generalized-RDF tests) |
 | [`@thomasfosterau/effect-rdfxml`](packages/rdfxml)               | RDF/XML parser and serialiser on a small namespace-aware XML parser (with Exclusive XML Canonicalization)                                                       | [RDF 1.2 XML Syntax](https://www.w3.org/TR/rdf12-xml/)                                                                                                            | Every W3C RDF 1.1 and RDF 1.2 RDF/XML test                                                                                          |
 | [`@thomasfosterau/effect-rdfjson`](packages/rdfjson)             | RDF/JSON codec built on Effect `Schema`                                                                                                                         | [RDF 1.1 JSON Alternate Serialization](https://www.w3.org/TR/rdf-json/)                                                                                           | Unit tests (no W3C suite exists)                                                                                                    |
+| [`@thomasfosterau/effect-xmp`](packages/xmp)                     | XMP packets as RDF: packet scanning and padding, the XMP data model, typed accessors for Dublin Core, XMP, PDF and PDF/A, JPEG and PNG extraction               | [XMP (ISO 16684-1)](https://www.iso.org/standard/75163.html), [PDF/A (ISO 19005)](https://www.pdfa.org/resource/iso-19005-pdfa/)                                  | Unit tests modelled on ISO 16684-1 and PDF/A examples (no public suite yet)                                                         |
 | [`@thomasfosterau/effect-sparql`](packages/sparql)               | SPARQL parser, generator, algebra, optimiser, streaming query / update engine, results formats, typed builder                                                   | [SPARQL 1.1 Query](https://www.w3.org/TR/sparql11-query/) / [Update](https://www.w3.org/TR/sparql11-update/), [SPARQL 1.2](https://www.w3.org/TR/sparql12-query/) | Syntax 574 / 574; evaluation 707 / 707 runnable (entailment and `SERVICE` tests skipped)                                            |
 | [`@thomasfosterau/effect-shacl`](packages/shacl)                 | SHACL Core validator: typed shapes graphs, paths, validation reports, `Schema` integration                                                                      | [SHACL](https://www.w3.org/TR/shacl/)                                                                                                                             | 98 / 98 Core tests                                                                                                                  |
 | [`@thomasfosterau/effect-shacl-sparql`](packages/shacl-sparql)   | SHACL-SPARQL: SPARQL-based constraints, constraint components and targets on the SPARQL engine                                                                  | [SHACL-SPARQL](https://www.w3.org/TR/shacl/#sparql-constraints), [SHACL-AF targets](https://www.w3.org/TR/shacl-af/#targets)                                      | 22 / 22 SHACL-SPARQL tests (and the 98 Core tests with the evaluator)                                                               |
@@ -32,7 +33,7 @@ Each package has a README with its API and usage examples.
 
 The packages are published to npm under the `@thomasfosterau` scope and have
 `effect` (4.x) as a peer dependency (`effect-turtle`, `effect-sparql`,
-`effect-shex` and `effect-n3` also have `@thomasfosterau/effect-parse`):
+`effect-shex`, `effect-n3`, `effect-rdfxml` and `effect-xmp` also have `@thomasfosterau/effect-parse`):
 
 ```sh
 pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-rdf @thomasfosterau/effect-turtle
@@ -148,6 +149,7 @@ Conformance tests read the suites from `.test-suites/` or `$RDF_TEST_SUITES`
 ```
 effect-rdf (core) ── Term · Dataset · Serialization · Formats · PrefixMap · Rdfs · Isomorphism
  ├─ syntaxes: effect-ntriples · effect-turtle · effect-n3 · effect-jsonld · effect-rdfxml · effect-rdfjson
+ │   └─ effect-xmp (on effect-rdfxml)
  ├─ effect-sparql ── QuadStore / QueryCapability ←─ effect-sparql-sql, protocol server / client
  ├─ effect-shacl ── SparqlConstraintEvaluator ←─ effect-shacl-sparql (uses effect-sparql)
  └─ effect-shex

@@ -13,6 +13,7 @@ This repo publishes the `@thomasfosterau/effect-rdf` package family: an Effect 4
 | `@thomasfosterau/effect-jsonld`        | `packages/jsonld`        | core                                  |
 | `@thomasfosterau/effect-rdfxml`        | `packages/rdfxml`        | core                                  |
 | `@thomasfosterau/effect-rdfjson`       | `packages/rdfjson`       | core                                  |
+| `@thomasfosterau/effect-xmp`           | `packages/xmp`           | core, rdfxml                          |
 | `@thomasfosterau/effect-sparql`        | `packages/sparql`        | core, rdfxml, turtle                  |
 | `@thomasfosterau/effect-shacl`         | `packages/shacl`         | core                                  |
 | `@thomasfosterau/effect-shacl-sparql`  | `packages/shacl-sparql`  | core, shacl, sparql                   |
