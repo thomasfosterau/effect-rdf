@@ -13,11 +13,13 @@ import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
 import * as Headers from 'effect/http/Headers';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as LinkHeader from './internal/linkHeader.ts';
+import { parseJson } from './internal/json.ts';
 import * as JsonLdError from './JsonLdError.ts';
 
 /**
@@ -192,38 +194,46 @@ export const fromResponse = (
     if (!isJsonMediaType(mt)) {
       return Effect.fail(loadingFailed(response.url, `unsupported content type ${String(mt)}`));
     }
-    let document: unknown;
-    try {
-      document = JSON.parse(response.body);
-    } catch (e) {
-      return Effect.fail(loadingFailed(response.url, `invalid JSON: ${String(e)}`));
-    }
-    return Effect.succeed({
-      _tag: 'Document' as const,
-      document: {
-        documentUrl: response.url,
-        document,
-        contentType: mt,
-        contextUrl,
-        profile: profileOf(response.contentType),
-      },
+    return Result.match(parseJson(response.body), {
+      onFailure: (e) => Effect.fail(loadingFailed(response.url, `invalid JSON: ${String(e)}`)),
+      onSuccess: (document) =>
+        Effect.succeed({
+          _tag: 'Document' as const,
+          document: {
+            documentUrl: response.url,
+            document,
+            contentType: mt,
+            contextUrl,
+            profile: profileOf(response.contentType),
+          },
+        }),
     });
   });
+
+const ENTITIES: ReadonlyMap<string, string> = new Map([
+  ['amp', '&'],
+  ['lt', '<'],
+  ['gt', '>'],
+  ['quot', '"'],
+  ['apos', "'"],
+]);
 
 const decodeEntities = (s: string): string =>
   s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (_, e: string) => {
     if (e.startsWith('#x')) return String.fromCodePoint(parseInt(e.slice(2), 16));
     if (e.startsWith('#')) return String.fromCodePoint(parseInt(e.slice(1), 10));
-    return ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[e]!;
+    // The pattern admits only the named entities in `ENTITIES`.
+    return ENTITIES.get(e) ?? '';
   });
 
-const attributes = (tag: string): Record<string, string> => {
-  const out: Record<string, string> = {};
+/** An element's attributes, by lower-cased name. */
+const attributes = (tag: string): ReadonlyMap<string, string> => {
+  const out = new Map<string, string>();
   const re = /([^\s=/>]+)(?:\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
   let m: RegExpExecArray | null;
   const body = tag.replace(/^<\s*[^\s>]+/, '').replace(/\/?>$/, '');
   while ((m = re.exec(body)) !== null) {
-    out[m[1]!.toLowerCase()] = decodeEntities(m[3] ?? m[4] ?? m[5] ?? '');
+    out.set(m[1]!.toLowerCase(), decodeEntities(m[3] ?? m[4] ?? m[5] ?? ''));
   }
   return out;
 };
@@ -245,51 +255,46 @@ export const extractHtml = (
     let documentUrl = url;
     const base = /<base\s[^>]*>/i.exec(html);
     if (base !== null) {
-      const href = attributes(base[0])['href'];
+      const href = attributes(base[0]).get('href');
       if (href !== undefined) documentUrl = Iri.resolve(href, url);
     }
     const hash = url.indexOf('#');
     const fragment = hash === -1 ? undefined : decodeURIComponent(url.slice(hash + 1));
-    const scripts: Array<{ attrs: Record<string, string>; content: string }> = [];
+    const scripts: Array<{ attrs: ReadonlyMap<string, string>; content: string }> = [];
     const re = /<script(\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi;
     let m: RegExpExecArray | null;
     while ((m = re.exec(html)) !== null) {
       const attrs = attributes(`<script${m[1] ?? ''}>`);
-      const type = mediaTypeOf(attrs['type']);
+      const type = mediaTypeOf(attrs.get('type'));
       if (type !== 'application/ld+json') continue;
       scripts.push({ attrs, content: m[2] ?? '' });
     }
-    const parse = (content: string): unknown => {
-      try {
-        return JSON.parse(content);
-      } catch (e) {
-        throw JsonLdError.make('invalid script element', String(e));
+    const parse = (content: string) =>
+      Result.mapError(parseJson(content), (e) =>
+        JsonLdError.make('invalid script element', String(e)),
+      );
+    const remote = (document: Result.Result<unknown, JsonLdError.JsonLdError>) =>
+      Effect.fromResult(
+        Result.map(document, (d): RemoteDocument => ({ documentUrl, document: d })),
+      );
+    if (fragment !== undefined && fragment !== '') {
+      const script = scripts.find((s) => s.attrs.get('id') === fragment);
+      if (script === undefined) {
+        return Effect.fail(loadingFailed(url, `no script element with id ${fragment}`));
       }
-    };
-    try {
-      if (fragment !== undefined && fragment !== '') {
-        const script = scripts.find((s) => s.attrs['id'] === fragment);
-        if (script === undefined) {
-          return Effect.fail(loadingFailed(url, `no script element with id ${fragment}`));
-        }
-        return Effect.succeed({ documentUrl, document: parse(script.content) });
-      }
-      if (options?.extractAllScripts === true) {
-        const all: Array<unknown> = [];
-        for (const s of scripts) {
-          const v = parse(s.content);
-          if (Array.isArray(v)) all.push(...v);
-          else all.push(v);
-        }
-        return Effect.succeed({ documentUrl, document: all });
-      }
-      if (scripts.length === 0) {
-        return Effect.fail(loadingFailed(url, 'no JSON-LD script element'));
-      }
-      return Effect.succeed({ documentUrl, document: parse(scripts[0]!.content) });
-    } catch (e) {
-      return Effect.fail(e as JsonLdError.JsonLdError);
+      return remote(parse(script.content));
     }
+    if (options?.extractAllScripts === true) {
+      return remote(
+        Result.map(Result.all(scripts.map((s) => parse(s.content))), (values) =>
+          values.flatMap((v) => (Array.isArray(v) ? v : [v])),
+        ),
+      );
+    }
+    if (scripts.length === 0) {
+      return Effect.fail(loadingFailed(url, 'no JSON-LD script element'));
+    }
+    return remote(parse(scripts[0]!.content));
   });
 
 /**
@@ -300,14 +305,17 @@ export const extractHtml = (
  * @category constructors
  */
 export const fromFetch = (
-  fetch: (url: string, options?: LoadOptions) => Effect.Effect<Response, JsonLdError.JsonLdError>,
+  fetchResponse: (
+    url: string,
+    options?: LoadOptions,
+  ) => Effect.Effect<Response, JsonLdError.JsonLdError>,
 ): Loader => {
   const load = (
     url: string,
     options: LoadOptions | undefined,
     depth: number,
   ): Effect.Effect<RemoteDocument, JsonLdError.JsonLdError> =>
-    fetch(url, options).pipe(
+    fetchResponse(url, options).pipe(
       Effect.flatMap((response) => fromResponse(response, options)),
       Effect.flatMap((r) => {
         if (r._tag === 'Document') return Effect.succeed(r.document);
@@ -360,15 +368,11 @@ export const makeStatic = (
         const value = map.get(key);
         if (isRemoteDocument(value)) return Effect.succeed(value);
         if (typeof value === 'string') {
-          try {
-            return Effect.succeed({
-              documentUrl: url,
-              document: JSON.parse(value),
-              contentType: 'application/ld+json',
-            });
-          } catch (e) {
-            return Effect.fail(loadingFailed(url, `invalid JSON: ${String(e)}`));
-          }
+          return Result.match(parseJson(value), {
+            onFailure: (e) => Effect.fail(loadingFailed(url, `invalid JSON: ${String(e)}`)),
+            onSuccess: (document) =>
+              Effect.succeed({ documentUrl: url, document, contentType: 'application/ld+json' }),
+          });
         }
         return Effect.succeed({
           documentUrl: url,
@@ -424,10 +428,10 @@ const ACCEPT =
  * @since 0.1.0
  * @category constructors
  */
-export const makeHttp: Effect.Effect<Loader, never, HttpClient.HttpClient> = Effect.gen(
-  function* () {
-    const client = yield* HttpClient.HttpClient;
-    const fetch = (url: string, options?: LoadOptions) =>
+export const makeHttp: Effect.Effect<Loader, never, HttpClient.HttpClient> = Effect.map(
+  HttpClient.HttpClient,
+  (client) => {
+    const fetchResponse = (url: string, options?: LoadOptions) =>
       Effect.gen(function* () {
         const accept =
           options?.profile !== undefined
@@ -448,7 +452,7 @@ export const makeHttp: Effect.Effect<Loader, never, HttpClient.HttpClient> = Eff
           body,
         } satisfies Response;
       }).pipe(Effect.mapError((e) => loadingFailed(url, String(e))));
-    return cached(fromFetch(fetch));
+    return cached(fromFetch(fetchResponse));
   },
 );
 

@@ -24,6 +24,10 @@ const specExample = `{
   }
 }`;
 
+const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const fromJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const documentFromJson = Schema.decodeUnknownSync(Schema.fromJsonString(RdfJson.Document));
+
 const nquads = (ds: Dataset.Dataset) => Dataset.toNQuads(Isomorphism.relabel(ds));
 
 describe('RdfJson.parse', () => {
@@ -39,7 +43,7 @@ describe('RdfJson.parse', () => {
   it.effect('parses all value kinds', () =>
     Effect.gen(function* () {
       const { dataset } = yield* RdfJson.parse(
-        JSON.stringify({
+        toJson({
           'http://example.org/s': {
             'http://example.org/p': [
               { type: 'uri', value: 'http://example.org/o' },
@@ -67,7 +71,7 @@ describe('RdfJson.parse', () => {
   it.effect('parses the RDF 1.2 extensions', () =>
     Effect.gen(function* () {
       const { dataset } = yield* RdfJson.parse(
-        JSON.stringify({
+        toJson({
           'http://example.org/s': {
             'http://example.org/p': [
               { type: 'literal', value: 'שלום', lang: 'he', direction: 'rtl' },
@@ -172,7 +176,7 @@ describe('RdfJson.parse', () => {
   for (const [name, json, message] of invalid) {
     it.effect(`rejects ${name}`, () =>
       Effect.gen(function* () {
-        const error = yield* Effect.flip(RdfJson.parse(JSON.stringify(json)));
+        const error = yield* Effect.flip(RdfJson.parse(toJson(json)));
         expect(error).toBeInstanceOf(Serialization.RdfParseError);
         expect(error.message).toMatch(message);
       }),
@@ -181,12 +185,12 @@ describe('RdfJson.parse', () => {
 
   it.effect('rejects the extensions in strict mode', () =>
     Effect.gen(function* () {
-      const direction = JSON.stringify({
+      const direction = toJson({
         s: { p: [{ type: 'literal', value: 'x', lang: 'ar', direction: 'rtl' }] },
       });
       const e1 = yield* Effect.flip(RdfJson.parse(direction, { strict: true }));
       expect(e1.message).toContain('extension');
-      const triple = JSON.stringify({
+      const triple = toJson({
         s: {
           p: [
             {
@@ -227,7 +231,7 @@ describe('RdfJson.serialize', () => {
   it.effect('writes strict RDF/JSON', () =>
     Effect.gen(function* () {
       const json = yield* RdfJson.serialize(data);
-      expect(JSON.parse(json)).toEqual({
+      expect(fromJson(json)).toEqual({
         '_:b': {
           'http://www.w3.org/1999/02/22-rdf-syntax-ns#type': [
             { type: 'uri', value: 'http://example.org/T' },
@@ -274,7 +278,7 @@ describe('RdfJson.serialize', () => {
         expect(error.message).toContain('extensions');
       }
       const json = yield* RdfJson.serialize(extended, { extensions: true });
-      expect(JSON.parse(json)['http://example.org/s']['http://example.org/p']).toEqual([
+      expect(documentFromJson(json)['http://example.org/s']?.['http://example.org/p']).toEqual([
         { type: 'literal', value: 'مرحبا', lang: 'ar', direction: 'rtl' },
       ]);
       const { dataset } = yield* RdfJson.parse(json);
@@ -292,7 +296,7 @@ describe('RdfJson.serialize', () => {
       const error = yield* Effect.flip(RdfJson.serialize(quads));
       expect(error.message).toContain('named graphs');
       const json = yield* RdfJson.serialize(quads, { mergeGraphs: true });
-      expect(JSON.parse(json)).toEqual({
+      expect(fromJson(json)).toEqual({
         'http://example.org/s': {
           'http://example.org/p': [
             { type: 'uri', value: 'http://example.org/o2' },
@@ -324,7 +328,7 @@ describe('RdfJson schemas', () => {
         { type: 'literal', value: "Anna's Homepage", lang: 'en' },
       ]);
       const text = yield* Schema.encodeEffect(RdfJson.RdfJsonFromString)(document);
-      expect(JSON.parse(text)).toEqual(JSON.parse(specExample));
+      expect(fromJson(text)).toEqual(fromJson(specExample));
       const error = yield* Effect.flip(Schema.decodeEffect(RdfJson.RdfJsonFromString)('{"s": 1}'));
       expect(error.message).toContain('["s"]');
     }),
@@ -347,11 +351,11 @@ describe('RdfJson schemas', () => {
   it.effect('DatasetFromRdfJson transforms documents and datasets', () =>
     Effect.gen(function* () {
       const dataset = yield* Schema.decodeUnknownEffect(RdfJson.DatasetFromRdfJson)(
-        JSON.parse(specExample),
+        fromJson(specExample),
       );
       expect(dataset.size).toBe(1);
       const document = yield* Schema.encodeEffect(RdfJson.DatasetFromRdfJson)(dataset);
-      expect(document).toEqual(JSON.parse(specExample));
+      expect(document).toEqual(fromJson(specExample));
       const named = Dataset.make(Term.quad(ex('s'), ex('p'), ex('o'), ex('g')));
       const error = yield* Effect.flip(Schema.encodeEffect(RdfJson.DatasetFromRdfJson)(named));
       expect(error.message).toContain('named graphs');

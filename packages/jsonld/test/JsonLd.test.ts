@@ -2,12 +2,15 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as Order from 'effect/Order';
 import * as Schema from 'effect/Schema';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import { DocumentLoader, JsonLd, JsonLdError } from '../src/index.ts';
+import { parseJsonText, toJsonText } from './support.ts';
 
 const ex = (s: string) => Term.namedNode(`http://example.org/${s}`);
 
@@ -115,7 +118,10 @@ describe('JsonLd', () => {
         },
         { rdfDirection: 'i18n-datatype' },
       );
-      const objects = quads.map((q) => q.object.key).sort();
+      const objects = Arr.sort(
+        quads.map((q) => q.object.key),
+        Order.String,
+      );
       expect(objects).toEqual([
         '"abc"^^<https://www.w3.org/ns/i18n#ar_rtl>',
         '"{\\"a\\":[true],\\"b\\":1}"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>',
@@ -235,7 +241,7 @@ describe('DocumentLoader', () => {
 describe('codec', () => {
   it.effect('parses JSON-LD text into a dataset', () =>
     Effect.gen(function* () {
-      const result = yield* JsonLd.parse(JSON.stringify(doc), { blankNodePrefix: 'x' });
+      const result = yield* JsonLd.parse(toJsonText(doc), { blankNodePrefix: 'x' });
       expect(result.dataset.size).toBe(2);
       expect(Dataset.has(result.dataset, Term.quad(ex('alice'), ex('knows'), ex('bob')))).toBe(
         true,
@@ -257,7 +263,7 @@ describe('codec', () => {
         [Term.quad(ex('alice'), ex('name'), Term.literal('Alice'))],
         { prefixes: PrefixMap.make({ ex: 'http://example.org/' }), indent: 0 },
       );
-      expect(JSON.parse(text)).toEqual({
+      expect(parseJsonText(text)).toEqual({
         '@context': { ex: 'http://example.org/' },
         '@id': 'ex:alice',
         'ex:name': 'Alice',

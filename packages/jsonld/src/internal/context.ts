@@ -3,12 +3,12 @@
  *
  * @internal
  */
-import * as JsonLdError from '../JsonLdError.ts';
 import { resolveIri } from './iri.ts';
 import {
   type Json,
   type JsonObject,
   deepEqual,
+  mapJsonLdError,
   fail,
   hasKeywordForm,
   isAbsoluteIri,
@@ -178,15 +178,10 @@ export const processContext = (
       let loaded = env.contextCache.get(url);
       let documentUrl = url;
       if (loaded === undefined) {
-        let doc: LoadedDocument;
-        try {
-          doc = env.load(url, 'http://www.w3.org/ns/json-ld#context');
-        } catch (e) {
-          if (JsonLdError.isJsonLdError(e)) {
-            return fail('loading remote context failed', `${url}: ${e.message}`);
-          }
-          throw e;
-        }
+        const doc: LoadedDocument = mapJsonLdError(
+          () => env.load(url, 'http://www.w3.org/ns/json-ld#context'),
+          (e) => fail('loading remote context failed', `${url}: ${e.message}`),
+        );
         if (!isObject(doc.document) || !('@context' in doc.document)) {
           fail('invalid remote context', url);
         }
@@ -219,15 +214,10 @@ export const processContext = (
       const imp = context['@import'];
       if (!isString(imp)) fail('invalid @import value');
       const url = resolveIri(imp, baseUrl);
-      let doc: LoadedDocument;
-      try {
-        doc = env.load(url, 'http://www.w3.org/ns/json-ld#context');
-      } catch (e) {
-        if (JsonLdError.isJsonLdError(e)) {
-          return fail('loading remote context failed', `${url}: ${e.message}`);
-        }
-        throw e;
-      }
+      const doc: LoadedDocument = mapJsonLdError(
+        () => env.load(url, 'http://www.w3.org/ns/json-ld#context'),
+        (e) => fail('loading remote context failed', `${url}: ${e.message}`),
+      );
       if (!isObject(doc.document) || !isObject(doc.document['@context'])) {
         fail('invalid remote context', url);
       }
@@ -539,14 +529,10 @@ export const createTermDefinition = (
   if ('@context' in value) {
     if (env.processingMode === 'json-ld-1.0') fail('invalid term definition');
     const ctx = value['@context'];
-    try {
-      processContext(env, active, ctx, baseUrl, remoteContexts, true, true, false);
-    } catch (e) {
-      if (JsonLdError.isJsonLdError(e)) {
-        return fail('invalid scoped context', e.message);
-      }
-      throw e;
-    }
+    mapJsonLdError(
+      () => processContext(env, active, ctx, baseUrl, remoteContexts, true, true, false),
+      (e) => fail('invalid scoped context', e.message),
+    );
     def.context = ctx;
     def.hasContext = true;
     def.baseUrl = baseUrl;

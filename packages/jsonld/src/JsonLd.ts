@@ -17,6 +17,7 @@ import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
 import * as DocumentLoader from './DocumentLoader.ts';
 import * as JsonLdError from './JsonLdError.ts';
 import { compactElement, compactIri } from './internal/compact.ts';
@@ -35,6 +36,7 @@ import { flattenExpanded } from './internal/flatten.ts';
 import { cleanupNull, frame as frameAlgorithm } from './internal/frame.ts';
 import * as Rdf from './internal/rdf.ts';
 import { type Json, type JsonObject, fail, isObject, isString } from './internal/util.ts';
+import { parseJson } from './internal/json.ts';
 
 /**
  * Any JSON value.
@@ -164,6 +166,37 @@ const getLoader = (options: Options | undefined) =>
       );
 
 /**
+ * The environment of one algorithm run: documents come from `docs`, and a
+ * document not loaded yet aborts the run with `NeedDocument`.
+ */
+const makeEnv = (options: Options | undefined, docs: ReadonlyMap<string, DocResult>): Env => ({
+  processingMode: options?.processingMode ?? 'json-ld-1.1',
+  contextCache: new Map(),
+  load: (url) => {
+    const hit = docs.get(url);
+    if (hit === undefined) throw new NeedDocument(url, undefined);
+    if (Result.isFailure(hit)) throw hit.failure;
+    return hit.success;
+  },
+});
+
+/**
+ * Runs the algorithm once. A `NeedDocument` or `JsonLdError` it throws is the
+ * failure; anything else is a bug and propagates (a defect in `run`).
+ */
+const attempt = <A>(
+  f: (env: Env) => A,
+  env: Env,
+): Result.Result<A, NeedDocument | JsonLdError.JsonLdError> =>
+  Result.try({
+    try: () => f(env),
+    catch: (e) => {
+      if (e instanceof NeedDocument || JsonLdError.isJsonLdError(e)) return e;
+      throw e;
+    },
+  });
+
+/**
  * Runs a pure algorithm, loading documents on demand: when the algorithm
  * needs a document that has not been loaded yet it aborts with
  * `NeedDocument`, the document is loaded, and the algorithm is restarted.
@@ -175,30 +208,16 @@ const run = <A>(
   Effect.gen(function* () {
     const loader = yield* getLoader(options);
     const docs = new Map<string, DocResult>();
-    const env: Env = {
-      processingMode: options?.processingMode ?? 'json-ld-1.1',
-      contextCache: new Map(),
-      load: (url) => {
-        const hit = docs.get(url);
-        if (hit === undefined) throw new NeedDocument(url, undefined);
-        if (Result.isFailure(hit)) throw hit.failure;
-        return hit.success;
-      },
-    };
+    const env = makeEnv(options, docs);
     for (;;) {
-      try {
-        return f(env);
-      } catch (e) {
-        if (e instanceof NeedDocument) {
-          const r = yield* Effect.result(
-            loader.load(e.url, { profile: 'http://www.w3.org/ns/json-ld#context' }),
-          );
-          docs.set(e.url, r);
-          continue;
-        }
-        if (JsonLdError.isJsonLdError(e)) return yield* Effect.fail(e);
-        throw e;
-      }
+      const step = attempt(f, env);
+      if (Result.isSuccess(step)) return step.success;
+      const failure = step.failure;
+      if (!(failure instanceof NeedDocument)) return yield* failure;
+      const r = yield* Effect.result(
+        loader.load(failure.url, { profile: 'http://www.w3.org/ns/json-ld#context' }),
+      );
+      docs.set(failure.url, r);
     }
   });
 
@@ -609,16 +628,20 @@ const jsonErrorOffset = (input: string): number => {
       i += m[0].length;
     }
   };
-  try {
-    value();
-    ws();
-    return i;
-  } catch (offset) {
-    return offset as number;
-  }
+  // `fail` throws at the offending offset, which is `i`.
+  return Result.merge(
+    Result.try({
+      try: () => {
+        value();
+        ws();
+        return i;
+      },
+      catch: () => i,
+    }),
+  );
 };
 
-const positionOf = (input: string): { line: number; column: number } => {
+const positionOf = (input: string) => {
   const pos = jsonErrorOffset(input);
   const before = input.slice(0, pos);
   return { line: before.split('\n').length, column: pos - before.lastIndexOf('\n') };
@@ -635,18 +658,16 @@ export const parse = (
   options?: ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
   Effect.gen(function* () {
-    let json: unknown;
-    try {
-      json = JSON.parse(input);
-    } catch (e) {
-      return yield* Effect.fail(
-        new Serialization.RdfParseError({
-          format: format.name,
-          message: `invalid JSON: ${String(e)}`,
-          ...positionOf(input),
-        }),
-      );
-    }
+    const json = yield* Effect.fromResult(parseJson(input)).pipe(
+      Effect.mapError(
+        (e) =>
+          new Serialization.RdfParseError({
+            format: format.name,
+            message: `invalid JSON: ${String(e)}`,
+            ...positionOf(input),
+          }),
+      ),
+    );
     const base = options?.base !== undefined ? options.base : (options?.baseIri ?? null);
     const quads = yield* toQuads(json as Input, { ...options, base }).pipe(
       Effect.mapError(
@@ -672,9 +693,9 @@ export const parse = (
     };
   });
 
-const prefixesOf = (json: unknown): PrefixMap.PrefixMap => {
+const prefixesOf = (json: Json): PrefixMap.PrefixMap => {
   const entries: Array<[string, string]> = [];
-  const visit = (ctx: unknown): void => {
+  const visit = (ctx: Json): void => {
     if (Array.isArray(ctx)) ctx.forEach(visit);
     else if (isObject(ctx)) {
       for (const [k, v] of Object.entries(ctx)) {
@@ -728,7 +749,9 @@ export const serialize = (
             processingMode: options?.processingMode,
             documentLoader: options?.documentLoader,
           });
-    return JSON.stringify(output, null, options?.indent ?? 2);
+    return yield* Schema.encodeEffect(
+      Schema.fromJsonString(Schema.Unknown, { space: options?.indent ?? 2 }),
+    )(output);
   }).pipe(
     Effect.mapError(
       (e) => new Serialization.RdfSerializeError({ format: format.name, message: e.message }),
