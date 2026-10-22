@@ -91,7 +91,7 @@ export default defineConfig({
       // by the type it describes.
       'effect/avoid-schema-suffix': 'off',
 
-      // ---- Effect preset: allowances (effect-rdf#ISSUE) --------------------
+      // ---- Effect preset: allowances (effect-rdf#18) --------------------
       // The packages predate the Effect oxlint preset, and AGENTS.md makes
       // hot loops (parsers, evaluators, the dataset index) plain code rather
       // than an Effect per step. The rules below sit at `warn` with their
