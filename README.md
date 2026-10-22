@@ -9,28 +9,28 @@ and community conformance suites.
 
 ## Packages
 
-| Package                                                        | Purpose                                                                                                                                                         | Specification                                                                                                                                                     | Conformance                                                                                                                         |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| [`@thomasfosterau/effect-rdf`](packages/core)                  | Core: terms, quads, immutable indexed `Dataset`, IRIs, prefix maps, vocabularies, XSD, RDFS, isomorphism, serialisation interfaces                              | [RDF 1.2 Concepts](https://www.w3.org/TR/rdf12-concepts/), [RDF Schema](https://www.w3.org/TR/rdf12-schema/)                                                      | Unit tests (the syntax packages exercise it against the RDF suites)                                                                 |
-| [`@thomasfosterau/effect-ntriples`](packages/ntriples)         | N-Triples and N-Quads: strict and streaming parsers, canonical serialisers                                                                                      | [N-Triples](https://www.w3.org/TR/rdf12-n-triples/), [N-Quads](https://www.w3.org/TR/rdf12-n-quads/)                                                              | Full W3C rdf11 / rdf12 suites (syntax and canonicalisation)                                                                         |
-| [`@thomasfosterau/effect-turtle`](packages/turtle)             | Turtle and TriG parsers / pretty-printers (RDF 1.2 triple terms, reifiers, annotations); test-manifest reader                                                   | [Turtle](https://www.w3.org/TR/rdf12-turtle/), [TriG](https://www.w3.org/TR/rdf12-trig/)                                                                          | Every W3C rdf11 / rdf12 syntax and evaluation test; positive tests round-trip                                                       |
-| [`@thomasfosterau/effect-n3`](packages/n3)                     | Notation3 model, parser, serialiser, dataset mapping and a forward-chaining reasoner                                                                            | [Notation3](https://w3c.github.io/N3/spec/)                                                                                                                       | W3C N3 CG syntax suites (documented skip list); reasoner suite 76 / 89                                                              |
-| [`@thomasfosterau/effect-jsonld`](packages/jsonld)             | JSON-LD 1.1 processor: expansion, compaction, flattening, framing, RDF conversion, document loaders                                                             | [JSON-LD 1.1 API](https://www.w3.org/TR/json-ld11-api/), [Framing](https://www.w3.org/TR/json-ld11-framing/)                                                      | W3C expand, compact, flatten, toRdf, fromRdf, remote-doc and framing suites (skips only JSON-LD 1.0-only and generalized-RDF tests) |
-| [`@thomasfosterau/effect-rdfxml`](packages/rdfxml)             | RDF/XML parser and serialiser on a small namespace-aware XML parser (with Exclusive XML Canonicalization)                                                       | [RDF 1.2 XML Syntax](https://www.w3.org/TR/rdf12-xml/)                                                                                                            | Every W3C RDF 1.1 and RDF 1.2 RDF/XML test                                                                                          |
-| [`@thomasfosterau/effect-rdfjson`](packages/rdfjson)           | RDF/JSON codec built on Effect `Schema`                                                                                                                         | [RDF 1.1 JSON Alternate Serialization](https://www.w3.org/TR/rdf-json/)                                                                                           | Unit tests (no W3C suite exists)                                                                                                    |
-| [`@thomasfosterau/effect-sparql`](packages/sparql)             | SPARQL parser, generator, algebra, optimiser, streaming query / update engine, results formats, typed builder                                                   | [SPARQL 1.1 Query](https://www.w3.org/TR/sparql11-query/) / [Update](https://www.w3.org/TR/sparql11-update/), [SPARQL 1.2](https://www.w3.org/TR/sparql12-query/) | Syntax 574 / 574; evaluation 707 / 707 runnable (entailment and `SERVICE` tests skipped)                                            |
-| [`@thomasfosterau/effect-shacl`](packages/shacl)               | SHACL Core validator: typed shapes graphs, paths, validation reports, `Schema` integration                                                                      | [SHACL](https://www.w3.org/TR/shacl/)                                                                                                                             | 98 / 98 Core tests                                                                                                                  |
-| [`@thomasfosterau/effect-shacl-sparql`](packages/shacl-sparql) | SHACL-SPARQL: SPARQL-based constraints, constraint components and targets on the SPARQL engine                                                                  | [SHACL-SPARQL](https://www.w3.org/TR/shacl/#sparql-constraints), [SHACL-AF targets](https://www.w3.org/TR/shacl-af/#targets)                                      | 22 / 22 SHACL-SPARQL tests (and the 98 Core tests with the evaluator)                                                               |
-| [`@thomasfosterau/effect-shex`](packages/shex)                 | ShEx: ShExC / ShExJ / ShExR, validation with shape maps and semantic actions                                                                                    | [ShEx 2.1](https://shex.io/shex-semantics/)                                                                                                                       | shexTest: schemas 484 / 484, validation 1309 / 1309, negative syntax 105 / 105, negative structure 19 / 19                          |
-| [`@thomasfosterau/effect-sparql-sql`](packages/sparql-sql)     | SQL storage backend for the SPARQL engine on `effect/sql` (SQLite, PostgreSQL): term dictionary with triple terms, `QuadStore`, SPARQL-to-SQL `QueryCapability` | [SPARQL 1.1 Query](https://www.w3.org/TR/sparql11-query/)                                                                                                         | evaluation 707 / 707 runnable on SQLite and on PostgreSQL (PGlite)                                                                  |
-| `@thomasfosterau/effect-sparql-server`                         | SPARQL 1.1 Protocol + Graph Store Protocol server over `effect/http`, with content negotiation, service description, timeouts, read-only mode and a CLI         | [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/), [Graph Store Protocol](https://www.w3.org/TR/sparql11-http-rdf-update/)                          | protocol 34/34, graph store 14/14, service description 3/3                                                                          |
-| `@thomasfosterau/effect-sparql-client`                         | Strongly-typed SPARQL client over `effect/http` `HttpClient`: typed builder rows, streaming results, Graph Store operations, `SERVICE` federation               | [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/)                                                                                                   | 707/707 evaluation tests over HTTP; `service` 7/7                                                                                   |
+| Package                                                          | Purpose                                                                                                                                                         | Specification                                                                                                                                                     | Conformance                                                                                                                         |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [`@thomasfosterau/effect-rdf`](packages/core)                    | Core: terms, quads, immutable indexed `Dataset`, IRIs, prefix maps, vocabularies, XSD, RDFS, isomorphism, serialisation interfaces                              | [RDF 1.2 Concepts](https://www.w3.org/TR/rdf12-concepts/), [RDF Schema](https://www.w3.org/TR/rdf12-schema/)                                                      | Unit tests (the syntax packages exercise it against the RDF suites)                                                                 |
+| [`@thomasfosterau/effect-ntriples`](packages/ntriples)           | N-Triples and N-Quads: strict and streaming parsers, canonical serialisers                                                                                      | [N-Triples](https://www.w3.org/TR/rdf12-n-triples/), [N-Quads](https://www.w3.org/TR/rdf12-n-quads/)                                                              | Full W3C rdf11 / rdf12 suites (syntax and canonicalisation)                                                                         |
+| [`@thomasfosterau/effect-turtle`](packages/turtle)               | Turtle and TriG parsers / pretty-printers (RDF 1.2 triple terms, reifiers, annotations); test-manifest reader                                                   | [Turtle](https://www.w3.org/TR/rdf12-turtle/), [TriG](https://www.w3.org/TR/rdf12-trig/)                                                                          | Every W3C rdf11 / rdf12 syntax and evaluation test; positive tests round-trip                                                       |
+| [`@thomasfosterau/effect-n3`](packages/n3)                       | Notation3 model, parser, serialiser, dataset mapping and a forward-chaining reasoner                                                                            | [Notation3](https://w3c.github.io/N3/spec/)                                                                                                                       | W3C N3 CG syntax suites (documented skip list); reasoner suite 76 / 89                                                              |
+| [`@thomasfosterau/effect-jsonld`](packages/jsonld)               | JSON-LD 1.1 processor: expansion, compaction, flattening, framing, RDF conversion, document loaders                                                             | [JSON-LD 1.1 API](https://www.w3.org/TR/json-ld11-api/), [Framing](https://www.w3.org/TR/json-ld11-framing/)                                                      | W3C expand, compact, flatten, toRdf, fromRdf, remote-doc and framing suites (skips only JSON-LD 1.0-only and generalized-RDF tests) |
+| [`@thomasfosterau/effect-rdfxml`](packages/rdfxml)               | RDF/XML parser and serialiser on a small namespace-aware XML parser (with Exclusive XML Canonicalization)                                                       | [RDF 1.2 XML Syntax](https://www.w3.org/TR/rdf12-xml/)                                                                                                            | Every W3C RDF 1.1 and RDF 1.2 RDF/XML test                                                                                          |
+| [`@thomasfosterau/effect-rdfjson`](packages/rdfjson)             | RDF/JSON codec built on Effect `Schema`                                                                                                                         | [RDF 1.1 JSON Alternate Serialization](https://www.w3.org/TR/rdf-json/)                                                                                           | Unit tests (no W3C suite exists)                                                                                                    |
+| [`@thomasfosterau/effect-sparql`](packages/sparql)               | SPARQL parser, generator, algebra, optimiser, streaming query / update engine, results formats, typed builder                                                   | [SPARQL 1.1 Query](https://www.w3.org/TR/sparql11-query/) / [Update](https://www.w3.org/TR/sparql11-update/), [SPARQL 1.2](https://www.w3.org/TR/sparql12-query/) | Syntax 574 / 574; evaluation 707 / 707 runnable (entailment and `SERVICE` tests skipped)                                            |
+| [`@thomasfosterau/effect-shacl`](packages/shacl)                 | SHACL Core validator: typed shapes graphs, paths, validation reports, `Schema` integration                                                                      | [SHACL](https://www.w3.org/TR/shacl/)                                                                                                                             | 98 / 98 Core tests                                                                                                                  |
+| [`@thomasfosterau/effect-shacl-sparql`](packages/shacl-sparql)   | SHACL-SPARQL: SPARQL-based constraints, constraint components and targets on the SPARQL engine                                                                  | [SHACL-SPARQL](https://www.w3.org/TR/shacl/#sparql-constraints), [SHACL-AF targets](https://www.w3.org/TR/shacl-af/#targets)                                      | 22 / 22 SHACL-SPARQL tests (and the 98 Core tests with the evaluator)                                                               |
+| [`@thomasfosterau/effect-shex`](packages/shex)                   | ShEx: ShExC / ShExJ / ShExR, validation with shape maps and semantic actions                                                                                    | [ShEx 2.1](https://shex.io/shex-semantics/)                                                                                                                       | shexTest: schemas 484 / 484, validation 1309 / 1309, negative syntax 105 / 105, negative structure 19 / 19                          |
+| [`@thomasfosterau/effect-sparql-sql`](packages/sparql-sql)       | SQL storage backend for the SPARQL engine on `effect/sql` (SQLite, PostgreSQL): term dictionary with triple terms, `QuadStore`, SPARQL-to-SQL `QueryCapability` | [SPARQL 1.1 Query](https://www.w3.org/TR/sparql11-query/)                                                                                                         | evaluation 707 / 707 runnable on SQLite and on PostgreSQL (PGlite)                                                                  |
+| [`@thomasfosterau/effect-sparql-server`](packages/sparql-server) | SPARQL 1.1 Protocol + Graph Store Protocol server over `effect/http`, with content negotiation, service description, timeouts, read-only mode and a CLI         | [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/), [Graph Store Protocol](https://www.w3.org/TR/sparql11-http-rdf-update/)                          | protocol 34/34, graph store 14/14, service description 3/3                                                                          |
+| [`@thomasfosterau/effect-sparql-client`](packages/sparql-client) | Strongly-typed SPARQL client over `effect/http` `HttpClient`: typed builder rows, streaming results, Graph Store operations, `SERVICE` federation               | [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/)                                                                                                   | 707/707 evaluation tests over HTTP; `service` 7/7                                                                                   |
 
 Each package has a README with its API and usage examples.
 
 ## Install
 
-The packages are published under the `@thomasfosterau` scope and have
+The packages are published to npm under the `@thomasfosterau` scope and have
 `effect` (4.x) as a peer dependency (`effect-turtle`, `effect-sparql`,
 `effect-shex` and `effect-n3` also have `@thomasfosterau/effect-parse`):
 
@@ -47,7 +47,10 @@ as JSON-LD. This example is type-checked and run by the test suite
 ([`packages/shacl-sparql/test/readme-example.test.ts`](packages/shacl-sparql/test/readme-example.test.ts)).
 
 ```ts
-import { Effect, Layer, Schema, Stream } from 'effect';
+import * as Effect from 'effect/Effect';
+import * as Layer from 'effect/Layer';
+import * as Schema from 'effect/Schema';
+import * as Stream from 'effect/Stream';
 import { Namespace, PrefixMap } from '@thomasfosterau/effect-rdf';
 import { JsonLd } from '@thomasfosterau/effect-jsonld';
 import { ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
@@ -81,7 +84,7 @@ const shapes = `
     ] .
 `;
 
-const program = Effect.gen(function* () {
+const program = Effect.fn('program')(function* () {
   // 1. Parse Turtle into a core Dataset.
   const { dataset } = yield* Turtle.parse(data);
 
@@ -114,30 +117,31 @@ const program = Effect.gen(function* () {
   return { people, report: ValidationReport.format(report), jsonld };
 });
 
-Effect.runPromise(program).then(console.log);
+Effect.runPromise(program()).then(console.log);
 ```
 
 ## Development
 
-The repository is a pnpm workspace driven by [Vite+](https://viteplus.dev)
+The repository is a pnpm 11 workspace driven by [Vite+](https://viteplus.dev)
 (`vp`). Node ≥ 22.18 is required.
 
 ```sh
-vp install                    # install dependencies
-./scripts/fetch-test-suites.sh # clone the conformance suites into .test-suites (git-ignored)
-vp check                      # format check, lint and type-check (vp check --fix to format)
-vp test                       # all unit and conformance tests
-vp run -r build               # build every package (vp pack → dist/)
+pnpm install                              # dependencies, git hooks, the @effect/tsgo patch
+./scripts/fetch-test-suites.sh            # clone the conformance suites into .test-suites (git-ignored)
+vp check                                  # format + lint
+vp run --concurrency-limit 2 check        # type-check every package
+vp run --concurrency-limit 2 -r test:unit # all unit and conformance tests
+vp run -r build                           # build every package (vp pack → dist/)
 ```
 
-Inside a package directory the same commands apply to that package only
-(e.g. `cd packages/sparql && vp test`). Conformance tests read the suites
-from `.test-suites/` or `$RDF_TEST_SUITES` (`rdf-tests`, `json-ld-api`,
-`json-ld-framing`, `data-shapes`, `shexTest`, `N3`) and are skipped when the
-suites are absent. CI runs `vp check`, fetches the suites, then runs
-`vp test` and `vp run -r build`.
+Conformance tests read the suites from `.test-suites/` or `$RDF_TEST_SUITES`
+(`rdf-tests`, `json-ld-api`, `json-ld-framing`, `data-shapes`, `shexTest`,
+`N3`) and are skipped when the suites are absent; CI always fetches them.
 
-See [AGENTS.md](AGENTS.md) for the repository conventions.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — setup, hooks and individual checks.
+- [AGENTS.md](AGENTS.md) — repository conventions and the verification gates.
+- [PUBLISHING.md](PUBLISHING.md) — the Changesets release pipeline (npm trusted publishing).
+- [SECURITY.md](SECURITY.md) — reporting a vulnerability, untrusted-input defences.
 
 ## Architecture
 
