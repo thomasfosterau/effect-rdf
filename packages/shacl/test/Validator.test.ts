@@ -1,8 +1,10 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, Namespace, Term, Vocab } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import {
@@ -15,6 +17,8 @@ import {
   Vocabulary,
 } from '../src/index.ts';
 import { parseTurtle } from './utils/turtle.ts';
+
+const sorted = (xs: Iterable<string>) => Arr.sort(xs, Order.String);
 
 const { sh } = Vocabulary;
 const { rdf, xsd } = Vocab;
@@ -72,17 +76,15 @@ describe('Path', () => {
   `);
   it('evaluates complex paths', () => {
     const keys = (p: Path.Path, focus: Term.GroundTerm = ex('a')) =>
-      Path.evaluate(data, focus, p)
-        .map((t) => t.key)
-        .sort();
+      sorted(Path.evaluate(data, focus, p).map((t) => t.key));
     const p = Path.predicate(ex('p'));
     expect(keys(p)).toEqual([ex('b').key]);
     expect(keys(Path.inverse(p))).toEqual([ex('x').key]);
     expect(keys(Path.sequence(p, p, Path.predicate(ex('q'))))).toEqual([ex('d').key]);
-    expect(keys(Path.zeroOrMore(p))).toEqual([ex('a').key, ex('b').key, ex('c').key].sort());
-    expect(keys(Path.oneOrMore(p))).toEqual([ex('b').key, ex('c').key].sort());
-    expect(keys(Path.zeroOrOne(p))).toEqual([ex('a').key, ex('b').key].sort());
-    expect(keys(Path.alternative(p, Path.inverse(p)))).toEqual([ex('b').key, ex('x').key].sort());
+    expect(keys(Path.zeroOrMore(p))).toEqual(sorted([ex('a').key, ex('b').key, ex('c').key]));
+    expect(keys(Path.oneOrMore(p))).toEqual(sorted([ex('b').key, ex('c').key]));
+    expect(keys(Path.zeroOrOne(p))).toEqual(sorted([ex('a').key, ex('b').key]));
+    expect(keys(Path.alternative(p, Path.inverse(p)))).toEqual(sorted([ex('b').key, ex('x').key]));
     expect(keys(Path.inverse(Path.sequence(p, p)), ex('c'))).toEqual([ex('a').key]);
     expect(Path.toSparql(Path.sequence(Path.inverse(p), Path.zeroOrMore(p)))).toBe(
       '^<http://example.org/p>/<http://example.org/p>*',
@@ -110,7 +112,9 @@ describe('Shapes', () => {
   it.effect('parses a shapes graph into a typed model', () =>
     Effect.gen(function* () {
       const shapes = yield* Shapes.parse(personShapes);
-      const person = Option.getOrThrow(Shapes.get(shapes, ex('PersonShape')));
+      const found = Shapes.get(shapes, ex('PersonShape'));
+      assert(Option.isSome(found));
+      const person = found.value;
       expect(person._tag).toBe('NodeShape');
       expect(person.targets).toEqual([
         { _tag: 'TargetClass', class: ex('Person'), implicit: false },
@@ -156,7 +160,9 @@ describe('Shapes', () => {
           ex:T sh:target [ a sh:SPARQLTarget ; sh:select "SELECT ?this WHERE {}" ] .
         `),
       );
-      const person = Option.getOrThrow(Shapes.get(shapes, ex('Person')));
+      const found = Shapes.get(shapes, ex('Person'));
+      assert(Option.isSome(found));
+      const person = found.value;
       expect(person.targets).toEqual([
         { _tag: 'TargetClass', class: ex('Person'), implicit: true },
       ]);
@@ -171,12 +177,12 @@ describe('Validator', () => {
     Effect.gen(function* () {
       const report = yield* Validator.validate(personData, personShapes);
       expect(report.conforms).toBe(false);
-      const summary = report.results
-        .map(
+      const summary = sorted(
+        report.results.map(
           (r) =>
             `${(r.focusNode as Term.NamedNode).value} ${sh.localName(r.sourceConstraintComponent as Term.NamedNode)} ${sh.localName(r.severity)}`,
-        )
-        .sort();
+        ),
+      );
       expect(summary).toEqual([
         'http://example.org/bob ClassConstraintComponent Violation',
         'http://example.org/bob MinInclusiveConstraintComponent Warning',
@@ -207,8 +213,8 @@ describe('Validator', () => {
         ),
       ).toBe(true);
       const back = ValidationReport.fromDataset(ds);
-      expect(Result.isSuccess(back)).toBe(true);
-      const again = ValidationReport.toDataset(Result.getOrThrow(back));
+      assert(Result.isSuccess(back));
+      const again = ValidationReport.toDataset(back.success);
       expect(Isomorphism.isomorphic(ds, again)).toBe(true);
     }),
   );
@@ -260,12 +266,12 @@ describe('Validator', () => {
       `);
       const data = ttl(`ex:a a ex:T ; ex:p 1 ; ex:q 2 . ex:b ex:p 1 .`);
       const report = yield* Validator.validate(data, shapes, { details: true });
-      const tags = report.results
-        .map(
+      const tags = sorted(
+        report.results.map(
           (r) =>
             `${(r.focusNode as Term.NamedNode).value} ${sh.localName(r.sourceConstraintComponent as Term.NamedNode)}`,
-        )
-        .sort();
+        ),
+      );
       expect(tags).toEqual([
         'http://example.org/a ClosedConstraintComponent',
         'http://example.org/b NotConstraintComponent',

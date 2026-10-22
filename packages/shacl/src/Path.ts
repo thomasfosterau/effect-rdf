@@ -339,37 +339,51 @@ export const fromRdf = (
     if (n._tag !== 'BlankNode') return bad(n, `${n.key} is not a valid SHACL path`);
     if (visiting.has(n.key)) return bad(n, `${n.key} is a recursive path`);
     visiting.add(n.key);
-    try {
-      if (Dataset.match(graph, { subject: n, predicate: rdf.first }).length > 0) {
-        return sequence(...readList(n, n, 'sequence'));
-      }
-      const single = (p: Term.NamedNode): Term.Term | undefined => {
-        const values = Dataset.objectsOf(graph, n, p);
-        if (values.length > 1) bad(n, `${n.key} has multiple values for ${p.key}`);
-        return values[0];
-      };
-      const alt = single(sh.alternativePath);
-      if (alt !== undefined) return alternative(...readList(n, alt, 'alternative'));
-      const inv = single(sh.inversePath);
-      if (inv !== undefined) return inverse(go(inv));
-      const zom = single(sh.zeroOrMorePath);
-      if (zom !== undefined) return zeroOrMore(go(zom));
-      const oom = single(sh.oneOrMorePath);
-      if (oom !== undefined) return oneOrMore(go(oom));
-      const zoo = single(sh.zeroOrOnePath);
-      if (zoo !== undefined) return zeroOrOne(go(zoo));
-      return bad(n, `${n.key} is not a valid SHACL path`);
-    } finally {
-      visiting.delete(n.key);
-    }
+    const read = Result.try(() => readNode(n));
+    visiting.delete(n.key);
+    if (Result.isFailure(read)) throw read.failure;
+    return read.success;
   };
-  try {
-    return Result.succeed(go(node));
-  } catch (e) {
-    if (e instanceof PathSyntaxError) return Result.fail(e);
-    throw e;
-  }
+  const readNode = (n: Term.BlankNode): Path => {
+    if (Dataset.match(graph, { subject: n, predicate: rdf.first }).length > 0) {
+      return sequence(...readList(n, n, 'sequence'));
+    }
+    const single = (p: Term.NamedNode): Term.Term | undefined => {
+      const values = Dataset.objectsOf(graph, n, p);
+      if (values.length > 1) bad(n, `${n.key} has multiple values for ${p.key}`);
+      return values[0];
+    };
+    const alt = single(sh.alternativePath);
+    if (alt !== undefined) return alternative(...readList(n, alt, 'alternative'));
+    const inv = single(sh.inversePath);
+    if (inv !== undefined) return inverse(go(inv));
+    const zom = single(sh.zeroOrMorePath);
+    if (zom !== undefined) return zeroOrMore(go(zom));
+    const oom = single(sh.oneOrMorePath);
+    if (oom !== undefined) return oneOrMore(go(oom));
+    const zoo = single(sh.zeroOrOnePath);
+    if (zoo !== undefined) return zeroOrOne(go(zoo));
+    return bad(n, `${n.key} is not a valid SHACL path`);
+  };
+  return Result.try({
+    try: () => go(node),
+    catch: (e) => {
+      if (e instanceof PathSyntaxError) return e;
+      throw e;
+    },
+  });
 };
+
+/**
+ * A path encoded as RDF: its root term and the quads describing it.
+ *
+ * @since 0.1.0
+ * @category encoding
+ */
+export interface PathRdf {
+  readonly node: Term.NamedNode | Term.BlankNode;
+  readonly quads: ReadonlyArray<Term.Quad>;
+}
 
 /**
  * Encodes a path as RDF, returning the path's root term and the triples
@@ -378,10 +392,7 @@ export const fromRdf = (
  * @since 0.1.0
  * @category encoding
  */
-export const toRdf = (
-  self: Path,
-  graph: Term.Graph = Term.defaultGraph,
-): { readonly node: Term.NamedNode | Term.BlankNode; readonly quads: ReadonlyArray<Term.Quad> } => {
+export const toRdf = (self: Path, graph: Term.Graph = Term.defaultGraph): PathRdf => {
   const quads: Array<Term.Quad> = [];
   const list = (items: ReadonlyArray<Path>): Term.NamedNode | Term.BlankNode => {
     const nodes = items.map(() => Term.blankNode());

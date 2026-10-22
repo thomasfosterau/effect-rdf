@@ -97,7 +97,7 @@ const runTest = (t: ProtocolTest) =>
         if (format === 'boolean' || format === 'tabular') {
           const codec = Results.codecFor(contentType ?? '');
           assert.strictEqual(Option.isSome(codec), true, label);
-          const parsed = yield* Option.getOrThrow(codec).parse(text);
+          const parsed = yield* Option.getOrElse(codec, () => assert.fail(label)).parse(text);
           assert.strictEqual(parsed._tag, format === 'boolean' ? 'Boolean' : 'ResultSet', label);
           if (spec.response.expectedBoolean !== undefined && parsed._tag === 'Boolean') {
             assert.strictEqual(parsed.value, spec.response.expectedBoolean, label);
@@ -106,7 +106,9 @@ const runTest = (t: ProtocolTest) =>
           yield* parseRdf(contentType, text, request.url);
         }
       } else if (spec.response.expectedBoolean !== undefined) {
-        const parsed = yield* Option.getOrThrow(Results.codecFor(contentType ?? '')).parse(text);
+        const parsed = yield* Option.getOrElse(Results.codecFor(contentType ?? ''), () =>
+          assert.fail(label),
+        ).parse(text);
         assert.strictEqual(
           parsed._tag === 'Boolean' && parsed.value,
           spec.response.expectedBoolean,
@@ -229,6 +231,6 @@ describe.skipIf(!exists)('SPARQL 1.1 Service Description', () => {
  * requests only in prose comments, and depend on state the suite never sets
  * up (e.g. deleting `person/2.ttl`, which no earlier test creates).
  */
-export const skippedSuites: Readonly<Record<string, string>> = {
+export const skippedSuites = {
   'sparql11/http-rdf-update': 'Deprecated in favour of sparql11/graph-store-protocol',
 };

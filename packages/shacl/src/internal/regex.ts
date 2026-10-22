@@ -4,6 +4,11 @@
  *
  * @internal
  */
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
+
+/** A string as a JSON string literal, for messages. */
+const quote = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
 const escapeAll = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -55,13 +60,13 @@ export const compile = (
     }
   }
   if (flags.includes('q')) source = escapeAll(pattern);
-  try {
-    return { regex: new RegExp(source, `${jsFlags}u`) };
-  } catch {
-    try {
-      return { regex: new RegExp(source, jsFlags) };
-    } catch (e) {
-      return { error: `invalid regular expression ${JSON.stringify(pattern)}: ${String(e)}` };
-    }
-  }
+  // Unicode mode first (XPath character classes need it), then the legacy
+  // syntax that accepts the escapes Unicode mode rejects.
+  const compiled = Result.orElse(
+    Result.try(() => new RegExp(source, `${jsFlags}u`)),
+    () => Result.try(() => new RegExp(source, jsFlags)),
+  );
+  return Result.isSuccess(compiled)
+    ? { regex: compiled.success }
+    : { error: `invalid regular expression ${quote(pattern)}: ${String(compiled.failure)}` };
 };

@@ -88,7 +88,13 @@ interface Frame {
   textStart: number;
 }
 
-const PREDEFINED: Record<string, string> = { lt: '<', gt: '>', amp: '&', apos: "'", quot: '"' };
+const PREDEFINED = new Map([
+  ['lt', '<'],
+  ['gt', '>'],
+  ['amp', '&'],
+  ['apos', "'"],
+  ['quot', '"'],
+]);
 
 const baseFrame = (inScope: ReadonlyMap<string, string>): Frame => ({
   qname: '',
@@ -186,7 +192,7 @@ const act = (f: (pos: number) => void): P<number> => Parser.tap(Parser.location,
 
 /** Throws `message` at the current offset. */
 const failHere = <A = never>(message: string): P<A> =>
-  act((pos) => fail(message, pos)) as unknown as P<A>;
+  Parser.map(Parser.location, (pos): A => fail(message, pos));
 
 const at = (s: string): P<unknown> => Parser.peek(lit(s));
 
@@ -264,7 +270,7 @@ const expandCharRefs = (raw: string, offset: number): string =>
 /** The replacement text of a reference to `name`, counted against the expansion limit. */
 const entityText = (name: string, offset: number, stack: ReadonlySet<string>): string => {
   if (!isName(name)) fail('Invalid entity reference', offset);
-  const predefined = PREDEFINED[name];
+  const predefined = PREDEFINED.get(name);
   if (predefined !== undefined)
     return predefined === '<' ? '&#60;' : predefined === '&' ? '&#38;' : predefined;
   if (x.externalEntities.has(name)) fail(`External entity "${name}" is not supported`, offset);
@@ -821,21 +827,25 @@ const replacementNodes = (body: string, replacement: string, start: number): Arr
   x.stack = [frame];
   x.base = 1;
   x.entityStack = withEntry(entityStack, body);
-  try {
-    const result = Parser.parse(entityContent, replacement);
-    if (Result.isFailure(result)) fail('Invalid markup', result.failure.offset);
-    flush(frame);
-    return frame.children;
-  } catch (e) {
-    if (e instanceof Failure) fail(`In entity "${body}": ${e.message}`, start);
-    throw e;
-  } finally {
-    x.src = src;
-    x.lineStarts = lineStarts;
-    x.stack = stack;
-    x.base = base;
-    x.entityStack = entityStack;
+  const outcome = Result.try({
+    try: () => {
+      const result = Parser.parse(entityContent, replacement);
+      if (Result.isFailure(result)) fail('Invalid markup', result.failure.offset);
+      flush(frame);
+      return frame.children;
+    },
+    catch: (e) => e,
+  });
+  x.src = src;
+  x.lineStarts = lineStarts;
+  x.stack = stack;
+  x.base = base;
+  x.entityStack = entityStack;
+  if (Result.isSuccess(outcome)) return outcome.success;
+  if (outcome.failure instanceof Failure) {
+    fail(`In entity "${body}": ${outcome.failure.message}`, start);
   }
+  throw outcome.failure;
 };
 
 const reference: P<unknown> = Parser.seq(
@@ -851,7 +861,7 @@ const reference: P<unknown> = Parser.seq(
       pushText(frame, charRef(body, start), start);
       return;
     }
-    const predefined = PREDEFINED[body];
+    const predefined = PREDEFINED.get(body);
     if (predefined !== undefined) {
       pushText(frame, predefined, start);
       return;

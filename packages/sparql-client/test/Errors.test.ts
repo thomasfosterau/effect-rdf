@@ -2,6 +2,7 @@
  * Error handling against a mocked `HttpClient`.
  */
 import { describe, expect, it } from '@effect/vitest';
+import * as Headers from 'effect/http/Headers';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Schedule from 'effect/Schedule';
@@ -210,10 +211,10 @@ describe('SparqlClient errors', () => {
 
   it.effect('sends configured and per-request headers', () =>
     Effect.gen(function* () {
-      let seen: Record<string, string> = {};
+      let seen = Headers.empty;
       let url = '';
       const capture: Handler = (request) => {
-        seen = { ...request.headers };
+        seen = request.headers;
         url = request.url;
         return respond('{"head":{},"boolean":true}', { contentType: JSON_RESULTS })(request);
       };

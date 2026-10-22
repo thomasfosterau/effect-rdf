@@ -1,14 +1,14 @@
 import * as Cause from 'effect/Cause';
-import * as Data from 'effect/Data';
 import type * as Duration from 'effect/Duration';
 import * as Effect from 'effect/Effect';
 import * as Fiber from 'effect/Fiber';
 import * as Option from 'effect/Option';
 import * as Queue from 'effect/Queue';
+import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 
 /** Raised when a query exceeds its time limit. */
-export class QueryTimeout extends Data.TaggedError('QueryTimeout')<{}> {}
+export class QueryTimeout extends Schema.TaggedError<QueryTimeout>()('QueryTimeout', {}) {}
 
 /**
  * Starts evaluating a stream in the background and waits for its first

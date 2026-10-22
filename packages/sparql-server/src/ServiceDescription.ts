@@ -21,12 +21,22 @@ const FORMATS = 'http://www.w3.org/ns/formats/';
 const ENTAILMENT = 'http://www.w3.org/ns/entailment/';
 
 /**
+ * A table from media type to its `http://www.w3.org/ns/formats/` IRI.
+ *
+ * @since 0.1.0
+ * @category vocabulary
+ */
+export interface FormatIris {
+  readonly [mediaType: string]: string;
+}
+
+/**
  * The `http://www.w3.org/ns/formats/` IRIs of well-known media types.
  *
  * @since 0.1.0
  * @category vocabulary
  */
-export const formatIris: Readonly<Record<string, string>> = {
+export const formatIris: FormatIris = {
   'text/turtle': `${FORMATS}Turtle`,
   'application/n-triples': `${FORMATS}N-Triples`,
   'application/rdf+xml': `${FORMATS}RDF_XML`,

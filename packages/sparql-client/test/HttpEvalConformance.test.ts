@@ -12,6 +12,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
@@ -29,7 +31,7 @@ const sparqlDir = path.join(suitesDir, 'rdf-tests', 'sparql');
 const exists = fs.existsSync(sparqlDir);
 
 /** Directories whose tests are not run here, with the reason. */
-const SKIPPED_DIRECTORIES: Readonly<Record<string, string>> = {
+const SKIPPED_DIRECTORIES = {
   'sparql11/service': 'Run by Federation.test.ts with one server per endpoint',
   'sparql11/entailment': 'Entailment regimes are not supported by the engine',
 };
@@ -103,6 +105,12 @@ const orderKey = (
     })
     .join('|');
 
+const sortedStrings = (bindings: ReadonlyArray<{ readonly toString: () => string }>) =>
+  Arr.sort(
+    bindings.map((b) => b.toString()),
+    Order.String,
+  );
+
 const ENDPOINT = 'http://sparql.test/sparql';
 
 const clientLayer = (data: Dataset.Dataset, baseIri: string, resultsAccept: string) =>
@@ -135,9 +143,10 @@ const runQueryTest = (t: TestCase, accept: string) =>
         case 'Describe': {
           const actual = yield* client.constructDataset(text);
           const exp = expected as Dataset.Dataset;
-          if (!Isomorphism.isomorphic(actual, exp)) {
-            expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(exp));
-          }
+          const isomorphic = Isomorphism.isomorphic(actual, exp);
+          expect(isomorphic ? '' : Dataset.toNQuads(actual)).toBe(
+            isomorphic ? '' : Dataset.toNQuads(exp),
+          );
           return;
         }
         case 'Select': {
@@ -148,18 +157,16 @@ const runQueryTest = (t: TestCase, accept: string) =>
             actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
           }
           const exp = (expected as Results.ResultSet).bindings;
-          if (!sameResults(actual, exp, { lax: t.laxCardinality })) {
-            expect(actual.map((b) => b.toString()).sort()).toEqual(
-              exp.map((b) => b.toString()).sort(),
-            );
-            expect.fail('Results differ only in blank node structure');
-          }
+          const same = sameResults(actual, exp, { lax: t.laxCardinality });
+          expect(same ? [] : sortedStrings(actual)).toEqual(same ? [] : sortedStrings(exp));
+          expect(same, 'Results differ only in blank node structure').toBe(true);
           const vars = query.orderBy.every((o) => o.expression._tag === 'Variable')
             ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
             : [];
-          if (vars.length > 0 && !t.laxCardinality) {
-            expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
-          }
+          const ordered = vars.length > 0 && !t.laxCardinality;
+          expect(ordered ? actual.map((b) => orderKey(b, vars)) : []).toEqual(
+            ordered ? exp.map((b) => orderKey(b, vars)) : [],
+          );
           return;
         }
       }
@@ -173,19 +180,18 @@ const runUpdateTest = (t: TestCase) =>
     yield* Effect.gen(function* () {
       const client = yield* SparqlClient.SparqlClient;
       const outcome = yield* Effect.result(client.update(text));
-      if (!t.updateSuccess) {
-        expect(outcome._tag).toBe('Failure');
-        return;
-      }
-      if (outcome._tag === 'Failure') throw outcome.failure;
+      expect(t.updateSuccess ? 'Failure' : outcome._tag).toBe('Failure');
+      if (!t.updateSuccess) return;
+      if (outcome._tag === 'Failure') return yield* outcome.failure;
       const quads: Array<Term.Quad> = [];
       for (const file of t.resultData) quads.push(...parseFile(file));
       for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
       const expected = Dataset.fromIterable(quads);
       const actual = yield* Store.toDataset(yield* Store.QuadStore);
-      if (!Isomorphism.isomorphic(actual, expected)) {
-        expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(expected));
-      }
+      const isomorphic = Isomorphism.isomorphic(actual, expected);
+      expect(isomorphic ? '' : Dataset.toNQuads(actual)).toBe(
+        isomorphic ? '' : Dataset.toNQuads(expected),
+      );
     }).pipe(Effect.provide(clientLayer(loadDataset(t, undefined), baseIri, FORMATS[0])));
   });
 

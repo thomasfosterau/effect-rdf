@@ -19,6 +19,7 @@ import { parseArgs } from 'node:util';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import type * as HttpServerError from 'effect/http/HttpServerError';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -126,7 +127,13 @@ export const parse = (argv: ReadonlyArray<string>): Effect.Effect<Arguments, Cli
             help: { type: 'boolean', short: 'h' },
           },
         }),
-      catch: (e) => new CliError({ message: e instanceof Error ? e.message : String(e) }),
+      catch: (e) =>
+        new CliError({
+          message:
+            Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+              ? e.message
+              : String(e),
+        }),
     });
     const v = parsed.values;
     const port = (yield* positiveInt('port', v.port)) ?? 3030;
@@ -177,7 +184,11 @@ export const load = (
         try: () => fs.readFile(file, 'utf8'),
         catch: (e) =>
           new CliError({
-            message: `Cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`,
+            message: `Cannot read ${file}: ${
+              Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+                ? e.message
+                : String(e)
+            }`,
           }),
       });
       const url = pathToFileURL(path.resolve(file)).href;

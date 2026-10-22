@@ -808,13 +808,13 @@ export const layer = (config: Config): Layer.Layer<SparqlClient, never, HttpClie
 // -----------------------------------------------------------------------------
 
 /**
- * Streams the rows of a `SELECT` query with the `SparqlClient` from the
- * context. Builder queries produce typed rows.
+ * The type of the {@link select} accessor: `SparqlClientShape['select']`
+ * with the `SparqlClient` taken from the context.
  *
  * @since 0.1.0
  * @category accessors
  */
-export const select: {
+export interface SelectAccessor {
   <R extends string, O extends string>(
     query: QueryBuilder.Builder<'Select', R, O>,
     options?: QueryOptions,
@@ -823,8 +823,23 @@ export const select: {
     query: string | Ast.Query,
     options?: QueryOptions,
   ): Stream.Stream<Row, Errors.SparqlClientError, SparqlClient>;
-} = ((query: any, options?: QueryOptions) =>
-  Stream.unwrap(Effect.map(Effect.service(SparqlClient), (c) => c.select(query, options)))) as any;
+}
+
+/**
+ * Streams the rows of a `SELECT` query with the `SparqlClient` from the
+ * context. Builder queries produce typed rows.
+ *
+ * @since 0.1.0
+ * @category accessors
+ */
+export const select = ((query: QueryInput, options?: QueryOptions) =>
+  Stream.unwrap(
+    Effect.map(Effect.service(SparqlClient), (c) =>
+      // SAFETY: both overloads of `select` are one implementation over
+      // `QueryInput`; the builder's row typing is restored by `SelectAccessor`.
+      c.select(query as string | Ast.Query, options),
+    ),
+  )) as SelectAccessor;
 
 /**
  * Streams the rows of a `SELECT` query decoded with a schema (whose fields

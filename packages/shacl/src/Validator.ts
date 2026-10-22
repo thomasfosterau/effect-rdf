@@ -40,6 +40,9 @@ import * as Sparql from './Sparql.ts';
 import * as ValidationReport from './ValidationReport.ts';
 import { SH, sh } from './Vocabulary.ts';
 
+/** A string as a JSON string literal, for messages. */
+const quote = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+
 const { rdf, rdfs, xsd } = Vocab;
 
 // -----------------------------------------------------------------------------
@@ -222,7 +225,7 @@ const defaultMessage = (c: Shapes.Constraint, value: Term.Term | undefined): str
     case 'MaxLength':
       return `${v} is longer than ${c.maxLength} characters`;
     case 'Pattern':
-      return `${v} does not match pattern ${JSON.stringify(c.pattern)}`;
+      return `${v} does not match pattern ${quote(c.pattern)}`;
     case 'LanguageIn':
       return `${v} does not have a language tag in [${c.languages.join(', ')}]`;
     case 'UniqueLang':
@@ -463,7 +466,9 @@ const makeEngine = (
       active.add(key);
       const valueNodes =
         shape._tag === 'PropertyShape' ? Path.evaluate(data, focus, shape.path) : [focus];
-      return Effect.forEach(shape.constraints, (c) => evaluate(shape, focus, valueNodes, c)).pipe(
+      return Effect.forEach(shape.constraints, (c) => evaluate(shape, focus, valueNodes, c), {
+        concurrency: 1,
+      }).pipe(
         Effect.map((rs) => {
           const results = rs.flat();
           active.delete(key);

@@ -19,7 +19,10 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
+import type * as Ordering from 'effect/Ordering';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Chars from './internal/chars.ts';
@@ -305,19 +308,25 @@ export const normalizeInput = (input: string): string => {
 export const parseResult = (input: string): Result.Result<Document, XmlParseError> => {
   const text = normalizeInput(input);
   const lineStarts = lineStartsOf(text);
-  try {
-    const bad = Chars.INVALID_CHAR_RE.exec(text);
-    if (bad !== null) throw new Internal.Failure('Invalid XML character', bad.index);
-    return Result.succeed(Internal.parse(text, lineStarts));
-  } catch (e) {
-    if (e instanceof Internal.Failure) {
-      const p = position(lineStarts, Math.min(e.offset, text.length));
-      return Result.fail(
-        new XmlParseError({ message: e.message, offset: p.offset, line: p.line, column: p.column }),
-      );
-    }
-    throw e;
-  }
+  return Result.try({
+    try: () => {
+      const bad = Chars.INVALID_CHAR_RE.exec(text);
+      if (bad !== null) throw new Internal.Failure('Invalid XML character', bad.index);
+      return Internal.parse(text, lineStarts);
+    },
+    catch: (e) => {
+      if (e instanceof Internal.Failure) {
+        const p = position(lineStarts, Math.min(e.offset, text.length));
+        return new XmlParseError({
+          message: e.message,
+          offset: p.offset,
+          line: p.line,
+          column: p.column,
+        });
+      }
+      throw e;
+    },
+  });
 };
 
 /**
@@ -365,7 +374,7 @@ export const escapeAttribute = (value: string): string =>
               : '&#xD;',
   );
 
-const compareStrings = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const compareStrings = (a: string, b: string): Ordering.Ordering => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * Serialises a sequence of nodes (with all their descendants, but none of
@@ -394,12 +403,15 @@ export const canonicalize = (nodes: ReadonlyArray<Node>): string => {
         for (const a of node.attributes)
           if (a.prefix !== '' && a.prefix !== 'xml') utilized.add(a.prefix);
         utilized.delete('xml');
-        const decls: Array<readonly [string, string]> = [];
+        const unsorted: Array<readonly [string, string]> = [];
         for (const p of utilized) {
           const uri = node.inScopeNamespaces.get(p) ?? '';
-          if ((rendered.get(p) ?? '') !== uri) decls.push([p, uri]);
+          if ((rendered.get(p) ?? '') !== uri) unsorted.push([p, uri]);
         }
-        decls.sort((a, b) => compareStrings(a[0], b[0]));
+        const decls = Arr.sort(
+          unsorted,
+          Order.make<readonly [string, string]>((a, b) => compareStrings(a[0], b[0])),
+        );
         let next = rendered;
         if (decls.length > 0) {
           const m = new Map(rendered);
@@ -411,10 +423,13 @@ export const canonicalize = (nodes: ReadonlyArray<Node>): string => {
           out +=
             p === '' ? ` xmlns="${escapeAttribute(uri)}"` : ` xmlns:${p}="${escapeAttribute(uri)}"`;
         }
-        const attrs = [...node.attributes].sort(
-          (a, b) =>
-            compareStrings(a.namespace ?? '', b.namespace ?? '') ||
-            compareStrings(a.localName, b.localName),
+        const attrs = Arr.sort(
+          node.attributes,
+          Order.make<Attribute>(
+            (a, b) =>
+              compareStrings(a.namespace ?? '', b.namespace ?? '') ||
+              compareStrings(a.localName, b.localName),
+          ),
         );
         for (const a of attrs) out += ` ${a.name}="${escapeAttribute(a.value)}"`;
         out += '>';

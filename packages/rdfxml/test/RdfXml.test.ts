@@ -27,10 +27,12 @@ const expectGraph = (input: string, nt: string, options?: RdfXml.ParseOptions) =
   Effect.gen(function* () {
     const result = yield* RdfXml.parse(input, options);
     const expected = parseNTriples(nt);
-    if (!Isomorphism.isomorphic(result.dataset, expected)) {
-      expect(Dataset.toNQuads(result.dataset)).toEqual(Dataset.toNQuads(expected));
-    }
-    expect(Isomorphism.isomorphic(result.dataset, expected)).toBe(true);
+    const isomorphic = Isomorphism.isomorphic(result.dataset, expected);
+    // On a mismatch, compare the N-Quads first so the failure shows a diff.
+    expect(isomorphic ? '' : Dataset.toNQuads(result.dataset)).toEqual(
+      isomorphic ? '' : Dataset.toNQuads(expected),
+    );
+    expect(isomorphic).toBe(true);
   });
 
 describe('RdfXml.parse', () => {
@@ -180,7 +182,7 @@ _:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org
       expect(Dataset.toArray(result.dataset).map((q) => q.graph.key)).toEqual([
         '<http://example.org/g>',
       ]);
-      expect(Option.getOrThrow(PrefixMap.get(result.prefixes, 'ex'))).toBe('http://example.org/');
+      expect(PrefixMap.get(result.prefixes, 'ex')).toEqual(Option.some('http://example.org/'));
       expect(result.baseIri).toBe('http://example.org/');
     }),
   );

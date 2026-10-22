@@ -17,6 +17,7 @@
  * @since 0.1.0
  */
 import { Dataset, Rdfs, Term, Vocab, Xsd } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
@@ -420,20 +421,18 @@ const isShapeId = (t: Term.Term): t is ShapeId => t._tag === 'NamedNode' || t._t
  */
 export const parseResult = (
   dataset: Dataset.Dataset,
-): Result.Result<ShapesGraph, ShapesGraphError> => {
-  try {
-    return Result.succeed(parseUnsafe(dataset));
-  } catch (e) {
-    if (e instanceof ParseFailure) {
-      return Result.fail(
-        new ShapesGraphError(
+): Result.Result<ShapesGraph, ShapesGraphError> =>
+  Result.try({
+    try: () => parseUnsafe(dataset),
+    catch: (e) => {
+      if (e instanceof ParseFailure) {
+        return new ShapesGraphError(
           e.node === undefined ? { message: e.message } : { message: e.message, node: e.node.key },
-        ),
-      );
-    }
-    throw e;
-  }
-};
+        );
+      }
+      throw e;
+    },
+  });
 
 /**
  * Parses a shapes graph into a typed model. Fails with a `ShapesGraphError`
@@ -735,7 +734,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     return { _tag: 'NodeShape', id, targets, constraints, severity, messages, deactivated };
   };
 
-  const shapes = Array.from(candidates.values()).sort(Term.compare).map(parseShape);
+  const shapes = Arr.map(Arr.sort(candidates.values(), Term.compare), parseShape);
   const index = new Map(shapes.map((s) => [s.id.key, s]));
   return { _tag: 'ShapesGraph', dataset: g, shapes, index };
 };
