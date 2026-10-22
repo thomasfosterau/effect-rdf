@@ -30,52 +30,61 @@ const TIME = '(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?|24:00:00(?:\\.
 
 const re = (s: string) => new RegExp(`^${s}$`);
 
-const lexical: Record<string, RegExp> = {
-  boolean: /^(?:true|false|1|0)$/,
-  decimal: /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/,
-  integer: /^[+-]?\d+$/,
-  double: /^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?INF|NaN)$/,
-  float: /^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?INF|NaN)$/,
-  dateTime: re(`${YEAR}-${MONTH}-${DAY}T${TIME}${TZ}?`),
-  dateTimeStamp: re(`${YEAR}-${MONTH}-${DAY}T${TIME}${TZ}`),
-  date: re(`${YEAR}-${MONTH}-${DAY}${TZ}?`),
-  time: re(`${TIME}${TZ}?`),
-  gYear: re(`${YEAR}${TZ}?`),
-  gYearMonth: re(`${YEAR}-${MONTH}${TZ}?`),
-  gMonth: re(`--${MONTH}${TZ}?`),
-  gMonthDay: re(`--${MONTH}-${DAY}${TZ}?`),
-  gDay: re(`---${DAY}${TZ}?`),
-  duration:
-    /^-?P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/,
-  yearMonthDuration: /^-?P(?=\d)(?:\d+Y)?(?:\d+M)?$/,
-  dayTimeDuration: /^-?P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/,
-  hexBinary: /^(?:[0-9A-Fa-f]{2})*$/,
-  base64Binary:
-    /^(?:(?:[A-Za-z0-9+/] ?){4})*(?:(?:[A-Za-z0-9+/] ?){2}[AEIMQUYcgkosw048] ?=|[A-Za-z0-9+/] ?[AQgw] ?= ?=)?$/,
-  language: /^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/,
-  // eslint-disable-next-line no-control-regex
-  normalizedString: /^[^\r\n\t]*$/,
-  token: /^(?:[^\s](?:[^\s]| (?! ))*[^\s]|[^\s])?$/,
-  NMTOKEN: /^[\w.\-:\u00B7\u00C0-\uFFFD]+$/u,
-  Name: /^[A-Za-z_:\u00C0-\uFFFD][\w.\-:\u00B7\u00C0-\uFFFD]*$/u,
-  NCName: /^[A-Za-z_\u00C0-\uFFFD][\w.\-\u00B7\u00C0-\uFFFD]*$/u,
-};
+const INTEGER = /^[+-]?\d+$/;
+const LANGUAGE = /^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/;
 
-const integerBounds: Record<string, readonly [bigint | undefined, bigint | undefined]> = {
-  integer: [undefined, undefined],
-  long: [-(2n ** 63n), 2n ** 63n - 1n],
-  int: [-(2n ** 31n), 2n ** 31n - 1n],
-  short: [-32768n, 32767n],
-  byte: [-128n, 127n],
-  unsignedLong: [0n, 2n ** 64n - 1n],
-  unsignedInt: [0n, 2n ** 32n - 1n],
-  unsignedShort: [0n, 65535n],
-  unsignedByte: [0n, 255n],
-  positiveInteger: [1n, undefined],
-  nonNegativeInteger: [0n, undefined],
-  negativeInteger: [undefined, -1n],
-  nonPositiveInteger: [undefined, 0n],
-};
+/** Lexical-space patterns by XSD local name. */
+const lexical = new Map<string, RegExp>(
+  Object.entries({
+    boolean: /^(?:true|false|1|0)$/,
+    decimal: /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/,
+    integer: INTEGER,
+    double: /^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?INF|NaN)$/,
+    float: /^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?INF|NaN)$/,
+    dateTime: re(`${YEAR}-${MONTH}-${DAY}T${TIME}${TZ}?`),
+    dateTimeStamp: re(`${YEAR}-${MONTH}-${DAY}T${TIME}${TZ}`),
+    date: re(`${YEAR}-${MONTH}-${DAY}${TZ}?`),
+    time: re(`${TIME}${TZ}?`),
+    gYear: re(`${YEAR}${TZ}?`),
+    gYearMonth: re(`${YEAR}-${MONTH}${TZ}?`),
+    gMonth: re(`--${MONTH}${TZ}?`),
+    gMonthDay: re(`--${MONTH}-${DAY}${TZ}?`),
+    gDay: re(`---${DAY}${TZ}?`),
+    duration:
+      /^-?P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/,
+    yearMonthDuration: /^-?P(?=\d)(?:\d+Y)?(?:\d+M)?$/,
+    dayTimeDuration: /^-?P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/,
+    hexBinary: /^(?:[0-9A-Fa-f]{2})*$/,
+    base64Binary:
+      /^(?:(?:[A-Za-z0-9+/] ?){4})*(?:(?:[A-Za-z0-9+/] ?){2}[AEIMQUYcgkosw048] ?=|[A-Za-z0-9+/] ?[AQgw] ?= ?=)?$/,
+    language: LANGUAGE,
+    // eslint-disable-next-line no-control-regex
+    normalizedString: /^[^\r\n\t]*$/,
+    token: /^(?:[^\s](?:[^\s]| (?! ))*[^\s]|[^\s])?$/,
+    NMTOKEN: /^[\w.\-:\u00B7\u00C0-\uFFFD]+$/u,
+    Name: /^[A-Za-z_:\u00C0-\uFFFD][\w.\-:\u00B7\u00C0-\uFFFD]*$/u,
+    NCName: /^[A-Za-z_\u00C0-\uFFFD][\w.\-\u00B7\u00C0-\uFFFD]*$/u,
+  }),
+);
+
+/** Value-space bounds (inclusive; `undefined` is unbounded) of the XSD integer types. */
+const integerBounds = new Map<string, readonly [bigint | undefined, bigint | undefined]>(
+  Object.entries({
+    integer: [undefined, undefined],
+    long: [-(2n ** 63n), 2n ** 63n - 1n],
+    int: [-(2n ** 31n), 2n ** 31n - 1n],
+    short: [-32768n, 32767n],
+    byte: [-128n, 127n],
+    unsignedLong: [0n, 2n ** 64n - 1n],
+    unsignedInt: [0n, 2n ** 32n - 1n],
+    unsignedShort: [0n, 65535n],
+    unsignedByte: [0n, 255n],
+    positiveInteger: [1n, undefined],
+    nonNegativeInteger: [0n, undefined],
+    negativeInteger: [undefined, -1n],
+    nonPositiveInteger: [undefined, 0n],
+  }),
+);
 
 /**
  * The XSD numeric datatypes recognised by SPARQL, ordered by type promotion.
@@ -83,7 +92,7 @@ const integerBounds: Record<string, readonly [bigint | undefined, bigint | undef
  * @since 0.1.0
  */
 export const numericDatatypes: ReadonlySet<string> = new Set([
-  ...Object.keys(integerBounds).map((t) => XSD + t),
+  ...Array.from(integerBounds.keys(), (t) => XSD + t),
   `${XSD}decimal`,
   `${XSD}float`,
   `${XSD}double`,
@@ -96,7 +105,7 @@ export const numericDatatypes: ReadonlySet<string> = new Set([
  * @since 0.1.0
  */
 export const isIntegerDatatype = (datatype: string): boolean =>
-  datatype.startsWith(XSD) && datatype.slice(XSD.length) in integerBounds;
+  datatype.startsWith(XSD) && integerBounds.has(datatype.slice(XSD.length));
 
 /**
  * Whether a datatype IRI is numeric.
@@ -115,7 +124,7 @@ export const isKnownDatatype = (datatype: string): boolean => {
     return true;
   if (!datatype.startsWith(XSD)) return false;
   const local = datatype.slice(XSD.length);
-  return local in lexical || local in integerBounds || local === 'anyURI';
+  return lexical.has(local) || integerBounds.has(local) || local === 'anyURI';
 };
 
 /**
@@ -127,15 +136,15 @@ export const isKnownDatatype = (datatype: string): boolean => {
 export const isValidLexical = (datatype: string, value: string): boolean => {
   if (!datatype.startsWith(XSD)) return true;
   const local = datatype.slice(XSD.length);
-  const bounds = integerBounds[local];
+  const bounds = integerBounds.get(local);
   if (bounds !== undefined) {
-    if (!lexical.integer!.test(value)) return false;
+    if (!INTEGER.test(value)) return false;
     const n = BigInt(value);
     return (
       (bounds[0] === undefined || n >= bounds[0]) && (bounds[1] === undefined || n <= bounds[1])
     );
   }
-  const pattern = lexical[local];
+  const pattern = lexical.get(local);
   if (pattern === undefined) return true;
   if (!pattern.test(value)) return false;
   if (local === 'date' || local === 'dateTime' || local === 'dateTimeStamp') {
@@ -154,7 +163,7 @@ export const isValidLexical = (datatype: string, value: string): boolean => {
  */
 export const isWellFormed = (self: Literal): boolean =>
   self.language !== ''
-    ? lexical.language!.test(self.language)
+    ? LANGUAGE.test(self.language)
     : isValidLexical(self.datatype.value, self.value);
 
 const daysInMonth = (year: number, month: number) =>
@@ -245,7 +254,7 @@ export const toValue = (self: Literal): Value => {
   if (!dt.startsWith(XSD) || !isValidLexical(dt, v))
     return { _tag: 'Other', lexical: v, datatype: dt };
   const local = dt.slice(XSD.length);
-  if (local in integerBounds) return { _tag: 'Integer', value: BigInt(v) };
+  if (integerBounds.has(local)) return { _tag: 'Integer', value: BigInt(v) };
   switch (local) {
     case 'boolean':
       return { _tag: 'Boolean', value: v === 'true' || v === '1' };

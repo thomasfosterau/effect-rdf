@@ -5,7 +5,6 @@ import { describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, type Term } from '@thomasfosterau/effect-rdf';
 import { NQuads, NTriples } from '@thomasfosterau/effect-ntriples';
 import * as Effect from 'effect/Effect';
-import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -32,6 +31,32 @@ const chunked = (text: string, size: number): Stream.Stream<string> => {
   return Stream.fromIterable(chunks);
 };
 
+type Suite = (typeof suitesUnderTest)[number];
+type Options = { readonly baseIri: string; readonly blankNodePrefix: string };
+
+/** A negative test: both the strict and the streaming parser reject the input. */
+const expectRejected = Effect.fn(function* (suite: Suite, input: string, options: Options) {
+  const error = yield* Effect.flip(suite.syntax.parse(input, options));
+  expect(error._tag).toBe('RdfParseError');
+  const streamed = yield* Effect.flip(
+    Stream.runCollect(suite.syntax.parseStream(chunked(input, 7), options)),
+  );
+  expect(streamed._tag).toBe('RdfParseError');
+});
+
+/** An evaluation test: the parsed graph is isomorphic to the expected result. */
+const expectEvaluatesTo = Effect.fn(function* (
+  suite: Suite,
+  dataset: Dataset.Dataset,
+  result: string,
+) {
+  const expected = yield* suite.expected.parse(yield* read(result));
+  expect(
+    Isomorphism.isomorphic(dataset, expected.dataset),
+    `expected:\n${Dataset.toNQuads(expected.dataset)}\nactual:\n${Dataset.toNQuads(dataset)}`,
+  ).toBe(true);
+});
+
 const suitesUnderTest = [
   { manifest: 'rdf/rdf12/rdf-turtle/manifest.ttl', syntax: Turtle, expected: NTriples },
   { manifest: 'rdf/rdf12/rdf-trig/manifest.ttl', syntax: TriG, expected: NQuads },
@@ -45,19 +70,13 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
         expect(entries.length).toBeGreaterThan(200);
       });
       for (const entry of entries) {
-        const action = Option.getOrThrow(entry.action);
         it.effect(`${entry.name} (${entry.kind})`, () =>
           Effect.gen(function* () {
+            const action = yield* Effect.fromOption(entry.action);
             const input = yield* read(action);
             const options = { baseIri: action, blankNodePrefix: 'x' };
             if (entry.kind.endsWith('NegativeSyntax') || entry.kind.endsWith('NegativeEval')) {
-              const error = yield* Effect.flip(suite.syntax.parse(input, options));
-              expect(error._tag).toBe('RdfParseError');
-              const streamed = yield* Effect.flip(
-                Stream.runCollect(suite.syntax.parseStream(chunked(input, 7), options)),
-              );
-              expect(streamed._tag).toBe('RdfParseError');
-              return;
+              return yield* expectRejected(suite, input, options);
             }
             const { quads, prefixes } = yield* suite.syntax.parseQuads(input, options);
             for (const size of [1, 5, 64]) {
@@ -87,12 +106,7 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
               ).toBe(true);
             }
             if (entry.kind.endsWith('Eval')) {
-              const result = Option.getOrThrow(entry.result);
-              const expected = yield* suite.expected.parse(yield* read(result));
-              expect(
-                Isomorphism.isomorphic(dataset, expected.dataset),
-                `expected:\n${Dataset.toNQuads(expected.dataset)}\nactual:\n${Dataset.toNQuads(dataset)}`,
-              ).toBe(true);
+              yield* expectEvaluatesTo(suite, dataset, yield* Effect.fromOption(entry.result));
             }
           }),
         );

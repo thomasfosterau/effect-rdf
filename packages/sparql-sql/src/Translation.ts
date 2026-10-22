@@ -296,6 +296,18 @@ type F = { readonly s: Static } | { readonly q: string };
 
 type C = boolean | string;
 
+/** The join condition of two columns of one variable, and their merged column. */
+interface JoinCompat {
+  readonly cond: string;
+  readonly merged: Col;
+}
+
+/** Numeric-promotion branches of a comparison, and the class pairs they handle. */
+interface Promotions {
+  readonly branches: Array<readonly [C, string]>;
+  readonly handled: Set<string>;
+}
+
 interface Operand {
   readonly tag: 'term' | 'const' | 'int' | 'str' | 'bool' | 'iri' | 'null';
   /** Possible comparison classes (`undefined` = any). */
@@ -515,7 +527,7 @@ class Compiler {
 
   // --- joins ------------------------------------------------------------------
 
-  compat(a: Col, b: Col): { readonly cond: string; readonly merged: Col } {
+  compat(a: Col, b: Col): JoinCompat {
     if (a.type !== b.type) return unsupported('Joining integer and term columns');
     if (!a.nullable && !b.nullable) return { cond: `${a.sql} = ${b.sql}`, merged: a };
     if (!a.nullable) return { cond: `(${b.sql} IS NULL OR ${b.sql} = ${a.sql})`, merged: a };
@@ -1481,11 +1493,7 @@ class Compiler {
    * float, floats to double). Returns the branches and the class pairs they
    * handle.
    */
-  promoted(
-    a: Operand,
-    b: Operand,
-    op: string,
-  ): { readonly branches: Array<readonly [C, string]>; readonly handled: Set<string> } {
+  promoted(a: Operand, b: Operand, op: string): Promotions {
     const branches: Array<readonly [C, string]> = [];
     const handled = new Set<string>();
     const one = (t: Operand, c: Operand, flip: boolean) => {
@@ -1707,16 +1715,21 @@ export const compile = (
   context: TranslationContext,
   resolve: (term: Term.GroundTerm) => number | undefined,
 ): Result.Result<CompiledQuery, string> => {
-  try {
-    const locals = new Map<string, { readonly id: number; readonly term: Term.GroundTerm }>();
-    const first = compileOnce(op, context, resolve, locals, false);
-    if (locals.size === 0) return Result.succeed(first);
-    // Second pass: dictionary attributes of query-local terms are inlined.
-    return Result.succeed(compileOnce(op, context, resolve, locals, true));
-  } catch (err) {
-    if (err instanceof Unsupported) return Result.fail(err.reason);
-    throw err;
-  }
+  return Result.try({
+    try: () => {
+      const locals = new Map<string, { readonly id: number; readonly term: Term.GroundTerm }>();
+      const first = compileOnce(op, context, resolve, locals, false);
+      if (locals.size === 0) return first;
+      // Second pass: dictionary attributes of query-local terms are inlined.
+      return compileOnce(op, context, resolve, locals, true);
+    },
+    // An `Unsupported` is the expected failure; anything else is a defect and
+    // keeps propagating.
+    catch: (err) => {
+      if (err instanceof Unsupported) return err.reason;
+      throw err;
+    },
+  });
 };
 
 /**

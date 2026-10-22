@@ -7,7 +7,9 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
 import { parseQuads, parseStream, type Syntax } from '../src/internal/parse.ts';
 
@@ -93,8 +95,8 @@ const bench = (name: string, docs: ReadonlyArray<Doc>, stream = false, k = 9) =>
     all();
     samples.push(performance.now() - t);
   }
-  samples.sort((a, b) => a - b);
-  const median = samples[Math.floor(samples.length / 2)]!;
+  const sorted = Arr.sort(samples, Order.Number);
+  const median = sorted[Math.floor(sorted.length / 2)]!;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${docs.length} docs, ${(size / 1e6).toFixed(2)} MB, median ${median.toFixed(1)} ms` +

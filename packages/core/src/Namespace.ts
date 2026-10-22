@@ -79,7 +79,7 @@ export const vocabulary = <const Base extends string, const Terms extends string
   terms: ReadonlyArray<Terms>,
 ): Vocabulary<Base, Terms> => {
   const ns = make(base);
-  const props: Record<string, PropertyDescriptor> = {
+  const props: PropertyDescriptorMap = {
     terms: { value: terms, enumerable: false },
   };
   for (const term of terms) {

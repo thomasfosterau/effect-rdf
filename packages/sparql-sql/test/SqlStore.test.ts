@@ -2,6 +2,8 @@ import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Stream from 'effect/Stream';
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import { Dataset, Namespace, Term, Xsd } from '@thomasfosterau/effect-rdf';
 import * as Bindings from '@thomasfosterau/effect-sparql/Bindings';
 import * as Engine from '@thomasfosterau/effect-sparql/Engine';
@@ -81,12 +83,13 @@ describe('SqlStore', () => {
       );
       const rows = yield* Stream.runCollect(result.bindings);
       expect(
-        rows
-          .map(
+        Arr.sort(
+          rows.map(
             (b) =>
               `${lex(Bindings.getUndefined(b, 'name'))}:${lex(Bindings.getUndefined(b, 'age'))}`,
-          )
-          .sort(),
+          ),
+          Order.String,
+        ),
       ).toEqual(['Alice:30', 'Bob:undefined']);
       const count = yield* engine.select('SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }');
       const c = yield* Stream.runCollect(count.bindings);

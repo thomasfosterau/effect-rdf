@@ -6,6 +6,7 @@
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
+import * as Store from '@thomasfosterau/effect-sparql/Store';
 
 /** Term kinds stored in the `kind` column. */
 export const Kind = {
@@ -87,10 +88,14 @@ const decimalDigits = (d: BigDecimal.BigDecimal): number => {
   return v.toString().length;
 };
 
+/** A term's comparison class and, for numbers and booleans, its numeric value. */
+export interface Classification {
+  readonly cls: number;
+  readonly num: number | null;
+}
+
 /** The comparison class and numeric value of a term. */
-export const classify = (
-  term: Term.GroundTerm,
-): { readonly cls: number; readonly num: number | null } => {
+export const classify = (term: Term.GroundTerm): Classification => {
   switch (term._tag) {
     case 'NamedNode':
     case 'BlankNode':
@@ -200,7 +205,9 @@ export const encode = (
         num,
       };
     case 'Triple': {
-      if (componentIds === undefined) throw new Error('Triple terms need component ids');
+      if (componentIds === undefined) {
+        throw new Store.StoreError({ message: 'Triple terms need component ids' });
+      }
       return {
         kind: Kind.Triple,
         value: componentIds.join(' '),

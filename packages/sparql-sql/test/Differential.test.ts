@@ -3,10 +3,12 @@
  * the engine over the in-memory store and over the SQL store (SQLite), and
  * must give the same solutions (as multisets).
  */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Stream from 'effect/Stream';
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
 import * as Engine from '@thomasfosterau/effect-sparql/Engine';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
@@ -286,9 +288,15 @@ const evaluate = (engine: Engine.SparqlEngineShape, query: string) =>
       case 'Ask':
         return [String(result.value)];
       case 'Select':
-        return (yield* Stream.runCollect(result.bindings)).map((b) => b.key).sort();
+        return Arr.sort(
+          (yield* Stream.runCollect(result.bindings)).map((b) => b.key),
+          Order.String,
+        );
       case 'Graph':
-        return (yield* Stream.runCollect(result.quads)).map((q) => q.key).sort();
+        return Arr.sort(
+          (yield* Stream.runCollect(result.quads)).map((q) => q.key),
+          Order.String,
+        );
     }
   });
 
@@ -322,15 +330,17 @@ describe('Differential: SQL store vs in-memory store', () => {
               events = [];
               const expected = yield* Effect.exit(evaluate(memEngine, query));
               const actual = yield* Effect.exit(evaluate(sqlEngine, query));
-              if (Exit.isFailure(expected)) {
-                expect({ query, failed: Exit.isFailure(actual) }).toEqual({ query, failed: true });
-                continue;
-              }
-              if (Exit.isFailure(actual)) {
-                expect.fail(`SQL evaluation failed for ${query}: ${String(actual.cause)}`);
-              } else {
-                expect({ query, rows: actual.value }).toEqual({ query, rows: expected.value });
-              }
+              // Both fail, or both succeed with the same rows.
+              assert(
+                Exit.isSuccess(actual) || Exit.isFailure(expected),
+                Exit.isFailure(actual)
+                  ? `SQL evaluation failed for ${query}: ${String(actual.cause)}`
+                  : '',
+              );
+              const outcome = (exit: typeof expected) =>
+                Exit.isFailure(exit) ? { query, failed: true } : { query, rows: exit.value };
+              expect(outcome(actual)).toEqual(outcome(expected));
+              if (Exit.isFailure(expected)) continue;
               compared++;
               if (expected.value.length > 0 && expected.value[0] !== 'false') nonEmpty++;
               if (events[0]?._tag === 'Executed') rootInSql++;

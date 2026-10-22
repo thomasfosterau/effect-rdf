@@ -8,10 +8,12 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
@@ -397,23 +399,34 @@ export interface AcceptEntry {
  * @category negotiation
  */
 export const parseAccept = (header: string): ReadonlyArray<AcceptEntry> =>
-  header
-    .split(',')
-    .map((part, index) => {
-      const [type, ...params] = part.split(';').map((s) => s.trim());
-      let q = 1;
-      for (const p of params) {
-        const [k, v] = p.split('=').map((s) => s.trim());
-        if (k === 'q' && v !== undefined) q = Number(v);
-      }
-      return { mediaType: (type ?? '').toLowerCase(), q: Number.isNaN(q) ? 0 : q, index };
-    })
-    .filter((e) => e.mediaType !== '' && e.q > 0)
-    .sort(
-      (a, b) =>
-        b.q - a.q || specificity(b.mediaType) - specificity(a.mediaType) || a.index - b.index,
-    )
-    .map(({ mediaType, q }) => ({ mediaType, q }));
+  Arr.sort(
+    header
+      .split(',')
+      .map((part, index) => {
+        const [type, ...params] = part.split(';').map((s) => s.trim());
+        let q = 1;
+        for (const p of params) {
+          const [k, v] = p.split('=').map((s) => s.trim());
+          if (k === 'q' && v !== undefined) q = Number(v);
+        }
+        return { mediaType: (type ?? '').toLowerCase(), q: Number.isNaN(q) ? 0 : q, index };
+      })
+      .filter((e) => e.mediaType !== '' && e.q > 0),
+    acceptOrder,
+  ).map(({ mediaType, q }) => ({ mediaType, q }));
+
+interface AcceptCandidate {
+  readonly mediaType: string;
+  readonly q: number;
+  readonly index: number;
+}
+
+/** Highest quality first, then the most specific range, then header order. */
+const acceptOrder: Order.Order<AcceptCandidate> = Order.combineAll([
+  Order.flip(Order.mapInput(Order.Number, (e: AcceptCandidate) => e.q)),
+  Order.flip(Order.mapInput(Order.Number, (e: AcceptCandidate) => specificity(e.mediaType))),
+  Order.mapInput(Order.Number, (e: AcceptCandidate) => e.index),
+]);
 
 const specificity = (mt: string): number => (mt === '*/*' ? 0 : mt.endsWith('/*') ? 1 : 2);
 

@@ -4,9 +4,10 @@
  * @internal
  */
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Arr from 'effect/Array';
 import { rdf } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
-import { checkQuad, isPrefixName, Writer, type WriterOptions } from './writer.ts';
+import { byPrefixName, checkQuad, isPrefixName, Writer, type WriterOptions } from './writer.ts';
 
 /**
  * Groups consecutive statements by graph, subject and predicate but performs
@@ -46,9 +47,12 @@ export class StreamWriter {
       out += sparql ? `BASE <${base}>\n` : `@base <${base}> .\n`;
     }
     if (this.options.prefixes !== undefined) {
-      const prefixes = Array.from(this.options.prefixes.prefixes)
-        .filter(([p, ns]) => isPrefixName(p) && Lexical.isWritableIri(ns))
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      const prefixes = Arr.sort(
+        Array.from(this.options.prefixes.prefixes).filter(
+          ([p, ns]) => isPrefixName(p) && Lexical.isWritableIri(ns),
+        ),
+        byPrefixName,
+      );
       for (const [p, ns] of prefixes) {
         const iri = Term.escapeIri(ns);
         out += sparql ? `PREFIX ${p}: <${iri}>\n` : `@prefix ${p}: <${iri}> .\n`;

@@ -255,9 +255,9 @@ const act = (f: (pos: number) => void): P<number> => Parser.tap(Parser.location,
 
 /** Throws `message` at the current offset. */
 const failHere = <A = never>(message: string): P<A> =>
-  act((pos) => {
-    throw new Stop(message, pos);
-  }) as unknown as P<A>;
+  Parser.make<A, never, never, string>((state) => {
+    throw new Stop(message, state.pos);
+  });
 
 /** Throws the error `diagnose` finds at the current offset. */
 const failWith = <A = never>(diagnose: (input: string, pos: number) => Stop): P<A> =>
@@ -1150,20 +1150,32 @@ export class TurtleParser {
     b = builder;
     builder.final = this.final;
     builder.beginRun();
-    try {
-      const result = Parser.parsePeek(this.options.trig ? trigStatements : turtleStatements, input);
-      if (Result.isFailure(result)) this.fail('Invalid syntax', base + result.failure.offset);
-      const [, end] = result.success;
-      if (this.final) {
-        if (end < input.length) this.fail('Invalid syntax', base + end);
-        this.pos = base + end;
-      } else {
-        builder.rollback();
-        this.pos = base + builder.lastEnd;
-        this.checked = -1;
-      }
-    } catch (e) {
-      if (!(e instanceof Stop)) throw e;
+    const outcome = Result.try({
+      try: () => {
+        const result = Parser.parsePeek(
+          this.options.trig ? trigStatements : turtleStatements,
+          input,
+        );
+        if (Result.isFailure(result)) this.fail('Invalid syntax', base + result.failure.offset);
+        const [, end] = result.success;
+        if (this.final) {
+          if (end < input.length) this.fail('Invalid syntax', base + end);
+          this.pos = base + end;
+        } else {
+          builder.rollback();
+          this.pos = base + builder.lastEnd;
+          this.checked = -1;
+        }
+      },
+      // A `Stop` is the expected failure; anything else (a `SyntaxFailure`,
+      // a bug) keeps propagating.
+      catch: (e) => {
+        if (e instanceof Stop) return e;
+        throw e;
+      },
+    });
+    if (Result.isFailure(outcome)) {
+      const e = outcome.failure;
       builder.rollback();
       if (this.final) this.fail(e.message, base + e.pos);
       // A statement that fails is usually just cut off: it is retried with more
@@ -1190,17 +1202,25 @@ export class TurtleParser {
     const builder = this.builder;
     const start = builder.snapPos;
     builder.open = true;
-    try {
-      const result = Parser.parsePartial(
-        this.options.trig ? trigSingle : turtleSingle,
-        input.slice(start),
-      );
-      if (Result.isFailure(result))
-        this.fail('Invalid syntax', base + start + result.failure.offset);
-    } catch (e) {
-      if (!(e instanceof Stop)) throw e;
+    const outcome = Result.try({
+      try: () => {
+        const result = Parser.parsePartial(
+          this.options.trig ? trigSingle : turtleSingle,
+          input.slice(start),
+        );
+        if (Result.isFailure(result))
+          this.fail('Invalid syntax', base + start + result.failure.offset);
+      },
+      // A `Stop` is the expected failure; anything else (a `SyntaxFailure`,
+      // a bug) keeps propagating.
+      catch: (e) => {
+        if (e instanceof Stop) return e;
+        throw e;
+      },
+    });
+    if (Result.isFailure(outcome)) {
       builder.rollback();
-      this.fail(e.message, base + start + e.pos);
+      this.fail(outcome.failure.message, base + start + outcome.failure.pos);
     }
     builder.rollback();
     builder.open = false;

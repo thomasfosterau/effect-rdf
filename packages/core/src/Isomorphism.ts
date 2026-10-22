@@ -6,8 +6,10 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Dataset from './Dataset.ts';
 import * as Term from './Term.ts';
 
@@ -70,13 +72,15 @@ const refine = (quads: ReadonlyArray<Term.Quad>): Partition => {
   for (let round = 0; round <= nodes.length; round++) {
     const next = new Map<string, string>();
     for (const n of nodes) {
-      const sigs = byNode
-        .get(n)!
-        .map(
-          (q) =>
-            `${termSig(q.subject, n, labels)} ${q.predicate.key} ${termSig(q.object, n, labels)} ${termSig(q.graph, n, labels)}`,
-        )
-        .sort();
+      const sigs = Arr.sort(
+        byNode
+          .get(n)!
+          .map(
+            (q) =>
+              `${termSig(q.subject, n, labels)} ${q.predicate.key} ${termSig(q.object, n, labels)} ${termSig(q.graph, n, labels)}`,
+          ),
+        Order.String,
+      );
       next.set(n, fnv(labels.get(n)! + '|' + sigs.join('\n')));
     }
     const nextClasses = new Set(next.values()).size;
@@ -138,8 +142,9 @@ export const bijection = (
   const mapping = new Map<string, string>();
   const used = new Set<string>();
   // Assign unambiguous nodes first, then search the rest smallest class first.
-  const order = [...a.nodes].sort(
-    (x, y) => groupsA.get(a.labels.get(x)!)!.length - groupsA.get(a.labels.get(y)!)!.length,
+  const order = Arr.sort(
+    a.nodes,
+    Order.mapInput(Order.Number, (x: string) => groupsA.get(a.labels.get(x)!)!.length),
   );
 
   const consistent = (node: string): boolean => {
@@ -213,11 +218,10 @@ export const relabel = (self: Dataset.Dataset, prefix = 'c'): Dataset.Dataset =>
   const blank = Array.from(self).filter(Term.hasBlankNodes);
   if (blank.length === 0) return self;
   const { nodes, labels } = refine(blank);
-  const sorted = [...nodes].sort((x, y) => {
-    const lx = labels.get(x)!;
-    const ly = labels.get(y)!;
-    return lx < ly ? -1 : lx > ly ? 1 : 0;
-  });
+  const sorted = Arr.sort(
+    nodes,
+    Order.mapInput(Order.String, (x: string) => labels.get(x)!),
+  );
   const mapping = new Map(sorted.map((n, i) => [n, `${prefix}${i}`]));
   return Dataset.map(self, (q) =>
     Term.mapTerms(q, (t) =>

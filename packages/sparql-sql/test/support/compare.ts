@@ -3,6 +3,8 @@
  * to blank node renaming (by encoding them as RDF graphs and using graph
  * isomorphism), optionally respecting order.
  */
+import * as Order from 'effect/Order';
+import * as Arr from 'effect/Array';
 import { Dataset, Isomorphism, Term, Xsd } from '@thomasfosterau/effect-rdf';
 import type { Bindings } from '@thomasfosterau/effect-sparql/Bindings';
 import * as B from '@thomasfosterau/effect-sparql/Bindings';
@@ -15,11 +17,14 @@ const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 export const normalize = (t: Term.GroundTerm): Term.GroundTerm =>
   t._tag === 'Literal' && Xsd.isNumericDatatype(t.datatype.value) ? Xsd.canonicalize(t) : t;
 
+let encodings = 0;
+
 /** Encodes solutions as a graph: one fresh blank node per row. */
 const encode = (bindings: ReadonlyArray<Bindings>, ordered: boolean): Dataset.Dataset => {
   const quads: Array<Term.Quad> = [];
+  const run = ++encodings;
   bindings.forEach((b, i) => {
-    const row = Term.blankNode(`row${i}_${Math.random().toString(36).slice(2)}`);
+    const row = Term.blankNode(`row${i}_${run}`);
     quads.push(Term.quad(row, Term.namedNode('urn:row'), Term.literal(ordered ? String(i) : 'x')));
     for (const [k, v] of b)
       quads.push(Term.quad(row, Term.namedNode(`urn:var:${k}`), normalize(v)));
@@ -75,8 +80,14 @@ export const fromRdf = (quads: ReadonlyArray<Term.Quad>): Results.ParsedResult |
     );
     return { index: index === undefined ? 0 : Number((index as Term.Literal).value), bindings };
   });
-  solutions.sort((a, b) => a.index - b.index);
-  return { _tag: 'ResultSet', variables, bindings: solutions.map((s) => s.bindings) };
+  return {
+    _tag: 'ResultSet',
+    variables,
+    bindings: Arr.sort(
+      solutions,
+      Order.mapInput(Order.Number, (s: { readonly index: number }) => s.index),
+    ).map((s) => s.bindings),
+  };
 };
 
 export const hasIndex = (quads: ReadonlyArray<Term.Quad>): boolean =>

@@ -1,6 +1,7 @@
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import type { Syntax } from './parse.ts';
 import { StreamWriter } from './streamWriter.ts';
@@ -35,10 +36,11 @@ const writerOptions = (syntax: Syntax, options?: SerializeOptions): WriterOption
   indent: options?.indent ?? '    ',
 });
 
-const toSerializeError = (syntax: Syntax, error: unknown): Serialization.RdfSerializeError =>
+/** Maps what a serialisation threw (an `Error` or its string form) to an `RdfSerializeError`. */
+const toSerializeError = (syntax: Syntax, error: Error | string): Serialization.RdfSerializeError =>
   new Serialization.RdfSerializeError({
     format: syntax.name,
-    message: error instanceof Error ? error.message : String(error),
+    message: Predicate.isString(error) ? error : error.message,
   });
 
 /** @internal */
@@ -49,7 +51,7 @@ export const serialize = (
 ): Effect.Effect<string, Serialization.RdfSerializeError> =>
   Effect.try({
     try: () => new Writer(writerOptions(syntax, options), prepare(quads)).write(),
-    catch: (error) => toSerializeError(syntax, error),
+    catch: (error) => toSerializeError(syntax, Predicate.isError(error) ? error : String(error)),
   });
 
 /** @internal */
@@ -62,7 +64,11 @@ export const serializeStream =
     Stream.suspend(() => {
       const writer = new StreamWriter(writerOptions(syntax, options));
       const write = (f: () => string) =>
-        Effect.try({ try: f, catch: (error) => toSerializeError(syntax, error) });
+        Effect.try({
+          try: f,
+          catch: (error) =>
+            toSerializeError(syntax, Predicate.isError(error) ? error : String(error)),
+        });
       return quads.pipe(
         Stream.chunks,
         Stream.mapEffect((chunk) => write(() => writer.write(chunk))),
