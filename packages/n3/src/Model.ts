@@ -26,10 +26,12 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
+import * as Order from 'effect/Order';
 import { hasProperty } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
@@ -169,7 +171,10 @@ export class Formula extends N3Base {
   }
   protected computeKey(): string {
     if (this.statements.length === 0) return '{}';
-    const keys = this.statements.map((s) => s.key).sort();
+    const keys = Arr.sort(
+      this.statements.map((s) => s.key),
+      Order.String,
+    );
     return `{ ${keys.join(' . ')} }`;
   }
   [Symbol.iterator](): Iterator<Statement> {
@@ -378,12 +383,14 @@ export const blankNodes = (self: N3Term | Statement): ReadonlyArray<Term.BlankNo
  * @since 0.1.0
  * @category combinators
  */
-export const mapTerms: {
-  <T extends N3Term | Statement>(
-    self: T,
-    f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
-  ): T extends Statement ? Statement : T extends Formula ? Formula : N3Term;
-} = (self: any, f: (term: any) => N3Term): any => {
+export function mapTerms<T extends N3Term | Statement>(
+  self: T,
+  f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
+): T extends Statement ? Statement : T extends Formula ? Formula : N3Term;
+export function mapTerms(
+  self: N3Term | Statement,
+  f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
+): N3Term | Statement {
   const go = (t: N3Term | Statement): N3Term | Statement => {
     switch (t._tag) {
       case 'Collection':
@@ -401,7 +408,7 @@ export const mapTerms: {
     }
   };
   return go(self);
-};
+}
 
 /**
  * Replaces variables by the terms bound to them (by variable name); unbound
@@ -410,13 +417,16 @@ export const mapTerms: {
  * @since 0.1.0
  * @category combinators
  */
-export const substitute: {
-  <T extends N3Term | Statement>(
-    self: T,
-    bindings: ReadonlyMap<string, N3Term>,
-  ): T extends Statement ? Statement : T extends Formula ? Formula : N3Term;
-} = (self: any, bindings: ReadonlyMap<string, N3Term>): any =>
-  mapTerms(self, (t) => (t._tag === 'Variable' ? (bindings.get(t.value) ?? t) : t));
+export function substitute<T extends N3Term | Statement>(
+  self: T,
+  bindings: ReadonlyMap<string, N3Term>,
+): T extends Statement ? Statement : T extends Formula ? Formula : N3Term;
+export function substitute(
+  self: N3Term | Statement,
+  bindings: ReadonlyMap<string, N3Term>,
+): N3Term | Statement {
+  return mapTerms(self, (t) => (t._tag === 'Variable' ? (bindings.get(t.value) ?? t) : t));
+}
 
 /**
  * Adds statements to a formula.
@@ -449,12 +459,28 @@ export const FormulaSchema: Schema.declare<Formula> = Schema.declare(isFormula, 
 });
 
 /**
+ * The value a `FormulaSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type FormulaSchema = typeof FormulaSchema.Type;
+
+/**
  * @since 0.1.0
  * @category schemas
  */
 export const CollectionSchema: Schema.declare<Collection> = Schema.declare(isCollection, {
   identifier: 'Collection',
 });
+
+/**
+ * The value a `CollectionSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type CollectionSchema = typeof CollectionSchema.Type;
 
 /**
  * @since 0.1.0
@@ -465,9 +491,25 @@ export const StatementSchema: Schema.declare<Statement> = Schema.declare(isState
 });
 
 /**
+ * The value a `StatementSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type StatementSchema = typeof StatementSchema.Type;
+
+/**
  * @since 0.1.0
  * @category schemas
  */
 export const N3TermSchema: Schema.declare<N3Term> = Schema.declare(isN3Term, {
   identifier: 'N3Term',
 });
+
+/**
+ * The value a `N3TermSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type N3TermSchema = typeof N3TermSchema.Type;

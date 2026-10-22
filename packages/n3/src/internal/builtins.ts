@@ -7,6 +7,7 @@
  *
  * @internal
  */
+import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
@@ -217,7 +218,7 @@ const binary =
     return { kind: outKind, value: r };
   };
 
-const mathBuiltins: Record<string, Builtin> = {
+const mathBuiltins = {
   sum: listFunction(sum),
   product: listFunction(product),
   difference: listFunction(
@@ -283,7 +284,7 @@ const mathBuiltins: Record<string, Builtin> = {
   notLessThan: comparison((c) => c >= 0),
   equalTo: comparison((c) => c === 0),
   notEqualTo: comparison((c) => !(c === 0)),
-};
+} satisfies Record<string, Builtin>;
 
 // -----------------------------------------------------------------------------
 // Strings
@@ -342,15 +343,10 @@ const stringFunction =
     return r === undefined ? [] : ctx.unify(o, Term.literal(r), b);
   };
 
-const regex = (pattern: string, flags = ''): RegExp | undefined => {
-  try {
-    return new RegExp(pattern, flags);
-  } catch {
-    return undefined;
-  }
-};
+const regex = (pattern: string, flags = ''): RegExp | undefined =>
+  Result.getOrUndefined(Result.try(() => new RegExp(pattern, flags)));
 
-const stringBuiltins: Record<string, Builtin> = {
+const stringBuiltins = {
   concatenation: stringFunction((args) => args.join('')),
   contains: stringTest((a, b) => a.includes(b)),
   containsIgnoringCase: stringTest((a, b) => a.toLowerCase().includes(b.toLowerCase())),
@@ -378,7 +374,7 @@ const stringBuiltins: Record<string, Builtin> = {
     let i = 0;
     return fmt.replace(/%s/g, () => args[i++] ?? '');
   }),
-};
+} satisfies Record<string, Builtin>;
 
 // -----------------------------------------------------------------------------
 // Lists
@@ -386,7 +382,7 @@ const stringBuiltins: Record<string, Builtin> = {
 
 const integerLiteral = (n: number): Term.Literal => Term.literal(String(n), xsd.integer);
 
-const listBuiltins: Record<string, Builtin> = {
+const listBuiltins = {
   in: (s, o, b, ctx) => {
     if (o._tag !== 'Collection') return ready(o) ? [] : undefined;
     return o.items.flatMap((item) => ctx.unify(s, item, b));
@@ -441,7 +437,7 @@ const listBuiltins: Record<string, Builtin> = {
     if (l._tag !== 'Collection') return [];
     return ctx.unify(o, new Model.Collection(l.items.filter((i) => i.key !== x.key)), b);
   },
-};
+} satisfies Record<string, Builtin>;
 
 // -----------------------------------------------------------------------------
 // Log
@@ -459,7 +455,7 @@ const scopeOf = (t: Model.N3Term, ctx: Context): Model.Formula | undefined =>
 const goalsOf = (t: Model.N3Term): ReadonlyArray<Model.Statement> | undefined =>
   Model.isFormula(t) ? t.statements : t.key === TRUE.key ? [] : undefined;
 
-const logBuiltins: Record<string, Builtin> = {
+const logBuiltins = {
   equalTo: (s, o, b, ctx) => ctx.unify(s, o, b),
   notEqualTo: (s, o, b) => (!ready(s) || !ready(o) ? undefined : s.key !== o.key ? [b] : []),
   includes: (s, o, b, ctx) => {
@@ -551,7 +547,7 @@ const logBuiltins: Record<string, Builtin> = {
       ? [b]
       : [];
   },
-};
+} satisfies Record<string, Builtin>;
 
 const table = new Map<string, Builtin>();
 for (const [ns, builtins] of [

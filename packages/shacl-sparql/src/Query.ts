@@ -377,19 +377,19 @@ const mapQuery = <Q extends Ast.Query>(
   f: (t: Ast.TriplePattern | Ast.PathPattern) => Ast.TriplePattern | Ast.PathPattern,
 ): Q => {
   const expression = (e: Ast.Expression) => mapExpression(e, f);
-  return {
+  const mapped: Q = {
     ...q,
     where: mapGroup(q.where, f),
     having: q.having.map(expression),
     orderBy: q.orderBy.map((o) => ({ ...o, expression: expression(o.expression) })),
     groupBy: q.groupBy.map((g) => ({ ...g, expression: expression(g.expression) })),
-    ...(q._tag === 'Select' && q.projection !== '*'
-      ? {
-          projection: q.projection.map((p) =>
-            p._tag === 'Projection' ? { ...p, expression: expression(p.expression) } : p,
-          ),
-        }
-      : {}),
+  };
+  if (q._tag !== 'Select' || q.projection === '*') return mapped;
+  return {
+    ...mapped,
+    projection: q.projection.map((p) =>
+      p._tag === 'Projection' ? { ...p, expression: expression(p.expression) } : p,
+    ),
   };
 };
 

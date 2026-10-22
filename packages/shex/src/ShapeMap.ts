@@ -339,8 +339,8 @@ export const resolve = (map: QueryShapeMap, dataset: Dataset.Dataset): FixedShap
     }
     const pattern: Dataset.Pattern = {
       predicate: node.predicate,
-      ...(node.subject !== 'FOCUS' && node.subject !== '_' ? { subject: node.subject } : {}),
-      ...(node.object !== 'FOCUS' && node.object !== '_' ? { object: node.object } : {}),
+      subject: node.subject !== 'FOCUS' && node.subject !== '_' ? node.subject : undefined,
+      object: node.object !== 'FOCUS' && node.object !== '_' ? node.object : undefined,
     };
     for (const q of Dataset.match(dataset, pattern)) {
       push(node.subject === 'FOCUS' ? q.subject : q.object, shape);

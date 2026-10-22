@@ -1,7 +1,9 @@
 /* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Order from 'effect/Order';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as SemAct from '../src/SemAct.ts';
 import * as ShapeMap from '../src/ShapeMap.ts';
@@ -109,7 +111,7 @@ describe.skipIf(!hasShexTest)('shexTest validation', () => {
       const exit = Effect.runSyncExit(runEntry(entry));
       if (Exit.isFailure(exit)) {
         // A schema the validator rejects can only be a nonconformant test.
-        expect(entry.status, String(exit.cause)).toBe('nonconformant');
+        assert.strictEqual(entry.status, 'nonconformant', String(exit.cause));
         return;
       }
       const { report } = exit.value;
@@ -121,8 +123,11 @@ describe.skipIf(!hasShexTest)('shexTest validation', () => {
       // Test extension output (compared as a multiset: evaluation order is unspecified).
       const expectedPrints = entry['tst:parms']?.prints;
       if (expectedPrints !== undefined && entry.status === 'conformant') {
-        const expected = expectedPrints.map((p) => (typeof p === 'string' ? p : p.line)).sort();
-        expect([...exit.value.prints].sort()).toEqual(expected);
+        const expected = Arr.sort(
+          expectedPrints.map((p) => (typeof p === 'string' ? p : p.line)),
+          Order.String,
+        );
+        assert.deepStrictEqual(Arr.sort(exit.value.prints, Order.String), expected);
       }
     });
   }

@@ -8,6 +8,7 @@
  * @internal
  */
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as SemAct from '../SemAct.ts';
@@ -41,6 +42,12 @@ const FULL: Ctx = { arcs: undefined, target: undefined, partitionClosed: false }
 
 /** `undefined` means success; a string is a failure reason. */
 type Outcome = string | undefined;
+
+/** Whether a triple expression was used, and the outcome of its semantic actions. */
+interface Visit {
+  readonly used: boolean;
+  readonly r: Outcome;
+}
 
 const OK = Symbol('ok');
 
@@ -126,12 +133,10 @@ export class Engine {
     }
     this.inProgress.add(key);
     const local = new Set<string>();
-    let r: Outcome;
-    try {
-      r = this.satisfiesDescendant(n, label, local);
-    } finally {
-      this.inProgress.delete(key);
-    }
+    const result = Result.try(() => this.satisfiesDescendant(n, label, local));
+    this.inProgress.delete(key);
+    if (Result.isFailure(result)) throw result.failure;
+    const r = result.success;
     local.delete(key);
     if (r !== undefined || local.size === 0) this.cache.set(key, r ?? OK);
     for (const d of local) deps.add(d);
@@ -151,12 +156,10 @@ export class Engine {
     }
     this.inProgress.add(key);
     const local = new Set<string>();
-    let r: Outcome;
-    try {
-      r = this.satisfies(n, start, FULL, local, undefined);
-    } finally {
-      this.inProgress.delete(key);
-    }
+    const result = Result.try(() => this.satisfies(n, start, FULL, local, undefined));
+    this.inProgress.delete(key);
+    if (Result.isFailure(result)) throw result.failure;
+    const r = result.success;
     local.delete(key);
     if (r !== undefined || local.size === 0) this.cache.set(key, r ?? OK);
     for (const d of local) deps.add(d);
@@ -381,12 +384,12 @@ export class Engine {
 
     const hasTcSemActs = local.some((tc) => tc.semActs !== undefined);
     const tried = new Set<string>();
-    const assignment: Array<ShExJ.TripleConstraint> = new Array(choices.length);
+    const assignment = Array.from<ShExJ.TripleConstraint>({ length: choices.length });
     let firstFailure: Outcome;
     const extDeps = deps;
 
     const tryAssignment = (): Outcome => {
-      const counts = new Array<number>(local.length).fill(0);
+      const counts = Array.from({ length: local.length }, () => 0);
       const partitions: Array<Array<Arc>> = extensions.map(() => []);
       const keyParts: Array<string> = [];
       for (let i = 0; i < choices.length; i++) {
@@ -538,10 +541,7 @@ export class Engine {
     n: Term.Term,
     triples: ReadonlyArray<Term.Triple>,
   ): Outcome {
-    const visit = (
-      te0: ShExJ.TripleExprOrRef,
-      seen: Set<string>,
-    ): { used: boolean; r: Outcome } => {
+    const visit = (te0: ShExJ.TripleExprOrRef, seen: Set<string>): Visit => {
       if (typeof te0 === 'string') {
         if (seen.has(te0)) return { used: false, r: undefined };
         seen.add(te0);

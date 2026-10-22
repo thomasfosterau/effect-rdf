@@ -16,6 +16,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vite-plus/test';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
 import { Isomorphism, Model, N3, Reasoner } from '../src/index.ts';
@@ -81,13 +82,14 @@ const canonical = (f: Model.Formula): Model.Formula =>
   Model.mapTerms(f, (t) => (t._tag === 'Literal' ? Xsd.canonicalize(t) : t));
 
 /** Runs a reasoner test; returns an error message, or `undefined` when it passes. */
-const run = (entry: Entry): string | undefined => {
-  try {
-    return runUnsafe(entry);
-  } catch (e) {
-    return String(e);
-  }
-};
+const run = (entry: Entry): string | undefined =>
+  Result.match(
+    Result.try(() => runUnsafe(entry)),
+    {
+      onSuccess: (message) => message,
+      onFailure: (e) => String(e),
+    },
+  );
 
 const runUnsafe = (entry: Entry): string | undefined => {
   const input = parseFile(entry.action);
@@ -106,8 +108,13 @@ const runUnsafe = (entry: Entry): string | undefined => {
     : `Not isomorphic:\n${N3.serializeDocument(closure)}`;
 };
 
+/** Test id → why the reasoner does not pass it. */
+interface Reasons {
+  readonly [id: string]: string;
+}
+
 /** Tests the reasoner does not (yet) pass, with the reason. */
-const unsupported: Record<string, string> = {
+const unsupported: Reasons = {
   cwm_includes_conclusion_simple: 'expected result uses the undeclared prefix log:',
   cwm_includes_conclusion: 'expected result uses the undeclared prefix rdfs:',
   cwm_includes_t6: 'expected result does not declare the `:` prefix',

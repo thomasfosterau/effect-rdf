@@ -6,7 +6,9 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
 import * as ShExC from '../src/ShExC.ts';
 
 const suites =
@@ -59,8 +61,8 @@ const bench = (name: string, inputs: ReadonlyArray<{ text: string; baseIri: stri
     run();
     samples.push(performance.now() - t);
   }
-  samples.sort((a, b) => a - b);
-  const median = samples[Math.floor(samples.length / 2)]!;
+  const sorted = Arr.sort(samples, Order.Number);
+  const median = sorted[Math.floor(samples.length / 2)]!;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${inputs.length} docs, ${(size / 1e3).toFixed(0)} kB, median ${median.toFixed(1)} ms` +

@@ -14,7 +14,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vite-plus/test';
+import { assert, describe, expect, it } from 'vite-plus/test';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -48,7 +48,7 @@ const parseFile = (iri: string) =>
 const readManifest = (relative: string): ReadonlyArray<Entry> => {
   const iri = BASE + relative;
   const exit = parseFile(iri);
-  if (!Exit.isSuccess(exit)) throw new Error(`Cannot parse manifest ${relative}`);
+  if (!Exit.isSuccess(exit)) assert.fail(`Cannot parse manifest ${relative}`);
   const statements = exit.value.formula.statements;
   const objects = (s: Model.N3Term, p: string) =>
     statements
@@ -74,8 +74,13 @@ const readManifest = (relative: string): ReadonlyArray<Entry> => {
   });
 };
 
+/** Test id → why the test is treated specially. */
+interface Reasons {
+  readonly [id: string]: string;
+}
+
 /** Turtle negative syntax tests whose input is valid N3. */
-const validInN3: Record<string, string> = {
+const validInN3: Reasons = {
   'turtle-syntax-bad-prefix-01': 'the empty prefix defaults to <#> in N3',
   'turtle-syntax-bad-struct-02': '`=` is owl:sameAs in N3',
   'turtle-syntax-bad-struct-04': 'literals may be subjects in N3',
@@ -101,7 +106,7 @@ const validInN3: Record<string, string> = {
 };
 
 /** Tests that cannot pass as written, with the reason. */
-const skip: Record<string, string> = {
+const skip: Reasons = {
   'cwm_syntax_numbers.n3':
     'expected result contains a stale file:/home/syosi/… IRI and canonicalised numeric lexical forms',
   // rdft:Rejected tests using syntax outside N3 (historical Euler/cwm dialects).
@@ -142,10 +147,10 @@ const roundTrip = (entry: Entry, doc: Model.Document): void => {
   const text = N3.serializeDocument(doc);
   const again = Effect.runSyncExit(N3.parse(text));
   if (!Exit.isSuccess(again)) {
-    throw new Error(`Serialised output does not parse: ${String(again.cause)}\n${text}`);
+    assert.fail(`Serialised output does not parse: ${String(again.cause)}\n${text}`);
   }
   if (!Isomorphism.isomorphic(doc.formula, again.value.formula)) {
-    throw new Error(`Serialised output is not isomorphic:\n${text}`);
+    assert.fail(`Serialised output is not isomorphic:\n${text}`);
   }
   // The dataset round trip is limited to moderately sized documents, as
   // building large core datasets dominates the run time.
@@ -155,7 +160,7 @@ const roundTrip = (entry: Entry, doc: Model.Document): void => {
     const ttl = Effect.runSync(N3.serialize(dataset.value, { prefixes: doc.prefixes }));
     const back = Effect.runSyncExit(N3.parser.parse(ttl));
     if (!Exit.isSuccess(back) || !datasetsIsomorphic(dataset.value, back.value.dataset)) {
-      throw new Error(`Dataset round trip failed for ${entry.id}:\n${ttl}`);
+      assert.fail(`Dataset round trip failed for ${entry.id}:\n${ttl}`);
     }
   }
 };
@@ -164,23 +169,23 @@ const run = (entry: Entry): void => {
   const exit = parseFile(entry.action);
   if (entry.type.includes('Negative')) {
     if (validInN3[entry.id] !== undefined) {
-      if (!Exit.isSuccess(exit)) throw new Error(String(exit.cause));
+      if (!Exit.isSuccess(exit)) assert.fail(String(exit.cause));
       return;
     }
-    if (!Exit.isFailure(exit)) throw new Error('expected a syntax error');
+    if (!Exit.isFailure(exit)) assert.fail('expected a syntax error');
     return;
   }
   if (!Exit.isSuccess(exit)) {
-    throw new Error(String(exit.cause));
+    assert.fail(String(exit.cause));
   }
   roundTrip(entry, exit.value);
   if (entry.result !== undefined && entry.type.includes('Eval')) {
     const expected = parseFile(entry.result);
     if (!Exit.isSuccess(expected))
-      throw new Error(`Cannot parse expected result: ${String(expected.cause)}`);
+      assert.fail(`Cannot parse expected result: ${String(expected.cause)}`);
     const ok = Isomorphism.isomorphic(exit.value.formula, expected.value.formula);
     if (!ok) {
-      throw new Error(
+      assert.fail(
         `Not isomorphic.\nActual:\n${N3.serializeDocument(exit.value.formula)}\nExpected:\n${N3.serializeDocument(expected.value.formula)}`,
       );
     }

@@ -4,6 +4,8 @@
  *
  * @internal
  */
+import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
 import type * as ShExJ from '../ShExJ.ts';
@@ -42,17 +44,21 @@ const codePointLength = (s: string): number => {
   return n;
 };
 
-const regexCache = new Map<string, RegExp | Error>();
+const regexCache = new Map<string, Result.Result<RegExp, string>>();
 
-const getRegex = (pattern: string, flags: string | undefined): RegExp | Error => {
+/** Compiles (once) an XPath pattern; fails with the reason it is invalid. */
+const getRegex = (pattern: string, flags: string | undefined): Result.Result<RegExp, string> => {
   const key = `${flags ?? ''}/${pattern}`;
   let re = regexCache.get(key);
   if (re === undefined) {
-    try {
-      re = compileXPathRegex(pattern, flags ?? '');
-    } catch (e) {
-      re = e instanceof Error ? e : new Error(String(e));
-    }
+    re = Result.try({
+      try: () => compileXPathRegex(pattern, flags ?? ''),
+      // The message of the thrown `SyntaxError`, else the thrown value's string form.
+      catch: (e) =>
+        Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+          ? e.message
+          : String(e),
+    });
     regexCache.set(key, re);
   }
   return re;
@@ -259,8 +265,9 @@ export const checkNodeConstraint = (n: Term.Term, nc: ShExJ.NodeConstraint): str
     if (nc.maxlength !== undefined && len > nc.maxlength)
       return `${n.key} has length ${len}, expected at most ${nc.maxlength}`;
     if (nc.pattern !== undefined) {
-      const re = getRegex(nc.pattern, nc.flags);
-      if (re instanceof Error) return `invalid pattern /${nc.pattern}/: ${re.message}`;
+      const compiled = getRegex(nc.pattern, nc.flags);
+      if (Result.isFailure(compiled)) return `invalid pattern /${nc.pattern}/: ${compiled.failure}`;
+      const re = compiled.success;
       re.lastIndex = 0;
       if (!re.test(lex)) return `${n.key} does not match /${nc.pattern}/${nc.flags ?? ''}`;
     }

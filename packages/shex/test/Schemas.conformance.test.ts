@@ -1,5 +1,5 @@
 /* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as ShExC from '../src/ShExC.ts';
@@ -37,11 +37,11 @@ describe.skipIf(!hasShexTest)('shexTest schemas (ShExC → ShExJ)', () => {
       const exit = Effect.runSyncExit(
         ShExC.parse(input, { baseIri: `${suiteBase}schemas/${entry.shex}` }),
       );
-      if (Exit.isFailure(exit)) throw new Error(String(exit.cause));
+      if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
       expect(exit.value).toEqual(expected);
       // The ShExJ itself must decode with the ShExJ schema.
       const decoded = Effect.runSyncExit(ShExJ.decode(expected));
-      if (Exit.isFailure(decoded)) throw new Error(String(decoded.cause));
+      if (Exit.isFailure(decoded)) assert.fail(String(decoded.cause));
     });
   }
 });

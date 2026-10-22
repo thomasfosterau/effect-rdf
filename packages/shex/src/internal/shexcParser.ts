@@ -19,6 +19,7 @@ import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Result from 'effect/Result';
 import type * as ShExJ from '../ShExJ.ts';
+import { quote } from './lexer.ts';
 import { resolve, type Tok, tokenize } from './shexcLexer.ts';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -332,7 +333,17 @@ const NUMERIC_FACETS = [
   'MAXEXCLUSIVE',
 ];
 
-const facetCases: Record<string, P<Facet>> = {
+/** Facet keyword → its parser. */
+interface FacetCases {
+  readonly [keyword: string]: P<Facet>;
+}
+
+/** Facet name → its value, as the facets are read. */
+interface FacetValues {
+  [facet: string]: number | string;
+}
+
+const facetCases: FacetCases = {
   REGEXP: Parser.seq(Parser.location, anyToken).pipe(
     Parser.map(([at, t]): Facet => ['pattern', t.text, at, t.suffix]),
   ),
@@ -364,13 +375,13 @@ const facets = (strings: boolean, numerics: boolean): P<Mutable<ShExJ.Facets>> =
     ),
   ).pipe(
     Parser.tryMap((list) => {
-      const out: Record<string, unknown> = {};
+      const out: FacetValues = {};
       for (const [key, value, at, flags] of list) {
         if (key in out) {
           return failAt<Mutable<ShExJ.Facets>>(`facet ${key} defined multiple times`, at);
         }
         out[key] = value;
-        if (flags !== undefined && flags !== '') out.flags = flags;
+        if (flags !== undefined && flags !== '') out['flags'] = flags;
       }
       return Result.succeed(out as Mutable<ShExJ.Facets>);
     }),
@@ -1218,7 +1229,7 @@ const grammarError = (
   }
   const t = tokens[error.offset];
   if (t?.type === 'ERROR') return { message: t.text, offset: t.start };
-  const found = t === undefined ? 'end of input' : JSON.stringify(input.slice(t.start, t.end));
+  const found = t === undefined ? 'end of input' : quote(input.slice(t.start, t.end));
   const expected = ParseError.formatExpected(error.expected);
   return {
     message: expected === '' ? `unexpected ${found}` : `expected ${expected}, found ${found}`,

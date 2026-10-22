@@ -7,7 +7,7 @@
  * resultPath / value / sourceShape / sourceConstraintComponent / severity
  * (and expected `sh:resultMessage`s), ignoring blank node identity.
  */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import { Path, ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
 import { Turtle } from '@thomasfosterau/effect-turtle';
@@ -88,14 +88,14 @@ const runCase = (tc: TestCase) =>
       Validator.validate(data, shapes).pipe(Effect.provide(Evaluator.layer())),
     );
     if (expectedNode.key === sht('Failure').key) {
-      expect(Exit.isFailure(exit)).toBe(true);
+      assert.isTrue(Exit.isFailure(exit));
       return;
     }
-    if (Exit.isFailure(exit)) throw new Error(`validation failed: ${String(exit.cause)}`);
+    if (Exit.isFailure(exit)) assert.fail(`validation failed: ${String(exit.cause)}`);
     const actual = exit.value;
 
     const expectedResult = ValidationReport.fromDataset(tc.ds, expectedNode as Term.BlankNode);
-    if (Result.isFailure(expectedResult)) throw new Error(expectedResult.failure.message);
+    if (Result.isFailure(expectedResult)) assert.fail(expectedResult.failure.message);
     const expected = expectedResult.success;
 
     const known = new Set([...blankKeys(data), ...blankKeys(shapes)]);
