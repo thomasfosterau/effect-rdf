@@ -71,7 +71,7 @@ Before you report work as done, run the gates below in order and quote each comm
 5. `vp run -r build`
 6. `vp run check:dist`
 7. `pnpm audit --audit-level high` (network)
-8. `vp run test:coverage`, then `fallow audit --format json --quiet --explain --gate-marker agent --base origin/trunk` (the fallow gate below; not a CI step). The PreToolUse fallow gate audits against `coverage/coverage-final.json` and never refreshes it, so run `test:coverage` first.
+8. `vp run test:coverage`, then `fallow audit --format json --quiet --explain --gate-marker agent --base origin/trunk` (the fallow gate below; not a CI step). The PreToolUse fallow gate audits against `coverage/coverage-final.json` and never refreshes it, so run `test:coverage` first. The complexity and duplication already on `main` when fallow was adopted is recorded in `.fallow-baselines/` (`audit.healthBaseline` / `dupesBaseline`); the audit fails on what a change adds or worsens. Re-save a baseline only to shrink it.
 
 Steps 2–7 are CI's required `ci` job, in its order ([ci.yml](.github/workflows/ci.yml)). `CONTRIBUTING.md` and the PR template link here rather than restating the list.
 

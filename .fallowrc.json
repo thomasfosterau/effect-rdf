@@ -159,13 +159,41 @@
       },
       {
         "from": "sparql-sql",
-        "allow": ["core", "ntriples", "rdfxml", "sparql", "turtle"]
+        "allow": ["core", "sparql"]
       },
       {
         "from": "turtle",
         "allow": ["core", "ntriples"]
       }
     ]
+  },
+  // Each package's benchmark is a standalone Node script over that package's
+  // own corpus; sharing their timing loops would need a workspace module that
+  // no published package should depend on.
+  "duplicates": {
+    "ignore": ["packages/*/bench/**"],
+    // Reviewed clones that predate fallow, between packages that may not
+    // depend on each other (AGENTS.md: each package stays lean): JSON-LD and
+    // RDF/JSON each locate JSON syntax errors, the N-Triples, Turtle and
+    // RDF/XML parsers each map a thrown parse failure to `RdfParseError`, and
+    // the SPARQL evaluator dedupes path results the way core's `Dataset`
+    // dedupes terms without core exporting that helper. A content change on
+    // either side makes the group reportable again.
+    "ignoredClones": [
+      "dup:9c54618a:2",
+      "dup:ec5793a2:2",
+      "dup:0a9d0de4:2",
+      "dup:5c48d303:2",
+      "dup:71613c48:2"
+    ]
+  },
+  // The complexity and duplication already on `main` when fallow was adopted
+  // (saved from main's sources with real coverage): the audit fails on what a
+  // change adds or worsens, not on that inherited debt. Re-save a baseline
+  // only to shrink it.
+  "audit": {
+    "healthBaseline": ".fallow-baselines/health.json",
+    "dupesBaseline": ".fallow-baselines/dupes.json"
   },
   "health": {
     "maxCyclomatic": 20,
