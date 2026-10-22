@@ -11,7 +11,7 @@ const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
  * A schema as the JSON it serialises to (absent and `undefined` members
  * alike are dropped, as `toEqual` treats them).
  */
-export const toJson = (schema: ShExJ.Schema): Schema.Json => decodeJson(encodeJson(schema));
+const toJson = (schema: ShExJ.Schema): Schema.Json => decodeJson(encodeJson(schema));
 
 /** Whether a JSON value is an object (not an array or `null`). */
 export const isJsonObject = (v: Schema.Json): v is Schema.JsonObject =>

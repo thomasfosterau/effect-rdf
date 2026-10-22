@@ -89,6 +89,3 @@ export const fromRdf = (quads: ReadonlyArray<Term.Quad>): Results.ParsedResult |
     ).map((s) => s.bindings),
   };
 };
-
-export const hasIndex = (quads: ReadonlyArray<Term.Quad>): boolean =>
-  quads.some((q) => q.predicate.value === `${RS}index`);

@@ -8,11 +8,11 @@ export interface Reasons {
 }
 
 /** The directory holding the conformance test suites. */
-export const suitesDir: string =
+const suitesDir: string =
   process.env.RDF_TEST_SUITES ?? path.resolve(import.meta.dirname, '../../../../.test-suites');
 
 /** The shexTest checkout. */
-export const shexTestDir: string = path.join(suitesDir, 'shexTest');
+const shexTestDir: string = path.join(suitesDir, 'shexTest');
 
 /** Whether the shexTest suite is available. */
 export const hasShexTest: boolean = fs.existsSync(path.join(shexTestDir, 'schemas'));
