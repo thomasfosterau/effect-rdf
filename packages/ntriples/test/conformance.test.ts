@@ -5,7 +5,7 @@
  * cannot depend on the Turtle parser, which depends on it for its own tests).
  */
 import { describe, expect, it } from '@effect/vitest';
-import { Dataset, Isomorphism } from '@thomasfosterau/effect-rdf';
+import { Dataset, Isomorphism, Serialization } from '@thomasfosterau/effect-rdf';
 import * as Effect from 'effect/Effect';
 import * as Stream from 'effect/Stream';
 import * as fs from 'node:fs';
@@ -42,8 +42,10 @@ const readManifest = (dir: string): ReadonlyArray<Entry> => {
   const out: Array<Entry> = [];
   const block = /^(\S+)\s+(?:rdf:type|a)\s+rdft:(\w+)\s*;([\s\S]*?)(?:^\s*\.\s*$|\s\.\s*$)/gm;
   for (const m of text.matchAll(block)) {
-    const [, id, type, body] = m as unknown as [string, string, string, string];
-    if (!ids.has(id)) continue;
+    const id = m[1];
+    const type = m[2];
+    const body = m[3];
+    if (id === undefined || type === undefined || body === undefined || !ids.has(id)) continue;
     const action = /mf:action\s+<([^>]+)>/.exec(body)?.[1];
     const result = /mf:result\s+<([^>]+)>/.exec(body)?.[1];
     if (action === undefined) continue;
@@ -72,6 +74,46 @@ const chunked = (text: string, size: number): Stream.Stream<string> => {
   return Stream.fromIterable(chunks);
 };
 
+type Codec = typeof NTriples | typeof NQuads;
+
+type Failure = Serialization.RdfParseError | Serialization.RdfSerializeError;
+
+// An unexpected parse success dies, which fails the test.
+const negative = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
+  Effect.gen(function* () {
+    const input = fs.readFileSync(entry.action, 'utf8');
+    const error = yield* codec.parse(input).pipe(Effect.flip, Effect.orDie);
+    expect(error._tag).toBe('RdfParseError');
+    const streamed = yield* Stream.runCollect(codec.parseStream(chunked(input, 5))).pipe(
+      Effect.flip,
+      Effect.orDie,
+    );
+    expect(streamed._tag).toBe('RdfParseError');
+  });
+
+const positive = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
+  Effect.gen(function* () {
+    const input = fs.readFileSync(entry.action, 'utf8');
+    const quads = yield* codec.parseQuads(input, { blankNodePrefix: '' });
+    // Streaming with arbitrary chunk boundaries yields the same statements.
+    for (const size of [1, 3, 17]) {
+      const streamed = yield* Stream.runCollect(
+        codec.parseStream(chunked(input, size), { blankNodePrefix: '' }),
+      );
+      expect(streamed.map((q) => q.key)).toEqual(quads.map((q) => q.key));
+    }
+    // The canonical serialisation round-trips.
+    const text = yield* codec.serialize(quads);
+    const reparsed = yield* codec.parse(text);
+    expect(Isomorphism.isomorphic(reparsed.dataset, Dataset.fromIterable(quads))).toBe(true);
+    // A c14n test also pins the canonical text; other tests have none.
+    const expected =
+      entry.type.endsWith('PositiveC14N') && entry.result !== undefined
+        ? fs.readFileSync(entry.result, 'utf8')
+        : text;
+    expect(text).toBe(expected);
+  });
+
 describe.skipIf(!exists)('N-Triples / N-Quads conformance', () => {
   for (const dir of manifests) {
     const entries = exists ? readManifest(path.join(rdfDir, dir)) : [];
@@ -82,36 +124,7 @@ describe.skipIf(!exists)('N-Triples / N-Quads conformance', () => {
       for (const entry of entries) {
         const codec = entry.type.startsWith('TestNQuads') ? NQuads : NTriples;
         it.effect(`${entry.id} (${entry.type})`, () =>
-          Effect.gen(function* () {
-            const input = fs.readFileSync(entry.action, 'utf8');
-            if (entry.type.endsWith('NegativeSyntax')) {
-              const error = yield* Effect.flip(codec.parse(input));
-              expect(error._tag).toBe('RdfParseError');
-              const streamed = yield* Effect.flip(
-                Stream.runCollect(codec.parseStream(chunked(input, 5))),
-              );
-              expect(streamed._tag).toBe('RdfParseError');
-              return;
-            }
-            const quads = yield* codec.parseQuads(input, { blankNodePrefix: '' });
-            // Streaming with arbitrary chunk boundaries yields the same statements.
-            for (const size of [1, 3, 17]) {
-              const streamed = yield* Stream.runCollect(
-                codec.parseStream(chunked(input, size), { blankNodePrefix: '' }),
-              );
-              expect(streamed.map((q) => q.key)).toEqual(quads.map((q) => q.key));
-            }
-            // The canonical serialisation round-trips.
-            const text = yield* codec.serialize(quads);
-            const reparsed = yield* codec.parse(text);
-            expect(Isomorphism.isomorphic(reparsed.dataset, Dataset.fromIterable(quads))).toBe(
-              true,
-            );
-            if (entry.type.endsWith('PositiveC14N') && entry.result !== undefined) {
-              const expected = fs.readFileSync(entry.result, 'utf8');
-              expect(text).toBe(expected);
-            }
-          }),
+          entry.type.endsWith('NegativeSyntax') ? negative(codec, entry) : positive(codec, entry),
         );
       }
     });

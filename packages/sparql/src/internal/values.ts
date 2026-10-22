@@ -10,6 +10,7 @@
  */
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
 
@@ -23,6 +24,19 @@ export class EvalFailure {
     this.message = message;
   }
 }
+
+/**
+ * Runs `f`, returning a thrown `EvalFailure` (an expression error) as the
+ * failure; any other exception is a defect and propagates.
+ */
+export const catchEvalFailure = <A>(f: () => A): Result.Result<A, EvalFailure> =>
+  Result.try({
+    try: f,
+    catch: (cause) => {
+      if (cause instanceof EvalFailure) return cause;
+      throw cause;
+    },
+  });
 
 export const fail = (message: string): never => {
   throw new EvalFailure(message);
@@ -489,12 +503,12 @@ export const orderCompare = (a: Term.Term | undefined, b: Term.Term | undefined)
     }
     case 'Literal': {
       const l = b as Term.Literal;
-      try {
-        const c = compareLiterals(a, l);
+      // Where the values cannot be compared, fall through to the syntactic
+      // ordering.
+      const c = Result.getOrUndefined(Result.try(() => compareLiterals(a, l)));
+      if (c !== undefined) {
         if (!Number.isNaN(c) && c !== 0) return c;
         if (c === 0 && a.key === l.key) return 0;
-      } catch {
-        // fall through to the syntactic ordering
       }
       // Simple literals before language-tagged before other typed literals.
       const ka = a.language !== '' ? 1 : a.datatype.value === Term.XSD_STRING ? 0 : 2;

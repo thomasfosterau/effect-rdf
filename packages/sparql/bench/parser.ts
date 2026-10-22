@@ -4,6 +4,8 @@
  *
  *   node --experimental-strip-types bench/parser.ts
  */
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as Parser from '../src/Parser.ts';
@@ -70,8 +72,7 @@ const bench = (
     run();
     samples.push(performance.now() - t);
   }
-  samples.sort((a, b) => a - b);
-  const median = samples[Math.floor(samples.length / 2)]!;
+  const median = Arr.sort(samples, Order.Number)[Math.floor(samples.length / 2)]!;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${inputs.length} docs, ${(size / 1e3).toFixed(0)} kB, median ${median.toFixed(1)} ms` +

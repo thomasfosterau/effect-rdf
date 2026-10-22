@@ -10,6 +10,7 @@
  *
  * @since 0.1.0
  */
+import * as Cause from 'effect/Cause';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
 import * as Ast from './Ast.ts';
@@ -29,10 +30,10 @@ class Translator {
       case 'BlankNode':
         return Algebra.internalVariable(`b:${t.value}`);
       case 'Triple':
-        return Term.triple(
-          this.termPattern(t.subject) as any,
-          this.termPattern(t.predicate) as any,
-          this.termPattern(t.object) as any,
+        return Term.triple<any, any, any>(
+          this.termPattern(t.subject),
+          this.termPattern(t.predicate),
+          this.termPattern(t.object),
         );
       default:
         return t;
@@ -196,7 +197,7 @@ class Translator {
         return { _tag: 'Exists', negated: e.negated, input: this.group(e.pattern) };
       case 'Aggregate':
         if (aggregates === undefined)
-          throw new Error('Aggregate outside of an aggregation context');
+          throw new Cause.IllegalArgumentError('Aggregate outside of an aggregation context');
         return aggregates(e);
     }
   }
@@ -230,12 +231,13 @@ class Translator {
       ]);
       const aggregates: Array<{ variable: Term.Variable; aggregate: Algebra.Aggregate }> = [];
       const aggregateVariable = (a: Ast.AggregateExpression): Term.Variable => {
-        const aggregate: Algebra.Aggregate = {
+        const unseparated: Algebra.Aggregate = {
           name: a.name,
           distinct: a.distinct,
           expression: a.expression === '*' ? '*' : this.expression(a.expression),
-          ...(a.separator !== undefined ? { separator: a.separator } : {}),
         };
+        const aggregate: Algebra.Aggregate =
+          a.separator === undefined ? unseparated : { ...unseparated, separator: a.separator };
         const variable = this.fresh('agg');
         aggregates.push({ variable, aggregate });
         return variable;

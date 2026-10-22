@@ -7,10 +7,12 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty } from 'effect/Predicate';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -60,7 +62,7 @@ export class Bindings
   /** A canonical string identifying this solution (used for hashing and DISTINCT). */
   get key(): string {
     if (this.#key === undefined) {
-      const names = Array.from(this.map.keys()).sort();
+      const names = Arr.sort(this.map.keys(), Order.String);
       this.#key = names.map((n) => `${n}=${this.map.get(n)!.key}`).join('\u0000');
     }
     return this.#key;
@@ -71,7 +73,7 @@ export class Bindings
   }
 
   [Equal.symbol](that: Equal.Equal): boolean {
-    return isBindings(that) && that.key === this.key;
+    return isEqualBindings(that) && that.key === this.key;
   }
 
   [Hash.symbol](): number {
@@ -82,7 +84,7 @@ export class Bindings
     return pipeArguments(this, arguments);
   }
 
-  toJSON(): unknown {
+  toJSON(): Readonly<Record<string, string>> {
     return Object.fromEntries(Array.from(this.map, ([k, v]) => [k, v.toString()]));
   }
 
@@ -90,7 +92,7 @@ export class Bindings
     return `{ ${Array.from(this.map, ([k, v]) => `?${k} → ${v.toString()}`).join(', ')} }`;
   }
 
-  [NodeInspectSymbol](): unknown {
+  [NodeInspectSymbol](): Readonly<Record<string, string>> {
     return this.toJSON();
   }
 }
@@ -100,6 +102,8 @@ export class Bindings
  * @category guards
  */
 export const isBindings = (u: unknown): u is Bindings => hasProperty(u, TypeId);
+
+const isEqualBindings = (that: Equal.Equal): that is Bindings => hasProperty(that, TypeId);
 
 /**
  * The empty solution mapping (the join identity).

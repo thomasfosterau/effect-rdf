@@ -16,7 +16,7 @@ export const parseRdf = (
   extension: string,
   graph?: Term.Graph,
 ): Array<Term.Quad> => {
-  const options = { baseIri, ...(graph !== undefined ? { graph } : {}) };
+  const options = graph === undefined ? { baseIri } : { baseIri, graph };
   const parser =
     extension === 'trig'
       ? TriG.parse

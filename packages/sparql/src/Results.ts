@@ -9,6 +9,7 @@
  */
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -18,6 +19,7 @@ import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as XmlParser from '@thomasfosterau/effect-rdfxml/Xml';
 import * as B from './Bindings.ts';
+import * as JsonText from './internal/json.ts';
 import * as TextResults from './internal/textResults.ts';
 
 type Bindings = B.Bindings;
@@ -251,7 +253,15 @@ export const JsonTermSchema: Schema.Codec<JsonTerm> = Schema.Union([
       object: Schema.suspend((): Schema.Codec<JsonTerm> => JsonTermSchema),
     }),
   }),
-]) as any;
+]);
+
+/**
+ * The type `JsonTermSchema` decodes to (the same as `JsonTerm`).
+ *
+ * @since 0.1.0
+ * @category json
+ */
+export type JsonTermSchema = typeof JsonTermSchema.Type;
 
 /**
  * Schema of a SPARQL JSON results document.
@@ -277,6 +287,14 @@ export const JsonResultsSchema = Schema.Struct({
  * @category json
  */
 export type JsonResults = typeof JsonResultsSchema.Type;
+
+/**
+ * The type `JsonResultsSchema` decodes to (the same as `JsonResults`).
+ *
+ * @since 0.1.0
+ * @category json
+ */
+export type JsonResultsSchema = typeof JsonResultsSchema.Type;
 
 /**
  * Encodes a term as SPARQL JSON.
@@ -347,6 +365,9 @@ export const termFromJson = (j: JsonTerm): Term.GroundTerm => {
 
 const decodeJsonResults = Schema.decodeUnknownResult(JsonResultsSchema);
 
+// Any JSON value as its text (exactly `JSON.stringify`).
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 const jsonFormat: ResultsFormat = {
   name: 'SPARQL Results JSON',
   mediaType: 'application/sparql-results+json',
@@ -360,7 +381,7 @@ const serializeJson = <E>(result: SelectResult<E> | AskResult): Stream.Stream<st
     return Stream.succeed(`{"head":{},"boolean":${result.value}}\n`);
   }
   const vars = result.variables.map((v) => v.value);
-  const head = `{"head":{"vars":${JSON.stringify(vars)}},"results":{"bindings":[`;
+  const head = `{"head":{"vars":${encodeJsonText(vars)}},"results":{"bindings":[`;
   return Stream.concat(
     Stream.concat(
       Stream.succeed(head),
@@ -371,7 +392,7 @@ const serializeJson = <E>(result: SelectResult<E> | AskResult): Stream.Stream<st
           if (t !== undefined) row[v] = termToJson(t);
         }
         // Variables bound but not projected are not serialised.
-        return `${i > 0 ? ',' : ''}\n${JSON.stringify(row)}`;
+        return `${i > 0 ? ',' : ''}\n${encodeJsonText(row)}`;
       }),
     ),
     Stream.succeed('\n]}}\n'),
@@ -382,13 +403,9 @@ const parseJson = (input: string): Effect.Effect<ParsedResult, ResultsParseError
   Effect.suspend((): Effect.Effect<ParsedResult, ResultsParseError> => {
     const err = (message: string) =>
       Effect.fail(new ResultsParseError({ format: 'json', message }));
-    let raw: unknown;
-    try {
-      raw = JSON.parse(input);
-    } catch (e) {
-      return err(`Invalid JSON: ${String(e)}`);
-    }
-    const decoded = decodeJsonResults(raw);
+    const raw = JsonText.parse(input);
+    if (Result.isFailure(raw)) return err(`Invalid JSON: ${raw.failure}`);
+    const decoded = decodeJsonResults(raw.success);
     if (Result.isFailure(decoded)) return err(decoded.failure.message);
     const doc = decoded.success;
     if (doc.boolean !== undefined)
@@ -503,7 +520,9 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
       const part = (name: string) => {
         const p = elements(e).find((c) => c.localName === name);
         const inner = p === undefined ? undefined : elements(p)[0];
-        if (inner === undefined) throw new Error(`Missing ${name} in triple term`);
+        if (inner === undefined) {
+          throw new ResultsParseError({ format: 'xml', message: `Missing ${name} in triple term` });
+        }
         return xmlToTerm(inner);
       };
       return Term.triple(
@@ -513,7 +532,10 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
       );
     }
     default:
-      throw new Error(`Unexpected element <${e.localName}>`);
+      throw new ResultsParseError({
+        format: 'xml',
+        message: `Unexpected element <${e.localName}>`,
+      });
   }
 };
 
@@ -523,39 +545,36 @@ const parseXml = (input: string): Effect.Effect<ParsedResult, ResultsParseError>
     if (Result.isFailure(doc)) {
       return Effect.fail(new ResultsParseError({ format: 'xml', message: doc.failure.message }));
     }
-    try {
-      const root = doc.success.root;
-      const head = elements(root).find((c) => c.localName === 'head');
-      const vars =
-        head === undefined
-          ? []
-          : elements(head)
-              .filter((c) => c.localName === 'variable')
-              .map((c) => attribute(c, 'name') ?? '');
-      const boolean = elements(root).find((c) => c.localName === 'boolean');
-      if (boolean !== undefined) {
-        return Effect.succeed({
-          _tag: 'Boolean',
-          value: textOf(boolean).trim() === 'true',
-        } as const);
-      }
-      const results = elements(root).find((c) => c.localName === 'results');
-      const bindings = (results === undefined ? [] : elements(results)).map((r) =>
-        B.fromEntries(
-          elements(r)
-            .filter((c) => c.localName === 'binding')
-            .map((c) => [attribute(c, 'name') ?? '', xmlToTerm(elements(c)[0]!)] as const),
-        ),
-      );
-      return Effect.succeed({ _tag: 'ResultSet', variables: vars, bindings } as const);
-    } catch (e) {
-      return Effect.fail(
+    return Effect.try({
+      try: (): ParsedResult => {
+        const root = doc.success.root;
+        const head = elements(root).find((c) => c.localName === 'head');
+        const vars =
+          head === undefined
+            ? []
+            : elements(head)
+                .filter((c) => c.localName === 'variable')
+                .map((c) => attribute(c, 'name') ?? '');
+        const boolean = elements(root).find((c) => c.localName === 'boolean');
+        if (boolean !== undefined) {
+          return { _tag: 'Boolean', value: textOf(boolean).trim() === 'true' } as const;
+        }
+        const results = elements(root).find((c) => c.localName === 'results');
+        const bindings = (results === undefined ? [] : elements(results)).map((r) =>
+          B.fromEntries(
+            elements(r)
+              .filter((c) => c.localName === 'binding')
+              .map((c) => [attribute(c, 'name') ?? '', xmlToTerm(elements(c)[0]!)] as const),
+          ),
+        );
+        return { _tag: 'ResultSet', variables: vars, bindings } as const;
+      },
+      catch: (cause) =>
         new ResultsParseError({
           format: 'xml',
-          message: e instanceof Error ? e.message : String(e),
+          message: Predicate.isError(cause) ? cause.message : String(cause),
         }),
-      );
-    }
+    });
   });
 
 /**

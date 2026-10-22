@@ -151,7 +151,12 @@ const variable: Parser.Parser<Partial> = Parser.preceded(
   ),
 ).pipe(Parser.map((value): Partial => ({ type: 'VAR', value })));
 
-const ECHAR: Record<string, string> = {
+/** Escape letters (the `t` of `\t`, …) and the characters they denote. */
+interface EscapeTable {
+  readonly [letter: string]: string;
+}
+
+const ECHAR: EscapeTable = {
   t: '\t',
   b: '\b',
   n: '\n',
@@ -340,7 +345,12 @@ const lexer = Parser.compile(
 
 /** Splits a query or update into tokens (ending at the first `ERROR` token, if any). */
 export const tokenize = (input: string): Array<Tok> => {
-  const [, [tokens]] = Result.getOrThrow(Parser.parsePeek(lexer, input));
+  // The lexer is total (where no token can be read it emits an ERROR token),
+  // so the failure branch is unreachable; it still ends in an ERROR token.
+  const tokens = Result.match(Parser.parsePeek(lexer, input), {
+    onSuccess: ([, [lexed]]) => lexed,
+    onFailure: (): Array<Tok> => [make(errorToken('No token could be read'), 0, 0)],
+  });
   const error = tokens.findIndex((t) => t.type === 'ERROR');
   if (error !== -1) tokens.length = error + 1;
   return tokens;
@@ -349,6 +359,11 @@ export const tokenize = (input: string): Array<Tok> => {
 // -----------------------------------------------------------------------------
 // Names
 // -----------------------------------------------------------------------------
+
+/** Prefix labels and the namespace IRIs they expand to. */
+interface PrefixTable {
+  [prefix: string]: string;
+}
 
 /** The base IRI and prefixes after resolving the tokens. */
 export interface Resolved {
@@ -368,7 +383,7 @@ export const resolve = (
   initialPrefixes: Readonly<Record<string, string>> | undefined,
 ): Resolved => {
   let base = baseIri;
-  const prefixes: Record<string, string> = { ...initialPrefixes };
+  const prefixes: PrefixTable = { ...initialPrefixes };
   const resolveIri = (iri: string) => (base !== undefined ? Iri.resolve(iri, base) : iri);
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;

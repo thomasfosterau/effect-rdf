@@ -3,8 +3,11 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
+import * as Cause from 'effect/Cause';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Result from 'effect/Result';
 import * as Stream from 'effect/Stream';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -186,14 +189,14 @@ const pathFrom = (
         (): ReadonlyArray<Term.GroundTerm> => [start],
         (frontier, step) =>
           Effect.map(
-            Effect.forEach(frontier, (n) => pathFrom(env, step, n, forward)),
+            Effect.forEach(frontier, (n) => pathFrom(env, step, n, forward), { concurrency: 1 }),
             (lists) => lists.flat(),
           ),
       );
     }
     case 'PathAlternative':
       return Effect.map(
-        Effect.forEach(path.paths, (p) => pathFrom(env, p, start, forward)),
+        Effect.forEach(path.paths, (p) => pathFrom(env, p, start, forward), { concurrency: 1 }),
         (lists) => lists.flat(),
       );
     case 'PathZeroOrOne':
@@ -226,7 +229,7 @@ const pathFrom = (
           ),
         );
       }
-      return Effect.map(Effect.all(parts), (lists) => lists.flat());
+      return Effect.map(Effect.all(parts, { concurrency: 1 }), (lists) => lists.flat());
     }
   }
 };
@@ -279,13 +282,16 @@ const pathAll = (
       const [first, ...rest] = path.paths;
       return Effect.flatMap(pathAll(env, first!), (pairs) =>
         Effect.map(
-          Effect.forEach(pairs, ([x, m]) =>
-            Effect.map(
-              rest.length === 0
-                ? Effect.succeed([m])
-                : pathFrom(env, { _tag: 'PathSequence', paths: rest }, m, true),
-              (ys) => ys.map((y) => [x, y] as const),
-            ),
+          Effect.forEach(
+            pairs,
+            ([x, m]) =>
+              Effect.map(
+                rest.length === 0
+                  ? Effect.succeed([m])
+                  : pathFrom(env, { _tag: 'PathSequence', paths: rest }, m, true),
+                (ys) => ys.map((y) => [x, y] as const),
+              ),
+            { concurrency: 1 },
           ),
           (lists) => lists.flat(),
         ),
@@ -293,7 +299,7 @@ const pathAll = (
     }
     case 'PathAlternative':
       return Effect.map(
-        Effect.forEach(path.paths, (p) => pathAll(env, p)),
+        Effect.forEach(path.paths, (p) => pathAll(env, p), { concurrency: 1 }),
         (lists) => lists.flat(),
       );
     case 'PathNegated': {
@@ -314,13 +320,15 @@ const pathAll = (
           ),
         );
       }
-      return Effect.map(Effect.all(out), (lists) => lists.flat());
+      return Effect.map(Effect.all(out, { concurrency: 1 }), (lists) => lists.flat());
     }
     default:
       return Effect.flatMap(allNodes(env), (nodes) =>
         Effect.map(
-          Effect.forEach(nodes, (n) =>
-            Effect.map(pathFrom(env, path, n, true), (ys) => ys.map((y) => [n, y] as const)),
+          Effect.forEach(
+            nodes,
+            (n) => Effect.map(pathFrom(env, path, n, true), (ys) => ys.map((y) => [n, y] as const)),
+            { concurrency: 1 },
           ),
           (lists) => lists.flat(),
         ),
@@ -347,10 +355,13 @@ const nullable = (path: Ast.Path): boolean => {
 
 const isGraphNode = (env: Env, term: Term.GroundTerm): E<boolean> =>
   Effect.map(
-    Effect.all([
-      Stream.runHead(matchQuads(env, { subject: term })),
-      Stream.runHead(matchQuads(env, { object: term })),
-    ]),
+    Effect.all(
+      [
+        Stream.runHead(matchQuads(env, { subject: term })),
+        Stream.runHead(matchQuads(env, { object: term })),
+      ],
+      { concurrency: 1 },
+    ),
     ([a, b]) => Option.isSome(a) || Option.isSome(b),
   );
 
@@ -419,8 +430,10 @@ const prepare = (
   if (nodes.length === 0) return () => Effect.succeed(env.expr);
   return (b) =>
     Effect.map(
-      Effect.forEach(nodes, (n) =>
-        Effect.map(Stream.runHead(evaluate(n.input, { ...env, context: b })), Option.isSome),
+      Effect.forEach(
+        nodes,
+        (n) => Effect.map(Stream.runHead(evaluate(n.input, { ...env, context: b })), Option.isSome),
+        { concurrency: 1 },
       ),
       (results) => {
         const table = new Map(nodes.map((n, i) => [n, results[i]!] as const));
@@ -468,7 +481,7 @@ const evalWith = (op: Algebra.Operation, env: Env, initial: Bindings): S => {
     case 'Service':
       return evalBoundService(op, env, initial);
     default:
-      return Stream.die(new Error('not bindable'));
+      return Stream.die(new Cause.IllegalArgumentError('not bindable'));
   }
 };
 
@@ -640,46 +653,50 @@ const aggregateValue = (
     });
   }
   const defined = values.filter((v): v is Term.GroundTerm => v !== undefined);
-  try {
-    switch (agg.name) {
-      case 'COUNT':
-        return new Term.Literal(String(defined.length), V.dt.integer);
-      case 'SUM': {
-        if (defined.length !== values.length) return undefined;
-        let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
-        for (const v of defined) acc = V.arithmetic('+', acc, v);
-        return acc;
-      }
-      case 'AVG': {
-        if (defined.length !== values.length) return undefined;
-        if (defined.length === 0) return new Term.Literal('0', V.dt.integer);
-        let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
-        for (const v of defined) acc = V.arithmetic('+', acc, v);
-        return V.arithmetic('/', acc, new Term.Literal(String(defined.length), V.dt.integer));
-      }
-      case 'MIN':
-      case 'MAX': {
-        if (defined.length === 0) return undefined;
-        let best = defined[0]!;
-        for (const v of defined.slice(1)) {
-          const c = V.orderCompare(v, best);
-          if (agg.name === 'MIN' ? c < 0 : c > 0) best = v;
-        }
-        return best;
-      }
-      case 'SAMPLE':
-        return defined[0];
-      case 'GROUP_CONCAT': {
-        if (defined.length !== values.length) return undefined;
-        const lits = defined.map((v) => (v._tag === 'Literal' ? v : V.fail('Not a literal')));
-        const sep = agg.separator ?? ' ';
-        // GROUP_CONCAT always produces an xsd:string.
-        return V.simple(lits.map((l) => l.value).join(sep));
-      }
+  // An expression error in the aggregate leaves it unbound.
+  return Result.getOrUndefined(V.catchEvalFailure(() => aggregateOf(agg, values, defined)));
+};
+
+const aggregateOf = (
+  agg: Algebra.Aggregate,
+  values: ReadonlyArray<Term.GroundTerm | undefined>,
+  defined: ReadonlyArray<Term.GroundTerm>,
+): Term.GroundTerm | undefined => {
+  switch (agg.name) {
+    case 'COUNT':
+      return new Term.Literal(String(defined.length), V.dt.integer);
+    case 'SUM': {
+      if (defined.length !== values.length) return undefined;
+      let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
+      for (const v of defined) acc = V.arithmetic('+', acc, v);
+      return acc;
     }
-  } catch (err) {
-    if (err instanceof V.EvalFailure) return undefined;
-    throw err;
+    case 'AVG': {
+      if (defined.length !== values.length) return undefined;
+      if (defined.length === 0) return new Term.Literal('0', V.dt.integer);
+      let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
+      for (const v of defined) acc = V.arithmetic('+', acc, v);
+      return V.arithmetic('/', acc, new Term.Literal(String(defined.length), V.dt.integer));
+    }
+    case 'MIN':
+    case 'MAX': {
+      if (defined.length === 0) return undefined;
+      let best = defined[0]!;
+      for (const v of defined.slice(1)) {
+        const c = V.orderCompare(v, best);
+        if (agg.name === 'MIN' ? c < 0 : c > 0) best = v;
+      }
+      return best;
+    }
+    case 'SAMPLE':
+      return defined[0];
+    case 'GROUP_CONCAT': {
+      if (defined.length !== values.length) return undefined;
+      const lits = defined.map((v) => (v._tag === 'Literal' ? v : V.fail('Not a literal')));
+      const sep = agg.separator ?? ' ';
+      // GROUP_CONCAT always produces an xsd:string.
+      return V.simple(lits.map((l) => l.value).join(sep));
+    }
   }
 };
 
@@ -722,14 +739,14 @@ const evalOrderBy = (op: Algebra.OrderBy, env: Env): S =>
         s,
         keys: op.conditions.map((c) => Expression.evaluateOrUndefined(c.expression, s, env.expr)),
       }));
-      keyed.sort((a, b) => {
+      const byConditions = Order.make<(typeof keyed)[number]>((a, b) => {
         for (let i = 0; i < op.conditions.length; i++) {
           const c = V.orderCompare(a.keys[i], b.keys[i]);
-          if (c !== 0) return op.conditions[i]!.descending ? -c : c;
+          if (c !== 0) return c < 0 === op.conditions[i]!.descending ? 1 : -1;
         }
         return 0;
       });
-      return keyed.map((k) => k.s);
+      return Arr.sort(keyed, byConditions).map((k) => k.s);
     }),
   );
 
