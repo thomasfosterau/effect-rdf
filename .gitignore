@@ -34,3 +34,21 @@ dist-ssr
 
 # Conformance test suites (scripts/fetch-test-suites.sh)
 .test-suites
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Fallow cache and reports
+.fallow
+fallow.sarif
+
+# Vitest coverage reports (the `test:coverage` tasks)
+coverage/
+
+# The Vite+ task cache; the generated git-hook runner (the editable hook
+# itself, .vite-hooks/pre-commit, is committed)
+.vite/
+.vite-hooks/_/
+vite.config.*.timestamp*
+*.tsbuildinfo

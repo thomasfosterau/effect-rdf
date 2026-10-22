@@ -20,7 +20,6 @@
     "@changesets/cli": "catalog:",
     "@effect/language-service": "catalog:",
     "@effect/tsgo": "catalog:",
-    "@effect/vitest": "catalog:",
     "@mpsuesser/oxlint-plugin-effect": "catalog:",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",

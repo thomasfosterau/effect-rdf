@@ -1,0 +1,177 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "packages/*/src/*.ts",
+    "packages/*/test/**/*.test.ts",
+    "packages/*/bench/*.ts",
+    "packages/sparql-server/bin/*.mjs",
+    "**/vite.config.ts",
+    "vite.package.ts",
+    "scripts/check-dist-imports.mjs"
+  ],
+  "ignorePatterns": ["**/dist/**", "**/coverage/**", ".test-suites/**"],
+  "ignoreDependencies": [
+    "@types/node",
+    "@effect/language-service",
+    "@effect/tsgo",
+    "@typescript/native",
+    "typescript",
+    "vite",
+    "vitest",
+    "vite-plus",
+    "@vitest/coverage-istanbul",
+    "@changesets/cli",
+    "@changesets/changelog-github",
+    "effect-solutions",
+    "fallow"
+  ],
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-types": "error",
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "warn",
+    "unused-enum-members": "error",
+    "unused-class-members": "warn",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "duplicate-exports": "error",
+    "circular-dependencies": "error",
+    "boundary-violation": "error",
+    "stale-suppressions": "warn"
+  },
+  "boundaries": {
+    "zones": [
+      {
+        "name": "core",
+        "patterns": ["packages/core/**"]
+      },
+      {
+        "name": "jsonld",
+        "patterns": ["packages/jsonld/**"]
+      },
+      {
+        "name": "n3",
+        "patterns": ["packages/n3/**"]
+      },
+      {
+        "name": "ntriples",
+        "patterns": ["packages/ntriples/**"]
+      },
+      {
+        "name": "rdfjson",
+        "patterns": ["packages/rdfjson/**"]
+      },
+      {
+        "name": "rdfxml",
+        "patterns": ["packages/rdfxml/**"]
+      },
+      {
+        "name": "shacl",
+        "patterns": ["packages/shacl/**"]
+      },
+      {
+        "name": "shacl-sparql",
+        "patterns": ["packages/shacl-sparql/**"]
+      },
+      {
+        "name": "shex",
+        "patterns": ["packages/shex/**"]
+      },
+      {
+        "name": "sparql",
+        "patterns": ["packages/sparql/**"]
+      },
+      {
+        "name": "sparql-client",
+        "patterns": ["packages/sparql-client/**"]
+      },
+      {
+        "name": "sparql-server",
+        "patterns": ["packages/sparql-server/**"]
+      },
+      {
+        "name": "sparql-sql",
+        "patterns": ["packages/sparql-sql/**"]
+      },
+      {
+        "name": "turtle",
+        "patterns": ["packages/turtle/**"]
+      }
+    ],
+    "rules": [
+      {
+        "from": "core",
+        "allow": []
+      },
+      {
+        "from": "jsonld",
+        "allow": ["core"]
+      },
+      {
+        "from": "n3",
+        "allow": ["core", "turtle"]
+      },
+      {
+        "from": "ntriples",
+        "allow": ["core"]
+      },
+      {
+        "from": "rdfjson",
+        "allow": ["core"]
+      },
+      {
+        "from": "rdfxml",
+        "allow": ["core"]
+      },
+      {
+        "from": "shacl",
+        "allow": ["core", "turtle"]
+      },
+      {
+        "from": "shacl-sparql",
+        "allow": ["core", "jsonld", "shacl", "sparql", "turtle"]
+      },
+      {
+        "from": "shex",
+        "allow": ["core", "turtle"]
+      },
+      {
+        "from": "sparql",
+        "allow": ["core", "ntriples", "rdfxml", "turtle"]
+      },
+      {
+        "from": "sparql-client",
+        "allow": [
+          "core",
+          "jsonld",
+          "n3",
+          "ntriples",
+          "rdfjson",
+          "rdfxml",
+          "sparql",
+          "sparql-server",
+          "turtle"
+        ]
+      },
+      {
+        "from": "sparql-server",
+        "allow": ["core", "jsonld", "n3", "ntriples", "rdfjson", "rdfxml", "sparql", "turtle"]
+      },
+      {
+        "from": "sparql-sql",
+        "allow": ["core", "ntriples", "rdfxml", "sparql", "turtle"]
+      },
+      {
+        "from": "turtle",
+        "allow": ["core", "ntriples"]
+      }
+    ]
+  },
+  "health": {
+    "maxCyclomatic": 20,
+    "maxCognitive": 15,
+    "maxCrap": 30,
+    "coverage": "coverage/coverage-final.json"
+  }
+}
