@@ -142,23 +142,23 @@ export const readManifest = (file: string): Array<ProtocolTest> => {
   return out;
 };
 
-const STATUS_CODES: Readonly<Record<string, number>> = {
-  OK: 200,
-  Created: 201,
-  Accepted: 202,
-  NoContent: 204,
-  BadRequest: 400,
-  Forbidden: 403,
-  NotFound: 404,
-  MethodNotAllowed: 405,
-  NotAcceptable: 406,
-  UnsupportedMediaType: 415,
-};
+const STATUS_CODES = new Map<string, number>([
+  ['OK', 200],
+  ['Created', 201],
+  ['Accepted', 202],
+  ['NoContent', 204],
+  ['BadRequest', 400],
+  ['Forbidden', 403],
+  ['NotFound', 404],
+  ['MethodNotAllowed', 405],
+  ['NotAcceptable', 406],
+  ['UnsupportedMediaType', 415],
+]);
 
 export const statusMatches = (status: number, expected: ReadonlyArray<string>): boolean =>
   expected.length === 0 ||
   expected.some((e) => {
     const cls = /^StatusCode(\d)xx$/.exec(e);
     if (cls !== null) return Math.floor(status / 100) === Number(cls[1]);
-    return STATUS_CODES[e] === status;
+    return STATUS_CODES.get(e) === status;
   });

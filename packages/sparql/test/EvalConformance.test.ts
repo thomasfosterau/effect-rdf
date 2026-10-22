@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
 import * as Ast from '../src/Ast.ts';
@@ -21,14 +23,14 @@ const exists = fs.existsSync(sparqlDir);
 /** Tests that are deliberately not run, with the reason. */
 export const skipped: Readonly<Record<string, string>> = {};
 
-const SKIPPED_DIRECTORIES: Readonly<Record<string, string>> = {
+const SKIPPED_DIRECTORIES = {
   'sparql11/service': 'SERVICE federation requires remote endpoints',
   'sparql11/entailment': 'Entailment regimes are not supported',
   'sparql11/protocol': 'Protocol tests belong to the HTTP server package',
   'sparql11/graph-store-protocol': 'Graph Store Protocol tests belong to the HTTP server package',
   'sparql11/http-rdf-update': 'Graph Store Protocol tests belong to the HTTP server package',
   'sparql11/service-description': 'Service descriptions belong to the HTTP server package',
-};
+} satisfies Readonly<Record<string, string>>;
 
 const EVAL_TYPES = new Set(['QueryEvaluationTest', 'UpdateEvaluationTest', 'CSVResultFormatTest']);
 
@@ -101,6 +103,36 @@ const orderKey = (b: Bindings, vars: ReadonlyArray<string>): string =>
     })
     .join('|');
 
+/** Fails with an N-Quads diff unless the graphs are isomorphic. */
+const expectIsomorphic = (actual: Dataset.Dataset, expected: Dataset.Dataset): void => {
+  const want = Dataset.toNQuads(expected);
+  expect(Isomorphism.isomorphic(actual, expected) ? want : Dataset.toNQuads(actual)).toBe(want);
+};
+
+const rowStrings = (rows: ReadonlyArray<Bindings>): ReadonlyArray<string> =>
+  Arr.sort(
+    rows.map((b) => b.toString()),
+    Order.String,
+  );
+
+/**
+ * Fails unless the solutions match (as multisets, or as sets when `lax`), and
+ * in `ORDER BY` order when the query has one and the test is not lax.
+ */
+const expectSameSolutions = (
+  actual: ReadonlyArray<Bindings>,
+  exp: ReadonlyArray<Bindings>,
+  vars: ReadonlyArray<string>,
+  lax: boolean,
+): void => {
+  const ok = sameResults(actual, exp, { lax });
+  // On a mismatch, show the rows; equal rows differ only in blank nodes.
+  expect(ok ? [] : rowStrings(actual)).toEqual(ok ? [] : rowStrings(exp));
+  assert.isTrue(ok, 'Results differ only in blank node structure');
+  if (vars.length === 0 || lax) return;
+  expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
+};
+
 const runQueryTest = (t: TestCase, optimize = true) =>
   Effect.gen(function* () {
     const text = fs.readFileSync(t.query!, 'utf8');
@@ -122,10 +154,7 @@ const runQueryTest = (t: TestCase, optimize = true) =>
       case 'Graph': {
         const quads = yield* Stream.runCollect(result.quads);
         const actual = Dataset.fromIterable(quads);
-        const exp = expected as Dataset.Dataset;
-        if (!Isomorphism.isomorphic(actual, exp)) {
-          expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(exp));
-        }
+        expectIsomorphic(actual, expected as Dataset.Dataset);
         return;
       }
       case 'Select': {
@@ -140,42 +169,35 @@ const runQueryTest = (t: TestCase, optimize = true) =>
         if (t.result!.endsWith('.tsv') || t.result!.endsWith('.csv')) {
           exp = exp.map((b) => b);
         }
-        const ok = sameResults(actual, exp, { lax: t.laxCardinality });
-        if (!ok) {
-          expect(actual.map((b) => b.toString()).sort()).toEqual(
-            exp.map((b) => b.toString()).sort(),
-          );
-          expect.fail('Results differ only in blank node structure');
-        }
-        const vars = orderVariables(query);
-        if (vars.length > 0 && !t.laxCardinality) {
-          expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
-        }
+        expectSameSolutions(actual, exp, orderVariables(query), t.laxCardinality);
         return;
       }
     }
   });
 
-const runUpdateTest = (t: TestCase) =>
+const updateEngine = (t: TestCase) =>
   Effect.gen(function* () {
-    const text = fs.readFileSync(t.query!, 'utf8');
     const baseIri = pathToFileURL(t.query!).href;
     const store = yield* Store.makeMemory(loadDataset(t, true));
-    const engine = Engine.make(store, { baseIri });
-    const outcome = yield* Effect.result(engine.update(text));
-    if (!t.updateSuccess) {
-      expect(outcome._tag).toBe('Failure');
-      return;
-    }
-    if (outcome._tag === 'Failure') throw outcome.failure;
+    return { store, engine: Engine.make(store, { baseIri }) };
+  });
+
+const runFailingUpdateTest = (t: TestCase) =>
+  Effect.gen(function* () {
+    const { engine } = yield* updateEngine(t);
+    const outcome = yield* Effect.result(engine.update(fs.readFileSync(t.query!, 'utf8')));
+    expect(outcome._tag).toBe('Failure');
+  });
+
+const runUpdateTest = (t: TestCase) =>
+  Effect.gen(function* () {
+    const { store, engine } = yield* updateEngine(t);
+    yield* engine.update(fs.readFileSync(t.query!, 'utf8'));
     const quads: Array<Term.Quad> = [];
     for (const file of t.resultData) quads.push(...parseFile(file));
     for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
     const expected = Dataset.fromIterable(quads);
-    const actual = yield* store.snapshot;
-    if (!Isomorphism.isomorphic(actual, expected)) {
-      expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(expected));
-    }
+    expectIsomorphic(yield* store.snapshot, expected);
   });
 
 const tests = loadTests();
@@ -205,7 +227,8 @@ describe.skipIf(!exists)('SPARQL evaluation conformance', () => {
   )(
     '%s',
     async (_, t) => {
-      expect(await Effect.runPromise(Effect.as(runUpdateTest(t), true))).toBe(true);
+      const run = t.updateSuccess ? runUpdateTest(t) : runFailingUpdateTest(t);
+      expect(await Effect.runPromise(Effect.as(run, true))).toBe(true);
     },
     20_000,
   );

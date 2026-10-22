@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -15,6 +15,10 @@ import type * as Options from '../src/Options.ts';
 import * as Protocol from '../src/Protocol.ts';
 import * as SparqlServer from '../src/SparqlServer.ts';
 import * as Testing from '../src/Testing.ts';
+
+/** The value of an `Option` the test expects to be present. */
+const some = <A>(option: Option.Option<A>, label: string): A =>
+  Option.getOrElse(option, () => assert.fail(`${label}: expected a value`));
 
 const ex = (s: string) => Term.namedNode(`http://example.org/${s}`);
 const data = Dataset.make(
@@ -76,8 +80,8 @@ describe('SPARQL endpoint', () => {
           expect(r.status).toBe(200);
           expect(mediaType(r)).toBe(codec.format.mediaType);
           const parsed = yield* codec.parse(yield* r.text);
-          expect(parsed._tag).toBe('ResultSet');
-          if (parsed._tag === 'ResultSet') expect(parsed.bindings).toHaveLength(3);
+          assert(parsed._tag === 'ResultSet');
+          expect(parsed.bindings).toHaveLength(3);
         }
         // Default: JSON.
         const r = yield* get(client, q(SELECT));
@@ -99,7 +103,7 @@ describe('SPARQL endpoint', () => {
           'application/sparql-results+xml',
         ]) {
           const r = yield* get(client, q('ASK { ?s ?p "Bob" }'), { accept });
-          const parsed = yield* Option.getOrThrow(Results.codecFor(accept)).parse(yield* r.text);
+          const parsed = yield* some(Results.codecFor(accept), accept).parse(yield* r.text);
           expect(parsed).toEqual({ _tag: 'Boolean', value: true });
         }
       }),
@@ -115,7 +119,7 @@ describe('SPARQL endpoint', () => {
           const r = yield* get(client, q(construct), { accept: serializer.format.mediaType });
           expect(r.status).toBe(200);
           expect(mediaType(r)).toBe(serializer.format.mediaType);
-          const parser = Option.getOrThrow(Serialization.parserFor(formats, mediaType(r)));
+          const parser = some(Serialization.parserFor(formats, mediaType(r)), mediaType(r));
           const parsed = yield* parser.parse(yield* r.text, { baseIri: BASE });
           expect(Isomorphism.isomorphic(parsed.dataset, expected)).toBe(true);
         }
@@ -417,7 +421,7 @@ describe('Graph Store Protocol', () => {
         const p = yield* client.execute(
           HttpClientRequest.post(`${BASE}${gsp}${g}`).pipe(
             HttpClientRequest.bodyText(
-              JSON.stringify({ '@id': 'http://a', 'http://b': { '@id': 'http://e' } }),
+              '{"@id":"http://a","http://b":{"@id":"http://e"}}',
               'application/ld+json',
             ),
           ),

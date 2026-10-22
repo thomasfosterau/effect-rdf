@@ -3,6 +3,7 @@
  * that the PostgreSQL dialect can be tested without a server. It uses the
  * PostgreSQL statement compiler of `@effect/sql-pg`.
  */
+import * as Predicate from 'effect/Predicate';
 import { PGlite } from '@electric-sql/pglite';
 import * as PgClient from '@effect/sql-pg/PgClient';
 import * as Effect from 'effect/Effect';
@@ -18,12 +19,19 @@ export const layer: Layer.Layer<SqlClient.SqlClient, SqlError> = Layer.effect(
   SqlClient.SqlClient,
   Effect.gen(function* () {
     const db = yield* Effect.acquireRelease(
-      Effect.promise(async () => {
-        const d = new PGlite();
-        await d.waitReady;
-        return d;
+      Effect.tryPromise({
+        try: async () => {
+          const d = new PGlite();
+          await d.waitReady;
+          return d;
+        },
+        catch: (cause) =>
+          new SqlError({
+            reason: new UnknownError({ cause, message: 'PGlite failed to start' }),
+          }),
       }),
-      (d) => Effect.promise(() => d.close()),
+      // A failure to close is a defect: there is nothing left to recover.
+      (d) => Effect.orDie(Effect.tryPromise(() => d.close())),
     );
     const query = (sql: string, params: ReadonlyArray<unknown>, rowMode: 'array' | 'object') =>
       Effect.tryPromise({
@@ -32,7 +40,7 @@ export const layer: Layer.Layer<SqlClient.SqlClient, SqlError> = Layer.effect(
           new SqlError({
             reason: new UnknownError({
               cause,
-              message: `${cause instanceof Error ? cause.message : 'error'} in: ${sql}`,
+              message: `${Predicate.isError(cause) ? cause.message : 'error'} in: ${sql}`,
               operation: 'execute',
             }),
           }),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Option from 'effect/Option';
 import { Iri } from '../src/index.ts';
 
@@ -53,8 +53,8 @@ describe('Iri', () => {
       'http://example.org/a/b?q',
     ]) {
       const rel = Iri.relativize(iri, b);
-      expect(Option.isSome(rel)).toBe(true);
-      expect(Iri.resolve(Option.getOrThrow(rel), b)).toBe(iri);
+      assert(Option.isSome(rel));
+      expect(Iri.resolve(rel.value, b)).toBe(iri);
     }
     expect(Option.isNone(Iri.relativize('https://other/', b))).toBe(true);
   });

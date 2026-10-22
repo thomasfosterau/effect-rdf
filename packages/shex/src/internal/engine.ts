@@ -8,6 +8,7 @@
  * @internal
  */
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as SemAct from '../SemAct.ts';
@@ -41,6 +42,12 @@ const FULL: Ctx = { arcs: undefined, target: undefined, partitionClosed: false }
 
 /** `undefined` means success; a string is a failure reason. */
 type Outcome = string | undefined;
+
+/** Whether a triple expression was used, and the outcome of its semantic actions. */
+interface Visit {
+  readonly used: boolean;
+  readonly r: Outcome;
+}
 
 const OK = Symbol('ok');
 
@@ -117,32 +124,31 @@ export class Engine {
 
   /** Validates `n` against a shape label (or a descendant) on its full neighbourhood. */
   validateLabel(n: Term.Term, label: string, deps: Set<string>): Outcome {
-    const key = `${n.key}\u0000${label}`;
-    const cached = this.cache.get(key);
-    if (cached !== undefined) return cached === OK ? undefined : cached;
-    if (this.inProgress.has(key)) {
-      deps.add(key);
-      return undefined;
-    }
-    this.inProgress.add(key);
-    const local = new Set<string>();
-    let r: Outcome;
-    try {
-      r = this.satisfiesDescendant(n, label, local);
-    } finally {
-      this.inProgress.delete(key);
-    }
-    local.delete(key);
-    if (r !== undefined || local.size === 0) this.cache.set(key, r ?? OK);
-    for (const d of local) deps.add(d);
-    return r;
+    return this.memoized(`${n.key}\u0000${label}`, deps, (local) =>
+      this.satisfiesDescendant(n, label, local),
+    );
   }
 
   /** Validates `n` against the start shape expression. */
   validateStart(n: Term.Term, deps: Set<string>): Outcome {
     const start = this.index.schema.start;
     if (start === undefined) return 'the schema has no start shape';
-    const key = `${n.key}\u0000\u0000START`;
+    return this.memoized(`${n.key}\u0000\u0000START`, deps, (local) =>
+      this.satisfies(n, start, FULL, local, undefined),
+    );
+  }
+
+  /**
+   * Runs `check` once per `key` (a node and shape pair), caching its outcome.
+   * A key already in progress is a recursive reference: it succeeds for now
+   * and is reported to the caller in `deps`, and an outcome is cached only
+   * once it no longer depends on an unfinished key.
+   */
+  private memoized(
+    key: string,
+    deps: Set<string>,
+    check: (local: Set<string>) => Outcome,
+  ): Outcome {
     const cached = this.cache.get(key);
     if (cached !== undefined) return cached === OK ? undefined : cached;
     if (this.inProgress.has(key)) {
@@ -151,12 +157,10 @@ export class Engine {
     }
     this.inProgress.add(key);
     const local = new Set<string>();
-    let r: Outcome;
-    try {
-      r = this.satisfies(n, start, FULL, local, undefined);
-    } finally {
-      this.inProgress.delete(key);
-    }
+    const result = Result.try(() => check(local));
+    this.inProgress.delete(key);
+    if (Result.isFailure(result)) throw result.failure;
+    const r = result.success;
     local.delete(key);
     if (r !== undefined || local.size === 0) this.cache.set(key, r ?? OK);
     for (const d of local) deps.add(d);
@@ -381,12 +385,12 @@ export class Engine {
 
     const hasTcSemActs = local.some((tc) => tc.semActs !== undefined);
     const tried = new Set<string>();
-    const assignment: Array<ShExJ.TripleConstraint> = new Array(choices.length);
+    const assignment = Array.from<ShExJ.TripleConstraint>({ length: choices.length });
     let firstFailure: Outcome;
     const extDeps = deps;
 
     const tryAssignment = (): Outcome => {
-      const counts = new Array<number>(local.length).fill(0);
+      const counts = Array.from({ length: local.length }, () => 0);
       const partitions: Array<Array<Arc>> = extensions.map(() => []);
       const keyParts: Array<string> = [];
       for (let i = 0; i < choices.length; i++) {
@@ -538,10 +542,7 @@ export class Engine {
     n: Term.Term,
     triples: ReadonlyArray<Term.Triple>,
   ): Outcome {
-    const visit = (
-      te0: ShExJ.TripleExprOrRef,
-      seen: Set<string>,
-    ): { used: boolean; r: Outcome } => {
+    const visit = (te0: ShExJ.TripleExprOrRef, seen: Set<string>): Visit => {
       if (typeof te0 === 'string') {
         if (seen.has(te0)) return { used: false, r: undefined };
         seen.add(te0);

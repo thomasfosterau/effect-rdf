@@ -180,7 +180,7 @@ export const resolveImports = Effect.fnUntraced(function* (
     queue.push(...(imported.imports ?? []));
   }
   const { imports: _, ...rest } = schema;
-  return { ...rest, ...(shapes.length > 0 ? { shapes } : {}) } as ShExJ.Schema;
+  return (shapes.length > 0 ? { ...rest, shapes } : rest) as ShExJ.Schema;
 });
 
 // -----------------------------------------------------------------------------

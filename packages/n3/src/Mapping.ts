@@ -27,7 +27,9 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -54,15 +56,15 @@ class Failure {
 }
 
 const guard = <A>(f: () => A): Effect.Effect<A, UnrepresentableError> =>
-  Effect.suspend(() => {
-    try {
-      return Effect.succeed(f());
-    } catch (e) {
-      if (e instanceof Failure)
-        return Effect.fail(new UnrepresentableError({ message: e.message }));
-      throw e;
-    }
-  });
+  Effect.suspend(() =>
+    Result.match(Result.try(f), {
+      onSuccess: Effect.succeed,
+      onFailure: (e) =>
+        e instanceof Failure
+          ? Effect.fail(new UnrepresentableError({ message: e.message }))
+          : Effect.die(e),
+    }),
+  );
 
 /**
  * @since 0.1.0
@@ -160,13 +162,10 @@ export const toDataset = (
  * @category predicates
  */
 export const isRdfCompatible = (self: Model.Formula): boolean => {
-  try {
-    toQuadsUnsafe(self);
-    return true;
-  } catch (e) {
-    if (e instanceof Failure) return false;
-    throw e;
-  }
+  const result = Result.try(() => toQuadsUnsafe(self));
+  if (Result.isSuccess(result)) return true;
+  if (result.failure instanceof Failure) return false;
+  throw result.failure;
 };
 
 // -----------------------------------------------------------------------------
@@ -177,7 +176,7 @@ type Ground = Term.NamedNode | Term.BlankNode | Term.Literal;
 
 /** @internal */
 export const fromQuadsUnsafe = (quads: Iterable<Term.Quad>): Model.Formula => {
-  const all = Array.from(quads).sort(Term.compareQuads);
+  const all = Arr.sort(quads, Term.compareQuads);
   const graphs = new Map<string, Array<Term.Quad>>();
   // Occurrences of blank nodes as subject/object, per graph and in total.
   const occurrences = new Map<string, Map<string, number>>();

@@ -26,7 +26,8 @@ describe('Xsd', () => {
   it('maps values', () => {
     expect(Xsd.toValue(Term.literal('12', xsd.int))).toEqual({ _tag: 'Integer', value: 12n });
     const dt = Xsd.toValue(Term.literal('2020-01-01T00:00:00+01:00', xsd.dateTime));
-    expect(dt._tag === 'DateTime' && dt.epochMillis).toBe(Date.UTC(2019, 11, 31, 23));
+    // 2019-12-31T23:00:00Z
+    expect(dt._tag === 'DateTime' && dt.epochMillis).toBe(1_577_833_200_000);
     expect(Xsd.toValue(Term.literal('-P1DT1S', xsd.dayTimeDuration))).toEqual({
       _tag: 'Duration',
       months: 0,

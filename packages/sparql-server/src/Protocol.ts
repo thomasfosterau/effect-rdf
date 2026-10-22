@@ -131,12 +131,16 @@ const graphList = (
   values: ReadonlyArray<string>,
   baseIri: string,
 ): Effect.Effect<Array<Term.NamedNode>, Errors.ProtocolError> =>
-  Effect.forEach(values, (value) => {
-    const iri = Iri.resolve(value, baseIri);
-    return Iri.isAbsolute(iri) && !/[\s<>"{}|^`\\]/.test(iri)
-      ? Effect.succeed(Term.namedNode(iri))
-      : Effect.fail(Errors.badRequest(`Invalid graph IRI: ${value}`));
-  });
+  Effect.forEach(
+    values,
+    (value) => {
+      const iri = Iri.resolve(value, baseIri);
+      return Iri.isAbsolute(iri) && !/[\s<>"{}|^`\\]/.test(iri)
+        ? Effect.succeed(Term.namedNode(iri))
+        : Effect.fail(Errors.badRequest(`Invalid graph IRI: ${value}`));
+    },
+    { concurrency: 1 },
+  );
 
 /**
  * Builds the dataset described by protocol parameters (`undefined` when no

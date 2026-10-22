@@ -3,6 +3,7 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
 import { type NodeMap, generateNodeMap, mergeNodeMaps } from './flatten.ts';
 import {
   IdIssuer,
@@ -22,6 +23,7 @@ import {
   isObject,
   isString,
   isValueObject,
+  stringifyJson,
 } from './util.ts';
 
 /** @internal */
@@ -86,7 +88,7 @@ export const frame = (expanded: Json, expandedFrame: Json, options: FrameOptions
   const framed: Array<Json> = [];
   frameSubjects(
     state,
-    Object.keys(state.subjects).sort(compareStrings),
+    Arr.sort(Object.keys(state.subjects), compareStrings),
     asArray(expandedFrame),
     framed,
     null,
@@ -97,9 +99,13 @@ export const frame = (expanded: Json, expandedFrame: Json, options: FrameOptions
   return cleanupPreserve(framed, bnodesToClear, new Set()) as Array<Json>;
 };
 
-const getFlag = (frame: JsonObject, options: FrameOptions, name: string): any => {
+const getFlag = (
+  frame: JsonObject,
+  options: FrameOptions,
+  name: 'embed' | 'explicit' | 'omitDefault' | 'requireAll',
+): any => {
   const flag = `@${name}`;
-  let value = hasOwn(frame, flag) ? asArray(frame[flag])[0] : (options as any)[name];
+  let value: Json = hasOwn(frame, flag) ? asArray(frame[flag])[0] : options[name];
   if (isValueObject(value)) value = value['@value'];
   if (name === 'embed') {
     if (value === true) value = '@once';
@@ -121,7 +127,7 @@ const validateFrame = (frame: Json): void => {
   if (hasOwn(f, '@id')) {
     for (const id of asArray(f['@id'])) {
       if (!(isObject(id) || (isString(id) && isAbsoluteIri(id))) || isBlankNodeId(id)) {
-        fail('invalid frame', `invalid @id ${JSON.stringify(id)}`);
+        fail('invalid frame', `invalid @id ${stringifyJson(id)}`);
       }
     }
   }
@@ -131,7 +137,7 @@ const validateFrame = (frame: Json): void => {
         !(isObject(type) || (isString(type) && isAbsoluteIri(type)) || type === '@json') ||
         isBlankNodeId(type)
       ) {
-        fail('invalid frame', `invalid @type ${JSON.stringify(type)}`);
+        fail('invalid frame', `invalid @type ${stringifyJson(type)}`);
       }
     }
   }
@@ -183,7 +189,7 @@ const frameSubjects = (
   if (!hasOwn(state.link, state.graph)) state.link[state.graph] = {};
   const link = state.link[state.graph]!;
   const matches = filterSubjects(state, subjects, frame, flags);
-  const ids = Object.keys(matches).sort(compareStrings);
+  const ids = Arr.sort(Object.keys(matches), compareStrings);
   for (const id of ids) {
     const subject = matches[id]!;
     if (property === null) state.uniqueEmbeds = { [state.graph]: {} };
@@ -230,7 +236,7 @@ const frameSubjects = (
       if (recurse) {
         frameSubjects(
           { ...state, graph: id, subjects: state.graphMap[id]!, embedded: false },
-          Object.keys(state.graphMap[id]!).sort(compareStrings),
+          Arr.sort(Object.keys(state.graphMap[id]!), compareStrings),
           [subframe],
           output,
           '@graph',
@@ -246,7 +252,7 @@ const frameSubjects = (
         '@included',
       );
     }
-    for (const prop of Object.keys(subject).sort(compareStrings)) {
+    for (const prop of Arr.sort(Object.keys(subject), compareStrings)) {
       if (isKeyword(prop)) {
         output[prop] = clone(subject[prop]);
         if (prop === '@type') {
@@ -280,7 +286,7 @@ const frameSubjects = (
       }
     }
     // defaults
-    for (const prop of Object.keys(frame).sort(compareStrings)) {
+    for (const prop of Arr.sort(Object.keys(frame), compareStrings)) {
       if (prop === '@type') {
         const first = asArray(frame[prop])[0];
         if (!isObject(first) || !hasOwn(first, '@default')) continue;
@@ -297,7 +303,7 @@ const frameSubjects = (
     }
     // reverse properties
     if (isObject(frame['@reverse'])) {
-      for (const reverseProp of Object.keys(frame['@reverse']).sort(compareStrings)) {
+      for (const reverseProp of Arr.sort(Object.keys(frame['@reverse']), compareStrings)) {
         const subframe = frame['@reverse'][reverseProp];
         for (const s of Object.keys(state.subjects)) {
           const values = asArray(state.subjects[s]![reverseProp] ?? []);
@@ -351,7 +357,7 @@ const filterSubjects = (
   subjects: ReadonlyArray<string>,
   frame: JsonObject,
   flags: Flags,
-): Record<string, JsonObject> => {
+) => {
   const result: Record<string, JsonObject> = {};
   for (const id of subjects) {
     const subject = state.graphMap[state.graph]![id];

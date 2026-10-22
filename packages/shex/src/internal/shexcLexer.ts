@@ -13,7 +13,7 @@ import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
-import { unescapeCode, unescapeRegexp } from './lexer.ts';
+import { quote, unescapeCode, unescapeRegexp } from './lexer.ts';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Tokens from './tokens.ts';
 
@@ -278,7 +278,7 @@ const describe = (input: string, offset: number): string => {
   if (c === '"' || c === "'") return 'invalid string literal';
   const w = /^[A-Za-z]+/.exec(input.slice(offset, offset + 64));
   if (w !== null) return `unexpected word "${w[0]}"`;
-  return `invalid character ${JSON.stringify(String.fromCodePoint(input.codePointAt(offset)!))}`;
+  return `invalid character ${quote(String.fromCodePoint(input.codePointAt(offset)!))}`;
 };
 
 /**
@@ -288,7 +288,9 @@ const describe = (input: string, offset: number): string => {
  */
 export const tokenize = (input: string): Array<Tok> => {
   // The lexer always succeeds: it stops where no token can be read.
-  const [, [tokens, end]] = Result.getOrThrow(Parser.parsePeek(lexer, input));
+  const peeked = Parser.parsePeek(lexer, input);
+  if (Result.isFailure(peeked)) throw peeked.failure;
+  const [, [tokens, end]] = peeked.success;
   if (end < input.length) {
     tokens.push(make({ type: 'ERROR', text: describe(input, end) }, end, end));
   }

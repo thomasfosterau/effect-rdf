@@ -281,7 +281,7 @@ const corsHeaders = (
   cors: Options.CorsOptions,
   request: HttpServerRequest.HttpServerRequest,
   preflight: boolean,
-): Record<string, string> => {
+) => {
   const headers: Record<string, string> = {};
   const origin = request.headers['origin'];
   const allowed = cors.allowedOrigins;

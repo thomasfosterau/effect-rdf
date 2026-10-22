@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
@@ -42,7 +42,11 @@ const chunked = (text: string, size: number): Stream.Stream<string> => {
 };
 
 const collect = (mediaType: string, text: string, size: number) =>
-  Stream.runCollect(Option.getOrThrow(ResultsStream.parse(mediaType, chunked(text, size))));
+  Stream.runCollect(
+    Option.getOrElse(ResultsStream.parse(mediaType, chunked(text, size)), () =>
+      assert.fail(`Unsupported media type ${mediaType}`),
+    ),
+  );
 
 const solutions = (events: ReadonlyArray<ResultsStream.ResultEvent>) =>
   events.flatMap((e) => (e._tag === 'Solution' ? [e.bindings] : []));

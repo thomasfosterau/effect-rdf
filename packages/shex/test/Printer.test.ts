@@ -1,11 +1,12 @@
 /* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import type * as Schema from 'effect/Schema';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as ShExC from '../src/ShExC.ts';
 import * as ShExJ from '../src/ShExJ.ts';
-import { canonical } from './utils/canonical.ts';
+import { canonical, isJsonObject } from './utils/canonical.ts';
 import { hasShexTest, readJson, suiteBase } from './utils/suite.ts';
 
 const entries: ReadonlyArray<{ name: string; json: string }> = hasShexTest
@@ -16,17 +17,16 @@ const entries: ReadonlyArray<{ name: string; json: string }> = hasShexTest
  * Removes value expressions that are the empty shape `{ }` (ShExC writes
  * these as `.`, which means "no value expression").
  */
-const normalise = (v: unknown): unknown => {
+const normalise = (v: Schema.Json): Schema.Json => {
   if (Array.isArray(v)) return v.map(normalise);
-  if (v !== null && typeof v === 'object') {
-    const out: Record<string, unknown> = {};
+  if (isJsonObject(v)) {
+    const out: { [key: string]: Schema.Json } = {};
     for (const [k, x] of Object.entries(v)) {
       if (
         k === 'valueExpr' &&
-        typeof x === 'object' &&
-        x !== null &&
+        isJsonObject(x) &&
         Object.keys(x).length === 1 &&
-        (x as { type?: string }).type === 'Shape'
+        x['type'] === 'Shape'
       )
         continue;
       out[k] = normalise(x);
@@ -45,7 +45,7 @@ describe.skipIf(!hasShexTest)('ShExC printer round trip (ShExJ → ShExC → ShE
         prefixes: PrefixMap.make({ xsd: 'http://www.w3.org/2001/XMLSchema#' }),
       });
       const exit = Effect.runSyncExit(ShExC.parse(text));
-      if (Exit.isFailure(exit)) throw new Error(`${String(exit.cause)}\n${text}`);
+      if (Exit.isFailure(exit)) assert.fail(`${String(exit.cause)}\n${text}`);
       expect(normalise(canonical(exit.value)), text).toEqual(normalise(canonical(schema)));
     });
   }

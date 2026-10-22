@@ -9,6 +9,8 @@
  *
  * @since 0.1.0
  */
+import * as DateTime from 'effect/DateTime';
+import * as Random from 'effect/Random';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Algebra from './Algebra.ts';
@@ -47,12 +49,15 @@ export const makeContext = (options?: {
 }): Context => {
   const scopes = new WeakMap<Bindings, Map<string, Term.BlankNode>>();
   let counter = 0;
-  const prefix = `e${Math.floor(Math.random() * 0xffffff).toString(36)}_`;
+  // A plain constructor, outside any Effect: the defaults are the default
+  // `Random` service (`Math.random`) and the current time.
+  const defaultRandom = Random.Random.defaultValue();
+  const prefix = `e${Math.floor(defaultRandom.nextDoubleUnsafe() * 0xffffff).toString(36)}_`;
   return {
-    now: options?.now ?? new Date(),
+    now: options?.now ?? DateTime.toDateUtc(DateTime.nowUnsafe()),
     baseIri: options?.baseIri,
     functions: options?.functions ?? new Map(),
-    random: options?.random ?? Math.random,
+    random: options?.random ?? (() => defaultRandom.nextDoubleUnsafe()),
     blankNode: (label, solution) => {
       if (label === undefined) return Term.blankNode(`${prefix}${counter++}`);
       const row = solution.origin ?? solution;
@@ -124,14 +129,10 @@ export const evaluateUnsafe = (
 const ebvOf = (e: Algebra.Expression, solution: Bindings, ctx: Context): boolean =>
   V.ebv(evaluateUnsafe(e, solution, ctx));
 
-const attempt = <A>(f: () => A): A | V.EvalFailure => {
-  try {
-    return f();
-  } catch (err) {
-    if (err instanceof V.EvalFailure) return err;
-    throw err;
-  }
-};
+const toError = (failure: V.EvalFailure): Functions.ExpressionError =>
+  new Functions.ExpressionError({ message: failure.message });
+
+const attempt = <A>(f: () => A): A | V.EvalFailure => Result.merge(V.catchEvalFailure(f));
 
 const operation = (
   e: Algebra.OperationExpression,
@@ -238,16 +239,11 @@ export const evaluate = (
   expression: Algebra.Expression,
   solution: Bindings,
   context: Context,
-): Result.Result<Term.GroundTerm, Functions.ExpressionError> => {
-  try {
-    return Result.succeed(evaluateUnsafe(expression, solution, context));
-  } catch (err) {
-    if (err instanceof V.EvalFailure) {
-      return Result.fail(new Functions.ExpressionError({ message: err.message }));
-    }
-    throw err;
-  }
-};
+): Result.Result<Term.GroundTerm, Functions.ExpressionError> =>
+  Result.mapError(
+    V.catchEvalFailure(() => evaluateUnsafe(expression, solution, context)),
+    toError,
+  );
 
 /**
  * Evaluates an expression, returning `undefined` on errors.
@@ -259,14 +255,8 @@ export const evaluateOrUndefined = (
   expression: Algebra.Expression,
   solution: Bindings,
   context: Context,
-): Term.GroundTerm | undefined => {
-  try {
-    return evaluateUnsafe(expression, solution, context);
-  } catch (err) {
-    if (err instanceof V.EvalFailure) return undefined;
-    throw err;
-  }
-};
+): Term.GroundTerm | undefined =>
+  Result.getOrUndefined(V.catchEvalFailure(() => evaluateUnsafe(expression, solution, context)));
 
 /**
  * Evaluates a filter condition: the effective boolean value of the
@@ -279,14 +269,11 @@ export const test = (
   expression: Algebra.Expression,
   solution: Bindings,
   context: Context,
-): boolean => {
-  try {
-    return V.ebv(evaluateUnsafe(expression, solution, context));
-  } catch (err) {
-    if (err instanceof V.EvalFailure) return false;
-    throw err;
-  }
-};
+): boolean =>
+  Result.getOrElse(
+    V.catchEvalFailure(() => V.ebv(evaluateUnsafe(expression, solution, context))),
+    () => false,
+  );
 
 /**
  * The effective boolean value of a term (SPARQL 1.1 §17.2.2).
@@ -296,16 +283,11 @@ export const test = (
  */
 export const effectiveBooleanValue = (
   term: Term.GroundTerm,
-): Result.Result<boolean, Functions.ExpressionError> => {
-  try {
-    return Result.succeed(V.ebv(term));
-  } catch (err) {
-    if (err instanceof V.EvalFailure) {
-      return Result.fail(new Functions.ExpressionError({ message: err.message }));
-    }
-    throw err;
-  }
-};
+): Result.Result<boolean, Functions.ExpressionError> =>
+  Result.mapError(
+    V.catchEvalFailure(() => V.ebv(term)),
+    toError,
+  );
 
 /**
  * Value equality (the `=` operator). Fails for incomparable literals.
@@ -316,16 +298,11 @@ export const effectiveBooleanValue = (
 export const equals = (
   a: Term.GroundTerm,
   b: Term.GroundTerm,
-): Result.Result<boolean, Functions.ExpressionError> => {
-  try {
-    return Result.succeed(V.equals(a, b));
-  } catch (err) {
-    if (err instanceof V.EvalFailure) {
-      return Result.fail(new Functions.ExpressionError({ message: err.message }));
-    }
-    throw err;
-  }
-};
+): Result.Result<boolean, Functions.ExpressionError> =>
+  Result.mapError(
+    V.catchEvalFailure(() => V.equals(a, b)),
+    toError,
+  );
 
 /**
  * The total order on (possibly unbound) terms used by `ORDER BY`: unbound <

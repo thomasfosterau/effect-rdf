@@ -1,15 +1,5 @@
-import { defineConfig } from 'vite-plus';
+import { packageConfig } from '../../vite.package.ts';
 
-export default defineConfig({
-  test: {
-    include: ['test/**/*.test.ts'],
-    testTimeout: 60_000,
-  },
-  pack: {
-    entry: ['src/*.ts'],
-    dts: true,
-    tsconfig: 'tsconfig.build.json',
-    format: ['esm'],
-    sourcemap: true,
-  },
-});
+// `tsconfig.json` also covers `test/`, which imports the sparql package's test
+// support files; declaring from it would emit stray .d.ts files there.
+export default packageConfig({ packTsconfig: 'tsconfig.build.json' });

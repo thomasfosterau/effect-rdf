@@ -10,7 +10,15 @@ import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as JsonLd from '../src/JsonLd.ts';
 import * as JsonLdError from '../src/JsonLdError.ts';
-import { SUITES, jsonLdEqual, makeLoader, parseNQuads } from './support.ts';
+import {
+  type Json,
+  SUITES,
+  jsonLdEqual,
+  makeLoader,
+  parseJsonText,
+  parseNQuads,
+  toJsonText,
+} from './support.ts';
 
 const DIR = path.join(SUITES, 'json-ld-api', 'tests');
 const BASE = 'https://w3c.github.io/json-ld-api/tests/';
@@ -28,10 +36,11 @@ interface TestEntry {
   readonly context?: string;
   readonly expectErrorCode?: string;
   readonly requires?: string;
-  readonly option?: Record<string, any>;
+  readonly option?: Record<string, Json>;
 }
 
-const readJson = (file: string): any => JSON.parse(fs.readFileSync(path.join(DIR, file), 'utf8'));
+const readJson = (file: string): Json =>
+  parseJsonText(fs.readFileSync(path.join(DIR, file), 'utf8'));
 
 const stats: Record<string, { pass: number; fail: number; skip: number }> = {};
 
@@ -90,9 +99,8 @@ async function evaluate(
   ) => Effect.Effect<{ readonly ok: boolean; readonly actual?: unknown }, JsonLdError.JsonLdError>,
 ): Promise<{ ok: boolean; detail: string }> {
   const option = test.option ?? {};
-  const options: Record<string, any> = {
-    documentLoader: makeLoader(BASE, DIR, { url: BASE + test.input, options: option }),
-  };
+  const options: Record<string, Json> = {};
+  options['documentLoader'] = makeLoader(BASE, DIR, { url: BASE + test.input, options: option });
   for (const key of OPTION_KEYS) {
     if (key in option) options[key] = option[key];
   }
@@ -102,22 +110,22 @@ async function evaluate(
     if (Exit.isSuccess(exit)) {
       return {
         ok: false,
-        detail: `expected error ${test.expectErrorCode}, got ${JSON.stringify(exit.value.actual)}`,
+        detail: `expected error ${test.expectErrorCode}, got ${toJsonText(exit.value.actual)}`,
       };
     }
-    const failure = JSON.stringify(exit.cause);
+    const failure = toJsonText(exit.cause);
     return {
       ok: failure.includes(`"code":"${test.expectErrorCode}"`),
       detail: `expected ${test.expectErrorCode}, got ${failure}`,
     };
   }
   if (Exit.isSuccess(exit)) {
-    return { ok: exit.value.ok, detail: `got ${JSON.stringify(exit.value.actual, null, 1)}` };
+    return { ok: exit.value.ok, detail: `got ${toJsonText(exit.value.actual, 1)}` };
   }
   return { ok: false, detail: `failed: ${String(exit.cause)}` };
 }
 
-const jsonResult = (actual: unknown, test: TestEntry) => {
+const jsonResult = (actual: Json, test: TestEntry) => {
   if (test.expect === undefined) return { ok: true, actual };
   const expected = readJson(test.expect);
   return { ok: jsonLdEqual(actual, expected), actual };

@@ -136,20 +136,23 @@ const orderBgp = (
   Effect.gen(function* () {
     if (patterns.length < 2) return patterns;
     const estimate = ctx.store.estimate;
-    const costs = yield* Effect.forEach(patterns, (p) =>
-      estimate === undefined
-        ? Effect.succeed(staticCost(p))
-        : estimate({
-            subject: constant(p.subject),
-            predicate: constant(p.predicate),
-            object: constant(p.object),
-            graph:
-              ctx.graph._tag === 'NamedGraph'
-                ? ctx.graph.graph
-                : ctx.dataset.defaultGraph === 'default'
-                  ? Term.defaultGraph
-                  : undefined,
-          }),
+    const costs = yield* Effect.forEach(
+      patterns,
+      (p) =>
+        estimate === undefined
+          ? Effect.succeed(staticCost(p))
+          : estimate({
+              subject: constant(p.subject),
+              predicate: constant(p.predicate),
+              object: constant(p.object),
+              graph:
+                ctx.graph._tag === 'NamedGraph'
+                  ? ctx.graph.graph
+                  : ctx.dataset.defaultGraph === 'default'
+                    ? Term.defaultGraph
+                    : undefined,
+            }),
+      { concurrency: 1 },
     );
     const remaining = patterns.map((p, i) => ({ p, cost: costs[i]!, vars: patternVariables(p) }));
     const bound = new Set<string>();
@@ -201,7 +204,7 @@ const orderBgps = (
         return c;
       });
       return Effect.map(
-        Effect.forEach(children, (c) => orderBgps(c, ctx)),
+        Effect.forEach(children, (c) => orderBgps(c, ctx), { concurrency: 1 }),
         (optimized) => {
           let i = 0;
           return Algebra.mapChildren(op, () => optimized[i++]!);

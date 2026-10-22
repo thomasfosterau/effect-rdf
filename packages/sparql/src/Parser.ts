@@ -53,7 +53,7 @@ export interface ParseOptions {
 // Entry points
 // -----------------------------------------------------------------------------
 
-const position = (input: string, offset: number): { line: number; column: number } => {
+const position = (input: string, offset: number) => {
   let line = 1;
   let lineStart = 0;
   for (let i = 0; i < offset && i < input.length; i++) {

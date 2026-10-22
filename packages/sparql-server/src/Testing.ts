@@ -7,6 +7,7 @@
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as Result from 'effect/Result';
 import * as HttpClient from 'effect/http/HttpClient';
 import type * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
@@ -61,13 +62,8 @@ export const fromApps = (
 ): HttpClient.HttpClient =>
   fromApp(
     Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) => {
-      let origin: string | undefined;
-      try {
-        origin = new URL(request.originalUrl).origin;
-      } catch {
-        origin = undefined;
-      }
-      const app = origin === undefined ? undefined : apps[origin];
+      const origin = Result.try(() => new URL(request.originalUrl).origin);
+      const app = Result.isFailure(origin) ? undefined : apps[origin.success];
       return app ?? Effect.succeed(HttpServerResponse.text('Unknown host\n', { status: 502 }));
     }),
   );
@@ -115,4 +111,4 @@ export const provideServices = (
   HttpServerResponse.HttpServerResponse,
   never,
   HttpServerRequest.HttpServerRequest
-> => Effect.provideContext(app, context) as any;
+> => Effect.provideContext(app, context);

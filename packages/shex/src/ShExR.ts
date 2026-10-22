@@ -5,8 +5,11 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { ShExRError } from './ShExError.ts';
@@ -278,7 +281,11 @@ class Reader {
     const closed = this.one(n, 'closed');
     if (closed !== undefined) shape.closed = this.bool(closed);
     const extra = this.all(n, 'extra');
-    if (extra.length > 0) shape.extra = extra.map((e) => this.iri(e, 'sx:extra')).sort();
+    if (extra.length > 0)
+      shape.extra = Arr.sort(
+        extra.map((e) => this.iri(e, 'sx:extra')),
+        Order.String,
+      );
     const expr = this.one(n, 'expression');
     if (expr !== undefined) shape.expression = this.tripleExpr(expr, true);
     return this.meta(n, shape);
@@ -380,12 +387,15 @@ class Reader {
  * @category reading
  */
 export const fromDataset = (dataset: Dataset.Dataset): Effect.Effect<ShExJ.Schema, ShExRError> =>
-  Effect.suspend(() => {
-    try {
-      return Effect.succeed(new Reader(dataset).schema());
-    } catch (e) {
-      return Effect.fail(new ShExRError({ message: e instanceof Error ? e.message : String(e) }));
-    }
+  Effect.try({
+    try: () => new Reader(dataset).schema(),
+    catch: (e) =>
+      new ShExRError({
+        message:
+          Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+            ? e.message
+            : String(e),
+      }),
   });
 
 // -----------------------------------------------------------------------------

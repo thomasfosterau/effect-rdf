@@ -1042,13 +1042,17 @@ export const aggregate = (
   name: AggregateName,
   expression: Expression | '*',
   options?: { readonly distinct?: boolean; readonly separator?: string },
-): AggregateExpression => ({
-  _tag: 'Aggregate',
-  name,
-  expression,
-  distinct: options?.distinct ?? false,
-  ...(options?.separator !== undefined ? { separator: options.separator } : {}),
-});
+): AggregateExpression => {
+  const aggregate: AggregateExpression = {
+    _tag: 'Aggregate',
+    name,
+    expression,
+    distinct: options?.distinct ?? false,
+  };
+  return options?.separator === undefined
+    ? aggregate
+    : { ...aggregate, separator: options.separator };
+};
 
 /**
  * @since 0.1.0

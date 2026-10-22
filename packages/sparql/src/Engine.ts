@@ -574,6 +574,7 @@ export const make = (
       const baseIri = ast.prologue.base ?? request?.baseIri ?? options.baseIri;
       yield* store.transaction(
         Effect.forEach(ast.operations, (op) => executeOperation(op, baseIri, request), {
+          concurrency: 1,
           discard: true,
         }),
       );

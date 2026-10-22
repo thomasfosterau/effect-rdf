@@ -16,11 +16,13 @@
  */
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as B from '@thomasfosterau/effect-sparql/Bindings';
+import * as Json from './internal/json.ts';
 import * as Results from '@thomasfosterau/effect-sparql/Results';
 
 /**
@@ -76,6 +78,7 @@ const runSyncParse = (
 // JSON
 // -----------------------------------------------------------------------------
 
+const decodeJsonString = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.String));
 const decodeRow = Schema.decodeUnknownResult(Schema.Record(Schema.String, Results.JsonTermSchema));
 const decodeHead = Schema.decodeUnknownResult(
   Schema.Struct({ vars: Schema.optional(Schema.Array(Schema.String)) }),
@@ -131,12 +134,9 @@ export const json = (): Incremental => {
   };
 
   const emit = (kind: CaptureKind, text: string, out: Array<ResultEvent>) => {
-    let value: unknown;
-    try {
-      value = JSON.parse(text);
-    } catch (e) {
-      return fail('json', `Invalid JSON: ${String(e)}`);
-    }
+    const parsed = Json.parse(text);
+    if (Result.isFailure(parsed)) return fail('json', `Invalid JSON: ${String(parsed.failure)}`);
+    const value = parsed.success;
     switch (kind) {
       case 'head': {
         const head = decodeHead(value);
@@ -203,11 +203,9 @@ export const json = (): Incremental => {
           inString = false;
           if (stringIsKey) {
             const top = stack[stack.length - 1]!;
-            try {
-              top.key = JSON.parse(`"${keyRaw}"`) as string;
-            } catch {
-              return fail('json', 'Invalid object key');
-            }
+            const key = decodeJsonString(`"${keyRaw}"`);
+            if (Result.isFailure(key)) return fail('json', 'Invalid object key');
+            top.key = key.success;
             top.expectKey = false;
           } else if (capture !== undefined && stack.length === captureDepth) {
             finish(i + 1);
@@ -501,20 +499,24 @@ export const csv = (): Incremental => {
   let headerLines = 0;
   let lines = 0;
   const parse = (records: string): Results.ParsedResult => {
-    try {
-      return runSyncParse(Results.Csv.parse(header === undefined ? records : header + records));
-    } catch (e) {
-      // Report lines of the whole document, not of the records parsed
-      if (e instanceof Results.ResultsParseError && e.line !== undefined && header !== undefined) {
-        throw new Results.ResultsParseError({
-          format: e.format,
-          message: e.message,
-          line: e.line - headerLines + lines,
-          ...(e.column !== undefined ? { column: e.column } : {}),
-        });
-      }
-      throw e;
+    const parsed = Result.try(() =>
+      runSyncParse(Results.Csv.parse(header === undefined ? records : header + records)),
+    );
+    if (Result.isSuccess(parsed)) return parsed.success;
+    const e = parsed.failure;
+    // Report lines of the whole document, not of the records parsed
+    if (e instanceof Results.ResultsParseError && e.line !== undefined && header !== undefined) {
+      const line = e.line - headerLines + lines;
+      throw e.column === undefined
+        ? new Results.ResultsParseError({ format: e.format, message: e.message, line })
+        : new Results.ResultsParseError({
+            format: e.format,
+            message: e.message,
+            line,
+            column: e.column,
+          });
     }
+    throw e;
   };
   const records = (text: string, out: Array<ResultEvent>) => {
     if (boolean || text === '') return;
@@ -608,14 +610,6 @@ export const buffered = (codec: Results.ResultsCodec): Incremental => {
 // Streams
 // -----------------------------------------------------------------------------
 
-const toError = (format: string) => (e: unknown) =>
-  e instanceof Results.ResultsParseError
-    ? e
-    : new Results.ResultsParseError({
-        format,
-        message: e instanceof Error ? e.message : String(e),
-      });
-
 /**
  * Runs an incremental parser over a stream of text chunks.
  *
@@ -630,7 +624,19 @@ export const run = <E, R>(
   Stream.suspend(() => {
     const parser = make();
     const step = (f: () => ReadonlyArray<ResultEvent>) =>
-      Effect.try({ try: f, catch: toError(format) });
+      Effect.try({
+        try: f,
+        catch: (e) =>
+          e instanceof Results.ResultsParseError
+            ? e
+            : new Results.ResultsParseError({
+                format,
+                message:
+                  Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+                    ? e.message
+                    : String(e),
+              }),
+      });
     return Stream.concat(
       Stream.flattenIterable(Stream.mapEffect(input, (chunk) => step(() => parser.push(chunk)))),
       Stream.flattenIterable(Stream.fromEffect(step(() => parser.end()))),

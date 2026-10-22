@@ -12,8 +12,10 @@
  */
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Effect from 'effect/Effect';
+import * as Result from 'effect/Result';
 import * as S from 'effect/Schema';
 import { ShExJError } from './ShExError.ts';
+import * as Json from './internal/json.ts';
 
 // -----------------------------------------------------------------------------
 // Models
@@ -704,10 +706,10 @@ export const decode = (input: unknown): Effect.Effect<Schema, ShExJError> =>
  * @category decoding
  */
 export const parse = (input: string): Effect.Effect<Schema, ShExJError> =>
-  Effect.try({
-    try: () => JSON.parse(input) as unknown,
-    catch: (e) => new ShExJError({ message: `invalid JSON: ${String(e)}` }),
-  }).pipe(Effect.flatMap(decode));
+  Result.match(Json.parse(input), {
+    onFailure: (e) => Effect.fail(new ShExJError({ message: `invalid JSON: ${e}` })),
+    onSuccess: decode,
+  });
 
 /**
  * Encodes a schema as a ShExJ JSON value (adding the JSON-LD `@context`).
@@ -727,7 +729,7 @@ export const toJson = (schema: Schema): unknown => {
  * @category encoding
  */
 export const stringify = (schema: Schema, space: number | string = 2): string =>
-  JSON.stringify(toJson(schema), null, space);
+  S.encodeSync(S.fromJsonString(S.Unknown, { space }))(toJson(schema));
 
 // -----------------------------------------------------------------------------
 // IRI mapping
@@ -754,14 +756,14 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
     acts: ReadonlyArray<SemAct> | undefined,
     annots: ReadonlyArray<Annotation> | undefined,
   ): T => {
-    const out: any = { ...t };
-    if (acts !== undefined) out.semActs = semActs(acts);
-    if (annots !== undefined) out.annotations = annotations(annots);
+    let out: T = { ...t };
+    if (acts !== undefined) out = { ...out, semActs: semActs(acts) };
+    if (annots !== undefined) out = { ...out, annotations: annotations(annots) };
     return out;
   };
   const value = (v: ValueSetValue): ValueSetValue => {
     if (typeof v === 'string') return f(v);
-    if (isObjectLiteral(v)) return objectValue(v);
+    if ('value' in v) return objectValue(v);
     switch (v.type) {
       case 'IriStem':
         return { ...v, stem: f(v.stem) };
@@ -859,13 +861,25 @@ export const isObjectLiteral = (v: unknown): v is ObjectLiteral =>
   typeof v === 'object' && v !== null && 'value' in v;
 
 /**
+ * Inclusive repetition bounds of a triple expression; `max` may be
+ * `Infinity`.
+ *
+ * @since 0.1.0
+ * @category utils
+ */
+export interface Bounds {
+  readonly min: number;
+  readonly max: number;
+}
+
+/**
  * Normalised cardinality, with `max` of `-1` (unbounded) mapped to
  * `Infinity`.
  *
  * @since 0.1.0
  * @category utils
  */
-export const cardinality = (c: Cardinality): { readonly min: number; readonly max: number } => {
+export const cardinality = (c: Cardinality): Bounds => {
   const min = c.min ?? 1;
   const max = c.max === undefined ? 1 : c.max === -1 ? Infinity : c.max;
   return { min, max };

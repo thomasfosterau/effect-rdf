@@ -123,6 +123,19 @@ const start: P<void> = Parser.make<void, Failure, never, ReadonlyArray<Tok>>(() 
 const offsetOf = (t: Tok | undefined): number => t?.start ?? ctx.input.length;
 
 /**
+ * Runs `f`, returning a thrown `Failure` (a syntax error found while
+ * building) as the failure; any other exception is a defect and propagates.
+ */
+const catchFailure = <A>(f: () => A): Result.Result<A, Failure> =>
+  Result.try({
+    try: f,
+    catch: (cause) => {
+      if (cause instanceof Failure) return cause;
+      throw cause;
+    },
+  });
+
+/**
  * A hook: runs `f` on the current token (without consuming it). A `Failure`
  * thrown by `f` is an unrecoverable error.
  */
@@ -552,7 +565,7 @@ const build = (subject: Ast.TermPattern, pl: PropertyList, out: Triples = []): T
       }
       out.push(Ast.triplePattern(subject, v.predicate, o.term));
       if (annotation.length === 0) continue;
-      const triple = Term.triple(subject as any, v.predicate as any, o.term as any);
+      const triple = Term.triple<any, any, any>(subject, v.predicate, o.term);
       for (const a of annotation) {
         out.push(Ast.triplePattern(a.reifier, rdfReifies, triple));
         if (a.block !== undefined) build(a.reifier, a.block, out);
@@ -634,7 +647,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
   const tripleTerm: P<Ast.TermPattern> = Parser.preceded(
     tok('<<('),
     Parser.seq(tripleTermComponent, patternPredicate, tripleTermComponent, expect(')>>')),
-  ).pipe(Parser.map(([s, p, o]) => Term.triple(s as any, p as any, o as any)));
+  ).pipe(Parser.map(([s, p, o]) => Term.triple<any, any, any>(s, p, o)));
 
   const reifier: P<Ast.TermPattern> = Parser.preceded(
     tok('~'),
@@ -673,7 +686,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
       node(r, [
         ...s.triples,
         ...o.triples,
-        Ast.triplePattern(r, rdfReifies, Term.triple(s.term as any, p as any, o.term as any)),
+        Ast.triplePattern(r, rdfReifies, Term.triple<any, any, any>(s.term, p, o.term)),
       ]),
     ),
   );
@@ -1028,10 +1041,9 @@ const aggregate = (name: Ast.AggregateName): P<Ast.Expression> =>
     Parser.map(([distinct, body]) => {
       if (body === '*') return Ast.aggregate('COUNT', '*', { distinct });
       const [e, sep] = body;
-      return Ast.aggregate(name, e, {
-        distinct,
-        ...(sep._tag === 'Some' ? { separator: sep.value.value } : {}),
-      });
+      return sep._tag === 'Some'
+        ? Ast.aggregate(name, e, { distinct, separator: sep.value.value })
+        : Ast.aggregate(name, e, { distinct });
     }),
   );
 
@@ -1085,7 +1097,7 @@ const exprTripleTerm: P<Ast.Expression> = Parser.preceded(
     ),
     expect(')>>'),
   ),
-).pipe(Parser.map(([s, p, o]) => Term.triple(s as any, p as any, o as any)));
+).pipe(Parser.map(([s, p, o]) => Term.triple<any, any, any>(s, p, o)));
 
 const primary: P<Ast.Expression> = Parser.alt(
   variable,
@@ -1115,13 +1127,16 @@ const unary: P<Ast.Expression> = Parser.alt(
   primary,
 );
 
-const leftAssoc = (operand: P<Ast.Expression>, ops: ReadonlyArray<string>): P<Ast.Expression> =>
-  Parser.seq(
-    operand,
-    Parser.repeat(Parser.seq(Parser.alt(...ops.map((o) => tok(o))), operand)),
-  ).pipe(
+/** Matches the token of an operator, typed as that operator. */
+const operator = <O extends Ast.Operator>(o: O): P<O> => tok(o).pipe(Parser.map(() => o));
+
+const leftAssoc = (
+  operand: P<Ast.Expression>,
+  ops: ReadonlyArray<Ast.Operator>,
+): P<Ast.Expression> =>
+  Parser.seq(operand, Parser.repeat(Parser.seq(Parser.alt(...ops.map(operator)), operand))).pipe(
     Parser.map(([first, rest]) =>
-      rest.reduce((left, [op, right]) => Ast.operation(op.kind as any, left, right), first),
+      rest.reduce((left, [op, right]) => Ast.operation(op, left, right), first),
     ),
   );
 
@@ -1133,13 +1148,13 @@ const relational: P<Ast.Expression> = Parser.seq(
   Parser.opt(
     Parser.alt(
       Parser.seq(
-        Parser.alt(...['=', '!=', '<', '>', '<=', '>='].map((o) => tok(o))),
+        Parser.alt(...(['=', '!=', '<', '>', '<=', '>='] as const).map(operator)),
         additive,
       ).pipe(
         Parser.map(
           ([op, right]) =>
             (left: Ast.Expression) =>
-              Ast.operation(op.kind as any, left, right),
+              Ast.operation(op, left, right),
         ),
       ),
       Parser.preceded(tok('IN'), expressionList).pipe(
@@ -1374,6 +1389,12 @@ const prologueDecls: P<void> = Parser.asVoid(
 
 type Modifiers = Pick<Ast.QueryBase, 'groupBy' | 'having' | 'orderBy' | 'limit' | 'offset'>;
 
+/** `query` with its dataset clause; an absent clause leaves the member absent. */
+const withDataset = <Q extends Ast.QueryBase>(
+  query: Q,
+  dataset: Ast.DatasetClause | undefined,
+): Q => (dataset === undefined ? query : { ...query, dataset });
+
 const withAggregates = <A>(p: P<A>): P<A> => withFlags(true, undefined, p);
 
 const groupCondition: P<Ast.GroupCondition> = Parser.alt(
@@ -1490,13 +1511,15 @@ const solutionModifiers: P<Modifiers> = Parser.seq(
     Parser.succeed({ limit: undefined, offset: undefined }),
   ),
 ).pipe(
-  Parser.map(([groupBy, having, orderBy, { limit, offset }]): Modifiers => ({
-    groupBy: groupBy._tag === 'Some' ? groupBy.value : [],
-    having: having._tag === 'Some' ? having.value : [],
-    orderBy: orderBy._tag === 'Some' ? orderBy.value : [],
-    ...(limit !== undefined ? { limit } : {}),
-    ...(offset !== undefined ? { offset } : {}),
-  })),
+  Parser.map(([groupBy, having, orderBy, { limit, offset }]): Modifiers => {
+    const modifiers: Modifiers = {
+      groupBy: groupBy._tag === 'Some' ? groupBy.value : [],
+      having: having._tag === 'Some' ? having.value : [],
+      orderBy: orderBy._tag === 'Some' ? orderBy.value : [],
+    };
+    const limited = limit === undefined ? modifiers : { ...modifiers, limit };
+    return offset === undefined ? limited : { ...limited, offset };
+  }),
 );
 
 const datasetClauses: P<Ast.DatasetClause | undefined> = Parser.repeat(
@@ -1552,16 +1575,20 @@ const selectQuery = (sub: boolean): P<Ast.SelectQuery> =>
       solutionModifiers,
     ),
   ).pipe(
-    Parser.map(([[distinct, reduced], projection, dataset, where, modifiers]): Ast.SelectQuery => ({
-      _tag: 'Select',
-      prologue: prologue.value(),
-      ...(dataset !== undefined ? { dataset } : {}),
-      distinct,
-      reduced,
-      projection,
-      where,
-      ...modifiers,
-    })),
+    Parser.map(([[distinct, reduced], projection, dataset, where, modifiers]): Ast.SelectQuery =>
+      withDataset(
+        {
+          _tag: 'Select',
+          prologue: prologue.value(),
+          distinct,
+          reduced,
+          projection,
+          where,
+          ...modifiers,
+        },
+        dataset,
+      ),
+    ),
   );
 
 const constructTemplate: P<Array<Ast.TriplePattern>> = Parser.delimited(
@@ -1589,14 +1616,12 @@ const constructQuery: P<Ast.ConstructQuery> = Parser.preceded(
       Parser.preceded(eat('WHERE'), groupGraphPattern),
       solutionModifiers,
     ).pipe(
-      Parser.map(([template, dataset, where, modifiers]): Ast.ConstructQuery => ({
-        _tag: 'Construct',
-        prologue: prologue.value(),
-        ...(dataset !== undefined ? { dataset } : {}),
-        template,
-        where,
-        ...modifiers,
-      })),
+      Parser.map(([template, dataset, where, modifiers]): Ast.ConstructQuery =>
+        withDataset(
+          { _tag: 'Construct', prologue: prologue.value(), template, where, ...modifiers },
+          dataset,
+        ),
+      ),
     ),
     Parser.seq(
       datasetClauses,
@@ -1609,15 +1634,17 @@ const constructQuery: P<Ast.ConstructQuery> = Parser.preceded(
     ).pipe(
       Parser.map(([dataset, triples, modifiers]): Ast.ConstructQuery => {
         const template = triples as Array<Ast.TriplePattern>;
-        return {
-          _tag: 'Construct',
-          prologue: prologue.value(),
-          ...(dataset !== undefined ? { dataset } : {}),
-          template,
-          where: Ast.group(template.length > 0 ? [Ast.bgp(template)] : []),
-          short: true,
-          ...modifiers,
-        };
+        return withDataset(
+          {
+            _tag: 'Construct',
+            prologue: prologue.value(),
+            template,
+            where: Ast.group(template.length > 0 ? [Ast.bgp(template)] : []),
+            short: true,
+            ...modifiers,
+          },
+          dataset,
+        );
       }),
     ),
   ),
@@ -1641,27 +1668,21 @@ const describeQuery: P<Ast.DescribeQuery> = Parser.preceded(
     solutionModifiers,
   ),
 ).pipe(
-  Parser.map(([terms, dataset, where, modifiers]): Ast.DescribeQuery => ({
-    _tag: 'Describe',
-    prologue: prologue.value(),
-    ...(dataset !== undefined ? { dataset } : {}),
-    terms,
-    where,
-    ...modifiers,
-  })),
+  Parser.map(([terms, dataset, where, modifiers]): Ast.DescribeQuery =>
+    withDataset(
+      { _tag: 'Describe', prologue: prologue.value(), terms, where, ...modifiers },
+      dataset,
+    ),
+  ),
 );
 
 const askQuery: P<Ast.AskQuery> = Parser.preceded(
   tok('ASK'),
   Parser.seq(datasetClauses, Parser.preceded(eat('WHERE'), groupGraphPattern), solutionModifiers),
 ).pipe(
-  Parser.map(([dataset, where, modifiers]): Ast.AskQuery => ({
-    _tag: 'Ask',
-    prologue: prologue.value(),
-    ...(dataset !== undefined ? { dataset } : {}),
-    where,
-    ...modifiers,
-  })),
+  Parser.map(([dataset, where, modifiers]): Ast.AskQuery =>
+    withDataset({ _tag: 'Ask', prologue: prologue.value(), where, ...modifiers }, dataset),
+  ),
 );
 
 const subSelect_: P<Ast.GroupPattern> = Parser.seq(
@@ -1761,15 +1782,11 @@ const validateGrouping = (query: Ast.Query, offset: number): void => {
 
 const checked =
   <A>(f: (a: A) => void) =>
-  (a: A): Result.Result<A, Failure> => {
-    try {
+  (a: A): Result.Result<A, Failure> =>
+    catchFailure(() => {
       f(a);
-      return Result.succeed(a);
-    } catch (e) {
-      if (e instanceof Failure) return Result.fail(e);
-      throw e;
-    }
-  };
+      return a;
+    });
 
 const queryUnit = Parser.compile(
   Parser.preceded(
@@ -1869,7 +1886,7 @@ const quadData = (blankNodes: boolean): P<Array<Term.Quad>> =>
   ).pipe(
     Parser.map((quads) =>
       quads.map(
-        (q) => new Term.Quad(q.subject as any, q.predicate as any, q.object as any, q.graph as any),
+        (q) => new Term.Quad<any, any, any, any>(q.subject, q.predicate, q.object, q.graph),
       ),
     ),
   );
@@ -1889,20 +1906,18 @@ const modify = (deleteFirst: boolean): P<Ast.ModifyOperation> =>
     usingClauses,
     Parser.preceded(expect('WHERE'), groupGraphPattern),
   ).pipe(
-    Parser.map(([[del, ins], using, where]): Ast.ModifyOperation => ({
-      _tag: 'Modify',
-      delete: del,
-      insert: ins,
-      ...(using.length > 0
-        ? {
+    Parser.map(([[del, ins], using, where]): Ast.ModifyOperation => {
+      const modify: Ast.ModifyOperation = { _tag: 'Modify', delete: del, insert: ins, where };
+      return using.length === 0
+        ? modify
+        : {
+            ...modify,
             using: {
               default: using.filter(([named]) => !named).map(([, i]) => i),
               named: using.filter(([named]) => named).map(([, i]) => i),
             },
-          }
-        : {}),
-      where,
-    })),
+          };
+    }),
   );
 
 const graphRefAll: P<Ast.GraphTarget> = Parser.alt(
@@ -2069,20 +2084,16 @@ const run = <A>(
   fresh = () => new Context(input);
   ctx = fresh();
   prologue = {
-    value: () => ({
-      ...(resolved.base !== undefined ? { base: resolved.base } : {}),
-      prefixes: { ...resolved.prefixes },
-      ...(ctx.version !== undefined ? { version: ctx.version } : {}),
-    }),
+    value: () => {
+      const declared: Ast.Prologue = { prefixes: { ...resolved.prefixes } };
+      const based = resolved.base === undefined ? declared : { ...declared, base: resolved.base };
+      return ctx.version === undefined ? based : { ...based, version: ctx.version };
+    },
   };
-  let result: Result.Result<A, ParseError.ParseError<Failure>>;
-  try {
-    result = Parser.parse(grammar, tokens);
-  } catch (e) {
-    // Thrown by the maps that check what they build.
-    if (e instanceof Failure) return Result.fail(e);
-    throw e;
-  }
+  // A `Failure` thrown by the maps that check what they build ends the parse.
+  const parsed = catchFailure(() => Parser.parse(grammar, tokens));
+  if (Result.isFailure(parsed)) return Result.fail(parsed.failure);
+  const result: Result.Result<A, ParseError.ParseError<Failure>> = parsed.success;
   if (Result.isSuccess(result)) return Result.succeed(result.success);
   const error: ParseError.ParseError<Failure> = result.failure;
   if (error.cause !== undefined) return Result.fail(error.cause);

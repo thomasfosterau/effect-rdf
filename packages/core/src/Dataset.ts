@@ -9,6 +9,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
@@ -62,13 +63,16 @@ export interface Pattern {
   readonly graph?: Term.Graph | Term.Variable | undefined;
 }
 
+/** `isDataset` for a value already known to be an object. */
+const hasDatasetTypeId = (u: Equal.Equal | Iterable<Term.Quad>): u is Dataset => TypeId in u;
+
 const Proto: Omit<Dataset, 'size' | 'quads' | 'spog'> = {
   [TypeId]: TypeId,
   [Symbol.iterator](this: Dataset): Iterator<Term.Quad> {
     return HashMap.values(this.quads)[Symbol.iterator]();
   },
   [Equal.symbol](this: Dataset, that: Equal.Equal): boolean {
-    if (!isDataset(that) || that.size !== this.size) return false;
+    if (!hasDatasetTypeId(that) || that.size !== this.size) return false;
     for (const key of HashMap.keys(this.quads)) {
       if (!HashMap.has(that.quads, key)) return false;
     }
@@ -91,7 +95,7 @@ const Proto: Omit<Dataset, 'size' | 'quads' | 'spog'> = {
   [NodeInspectSymbol](this: Dataset) {
     return this.toJSON();
   },
-} as any;
+};
 
 const makeDataset = (
   quads: HashMap.HashMap<string, Term.Quad>,
@@ -175,11 +179,12 @@ export const mutate: {
   (self: Dataset, f: (builder: Builder) => void): Dataset;
 } = dual(2, (self: Dataset, f: (builder: Builder) => void): Dataset => {
   let quads = HashMap.beginMutation(self.quads);
-  let idx = self.spog.map((i) => HashMap.beginMutation(i)) as unknown as [
-    Index,
-    Index,
-    Index,
-    Index,
+  const [s0, p0, o0, g0] = self.spog;
+  const idx: [Index, Index, Index, Index] = [
+    HashMap.beginMutation(s0),
+    HashMap.beginMutation(p0),
+    HashMap.beginMutation(o0),
+    HashMap.beginMutation(g0),
   ];
   const builder: Builder = {
     add(quad) {
@@ -207,8 +212,12 @@ export const mutate: {
   };
   f(builder);
   quads = HashMap.endMutation(quads);
-  idx = idx.map((i) => HashMap.endMutation(i)) as unknown as [Index, Index, Index, Index];
-  return makeDataset(quads, idx);
+  return makeDataset(quads, [
+    HashMap.endMutation(idx[0]),
+    HashMap.endMutation(idx[1]),
+    HashMap.endMutation(idx[2]),
+    HashMap.endMutation(idx[3]),
+  ]);
 });
 
 // -----------------------------------------------------------------------------
@@ -220,7 +229,7 @@ export const mutate: {
  * @category constructors
  */
 export const fromIterable = (quads: Iterable<Term.Quad>): Dataset =>
-  isDataset(quads) ? quads : mutate(empty, (b) => b.addAll(quads));
+  hasDatasetTypeId(quads) ? quads : mutate(empty, (b) => b.addAll(quads));
 
 /**
  * @since 0.1.0
@@ -680,7 +689,7 @@ export const toArray = (self: Dataset): ReadonlyArray<Term.Quad> => Array.from(s
  * @category conversions
  */
 export const toSortedArray = (self: Dataset): ReadonlyArray<Term.Quad> =>
-  Array.from(self).sort(Term.compareQuads);
+  Arr.sort(self, Term.compareQuads);
 
 /**
  * Serialises to canonical, sorted N-Quads (one statement per line).
@@ -700,3 +709,11 @@ export const toNQuads = (self: Dataset): string =>
 export const DatasetSchema: Schema.declare<Dataset> = Schema.declare(isDataset, {
   identifier: 'Dataset',
 });
+
+/**
+ * The type `DatasetSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type DatasetSchema = typeof DatasetSchema.Type;

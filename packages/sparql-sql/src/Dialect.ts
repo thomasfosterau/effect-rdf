@@ -10,7 +10,18 @@
  * @since 0.1.0
  */
 import * as Effect from 'effect/Effect';
+import * as Schema from 'effect/Schema';
 import type * as SqlClient from 'effect/sql/SqlClient';
+
+/**
+ * A database the store has no `Dialect` for, or table names it cannot use.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
+export class DialectError extends Schema.TaggedError<DialectError>()('DialectError', {
+  message: Schema.String,
+}) {}
 
 /**
  * The names of the tables used by the store.
@@ -38,7 +49,8 @@ export interface Tables {
  * @category constructors
  */
 export const tables = (prefix = 'rdf_'): Tables => {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)) throw new Error(`Invalid table prefix: ${prefix}`);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix))
+    throw new DialectError({ message: `Invalid table prefix: ${prefix}` });
   return {
     terms: `${prefix}terms`,
     quads: `${prefix}quads`,
@@ -227,6 +239,8 @@ export const fromClient = (sql: SqlClient.SqlClient): Effect.Effect<Dialect, Err
     pg: () => Effect.succeed(postgres),
     orElse: () =>
       Effect.fail(
-        new Error('Unsupported SQL dialect: pass a Dialect to SqlStore.make for this database'),
+        new DialectError({
+          message: 'Unsupported SQL dialect: pass a Dialect to SqlStore.make for this database',
+        }),
       ),
   });

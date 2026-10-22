@@ -29,9 +29,7 @@ describe('Turtle parser', () => {
         '@base <http://example.org/a/> .\nPREFIX p: <q/>\nBASE <b/>\n<x> p:y <z> .',
       );
       expect(result.baseIri).toBe('http://example.org/a/b/');
-      expect(Option.getOrThrow(PrefixMap.get(result.prefixes, 'p'))).toBe(
-        'http://example.org/a/q/',
-      );
+      expect(PrefixMap.get(result.prefixes, 'p')).toEqual(Option.some('http://example.org/a/q/'));
       expect(
         Dataset.has(
           result.dataset,
@@ -230,21 +228,27 @@ describe('TriG', () => {
 describe('Manifest', () => {
   it.effect('reads entries and includes', () =>
     Effect.gen(function* () {
-      const files: Record<string, string> = {
-        'http://t/manifest.ttl': `
+      const files = new Map([
+        [
+          'http://t/manifest.ttl',
+          `
           PREFIX mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#>
           PREFIX rdft: <http://www.w3.org/ns/rdftest#>
           <> a mf:Manifest ; mf:include ( <sub/manifest.ttl> ) ;
             mf:entries ( <#t1> ) .
           <#t1> a rdft:TestTurtleEval ; mf:name "t1" ; mf:action <a.ttl> ; mf:result <a.nt> .`,
-        'http://t/sub/manifest.ttl': `
+        ],
+        [
+          'http://t/sub/manifest.ttl',
+          `
           PREFIX mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#>
           PREFIX rdft: <http://www.w3.org/ns/rdftest#>
           <> a mf:Manifest ; mf:entries ( <#t2> ) .
           <#t2> a rdft:TestTurtleNegativeSyntax ; mf:action <b.ttl> .`,
-      };
+        ],
+      ]);
       const entries = yield* Manifest.load('http://t/manifest.ttl', (iri) =>
-        Effect.succeed(files[iri]!),
+        Effect.succeed(files.get(iri)!),
       );
       expect(entries.map((e) => [e.name, e.kind, Option.getOrNull(e.action)])).toEqual([
         ['t1', 'TestTurtleEval', 'http://t/a.ttl'],

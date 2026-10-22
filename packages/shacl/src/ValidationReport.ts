@@ -111,6 +111,14 @@ export const ValidationReportSchema: Schema.declare<ValidationReport> = Schema.d
   { identifier: 'ValidationReport' },
 );
 
+/**
+ * The type `ValidationReportSchema` decodes to: a `ValidationReport`.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type ValidationReportSchema = typeof ValidationReportSchema.Type;
+
 // -----------------------------------------------------------------------------
 // Queries
 // -----------------------------------------------------------------------------
@@ -191,6 +199,18 @@ export interface ToDatasetOptions {
 }
 
 /**
+ * A validation report encoded as RDF: the report's node and the graph
+ * describing it.
+ *
+ * @since 0.1.0
+ * @category conversions
+ */
+export interface ReportRdf {
+  readonly node: Term.BlankNode;
+  readonly dataset: Dataset.Dataset;
+}
+
+/**
  * Converts a report to the standard RDF validation report graph, using fresh
  * blank nodes for the report, its results and any non-IRI result paths.
  * Returns the report node together with the dataset.
@@ -198,10 +218,7 @@ export interface ToDatasetOptions {
  * @since 0.1.0
  * @category conversions
  */
-export const toRdf = (
-  self: ValidationReport,
-  options: ToDatasetOptions = {},
-): { readonly node: Term.BlankNode; readonly dataset: Dataset.Dataset } => {
+export const toRdf = (self: ValidationReport, options: ToDatasetOptions = {}): ReportRdf => {
   const graph = options.graph ?? Term.defaultGraph;
   const includeDetails = options.details !== false;
   const includeMessages = options.messages !== false;

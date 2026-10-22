@@ -1,4 +1,5 @@
 {
+  "$schema": "./node_modules/@effect/tsgo/schema.json",
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
@@ -21,6 +22,22 @@
     "skipLibCheck": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // The patched native `tsc` (see @effect/tsgo in pnpm-workspace.yaml)
+        // reports the Effect diagnostics; warnings stay visible in the editor
+        // without failing the `check` tasks.
+        "ignoreEffectWarningsInTscExitCode": true,
+        "diagnosticSeverity": {
+          // Effect 4 marks most of `effect/http*`, `effect/sql*` and
+          // `@effect/vitest` `@stability unstable` — the surface the SPARQL
+          // client, server and SQL backend exist to wrap — so as a warning it
+          // fires on nearly every use and buries the warnings that matter.
+          "unstableApiUsage": "suggestion"
+        }
+      }
+    ]
   }
 }

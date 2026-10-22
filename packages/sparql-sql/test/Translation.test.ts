@@ -3,10 +3,12 @@
  * of the algebra is translated into one statement), that untranslatable
  * parts fall back to the engine, and the PostgreSQL SQL generation.
  */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
 import * as Stream from 'effect/Stream';
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import { Namespace, Term, Xsd } from '@thomasfosterau/effect-rdf';
 import * as Engine from '@thomasfosterau/effect-sparql/Engine';
 import * as Parser from '@thomasfosterau/effect-sparql/Parser';
@@ -43,7 +45,10 @@ const run = (query: string, quads: ReadonlyArray<Term.Quad> = data) => {
     const result = yield* engine.query(PREFIX + query);
     const rows =
       result._tag === 'Select'
-        ? (yield* Stream.runCollect(result.bindings)).map((b) => b.toString()).sort()
+        ? Arr.sort(
+            (yield* Stream.runCollect(result.bindings)).map((b) => b.toString()),
+            Order.String,
+          )
         : result._tag === 'Ask'
           ? [String(result.value)]
           : [];
@@ -55,11 +60,10 @@ const run = (query: string, quads: ReadonlyArray<Term.Quad> = data) => {
 
 const executedSql = (events: ReadonlyArray<SqlStore.QueryEvent>): string => {
   const first = events[0];
-  if (first?._tag !== 'Executed') {
-    throw new Error(
-      `Not executed in SQL: ${first?._tag === 'Declined' ? first.reason : 'no event'}`,
-    );
-  }
+  assert(
+    first?._tag === 'Executed',
+    `Not executed in SQL: ${first?._tag === 'Declined' ? first.reason : 'no event'}`,
+  );
   return first.sql;
 };
 
@@ -112,10 +116,8 @@ describe('SQL execution', () => {
       Effect.gen(function* () {
         const { events } = yield* run(query);
         const sql = executedSql(events);
-        for (const p of patterns) {
-          if (typeof p === 'string') expect(sql).toContain(p);
-          else expect(sql).toMatch(p);
-        }
+        // A string is a substring of the SQL; a RegExp matches it.
+        for (const p of patterns) expect(sql).toMatch(p);
         // The root was translated: no other node was offered.
         expect(events.length).toBe(1);
       }),
@@ -208,17 +210,16 @@ describe('PostgreSQL SQL generation', () => {
     const result = compile(
       'SELECT ?n ?m WHERE { ?p ex:name ?n OPTIONAL { ?p ex:nick ?m } FILTER(?n < "B" && CONTAINS(?n, "o")) }',
     );
-    expect(Result.isSuccess(result)).toBe(true);
-    const { sql, params } = Result.getOrThrow(result);
+    assert(Result.isSuccess(result));
+    const { sql, params } = result.success;
     expect(sql).not.toContain('?');
     expect(sql).toContain('$1');
     expect(sql).toContain('COLLATE "C"');
     expect(sql).toContain('strpos(');
     expect(params).toEqual(expect.arrayContaining(['B', 'o']));
-    const union = Result.getOrThrow(
-      compile('SELECT * WHERE { { ?a ex:p ?b } UNION { ?a ex:q ?c } }'),
-    );
-    expect(union.sql).toContain('CAST(NULL AS BIGINT)');
+    const union = compile('SELECT * WHERE { { ?a ex:p ?b } UNION { ?a ex:q ?c } }');
+    assert(Result.isSuccess(union));
+    expect(union.success.sql).toContain('CAST(NULL AS BIGINT)');
   });
 
   it('declares a schema with an md5 key index', () => {

@@ -25,7 +25,9 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
 import * as Schema from 'effect/Schema';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
@@ -353,11 +355,10 @@ const instantiate = (rule: Rule, b: Bindings): ReadonlyArray<Model.Statement> =>
   if (goals === undefined) return [];
   // Fresh blank nodes depend only on the bindings used by the conclusion.
   const used = new Set(Model.variables(conclusion).map((v) => v.value));
-  const signature = Array.from(b)
+  const entries = Array.from(b)
     .filter(([k]) => used.has(k))
-    .map(([k, v]) => `${k}=${resolve(v, b).key}`)
-    .sort()
-    .join('|');
+    .map(([k, v]) => `${k}=${resolve(v, b).key}`);
+  const signature = Arr.sort(entries, Order.String).join('|');
   const fresh = new Map<string, Term.BlankNode>();
   const skolem = (label: string): Term.BlankNode => {
     let node = fresh.get(label);
@@ -462,21 +463,18 @@ export const reason = (
   formula: Model.Formula | Model.Document,
   options?: Options,
 ): Effect.Effect<Result, ReasonerError> =>
-  Effect.suspend(() => {
-    try {
-      return Effect.succeed(
-        closureOf(Model.isFormula(formula) ? formula : formula.formula, options),
-      );
-    } catch (e) {
-      if (e instanceof Inconsistency) {
-        return Effect.fail(
-          new ReasonerError({ message: `Inconsistency derived by rule ${e.rule.key}` }),
-        );
-      }
-      if (e instanceof LimitExceeded) return Effect.fail(new ReasonerError({ message: e.message }));
-      throw e;
-    }
-  });
+  Effect.try({
+    try: () => closureOf(Model.isFormula(formula) ? formula : formula.formula, options),
+    catch: (e) => e,
+  }).pipe(
+    Effect.catch((e) =>
+      e instanceof Inconsistency
+        ? Effect.fail(new ReasonerError({ message: `Inconsistency derived by rule ${e.rule.key}` }))
+        : e instanceof LimitExceeded
+          ? Effect.fail(new ReasonerError({ message: e.message }))
+          : Effect.die(e),
+    ),
+  );
 
 /**
  * Answers a query: all bindings of the variables (and blank nodes) of

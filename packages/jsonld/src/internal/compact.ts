@@ -3,8 +3,11 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import {
   type ActiveContext,
+  applyTypeScopedContexts,
   type ContainerEntry,
   type Env,
   type InverseContext,
@@ -105,18 +108,18 @@ export const compactElement = (
   const result: JsonObject = {};
   // 11
   if ('@type' in element) {
-    const compactedTypes = asArray(element['@type'])
-      .map((t: string) => compactIri(env, typeScoped, t, null, true, false, options))
-      .sort(compareStrings);
-    for (const term of compactedTypes) {
-      const def = typeScoped.terms.get(term);
-      if (def?.hasContext === true) {
-        active = processContext(env, active, def.context, def.baseUrl ?? null, [], false, false);
-      }
-    }
+    const compactedTypes = Arr.sort(
+      asArray(element['@type']).map((t: string) =>
+        compactIri(env, typeScoped, t, null, true, false, options),
+      ),
+      compareStrings,
+    );
+    active = applyTypeScopedContexts(env, active, typeScoped, compactedTypes);
   }
   // 12
-  const keys = options.ordered ? Object.keys(element).sort(compareStrings) : Object.keys(element);
+  const keys = options.ordered
+    ? Arr.sort(Object.keys(element), compareStrings)
+    : Object.keys(element);
   for (const expandedProperty of keys) {
     const expandedValue = element[expandedProperty];
     // 12.1
@@ -397,6 +400,12 @@ const nestResultFor = (
 export const containerOf = (active: ActiveContext, term: string | null): Array<string> =>
   term === null ? [] : (active.terms.get(term)?.container ?? []);
 
+/** Terms ordered shortest first, then lexicographically. */
+const shortestTermFirst: Order.Order<string> = Order.combine(
+  Order.mapInput(Order.Number, (term: string) => term.length),
+  compareStrings,
+);
+
 /**
  * Inverse Context Creation algorithm.
  *
@@ -406,13 +415,12 @@ export const inverseContext = (active: ActiveContext): InverseContext => {
   if (active.inverse !== undefined) return active.inverse;
   const result: InverseContext = new Map();
   const defaultLanguage = active.language !== undefined ? active.language.toLowerCase() : '@none';
-  const terms = [...active.terms.keys()].sort(
-    (a, b) => a.length - b.length || compareStrings(a, b),
-  );
+  const terms = Arr.sort(active.terms.keys(), shortestTermFirst);
   for (const term of terms) {
     const def = active.terms.get(term)!;
     if (def.iri === null) continue;
-    const container = def.container.length === 0 ? '@none' : [...def.container].sort().join('');
+    const container =
+      def.container.length === 0 ? '@none' : Arr.sort(def.container, Order.String).join('');
     let containerMap = result.get(def.iri);
     if (containerMap === undefined) {
       containerMap = Object.create(null) as Record<string, ContainerEntry>;
@@ -626,7 +634,8 @@ export const compactIri = (
       if (isListObject(value) && value['@list'].length === 0) typeLanguage = '@any';
     }
     preferredValues.push('@any');
-    for (const pv of [...preferredValues]) {
+    // Iterates a copy: the loop appends to `preferredValues`.
+    for (const pv of Arr.copy(preferredValues)) {
       const i = pv.indexOf('_');
       if (i !== -1) preferredValues.push(pv.slice(i));
     }

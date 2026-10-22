@@ -258,7 +258,9 @@ export const make = (
       ['currentShape', input.shape.id],
     ]);
     const messages = literals(shapes, constraint.node, sh.message);
-    return yield* Effect.forEach(solutions, (s) => toViolation(s, input.shape, messages, []));
+    return yield* Effect.forEach(solutions, (s) => toViolation(s, input.shape, messages, []), {
+      concurrency: 1,
+    });
   });
 
   /** Selects the validator of a constraint component for a shape (§6.2.3). */
@@ -321,8 +323,10 @@ export const make = (
     ];
     if (validator.form === 'select') {
       const solutions = yield* select(context, query, bound);
-      return yield* Effect.forEach(solutions, (s) =>
-        toViolation(s, input.shape, messages, parameters),
+      return yield* Effect.forEach(
+        solutions,
+        (s) => toViolation(s, input.shape, messages, parameters),
+        { concurrency: 1 },
       );
     }
     const violations: Array<Sparql.Violation> = [];

@@ -6,11 +6,33 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
 import * as DocumentLoader from '../src/DocumentLoader.ts';
 import * as JsonLdError from '../src/JsonLdError.ts';
+import type { Json } from '../src/internal/util.ts';
+
+export type { Json };
 
 export const SUITES =
   process.env['RDF_TEST_SUITES'] ?? path.resolve(import.meta.dirname, '../../../.test-suites');
+
+// -----------------------------------------------------------------------------
+// JSON text
+// -----------------------------------------------------------------------------
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+const decodeJsonText = Schema.decodeUnknownSync(JsonText);
+
+/** Parses JSON text (`JSON.parse` semantics); throws on invalid JSON. */
+export const parseJsonText = (text: string): Json => decodeJsonText(text);
+
+/** Renders a value as JSON text (`JSON.stringify` semantics). */
+export const toJsonText = (value: Json, space?: number): string =>
+  Result.getOrElse(
+    Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Unknown, { space }))(value),
+    () => String(value),
+  );
 
 // -----------------------------------------------------------------------------
 // N-Quads
@@ -39,6 +61,10 @@ const unescape = (s: string): string =>
 const TERM =
   /\s*(?:<([^>]*)>|_:([^\s.]+(?:\.[^\s.]+)*)|"((?:[^"\\]|\\.)*)"(?:@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)|\^\^<([^>]*)>)?)/y;
 
+class BadNQuadsLine extends Schema.TaggedError<BadNQuadsLine>()('BadNQuadsLine', {
+  message: Schema.String,
+}) {}
+
 export const parseNQuads = (text: string): Array<Term.Quad> => {
   const quads: Array<Term.Quad> = [];
   for (const raw of text.split(/\r?\n/)) {
@@ -62,7 +88,7 @@ export const parseNQuads = (text: string): Array<Term.Quad> => {
         else terms.push(Term.literal(value));
       }
     }
-    if (rest.trim() !== '.') throw new Error(`Bad N-Quads line: ${line}`);
+    if (rest.trim() !== '.') throw new BadNQuadsLine({ message: `Bad N-Quads line: ${line}` });
     const [s, p, o, g] = terms;
     quads.push(
       Term.quad(
@@ -80,12 +106,12 @@ export const parseNQuads = (text: string): Array<Term.Quad> => {
 // JSON-LD object comparison
 // -----------------------------------------------------------------------------
 
-export const jsonLdEqual = (a: unknown, b: unknown, key: string | null = null): boolean => {
+export const jsonLdEqual = (a: Json, b: Json, key: string | null = null): boolean => {
   if (a === b) return true;
   if (Array.isArray(a)) {
     if (!Array.isArray(b) || a.length !== b.length) return false;
     if (key === '@list') return a.every((x, i) => jsonLdEqual(x, b[i]));
-    const used = new Array<boolean>(b.length).fill(false);
+    const used = Array.from({ length: b.length }, () => false);
     outer: for (const x of a) {
       for (let i = 0; i < b.length; i++) {
         if (!used[i] && jsonLdEqual(x, b[i], key)) {
@@ -104,8 +130,8 @@ export const jsonLdEqual = (a: unknown, b: unknown, key: string | null = null): 
     if (ka.length !== kb.length) return false;
     for (const k of ka) {
       if (!(k in b)) return false;
-      const va = (a as any)[k];
-      const vb = (b as any)[k];
+      const va = a[k];
+      const vb = b[k];
       if (k === '@language' && typeof va === 'string' && typeof vb === 'string') {
         if (va.toLowerCase() !== vb.toLowerCase()) return false;
         continue;

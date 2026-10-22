@@ -1,11 +1,29 @@
 {
+  "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-turtle",
   "version": "0.0.0",
   "description": "Effect-idiomatic RDF 1.2 Turtle and TriG parsers and pretty serializers",
+  "keywords": [
+    "effect",
+    "rdf",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/turtle#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-rdf/issues"
+  },
   "license": "MIT",
+  "author": "Thomas Foster <me@thomasfoster.au>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-rdf.git",
+    "directory": "packages/turtle"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -23,11 +41,11 @@
         "types": "./dist/*.d.mts",
         "default": "./dist/*.mjs"
       }
-    }
+    },
+    "access": "public"
   },
   "scripts": {
-    "bench": "node --experimental-strip-types --no-warnings bench/parser.ts",
-    "build": "vp pack"
+    "bench": "node --experimental-strip-types --no-warnings bench/parser.ts"
   },
   "dependencies": {
     "@thomasfosterau/effect-ntriples": "workspace:*",
@@ -36,11 +54,13 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:",
-    "vite-plus": "catalog:"
+    "effect": "catalog:"
   },
   "peerDependencies": {
-    "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:"
+    "@thomasfosterau/effect-parse": "catalog:peers",
+    "effect": "catalog:peers"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

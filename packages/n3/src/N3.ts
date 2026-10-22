@@ -67,28 +67,27 @@ const runParser = (
   input: string,
   options?: ParseOptions,
 ): Effect.Effect<Model.Document, Serialization.RdfParseError> =>
-  Effect.suspend(() => {
-    try {
-      return Effect.succeed(
-        Parser.parse(input, {
-          baseIri: options?.baseIri,
-          blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
-        }),
-      );
-    } catch (e) {
-      if (e instanceof Parser.SyntaxFailure) {
-        return Effect.fail(
-          new Serialization.RdfParseError({
-            format: format.name,
-            message: e.message,
-            line: e.line,
-            column: e.column,
-          }),
-        );
-      }
-      throw e;
-    }
-  });
+  Effect.try({
+    try: () =>
+      Parser.parse(input, {
+        baseIri: options?.baseIri,
+        blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
+      }),
+    catch: (e) => e,
+  }).pipe(
+    Effect.catch((e) =>
+      e instanceof Parser.SyntaxFailure
+        ? Effect.fail(
+            new Serialization.RdfParseError({
+              format: format.name,
+              message: e.message,
+              line: e.line,
+              column: e.column,
+            }),
+          )
+        : Effect.die(e),
+    ),
+  );
 
 /**
  * Parses an N3 document into the full N3 model.

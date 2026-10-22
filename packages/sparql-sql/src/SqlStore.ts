@@ -20,6 +20,7 @@ import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Migrator from 'effect/sql/Migrator';
 import * as SqlClient from 'effect/sql/SqlClient';
@@ -125,7 +126,7 @@ const storeError = (message: string) => (cause: unknown) =>
   cause instanceof Store.StoreError
     ? cause
     : new Store.StoreError({
-        message: `${message}: ${cause instanceof Error ? cause.message : String(cause)}`,
+        message: `${message}: ${Predicate.isError(cause) ? cause.message : String(cause)}`,
         cause,
       });
 
@@ -160,10 +161,7 @@ const DEFAULT_DATASET: Store.DatasetSpec = { defaultGraph: 'default', namedGraph
  * @since 0.1.0
  * @category schema
  */
-export const migrations = (
-  dialect: Dialect.Dialect,
-  tables: Dialect.Tables,
-): Record<string, Effect.Effect<void, SqlError.SqlError, SqlClient.SqlClient>> => ({
+export const migrations = (dialect: Dialect.Dialect, tables: Dialect.Tables) => ({
   '1_create_rdf_store': Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     for (const statement of dialect.schema(tables)) yield* sql.unsafe(statement);
@@ -197,6 +195,24 @@ interface DecodeState {
   readonly known: Map<number, Term.GroundTerm>;
   readonly triples: Map<number, readonly [number, number, number]>;
 }
+
+/**
+ * The term with id `id` of a decode state that `complete` has filled: every
+ * id is known, so a missing one is a defect.
+ */
+const termOf = (state: DecodeState, id: number): Term.GroundTerm => {
+  const known = state.known.get(id);
+  if (known !== undefined) return known;
+  const comps = state.triples.get(id);
+  if (comps === undefined) throw new Store.StoreError({ message: `Unknown term id ${id}` });
+  const t = Term.triple(
+    termOf(state, comps[0]) as Term.Subject,
+    termOf(state, comps[1]) as Term.Predicate,
+    termOf(state, comps[2]) as Term.Object,
+  );
+  state.known.set(id, t);
+  return t;
+};
 
 /**
  * Creates a SQL store over the `SqlClient` service.
@@ -384,26 +400,40 @@ export const make = (
 
     const newState = (): DecodeState => ({ known: new Map(), triples: new Map() });
 
-    const addRow = (
-      state: DecodeState,
-      id: number,
-      kind: unknown,
-      value: unknown,
-      datatype: unknown,
-      lang: unknown,
-      dir: unknown,
-    ) => {
+    /**
+     * Records the term with id `id` whose `kind, value, datatype, lang, dir`
+     * columns start at `row[at]` (`kind` is null for an id with no term row).
+     */
+    const addRow = (state: DecodeState, id: number, row: ReadonlyArray<unknown>, at: number) => {
       if (state.known.has(id) || state.triples.has(id)) return;
       const cached = termCache.get(id);
       if (cached !== undefined) {
         state.known.set(id, cached);
         return;
       }
+      const kind = row[at];
       if (kind === null || kind === undefined) return;
-      const t = Enc.decode(num(kind), str(value), str(datatype), str(lang), str(dir));
+      const t = Enc.decode(
+        num(kind),
+        str(row[at + 1]),
+        str(row[at + 2]),
+        str(row[at + 3]),
+        str(row[at + 4]),
+      );
       if (Array.isArray(t)) state.triples.set(id, t as readonly [number, number, number]);
       else state.known.set(id, t as Term.GroundTerm);
     };
+
+    /** Reads the dictionary rows of `ids` (one chunk) into a decode state. */
+    const fetchTerms = (state: DecodeState, ids: ReadonlyArray<number>) =>
+      Effect.map(
+        run(
+          `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE id IN (${ids.join(', ')})`,
+        ),
+        (rows) => {
+          for (const r of rows) addRow(state, num(r[0]), r, 1);
+        },
+      );
 
     /** Fetches the components of the triple terms of a decode state. */
     const complete = (state: DecodeState) =>
@@ -422,10 +452,7 @@ export const make = (
           }
           if (missing.size === 0) return;
           for (const chunk of chunks(Array.from(missing), 500)) {
-            const rows = yield* run(
-              `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE id IN (${chunk.join(', ')})`,
-            );
-            for (const r of rows) addRow(state, num(r[0]), r[1], r[2], r[3], r[4], r[5]);
+            yield* fetchTerms(state, chunk);
             for (const c of chunk) {
               if (!state.known.has(c) && !state.triples.has(c)) {
                 return yield* new Store.StoreError({ message: `Unknown term id ${c}` });
@@ -434,20 +461,6 @@ export const make = (
           }
         }
       });
-
-    const termOf = (state: DecodeState, id: number): Term.GroundTerm => {
-      const known = state.known.get(id);
-      if (known !== undefined) return known;
-      const comps = state.triples.get(id);
-      if (comps === undefined) throw new Error(`Unknown term id ${id}`);
-      const t = Term.triple(
-        termOf(state, comps[0]) as Term.Subject,
-        termOf(state, comps[1]) as Term.Predicate,
-        termOf(state, comps[2]) as Term.Object,
-      );
-      state.known.set(id, t);
-      return t;
-    };
 
     const remember = (state: DecodeState) =>
       Effect.map(inTransaction, (inTx) => {
@@ -513,7 +526,7 @@ export const make = (
             const id = num(r[i]);
             if (i === 3 && id === 0) continue;
             const base = 4 + i * 5;
-            addRow(state, id, r[base], r[base + 1], r[base + 2], r[base + 3], r[base + 4]);
+            addRow(state, id, r, base);
           }
         }
         yield* complete(state);
@@ -647,12 +660,7 @@ export const make = (
     const decodeIds = (ids: ReadonlyArray<number>) =>
       Effect.gen(function* () {
         const state = newState();
-        for (const chunk of chunks(ids, 500)) {
-          const rows = yield* run(
-            `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE id IN (${chunk.join(', ')})`,
-          );
-          for (const r of rows) addRow(state, num(r[0]), r[1], r[2], r[3], r[4], r[5]);
-        }
+        for (const chunk of chunks(ids, 500)) yield* fetchTerms(state, chunk);
         yield* complete(state);
         yield* remember(state);
         return ids.map((id) => termOf(state, id));
@@ -762,7 +770,7 @@ export const make = (
             const v = r[i];
             if (v !== null && v !== undefined) {
               const id = num(v);
-              if (id > 0) addRow(state, id, r[i + 1], r[i + 2], r[i + 3], r[i + 4], r[i + 5]);
+              if (id > 0) addRow(state, id, r, i + 1);
             }
             i += 6;
           }

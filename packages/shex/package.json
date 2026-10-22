@@ -1,11 +1,29 @@
 {
+  "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-shex",
   "version": "0.0.0",
   "description": "Effect-idiomatic ShEx (Shape Expressions): ShExJ, ShExC, ShExR, ShapeMaps and validation",
+  "keywords": [
+    "effect",
+    "rdf",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/shex#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-rdf/issues"
+  },
   "license": "MIT",
+  "author": "Thomas Foster <me@thomasfoster.au>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-rdf.git",
+    "directory": "packages/shex"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -23,10 +41,10 @@
         "types": "./dist/*.d.mts",
         "default": "./dist/*.mjs"
       }
-    }
+    },
+    "access": "public"
   },
   "scripts": {
-    "build": "vp pack",
     "bench": "node --experimental-strip-types --no-warnings bench/shexc.ts"
   },
   "dependencies": {
@@ -36,11 +54,13 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:",
-    "vite-plus": "catalog:"
+    "effect": "catalog:"
   },
   "peerDependencies": {
-    "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:"
+    "@thomasfosterau/effect-parse": "catalog:peers",
+    "effect": "catalog:peers"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

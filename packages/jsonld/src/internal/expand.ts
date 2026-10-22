@@ -3,7 +3,14 @@
  *
  * @internal
  */
-import { type ActiveContext, type Env, expandIri, processContext } from './context.ts';
+import * as Arr from 'effect/Array';
+import {
+  type ActiveContext,
+  applyTypeScopedContexts,
+  type Env,
+  expandIri,
+  processContext,
+} from './context.ts';
 import {
   type Json,
   type JsonObject,
@@ -21,6 +28,7 @@ import {
   isValueObject,
   getOrInit,
   hasOwn,
+  stringifyJson,
 } from './util.ts';
 
 /** @internal */
@@ -100,16 +108,16 @@ export const expandElement = (
   const typeScoped = active;
   // 11
   let inputType: string | null = null;
-  const keys = Object.keys(element).sort(compareStrings);
+  const keys = Arr.sort(Object.keys(element), compareStrings);
   for (const key of keys) {
     if (expandIri(env, active, key, true) !== '@type') continue;
     const values = asArray(element[key]);
-    for (const term of [...values].filter(isString).sort(compareStrings)) {
-      const def = typeScoped.terms.get(term);
-      if (def?.hasContext === true) {
-        active = processContext(env, active, def.context, def.baseUrl ?? null, [], false, false);
-      }
-    }
+    active = applyTypeScopedContexts(
+      env,
+      active,
+      typeScoped,
+      Arr.sort(Arr.filter(values, isString), compareStrings),
+    );
   }
   // 12
   for (const key of keys) {
@@ -206,7 +214,9 @@ const expandObject = (
   options: ExpandOptions,
 ): void => {
   const nests: Array<string> = [];
-  const keys = options.ordered ? Object.keys(element).sort(compareStrings) : Object.keys(element);
+  const keys = options.ordered
+    ? Arr.sort(Object.keys(element), compareStrings)
+    : Object.keys(element);
   for (const key of keys) {
     const value = element[key];
     // 13.1
@@ -247,7 +257,7 @@ const expandObject = (
           } else if (options.frameExpansion && Array.isArray(value) && value.every(isString)) {
             expandedValue = value.map((v) => expandIri(env, active, v, false, true));
           } else {
-            fail('invalid @id value', JSON.stringify(value));
+            fail('invalid @id value', stringifyJson(value));
           }
           break;
         }
@@ -268,7 +278,7 @@ const expandObject = (
           } else if (Array.isArray(value) && value.every(isString)) {
             expandedValue = value.map((v) => expandIri(env, typeScoped, v, true, true));
           } else {
-            fail('invalid type value', JSON.stringify(value));
+            fail('invalid type value', stringifyJson(value));
           }
           if ('@type' in result) {
             expandedValue = [...asArray(result['@type']), ...asArray(expandedValue)];
@@ -415,7 +425,9 @@ const expandObject = (
       expandedValue = [];
       let direction: string | null | undefined = active.direction;
       if (def !== undefined && 'direction' in def) direction = def.direction;
-      const langs = options.ordered ? Object.keys(value).sort(compareStrings) : Object.keys(value);
+      const langs = options.ordered
+        ? Arr.sort(Object.keys(value), compareStrings)
+        : Object.keys(value);
       for (const language of langs) {
         for (const item of asArray(value[language])) {
           if (item === null) continue;
@@ -436,7 +448,7 @@ const expandObject = (
       expandedValue = [];
       const indexKey = def?.index ?? '@index';
       const indexes = options.ordered
-        ? Object.keys(value).sort(compareStrings)
+        ? Arr.sort(Object.keys(value), compareStrings)
         : Object.keys(value);
       for (const index of indexes) {
         let mapContext: ActiveContext;
@@ -519,7 +531,7 @@ const expandObject = (
     }
   }
   // 14
-  const nestKeys = options.ordered ? [...nests].sort(compareStrings) : nests;
+  const nestKeys = options.ordered ? Arr.sort(nests, compareStrings) : nests;
   for (const nestKey of nestKeys) {
     for (const nested of asArray(element[nestKey])) {
       if (!isObject(nested)) fail('invalid @nest value');

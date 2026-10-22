@@ -39,10 +39,12 @@ describe.skipIf(!exists)('RDF/XML conformance (rdf11 + rdf12 rdf-xml)', () => {
       Effect.gen(function* () {
         const result = yield* parseFile(test);
         const expected = parseNTriples(fs.readFileSync(test.result!, 'utf8'));
-        if (!Isomorphism.isomorphic(result.dataset, expected)) {
-          expect(Dataset.toNQuads(result.dataset)).toEqual(Dataset.toNQuads(expected));
-        }
-        expect(Isomorphism.isomorphic(result.dataset, expected)).toBe(true);
+        const isomorphic = Isomorphism.isomorphic(result.dataset, expected);
+        // On a mismatch, compare the N-Quads first so the failure shows a diff.
+        expect(isomorphic ? '' : Dataset.toNQuads(result.dataset)).toEqual(
+          isomorphic ? '' : Dataset.toNQuads(expected),
+        );
+        expect(isomorphic).toBe(true);
       }),
     );
     it.effect(`${test.name} (round-trip)`, () =>

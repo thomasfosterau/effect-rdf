@@ -94,7 +94,7 @@ export const sha1 = (input: string): string => {
   const m = pad(utf8(input), 64, 8, false);
   const h = [0x67452301, 0xefcdab89 | 0, 0x98badcfe | 0, 0x10325476, 0xc3d2e1f0 | 0];
   const view = new DataView(m.buffer);
-  const w = new Array<number>(80);
+  const w = Array.from({ length: 80 }, () => 0);
   for (let off = 0; off < m.length; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4) | 0;
     for (let i = 16; i < 80; i++) w[i] = rotl(w[i - 3]! ^ w[i - 8]! ^ w[i - 14]! ^ w[i - 16]!, 1);
@@ -150,7 +150,7 @@ export const sha256 = (input: string): string => {
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
   ].map((x) => x | 0);
   const view = new DataView(m.buffer);
-  const w = new Array<number>(64);
+  const w = Array.from({ length: 64 }, () => 0);
   for (let off = 0; off < m.length; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4) | 0;
     for (let i = 16; i < 64; i++) {
@@ -281,7 +281,7 @@ const sha512core = (input: string, init: ReadonlyArray<string>, outWords: number
   const m = pad(utf8(input), 128, 16, false);
   const h = init.map((x) => BigInt(`0x${x}`));
   const view = new DataView(m.buffer);
-  const w = new Array<bigint>(80);
+  const w = Array.from({ length: 80 }, () => 0n);
   for (let off = 0; off < m.length; off += 128) {
     for (let i = 0; i < 16; i++) w[i] = view.getBigUint64(off + i * 8);
     for (let i = 16; i < 80; i++) {

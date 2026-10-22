@@ -4,6 +4,7 @@
  * @since 0.1.0
  */
 import * as Duration from 'effect/Duration';
+import * as Result from 'effect/Result';
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 
 /**
@@ -179,9 +180,11 @@ export const requestUrl = (
  */
 export const requestPath = (url: string): string => {
   const pathname = new URL(url, 'http://localhost').pathname;
-  try {
-    return stripTrailing(decodeURI(pathname));
-  } catch {
-    return stripTrailing(pathname);
-  }
+  // A malformed percent-encoding is matched as written.
+  return stripTrailing(
+    Result.getOrElse(
+      Result.try(() => decodeURI(pathname)),
+      () => pathname,
+    ),
+  );
 };

@@ -7,7 +7,14 @@ import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as JsonLd from '../src/JsonLd.ts';
-import { SUITES, jsonLdEqual, makeLoader } from './support.ts';
+import {
+  type Json,
+  SUITES,
+  jsonLdEqual,
+  makeLoader,
+  parseJsonText,
+  toJsonText,
+} from './support.ts';
 
 const DIR = path.join(SUITES, 'json-ld-framing', 'tests');
 const BASE = 'https://w3c.github.io/json-ld-framing/tests/';
@@ -24,16 +31,16 @@ interface TestEntry {
   readonly frame: string;
   readonly expect?: string;
   readonly expectErrorCode?: string;
-  readonly option?: Record<string, any>;
+  readonly option?: Record<string, Json>;
 }
 
-const readJson = (file: string): any => JSON.parse(fs.readFileSync(path.join(DIR, file), 'utf8'));
+const readJson = (file: string): Json =>
+  parseJsonText(fs.readFileSync(path.join(DIR, file), 'utf8'));
 
 async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string }> {
   const option = test.option ?? {};
-  const options: Record<string, any> = {
-    documentLoader: makeLoader(BASE, DIR, { url: BASE + test.input, options: option }),
-  };
+  const options: Record<string, Json> = {};
+  options['documentLoader'] = makeLoader(BASE, DIR, { url: BASE + test.input, options: option });
   for (const key of ['base', 'processingMode', 'omitGraph', 'ordered', 'compactArrays']) {
     if (key in option) options[key] = option[key];
   }
@@ -44,7 +51,7 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
     if (Exit.isSuccess(exit)) {
       return { ok: false, detail: `expected ${test.expectErrorCode}, got success` };
     }
-    const failure = JSON.stringify(exit.cause);
+    const failure = toJsonText(exit.cause);
     return {
       ok: failure.includes(`"code":"${test.expectErrorCode}"`),
       detail: `expected ${test.expectErrorCode}, got ${failure}`,
@@ -54,7 +61,7 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
   const expected = readJson(test.expect!);
   return {
     ok: jsonLdEqual(exit.value, expected),
-    detail: `got ${JSON.stringify(exit.value, null, 1)}`,
+    detail: `got ${toJsonText(exit.value, 1)}`,
   };
 }
 

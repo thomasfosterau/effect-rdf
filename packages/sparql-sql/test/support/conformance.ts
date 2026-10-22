@@ -6,8 +6,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
 import type * as Ast from '@thomasfosterau/effect-sparql/Ast';
@@ -17,9 +19,9 @@ import * as Parser from '@thomasfosterau/effect-sparql/Parser';
 import * as Results from '@thomasfosterau/effect-sparql/Results';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
 import type * as SqlStore from '../../src/SqlStore.ts';
-import { fromRdf, normalize, sameResults } from './compare.ts';
-import { readManifest, suitesDir, type TestCase } from './manifest.ts';
-import { parseFile } from './rdf.ts';
+import { fromRdf, normalize, sameResults } from '../../../sparql/test/support/compare.ts';
+import { readManifest, suitesDir, type TestCase } from '../../../sparql/test/support/manifest.ts';
+import { parseFile } from '../../../sparql/test/support/rdf.ts';
 
 const sparqlDir = path.join(suitesDir, 'rdf-tests', 'sparql');
 const exists = fs.existsSync(sparqlDir);
@@ -27,14 +29,14 @@ const exists = fs.existsSync(sparqlDir);
 /** Tests that are deliberately not run, with the reason. */
 const skipped: Readonly<Record<string, string>> = {};
 
-const SKIPPED_DIRECTORIES: Readonly<Record<string, string>> = {
-  'sparql11/service': 'SERVICE federation requires remote endpoints',
-  'sparql11/entailment': 'Entailment regimes are not supported',
-  'sparql11/protocol': 'Protocol tests belong to the HTTP server package',
-  'sparql11/graph-store-protocol': 'Graph Store Protocol tests belong to the HTTP server package',
-  'sparql11/http-rdf-update': 'Graph Store Protocol tests belong to the HTTP server package',
-  'sparql11/service-description': 'Service descriptions belong to the HTTP server package',
-};
+const SKIPPED_DIRECTORIES = new Map([
+  ['sparql11/service', 'SERVICE federation requires remote endpoints'],
+  ['sparql11/entailment', 'Entailment regimes are not supported'],
+  ['sparql11/protocol', 'Protocol tests belong to the HTTP server package'],
+  ['sparql11/graph-store-protocol', 'Graph Store Protocol tests belong to the HTTP server package'],
+  ['sparql11/http-rdf-update', 'Graph Store Protocol tests belong to the HTTP server package'],
+  ['sparql11/service-description', 'Service descriptions belong to the HTTP server package'],
+]);
 
 const EVAL_TYPES = new Set(['QueryEvaluationTest', 'UpdateEvaluationTest', 'CSVResultFormatTest']);
 
@@ -56,10 +58,20 @@ const loadTests = (): Array<TestCase> => {
 
 const skipReason = (t: TestCase): string | undefined => {
   const rel = path.relative(sparqlDir, t.manifest);
-  for (const [dir, reason] of Object.entries(SKIPPED_DIRECTORIES)) {
+  for (const [dir, reason] of SKIPPED_DIRECTORIES) {
     if (rel.startsWith(`${dir}/`)) return reason;
   }
   return skipped[t.id];
+};
+
+/** Asserts isomorphism, showing both graphs as N-Quads when they differ. */
+const expectIsomorphic = (actual: Dataset.Dataset, expected: Dataset.Dataset): void => {
+  const same = Isomorphism.isomorphic(actual, expected);
+  expect(same ? '' : Dataset.toNQuads(actual)).toBe(same ? '' : Dataset.toNQuads(expected));
+};
+
+const expectFailure = (outcome: { readonly _tag: 'Success' | 'Failure' }): void => {
+  expect(outcome._tag).toBe('Failure');
 };
 
 const loadQuads = (t: TestCase): Array<Term.Quad> => {
@@ -143,11 +155,7 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
       case 'Graph': {
         const quads = yield* Stream.runCollect(result.quads);
         const actual = Dataset.fromIterable(quads);
-        const exp = expected as Dataset.Dataset;
-        if (!Isomorphism.isomorphic(actual, exp)) {
-          expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(exp));
-        }
-        return;
+        return expectIsomorphic(actual, expected as Dataset.Dataset);
       }
       case 'Select': {
         const set = yield* Results.collect(result);
@@ -158,16 +166,23 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
           actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
         }
         const ok = sameResults(actual, exp, { lax: t.laxCardinality });
-        if (!ok) {
-          expect(actual.map((b) => b.toString()).sort()).toEqual(
-            exp.map((b) => b.toString()).sort(),
-          );
-          expect.fail('Results differ only in blank node structure');
-        }
+        // On a mismatch, show the sorted rows; equal rows that still differ
+        // differ only in blank node structure.
+        const sorted = (rows: ReadonlyArray<Bindings>) =>
+          ok
+            ? []
+            : Arr.sort(
+                rows.map((b) => b.toString()),
+                Order.String,
+              );
+        expect(sorted(actual)).toEqual(sorted(exp));
+        assert(ok, 'Results differ only in blank node structure');
+        // Ordered queries also agree on the order of the solutions.
         const vars = orderVariables(query);
-        if (vars.length > 0 && !t.laxCardinality) {
-          expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
-        }
+        const ordered = vars.length > 0 && !t.laxCardinality;
+        const order = (rows: ReadonlyArray<Bindings>) =>
+          ordered ? rows.map((b) => orderKey(b, vars)) : [];
+        expect(order(actual)).toEqual(order(exp));
         return;
       }
     }
@@ -180,19 +195,15 @@ const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
     yield* store.insert(loadQuads(t));
     const engine = Engine.make(store, { baseIri });
     const outcome = yield* Effect.result(engine.update(text));
-    if (!t.updateSuccess) {
-      expect(outcome._tag).toBe('Failure');
-      return;
-    }
+    // A negative update test passes when the update fails.
+    if (!t.updateSuccess) return expectFailure(outcome);
     if (outcome._tag === 'Failure') return yield* Effect.fail(outcome.failure);
     const quads: Array<Term.Quad> = [];
     for (const file of t.resultData) quads.push(...parseFile(file));
     for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
     const expected = Dataset.fromIterable(quads);
     const actual = yield* Store.toDataset(store);
-    if (!Isomorphism.isomorphic(actual, expected)) {
-      expect(Dataset.toNQuads(actual)).toBe(Dataset.toNQuads(expected));
-    }
+    expectIsomorphic(actual, expected);
   });
 
 const tests = loadTests();

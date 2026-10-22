@@ -6,7 +6,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -74,7 +76,10 @@ const federatedEngine = (
   );
 
 const sortedKeys = (bindings: ReadonlyArray<{ readonly key: string }>) =>
-  bindings.map((b) => b.key).sort();
+  Arr.sort(
+    bindings.map((b) => b.key),
+    Order.String,
+  );
 
 const ex = (s: string) => Term.namedNode(`http://example.org/${s}`);
 
@@ -213,7 +218,9 @@ const loadTests = (): Array<ServiceTest> => {
         endpoint: iri(objects(sd, `${QT}endpoint`)[0]),
         data: objects(sd, `${QT}data`).map((t) => fileURLToPath(iri(t))),
       })),
-      result: fileURLToPath(Option.getOrThrow(entry.result)),
+      result: fileURLToPath(
+        Option.getOrElse(entry.result, () => assert.fail(`${entry.name} has no result`)),
+      ),
     };
   });
 };
@@ -230,31 +237,32 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
           yield* engine.select(query, { baseIri: pathToFileURL(t.query).href }),
         );
         const expected = yield* Results.Xml.parse(fs.readFileSync(t.result, 'utf8'));
-        if (expected._tag !== 'ResultSet') throw new Error('Expected a result set');
+        assert(expected._tag === 'ResultSet', 'Expected a result set');
         const hasBlankNodes = expected.bindings.some((b) =>
           Array.from(b.map.values()).some((v) => v._tag === 'BlankNode'),
         );
-        if (hasBlankNodes) {
-          const toGraph = (
-            rows: ReadonlyArray<{ readonly map: ReadonlyMap<string, Term.GroundTerm> }>,
-          ) =>
-            Dataset.fromIterable(
-              rows.flatMap((row, i) =>
-                Array.from(row.map, ([k, v]) =>
-                  Term.quad(
-                    Term.namedNode(`urn:row:${i}`),
-                    Term.namedNode(`urn:var:${k}`),
-                    v as Term.Object,
-                  ),
+        const toGraph = (
+          rows: ReadonlyArray<{ readonly map: ReadonlyMap<string, Term.GroundTerm> }>,
+        ) =>
+          Dataset.fromIterable(
+            rows.flatMap((row, i) =>
+              Array.from(row.map, ([k, v]) =>
+                Term.quad(
+                  Term.namedNode(`urn:row:${i}`),
+                  Term.namedNode(`urn:var:${k}`),
+                  v as Term.Object,
                 ),
               ),
-            );
-          expect(Isomorphism.isomorphic(toGraph(result.bindings), toGraph(expected.bindings))).toBe(
-            true,
+            ),
           );
-        } else {
-          expect(sortedKeys(result.bindings)).toEqual(sortedKeys(expected.bindings));
-        }
+        // Blank node labels differ between runs, so those results are compared as graphs.
+        expect(
+          !hasBlankNodes ||
+            Isomorphism.isomorphic(toGraph(result.bindings), toGraph(expected.bindings)),
+        ).toBe(true);
+        expect(hasBlankNodes ? [] : sortedKeys(result.bindings)).toEqual(
+          hasBlankNodes ? [] : sortedKeys(expected.bindings),
+        );
       }).pipe(
         Effect.provide(
           federatedEngine(

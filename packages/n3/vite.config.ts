@@ -1,14 +1,3 @@
-import { defineConfig } from 'vite-plus';
+import { packageConfig } from '../../vite.package.ts';
 
-export default defineConfig({
-  test: {
-    include: ['test/**/*.test.ts'],
-    testTimeout: 120_000,
-  },
-  pack: {
-    entry: ['src/*.ts'],
-    dts: true,
-    format: ['esm'],
-    sourcemap: true,
-  },
-});
+export default packageConfig({ testTimeout: 120_000 });

@@ -3,6 +3,7 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
 import {
   type Json,
   type JsonObject,
@@ -142,7 +143,7 @@ export const generateNodeMap = (
     generateNodeMap(element['@included'], nodeMap, issuer, activeGraph);
   }
   // 6.12
-  for (const key of Object.keys(element).sort(compareStrings)) {
+  for (const key of Arr.sort(Object.keys(element), compareStrings)) {
     if (
       key === '@id' ||
       key === '@type' ||
@@ -166,23 +167,26 @@ export const generateNodeMap = (
  * @internal
  */
 export const flattenExpanded = (expanded: Json, ordered: boolean): Array<JsonObject> => {
-  const nodeMap: NodeMap = { '@default': {} };
+  const nodeMap: NodeMap = {};
+  nodeMap['@default'] = {};
   generateNodeMap(expanded, nodeMap, new IdIssuer());
   const defaultGraph = nodeMap['@default']!;
-  const graphNames = Object.keys(nodeMap).filter((g) => g !== '@default');
-  if (ordered) graphNames.sort(compareStrings);
+  const named = Object.keys(nodeMap).filter((g) => g !== '@default');
+  const graphNames = ordered ? Arr.sort(named, compareStrings) : named;
   for (const graphName of graphNames) {
     const graph = nodeMap[graphName]!;
     const entry = getOrInit(defaultGraph, graphName, () => ({ '@id': graphName }));
     const nodes: Array<JsonObject> = (entry['@graph'] = []);
-    const ids = ordered ? Object.keys(graph).sort(compareStrings) : Object.keys(graph);
+    const ids = ordered ? Arr.sort(Object.keys(graph), compareStrings) : Object.keys(graph);
     for (const id of ids) {
       const node = graph[id]!;
       if (!isOnlyId(node)) nodes.push(node);
     }
   }
   const flattened: Array<JsonObject> = [];
-  const ids = ordered ? Object.keys(defaultGraph).sort(compareStrings) : Object.keys(defaultGraph);
+  const ids = ordered
+    ? Arr.sort(Object.keys(defaultGraph), compareStrings)
+    : Object.keys(defaultGraph);
   for (const id of ids) {
     const node = defaultGraph[id]!;
     if (!isOnlyId(node)) flattened.push(node);
@@ -196,14 +200,14 @@ const isOnlyId = (node: JsonObject): boolean => {
 };
 
 /** @internal */
-export const mergeNodeMaps = (graphs: NodeMap): Record<string, JsonObject> => {
+export const mergeNodeMaps = (graphs: NodeMap) => {
   const merged: Record<string, JsonObject> = {};
-  for (const graphName of Object.keys(graphs).sort(compareStrings)) {
+  for (const graphName of Arr.sort(Object.keys(graphs), compareStrings)) {
     const graph = graphs[graphName]!;
-    for (const id of Object.keys(graph).sort(compareStrings)) {
+    for (const id of Arr.sort(Object.keys(graph), compareStrings)) {
       const node = graph[id]!;
       const mergedNode = getOrInit(merged, id, () => ({ '@id': id }));
-      for (const property of Object.keys(node).sort(compareStrings)) {
+      for (const property of Arr.sort(Object.keys(node), compareStrings)) {
         if (property === '@id') continue;
         if (property === '@type' || property.startsWith('@')) {
           if (property === '@type') {

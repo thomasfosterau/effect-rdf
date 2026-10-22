@@ -1,6 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Schema from 'effect/Schema';
 import {
   Dataset,
@@ -30,8 +32,10 @@ describe('Namespace', () => {
 describe('PrefixMap', () => {
   it('expands and compacts', () => {
     const pm = PrefixMap.set(PrefixMap.common, 'ex', 'http://example.org/');
-    expect(Option.getOrThrow(PrefixMap.expand(pm, 'ex:a')).value).toBe('http://example.org/a');
-    expect(Option.getOrThrow(PrefixMap.compact(pm, rdf.type))).toEqual(['rdf', 'type']);
+    expect(Option.map(PrefixMap.expand(pm, 'ex:a'), (t) => t.value)).toEqual(
+      Option.some('http://example.org/a'),
+    );
+    expect(PrefixMap.compact(pm, rdf.type)).toEqual(Option.some(['rdf', 'type']));
     expect(Option.isNone(PrefixMap.compact(pm, 'http://example.org/a/b'))).toBe(true);
   });
 });
@@ -128,7 +132,9 @@ describe('Serialization', () => {
       const codec = Serialization.makeCodec(parser, serializer);
       const ds = yield* Schema.decodeEffect(codec.schema)('a\nb');
       expect(ds.size).toBe(2);
-      expect((yield* Schema.encodeEffect(codec.schema)(ds)).split('\n').sort()).toEqual(['a', 'b']);
+      expect(
+        Arr.sort((yield* Schema.encodeEffect(codec.schema)(ds)).split('\n'), Order.String),
+      ).toEqual(['a', 'b']);
       const failure = yield* Effect.flip(Schema.decodeEffect(codec.schema)('a!'));
       expect(String(failure)).toContain('bang');
     }),

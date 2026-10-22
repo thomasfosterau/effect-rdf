@@ -15,8 +15,10 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
@@ -534,28 +536,32 @@ class RdfXmlParser {
 }
 
 const toParseError = (message: string, position: Xml.Position | undefined) =>
-  new Serialization.RdfParseError({
-    format: FORMAT_NAME,
-    message,
-    ...(position !== undefined ? { line: position.line, column: position.column } : {}),
-  });
+  position === undefined
+    ? new Serialization.RdfParseError({ format: FORMAT_NAME, message })
+    : new Serialization.RdfParseError({
+        format: FORMAT_NAME,
+        message,
+        line: position.line,
+        column: position.column,
+      });
 
 const parseTriples = (
   doc: Xml.Document,
   options: ParseOptions | undefined,
 ): Effect.Effect<ReadonlyArray<Term.Triple>, Serialization.RdfParseError> =>
-  Effect.suspend(() => {
-    const parser = new RdfXmlParser(
-      options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
-      options?.version,
-    );
-    try {
+  Effect.try({
+    try: () => {
+      const parser = new RdfXmlParser(
+        options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
+        options?.version,
+      );
       parser.document(doc, options?.baseIri);
-      return Effect.succeed(parser.sink);
-    } catch (e) {
-      if (e instanceof ParseFailure) return Effect.fail(toParseError(e.message, e.position));
+      return parser.sink;
+    },
+    catch: (e) => {
+      if (e instanceof ParseFailure) return toParseError(e.message, e.position);
       throw e;
-    }
+    },
   });
 
 const collectPrefixes = (doc: Xml.Document): PrefixMap.PrefixMap => {
@@ -853,8 +859,11 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   }
 
   const sortTriples = (ts: ReadonlyArray<Term.Triple>) =>
-    [...ts].sort(
-      (a, b) => Term.compare(a.predicate, b.predicate) || Term.compare(a.object, b.object),
+    Arr.sort(
+      ts,
+      Order.make<Term.Triple>(
+        (a, b) => Term.compare(a.predicate, b.predicate) || Term.compare(a.object, b.object),
+      ),
     );
 
   const body: Array<string> = [];
@@ -988,9 +997,12 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
     lines.push(`${pad}</rdf:Description>`);
   };
 
-  const subjects = [...graph.bySubject.values()]
-    .map((e) => e.subject)
-    .sort((a, b) => (a._tag === b._tag ? Term.compare(a, b) : a._tag === 'NamedNode' ? -1 : 1));
+  const subjects = Arr.sort(
+    Arr.map([...graph.bySubject.values()], (e) => e.subject),
+    Order.make<Term.Term>((a, b) =>
+      a._tag === b._tag ? Term.compare(a, b) : a._tag === 'NamedNode' ? -1 : 1,
+    ),
+  );
   for (const s of subjects) {
     if (s._tag === 'BlankNode' && nested.has(s.value)) continue;
     node(s, 1, false, body);
@@ -999,9 +1011,14 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   const out: Array<string> = [];
   if (options.xmlDeclaration ?? true) out.push('<?xml version="1.0" encoding="utf-8"?>');
   const decls: Array<string> = [];
-  const nsEntries = [...writer.namespaces.byNamespace.entries()]
-    .filter(([ns]) => writer.namespaces.declared.has(ns))
-    .sort((a, b) => (a[1] === 'rdf' ? -1 : b[1] === 'rdf' ? 1 : a[1] < b[1] ? -1 : 1));
+  const nsEntries = Arr.sort(
+    Arr.filter([...writer.namespaces.byNamespace.entries()], ([ns]) =>
+      writer.namespaces.declared.has(ns),
+    ),
+    Order.make<readonly [string, string]>((a, b) =>
+      a[1] === 'rdf' ? -1 : b[1] === 'rdf' ? 1 : a[1] < b[1] ? -1 : 1,
+    ),
+  );
   for (const [ns, prefix] of nsEntries) decls.push(`xmlns:${prefix}="${escapeAttr(ns)}"`);
   if (writer.needsIts) decls.push(`xmlns:its="${ITS}"`, 'its:version="2.0"');
   if (options.baseIri !== undefined) decls.push(`xml:base="${escapeAttr(options.baseIri)}"`);
@@ -1042,16 +1059,15 @@ export const serialize = (
       }
       triples.push(q.triple);
     }
-    try {
-      return Effect.succeed(serializeGraph(triples, options ?? {}));
-    } catch (e) {
-      if (e instanceof SerializeFailure) {
-        return Effect.fail(
-          new Serialization.RdfSerializeError({ format: FORMAT_NAME, message: e.message }),
-        );
-      }
-      throw e;
-    }
+    return Effect.try({
+      try: () => serializeGraph(triples, options ?? {}),
+      catch: (e) => {
+        if (e instanceof SerializeFailure) {
+          return new Serialization.RdfSerializeError({ format: FORMAT_NAME, message: e.message });
+        }
+        throw e;
+      },
+    });
   });
 
 /**

@@ -9,7 +9,7 @@
  * constraints require a `Sparql.SparqlConstraintEvaluator`, provided by
  * `@thomasfosterau/effect-shacl-sparql`, whose conformance test runs them.
  */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
@@ -92,15 +92,14 @@ const runCase = (tc: TestCase) =>
     const expectedNode = one(tc.node, mf('result'))!;
 
     const exit = yield* Effect.exit(Validator.validate(data, shapes));
-    if (expectedNode.key === sht('Failure').key) {
-      expect(Exit.isFailure(exit)).toBe(true);
-      return;
-    }
-    if (Exit.isFailure(exit)) throw new Error(`validation failed: ${String(exit.cause)}`);
+    const expectsFailure = expectedNode.key === sht('Failure').key;
+    expect(expectsFailure ? Exit.isFailure(exit) : true).toBe(true);
+    if (expectsFailure) return;
+    if (Exit.isFailure(exit)) assert.fail(`validation failed: ${String(exit.cause)}`);
     const actual = exit.value;
 
     const expectedResult = ValidationReport.fromDataset(tc.ds, expectedNode as Term.BlankNode);
-    if (Result.isFailure(expectedResult)) throw new Error(expectedResult.failure.message);
+    if (Result.isFailure(expectedResult)) assert.fail(expectedResult.failure.message);
     const expected = expectedResult.success;
 
     // Actual reports must also round-trip through RDF.

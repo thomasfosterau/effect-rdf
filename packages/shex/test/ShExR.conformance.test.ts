@@ -1,11 +1,11 @@
 /* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as ShExJ from '../src/ShExJ.ts';
 import * as ShExR from '../src/ShExR.ts';
 import { canonical } from './utils/canonical.ts';
-import { hasShexTest, readJson, readText, suiteBase } from './utils/suite.ts';
+import { hasShexTest, readJson, readText, type Reasons, suiteBase } from './utils/suite.ts';
 import { parseTurtle } from './utils/turtle.ts';
 
 interface SchemaEntry {
@@ -24,7 +24,7 @@ const expectedJson = (entry: SchemaEntry): ShExJ.Schema => {
 };
 
 /** ShExR documents whose ShExJ cannot be recovered unambiguously. */
-export const shexrSkips: Readonly<Record<string, string>> = {
+export const shexrSkips: Reasons = {
   '1Include1':
     'the labelled triple expression is the sx:expression of two shapes; RDF cannot say which one defines it',
   ShExR:
@@ -37,7 +37,7 @@ describe.skipIf(!hasShexTest)('shexTest schemas (ShExR → ShExJ)', () => {
       const base = `${suiteBase}schemas/${entry.ttl}`;
       const dataset = parseTurtle(readText('schemas', entry.ttl), base);
       const exit = Effect.runSyncExit(ShExR.fromDataset(dataset));
-      if (Exit.isFailure(exit)) throw new Error(String(exit.cause));
+      if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
       expect(canonical(exit.value)).toEqual(canonical(expectedJson(entry)));
     });
   }
@@ -48,7 +48,7 @@ describe.skipIf(!hasShexTest)('shexTest schemas (ShExJ → ShExR → ShExJ)', ()
     it.skipIf(entry.name in shexrSkips)(entry.name, () => {
       const schema = expectedJson(entry);
       const exit = Effect.runSyncExit(ShExR.fromDataset(ShExR.toDataset(schema)));
-      if (Exit.isFailure(exit)) throw new Error(String(exit.cause));
+      if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
       expect(canonical(exit.value)).toEqual(canonical(schema));
     });
   }

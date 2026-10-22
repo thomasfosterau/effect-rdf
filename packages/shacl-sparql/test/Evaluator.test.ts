@@ -1,10 +1,12 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import { type Dataset, Namespace, Term } from '@thomasfosterau/effect-rdf';
 import { Path, ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
 import { Generator, Parser } from '@thomasfosterau/effect-sparql';
 import { Turtle } from '@thomasfosterau/effect-turtle';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import * as Result from 'effect/Result';
 import { Evaluator, Query } from '../src/index.ts';
 
@@ -24,10 +26,11 @@ const ttl = (s: string): Dataset.Dataset => Effect.runSync(Turtle.parse(prefixes
 const validate = (data: Dataset.Dataset, shapes: Dataset.Dataset = data) =>
   Validator.validate(data, shapes).pipe(Effect.provide(Evaluator.layer()));
 
-const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-
 const messages = (report: ValidationReport.ValidationReport) =>
-  report.results.flatMap((r) => r.messages.map((m) => m.value)).sort();
+  Arr.sort(
+    report.results.flatMap((r) => r.messages.map((m) => m.value)),
+    Order.String,
+  );
 
 describe('SPARQL-based constraints', () => {
   it.effect('report one result per solution, with ?value, ?path and messages', () =>
@@ -146,8 +149,13 @@ describe('SPARQL-based constraint components', () => {
       `);
       const report = yield* validate(graph);
       expect(
-        report.results.map((r) => Option.getOrUndefined(r.value)?.key ?? '').sort(compare),
-      ).toEqual([Term.literal('a,b,c').key, Term.literal('one two three').key].sort(compare));
+        Arr.sort(
+          report.results.map((r) => Option.getOrUndefined(r.value)?.key ?? ''),
+          Order.String,
+        ),
+      ).toEqual(
+        Arr.sort([Term.literal('a,b,c').key, Term.literal('one two three').key], Order.String),
+      );
       expect(messages(report)).toEqual([
         'Value has more than 2 words',
         'Value has more than 2 words',
@@ -207,9 +215,12 @@ describe('SPARQL-based targets', () => {
         ex:carl ex:age 30 . ex:dora ex:age 12 .
       `);
       const report = yield* validate(graph);
-      expect(report.results.map((r) => r.focusNode.key).sort()).toEqual(
-        [ex('anna').key, ex('carl').key].sort(),
-      );
+      expect(
+        Arr.sort(
+          report.results.map((r) => r.focusNode.key),
+          Order.String,
+        ),
+      ).toEqual(Arr.sort([ex('anna').key, ex('carl').key], Order.String));
     }),
   );
 
@@ -265,8 +276,8 @@ describe('Pre-binding restrictions', () => {
       Path.zeroOrMore(Path.inverse(Path.predicate(ex('b')))),
     );
     const substituted = Query.substitutePath(parsed, path);
-    expect(Result.isSuccess(substituted)).toBe(true);
-    expect(Generator.print(Result.getOrThrow(substituted))).toContain(
+    assert(Result.isSuccess(substituted));
+    expect(Generator.print(substituted.success)).toContain(
       '?v (<http://example.org/a> / (^(<http://example.org/b>))*) ?w',
     );
     const misuse = Effect.runSync(Parser.parseQuery('SELECT $this WHERE { $this ?p $PATH }'));

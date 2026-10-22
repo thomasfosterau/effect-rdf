@@ -1,4 +1,24 @@
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
+import * as Schema from 'effect/Schema';
 import type * as ShExJ from '../../src/ShExJ.ts';
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
+
+/**
+ * A schema as the JSON it serialises to (absent and `undefined` members
+ * alike are dropped, as `toEqual` treats them).
+ */
+const toJson = (schema: ShExJ.Schema): Schema.Json => decodeJson(encodeJson(schema));
+
+/** Whether a JSON value is an object (not an array or `null`). */
+export const isJsonObject = (v: Schema.Json): v is Schema.JsonObject =>
+  Predicate.isObject(v) && !Array.isArray(v);
+
+const isTripleExpression = (v: Schema.JsonObject): boolean =>
+  v['type'] === 'TripleConstraint' || v['type'] === 'EachOf' || v['type'] === 'OneOf';
 
 /**
  * Canonicalises a ShExJ schema for comparison modulo blank node labels and
@@ -7,10 +27,11 @@ import type * as ShExJ from '../../src/ShExJ.ts';
  * expression labels that are never referenced are dropped (RDF cannot
  * distinguish them from anonymous expressions).
  */
-export const canonical = (schema: ShExJ.Schema): unknown => {
+export const canonical = (schema: ShExJ.Schema): Schema.Json => {
+  const json = toJson(schema);
   const referencedTe = new Set<string>();
-  const collectRefs = (v: unknown, key: string | undefined): void => {
-    if (typeof v === 'string') {
+  const collectRefs = (v: Schema.Json, key: string | undefined): void => {
+    if (Predicate.isString(v)) {
       if ((key === 'expression' || key === 'expressions') && v.startsWith('_:'))
         referencedTe.add(v);
       return;
@@ -19,37 +40,34 @@ export const canonical = (schema: ShExJ.Schema): unknown => {
       v.forEach((x) => collectRefs(x, key));
       return;
     }
-    if (v !== null && typeof v === 'object')
-      for (const [k, x] of Object.entries(v)) collectRefs(x, k);
+    if (isJsonObject(v)) for (const [k, x] of Object.entries(v)) collectRefs(x, k);
   };
-  collectRefs(schema, undefined);
+  collectRefs(json, undefined);
   const names = new Map<string, string>();
   const rename = (label: string) => {
     let n = names.get(label);
     if (n === undefined) names.set(label, (n = `_:c${names.size}`));
     return n;
   };
-  const go = (v: unknown, key: string | undefined): unknown => {
-    if (typeof v === 'string') return v.startsWith('_:') && key !== 'value' ? rename(v) : v;
+  const byString = Order.make<Schema.Json>((a, b) => {
+    const c = String(a).localeCompare(String(b));
+    return c < 0 ? -1 : c > 0 ? 1 : 0;
+  });
+  const byKey = Order.mapInput(Order.String, ([k]: readonly [string, Schema.Json]) => k);
+  const go = (v: Schema.Json, key: string | undefined): Schema.Json => {
+    if (Predicate.isString(v)) return v.startsWith('_:') && key !== 'value' ? rename(v) : v;
     if (Array.isArray(v)) {
       const items = v.map((x) => go(x, key));
-      return key === 'extra'
-        ? [...items].sort((a, b) => String(a).localeCompare(String(b)))
-        : items;
+      return key === 'extra' ? Arr.sort(items, byString) : items;
     }
-    if (v !== null && typeof v === 'object') {
-      const out: Record<string, unknown> = {};
-      const entries = Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-      const isTe =
-        'type' in v &&
-        ((v as { type: string }).type === 'TripleConstraint' ||
-          (v as { type: string }).type === 'EachOf' ||
-          (v as { type: string }).type === 'OneOf');
-      for (const [k, x] of entries) {
+    if (isJsonObject(v)) {
+      const out: { [key: string]: Schema.Json } = {};
+      const isTe = isTripleExpression(v);
+      for (const [k, x] of Arr.sort(Object.entries(v), byKey)) {
         if (
           isTe &&
           k === 'id' &&
-          typeof x === 'string' &&
+          Predicate.isString(x) &&
           x.startsWith('_:') &&
           !referencedTe.has(x)
         )
@@ -60,5 +78,5 @@ export const canonical = (schema: ShExJ.Schema): unknown => {
     }
     return v;
   };
-  return go(schema, undefined);
+  return go(json, undefined);
 };

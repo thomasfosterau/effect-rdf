@@ -14,8 +14,19 @@ const NAME_START =
   ':A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}';
 const NAME_CHAR = `${NAME_START}\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040`;
 
+/** A character class body, and whether the class is complemented. */
+interface ClassBody {
+  readonly body: string;
+  readonly negated: boolean;
+}
+
+/** A lookup table keyed by escape letter or block name. */
+interface Table<A> {
+  readonly [key: string]: A;
+}
+
 /** Class body fragments for the multi-character escapes. */
-const CLASS_ESCAPES: Record<string, { readonly body: string; readonly negated: boolean }> = {
+const CLASS_ESCAPES: Table<ClassBody> = {
   d: { body: '\\p{Nd}', negated: false },
   D: { body: '\\p{Nd}', negated: true },
   w: { body: '\\p{L}\\p{M}\\p{N}\\p{S}', negated: false },
@@ -28,7 +39,7 @@ const CLASS_ESCAPES: Record<string, { readonly body: string; readonly negated: b
   C: { body: NAME_CHAR, negated: true },
 };
 
-const BLOCKS: Record<string, string> = {
+const BLOCKS: Table<string> = {
   BasicLatin: '\\u0000-\\u007F',
   'Latin-1Supplement': '\\u0080-\\u00FF',
   LatinExtended_A: '\\u0100-\\u017F',
@@ -75,11 +86,11 @@ class Translator {
   }
 
   fail(msg: string): never {
-    throw new Error(`${msg} at ${this.i} in /${this.src}/`);
+    throw new SyntaxError(`${msg} at ${this.i} in /${this.src}/`);
   }
 
   /** Translates a property escape `\p{..}` / `\P{..}` (cursor after `p`/`P`). */
-  property(negated: boolean): { body: string; negated: boolean } {
+  property(negated: boolean): ClassBody {
     if (this.src[this.i] !== '{') this.fail('expected {');
     const end = this.src.indexOf('}', this.i);
     if (end === -1) this.fail('unterminated property escape');

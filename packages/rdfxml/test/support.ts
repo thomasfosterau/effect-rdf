@@ -3,6 +3,7 @@
  * N-Triples expected results, so the conformance tests do not depend on
  * the Turtle package.
  */
+import { assert } from '@effect/vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Dataset, Iri, Term } from '@thomasfosterau/effect-rdf';
@@ -51,7 +52,7 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
       const p = term() as Term.NamedNode;
       const o = term() as Term.Object;
       ws();
-      if (!input.startsWith(')>>', pos)) throw new Error(`Expected )>> at ${pos}`);
+      if (!input.startsWith(')>>', pos)) assert.fail(`Expected )>> at ${pos}`);
       pos += 3;
       return Term.triple(s, p, o);
     }
@@ -98,7 +99,7 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
       }
       return Term.literal(value);
     }
-    throw new Error(`Unexpected character ${JSON.stringify(c)} at ${pos}`);
+    assert.fail(`Unexpected character '${c}' at ${pos}`);
   };
   for (;;) {
     ws();
@@ -107,7 +108,7 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
     const p = term() as Term.NamedNode;
     const o = term() as Term.Object;
     ws();
-    if (input[pos] !== '.') throw new Error(`Expected . at ${pos}`);
+    if (input[pos] !== '.') assert.fail(`Expected . at ${pos}`);
     pos++;
     quads.push(Term.quad(s, p, o));
   }
@@ -195,7 +196,7 @@ const parseManifestGraph = (src: string, base: string): Graph => {
     if (tok === 'a') return 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
     const i = tok.indexOf(':');
     const ns = prefixes.get(tok.slice(0, i));
-    if (ns === undefined) throw new Error(`Unknown prefix in ${tok}`);
+    if (ns === undefined) assert.fail(`Unknown prefix in ${tok}`);
     return ns + tok.slice(i + 1);
   };
   const object = (): Value => {
@@ -245,7 +246,7 @@ const parseManifestGraph = (src: string, base: string): Graph => {
     }
     const subject = iri(tokens[k++]!);
     if (tokens[k] !== '.') predicateObjectList(subject);
-    if (tokens[k] !== '.') throw new Error(`Expected . but found ${tokens[k]}`);
+    if (tokens[k] !== '.') assert.fail(`Expected . but found ${tokens[k]}`);
     k++;
   }
   return graph;

@@ -6,7 +6,10 @@ import { describe, expect, it } from '@effect/vitest';
 import { readFileSync } from 'node:fs';
 
 // --- README example: begin ---
-import { Effect, Layer, Schema, Stream } from 'effect';
+import * as Effect from 'effect/Effect';
+import * as Layer from 'effect/Layer';
+import * as Schema from 'effect/Schema';
+import * as Stream from 'effect/Stream';
 import { Namespace, PrefixMap } from '@thomasfosterau/effect-rdf';
 import { JsonLd } from '@thomasfosterau/effect-jsonld';
 import { ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
@@ -40,7 +43,7 @@ const shapes = `
     ] .
 `;
 
-const program = Effect.gen(function* () {
+const program = Effect.fn('program')(function* () {
   // 1. Parse Turtle into a core Dataset.
   const { dataset } = yield* Turtle.parse(data);
 
@@ -91,16 +94,20 @@ describe('README quick tour', () => {
 
   it.effect('runs end to end', () =>
     Effect.gen(function* () {
-      const { people, report, jsonld } = yield* program;
+      const { people, report, jsonld } = yield* program();
       expect(people).toEqual([
         { name: 'Alice', age: 42 },
         { name: 'Bob', age: -1 },
       ]);
       expect(report).toContain('http://example.org/bob has an invalid age: -1');
       expect(report).not.toContain('knows themselves');
-      const json = JSON.parse(jsonld);
+      const json = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ '@context': Schema.Record(Schema.String, Schema.Unknown) }),
+        ),
+      )(jsonld);
       expect(json['@context']).toMatchObject({ ex: 'http://example.org/' });
-      expect(JSON.stringify(json)).toContain('ex:alice');
+      expect(jsonld).toContain('ex:alice');
     }),
   );
 });

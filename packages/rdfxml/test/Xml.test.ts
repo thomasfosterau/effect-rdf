@@ -1,17 +1,17 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
 import { Xml } from '../src/index.ts';
 
 const parseOk = (input: string): Xml.Document => {
   const r = Xml.parseResult(input);
-  if (Result.isFailure(r)) throw new Error(r.failure.message);
+  if (Result.isFailure(r)) assert.fail(r.failure.message);
   return r.success;
 };
 
 const parseErr = (input: string): Xml.XmlParseError => {
   const r = Xml.parseResult(input);
-  if (Result.isSuccess(r)) throw new Error('expected a parse error');
+  if (Result.isSuccess(r)) assert.fail('expected a parse error');
   return r.failure;
 };
 

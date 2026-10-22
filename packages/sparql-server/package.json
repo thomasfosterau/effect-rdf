@@ -1,15 +1,32 @@
 {
+  "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql-server",
   "version": "0.0.0",
   "description": "Effect-idiomatic SPARQL 1.1 Protocol and Graph Store HTTP Protocol server",
+  "keywords": [
+    "effect",
+    "rdf",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/sparql-server#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-rdf/issues"
+  },
   "license": "MIT",
+  "author": "Thomas Foster <me@thomasfoster.au>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-rdf.git",
+    "directory": "packages/sparql-server"
+  },
   "bin": {
     "effect-sparql-server": "./bin/effect-sparql-server.mjs"
   },
   "files": [
-    "bin",
     "dist",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
@@ -27,10 +44,10 @@
         "types": "./dist/*.d.mts",
         "default": "./dist/*.mjs"
       }
-    }
+    },
+    "access": "public"
   },
   "scripts": {
-    "build": "vp pack",
     "start": "node --experimental-transform-types --no-warnings bin/effect-sparql-server.mjs"
   },
   "dependencies": {
@@ -46,10 +63,12 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "effect": "catalog:",
-    "vite-plus": "catalog:"
+    "effect": "catalog:"
   },
   "peerDependencies": {
-    "effect": "catalog:"
+    "effect": "catalog:peers"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

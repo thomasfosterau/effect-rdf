@@ -1,10 +1,10 @@
 /* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as ShExC from '../src/ShExC.ts';
 import * as Structure from '../src/Structure.ts';
-import { hasShexTest, readJson, readText, suiteBase } from './utils/suite.ts';
+import { hasShexTest, readJson, readText, type Reasons, suiteBase } from './utils/suite.ts';
 
 interface NegativeEntry {
   readonly name: string;
@@ -47,7 +47,7 @@ describe.skipIf(!hasShexTest)('shexTest schemas are structurally valid', () => {
     : [];
   // Representation-only tests whose schemas deliberately violate a structural
   // requirement (they are not used by any validation test).
-  const notStructural: Readonly<Record<string, string>> = {
+  const notStructural: Reasons = {
     TwoNegation_pass: 'S -> NOT T -> NOT U -> S is a reference cycle through negation',
   };
   for (const entry of entries) {
@@ -61,7 +61,7 @@ describe.skipIf(!hasShexTest)('shexTest schemas are structurally valid', () => {
           ),
         ),
       );
-      if (Exit.isFailure(exit)) throw new Error(String(exit.cause));
+      if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
     });
   }
 });

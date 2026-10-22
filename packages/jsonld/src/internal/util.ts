@@ -1,4 +1,8 @@
 /** @internal */
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as JsonLdError from '../JsonLdError.ts';
 
@@ -6,6 +10,19 @@ import * as JsonLdError from '../JsonLdError.ts';
 export type Json = any;
 /** @internal */
 export type JsonObject = Record<string, any>;
+
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+
+const encodeJson = Schema.encodeUnknownResult(JsonText);
+
+/**
+ * Serialises a JSON value (`JSON.stringify` semantics); a value with no JSON
+ * form (`undefined`) renders as `String(value)`, as in a template literal.
+ *
+ * @internal
+ */
+export const stringifyJson = (value: Json): string =>
+  Result.getOrElse(encodeJson(value), () => String(value));
 
 /** @internal */
 export const KEYWORDS: ReadonlySet<string> = new Set([
@@ -79,17 +96,39 @@ export const fail = (code: JsonLdError.Code, message?: string): never => {
   throw JsonLdError.make(code, message);
 };
 
-/** @internal */
-export const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+/**
+ * Runs `f`, handing a thrown `JsonLdError` to `onError` (which rethrows a
+ * different one); any other thrown value propagates unchanged.
+ *
+ * @internal
+ */
+export const mapJsonLdError = <A>(
+  f: () => A,
+  onError: (error: JsonLdError.JsonLdError) => never,
+): A =>
+  Result.getOrElse(
+    Result.try({
+      try: f,
+      catch: (e) => {
+        if (JsonLdError.isJsonLdError(e)) return e;
+        throw e;
+      },
+    }),
+    onError,
+  );
 
 /** @internal */
-export const getOrInit = (o: Record<string, any>, k: string, init: () => unknown): any => {
+export const hasOwn = (o: JsonObject, k: string): boolean =>
+  Object.prototype.hasOwnProperty.call(o, k);
+
+/** @internal */
+export const getOrInit = (o: JsonObject, k: string, init: () => Json): Json => {
   if (!hasOwn(o, k)) o[k] = init();
   return o[k];
 };
 
 /** @internal */
-export const isKeyword = (v: unknown): boolean => typeof v === 'string' && KEYWORDS.has(v);
+export const isKeyword = (v: Json): boolean => typeof v === 'string' && KEYWORDS.has(v);
 
 /** @internal */
 export const hasKeywordForm = (v: string): boolean => /^@[a-zA-Z]+$/.test(v);
@@ -99,7 +138,7 @@ export const isObject = (v: unknown): v is JsonObject =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** @internal */
-export const isEmptyObject = (v: unknown): boolean => isObject(v) && Object.keys(v).length === 0;
+export const isEmptyObject = (v: Json): boolean => isObject(v) && Object.keys(v).length === 0;
 
 /** @internal */
 export const isString = (v: unknown): v is string => typeof v === 'string';
@@ -126,10 +165,10 @@ export const isWellFormedLanguage = (v: string): boolean =>
   /^[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*$/.test(v);
 
 /** @internal */
-export const isValueObject = (v: unknown): boolean => isObject(v) && '@value' in v;
+export const isValueObject = (v: Json): boolean => isObject(v) && '@value' in v;
 
 /** @internal */
-export const isListObject = (v: unknown): boolean => isObject(v) && '@list' in v;
+export const isListObject = (v: Json): boolean => isObject(v) && '@list' in v;
 
 /** @internal */
 export const isGraphObject = (v: unknown): v is JsonObject => {
@@ -167,10 +206,11 @@ export const deepEqual = (a: Json, b: Json): boolean => {
 };
 
 /** @internal */
-export const compareStrings = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+export const compareStrings: Order.Order<string> = Order.String;
 
 /** @internal */
-export const sortedKeys = (o: JsonObject): Array<string> => Object.keys(o).sort(compareStrings);
+export const sortedKeys = (o: JsonObject): Array<string> =>
+  Arr.sort(Object.keys(o), compareStrings);
 
 /**
  * Adds a value to an entry of a map. When `asArray` is true the entry is
@@ -208,11 +248,11 @@ export const clone = <A>(v: A): A => (v === undefined ? v : structuredClone(v));
  */
 export const canonicalJson = (v: Json): string => {
   if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
-    return JSON.stringify(v);
+    return stringifyJson(v);
   }
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  const keys = Object.keys(v).sort(compareStrings);
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+  const keys = Arr.sort(Object.keys(v), compareStrings);
+  return `{${keys.map((k) => `${stringifyJson(k)}:${canonicalJson(v[k])}`).join(',')}}`;
 };
 
 /**

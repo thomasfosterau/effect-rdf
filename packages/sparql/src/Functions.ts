@@ -10,7 +10,8 @@
  * @since 0.1.0
  */
 import * as BigDecimal from 'effect/BigDecimal';
-import * as Data from 'effect/Data';
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
@@ -26,9 +27,9 @@ import * as V from './internal/values.ts';
  * @since 0.1.0
  * @category errors
  */
-export class ExpressionError extends Data.TaggedError('ExpressionError')<{
-  readonly message: string;
-}> {}
+export class ExpressionError extends Schema.TaggedError<ExpressionError>()('ExpressionError', {
+  message: Schema.String,
+}) {}
 
 /**
  * Signals an expression error from inside a function implementation.
@@ -155,16 +156,12 @@ export const compileRegex = (pattern: string, flags: string, global = false): Re
         return V.fail(`Invalid regex flag '${f}'`);
     }
   }
-  let re: RegExp;
-  try {
-    re = new RegExp(source, `${jsFlags}u`);
-  } catch {
-    try {
-      re = new RegExp(source, jsFlags);
-    } catch {
-      return V.fail('Invalid regular expression');
-    }
-  }
+  // Unicode mode first; patterns it rejects may still compile without it.
+  const compiled = Result.try(() => new RegExp(source, `${jsFlags}u`)).pipe(
+    Result.orElse(() => Result.try(() => new RegExp(source, jsFlags))),
+  );
+  if (Result.isFailure(compiled)) return V.fail('Invalid regular expression');
+  const re = compiled.success;
   if (regexCache.size > 1000) regexCache.clear();
   regexCache.set(key, re);
   return re;

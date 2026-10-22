@@ -131,13 +131,15 @@ describe('SparqlClient ↔ SparqlServer', () => {
             client.select('SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o'),
           );
           expect(rows).toHaveLength(5);
-          if (accept !== 'text/csv') {
+          // CSV loses term kinds, so only the other formats are compared as graphs.
+          const isomorphicRows = () => {
             const expected = Dataset.filter(data, (q) => q.graph._tag === 'DefaultGraph');
             const quads = rows.map((r) =>
               Term.quad(r['s'] as Term.Subject, r['p'] as Term.NamedNode, r['o'] as Term.Object),
             );
-            expect(Isomorphism.isomorphic(Dataset.fromIterable(quads), expected)).toBe(true);
-          }
+            return Isomorphism.isomorphic(Dataset.fromIterable(quads), expected);
+          };
+          expect(accept === 'text/csv' || isomorphicRows()).toBe(true);
           expect(yield* client.ask('ASK { ?s ?p "Bob" }')).toBe(true);
           expect(
             yield* client.ask(Q.ask().where(Q.triple(Q.variable('s'), Q.variable('p'), 'Nobody'))),
@@ -283,11 +285,10 @@ describe('SparqlClient ↔ SparqlServer', () => {
         const client = yield* SparqlClient.SparqlClient;
         const syntax = yield* Effect.flip(Stream.runCollect(client.select('SELECT * {')));
         expect(syntax._tag).toBe('HttpStatusError');
-        if (syntax._tag === 'HttpStatusError') {
-          expect(syntax.status).toBe(400);
-          expect(syntax.body).toMatch(/line 1/);
-          expect(syntax.message).toMatch(/status 400/);
-        }
+        assert(syntax._tag === 'HttpStatusError');
+        expect(syntax.status).toBe(400);
+        expect(syntax.body).toMatch(/line 1/);
+        expect(syntax.message).toMatch(/status 400/);
         const update = yield* Effect.flip(client.update('CREATE GRAPH <http://example.org/g1>'));
         expect(update._tag === 'HttpStatusError' && update.status).toBe(400);
       }),

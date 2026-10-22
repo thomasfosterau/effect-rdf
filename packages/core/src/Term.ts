@@ -41,6 +41,9 @@ export type TypeId = typeof TypeId;
  */
 export type Direction = 'ltr' | 'rtl';
 
+/** `isTerm` for a value already known to be an object. */
+const hasTermTypeId = (u: Equal.Equal): u is Term => TypeId in u;
+
 abstract class TermBase implements Equal.Equal, Pipeable {
   readonly [TypeId]: TypeId = TypeId;
   abstract readonly _tag: string;
@@ -65,7 +68,7 @@ abstract class TermBase implements Equal.Equal, Pipeable {
   }
 
   [Equal.symbol](that: Equal.Equal): boolean {
-    return isTerm(that) && that.key === this.key;
+    return hasTermTypeId(that) && that.key === this.key;
   }
 
   [Hash.symbol](): number {
@@ -80,7 +83,7 @@ abstract class TermBase implements Equal.Equal, Pipeable {
     return this.key;
   }
 
-  toJSON(): unknown {
+  toJSON() {
     return { _tag: this._tag, value: this.key };
   }
 
@@ -273,7 +276,7 @@ export class Quad<
   }
 
   [Equal.symbol](that: Equal.Equal): boolean {
-    return isQuad(that) && that.key === this.key;
+    return that instanceof Quad && that.key === this.key;
   }
 
   [Hash.symbol](): number {
@@ -288,8 +291,8 @@ export class Quad<
     return `${this.key} .`;
   }
 
-  toJSON(): unknown {
-    return { _tag: 'Quad', value: this.toString() };
+  toJSON() {
+    return { _tag: 'Quad' as const, value: this.toString() };
   }
 
   [NodeInspectSymbol](): string {
@@ -439,21 +442,21 @@ export const literal = (
   if (typeof languageOrDatatype === 'string') {
     return new Literal(value, rdfLangString, languageOrDatatype.toLowerCase());
   }
-  if (isNamedNode(languageOrDatatype)) {
-    if (
-      languageOrDatatype.value === RDF_LANG_STRING ||
-      languageOrDatatype.value === RDF_DIR_LANG_STRING
-    ) {
-      // A language-tagged datatype without a language tag is invalid; keep the
-      // lexical form but fall back to a plain string.
-      return new Literal(value, xsdString);
-    }
-    return new Literal(value, languageOrDatatype);
+  if ('language' in languageOrDatatype) {
+    const language = languageOrDatatype.language.toLowerCase();
+    return languageOrDatatype.direction === undefined
+      ? new Literal(value, rdfLangString, language)
+      : new Literal(value, rdfDirLangString, language, languageOrDatatype.direction);
   }
-  const language = languageOrDatatype.language.toLowerCase();
-  return languageOrDatatype.direction === undefined
-    ? new Literal(value, rdfLangString, language)
-    : new Literal(value, rdfDirLangString, language, languageOrDatatype.direction);
+  if (
+    languageOrDatatype.value === RDF_LANG_STRING ||
+    languageOrDatatype.value === RDF_DIR_LANG_STRING
+  ) {
+    // A language-tagged datatype without a language tag is invalid; keep the
+    // lexical form but fall back to a plain string.
+    return new Literal(value, xsdString);
+  }
+  return new Literal(value, languageOrDatatype);
 };
 
 /**
@@ -474,20 +477,25 @@ export const triple = <S extends Subject, P extends Predicate, O extends Object>
  * @since 0.1.0
  * @category constructors
  */
-export const quad: {
-  <S extends Subject, P extends Predicate, O extends Object>(
-    subject: S,
-    predicate: P,
-    object: O,
-  ): Quad<S, P, O, DefaultGraph>;
-  <S extends Subject, P extends Predicate, O extends Object, G extends Graph>(
-    subject: S,
-    predicate: P,
-    object: O,
-    graph: G,
-  ): Quad<S, P, O, G>;
-} = (subject: Subject, predicate: Predicate, object: Object, graph: Graph = defaultGraph) =>
-  new Quad(subject, predicate, object, graph) as any;
+export function quad<S extends Subject, P extends Predicate, O extends Object>(
+  subject: S,
+  predicate: P,
+  object: O,
+): Quad<S, P, O, DefaultGraph>;
+export function quad<S extends Subject, P extends Predicate, O extends Object, G extends Graph>(
+  subject: S,
+  predicate: P,
+  object: O,
+  graph: G,
+): Quad<S, P, O, G>;
+export function quad(
+  subject: Subject,
+  predicate: Predicate,
+  object: Object,
+  graph: Graph = defaultGraph,
+): Quad {
+  return new Quad(subject, predicate, object, graph);
+}
 
 /**
  * Converts a triple to a quad in the given graph (default graph when omitted).
@@ -656,13 +664,15 @@ export const isGround = (self: Term | Quad): boolean => {
  * @since 0.1.0
  * @category combinators
  */
-export const mapTerms: {
-  <T extends Quad | Triple>(
-    self: T,
-    f: (term: NamedNode | BlankNode | Literal | DefaultGraph) => Term,
-  ): T;
-} = (self: any, f: (term: any) => Term): any => {
-  const go = (term: Term): Term =>
+export function mapTerms<T extends Quad | Triple>(
+  self: T,
+  f: (term: NamedNode | BlankNode | Literal | DefaultGraph) => Term,
+): T;
+export function mapTerms(
+  self: Quad | Triple,
+  f: (term: NamedNode | BlankNode | Literal | DefaultGraph) => Term,
+): Quad | Triple {
+  const go = (term: Subject | Predicate | Object | Graph): Term =>
     term._tag === 'Triple'
       ? new Triple(
           go(term.subject) as Subject,
@@ -670,14 +680,14 @@ export const mapTerms: {
           go(term.object) as Object,
         )
       : f(term);
-  if (self._tag === 'Triple') return go(self);
+  if (self._tag === 'Triple') return go(self) as Triple;
   return new Quad(
     go(self.subject) as Subject,
     go(self.predicate) as Predicate,
     go(self.object) as Object,
     go(self.graph) as Graph,
   );
-};
+}
 
 /**
  * A total ordering of terms suitable for deterministic serialisation:
@@ -794,12 +804,28 @@ export const NamedNodeSchema: Schema.declare<NamedNode> = Schema.declare(isNamed
 });
 
 /**
+ * The type `NamedNodeSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type NamedNodeSchema = typeof NamedNodeSchema.Type;
+
+/**
  * @since 0.1.0
  * @category schemas
  */
 export const BlankNodeSchema: Schema.declare<BlankNode> = Schema.declare(isBlankNode, {
   identifier: 'BlankNode',
 });
+
+/**
+ * The type `BlankNodeSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type BlankNodeSchema = typeof BlankNodeSchema.Type;
 
 /**
  * @since 0.1.0
@@ -810,12 +836,28 @@ export const LiteralSchema: Schema.declare<Literal> = Schema.declare(isLiteral, 
 });
 
 /**
+ * The type `LiteralSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type LiteralSchema = typeof LiteralSchema.Type;
+
+/**
  * @since 0.1.0
  * @category schemas
  */
 export const VariableSchema: Schema.declare<Variable> = Schema.declare(isVariable, {
   identifier: 'Variable',
 });
+
+/**
+ * The type `VariableSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type VariableSchema = typeof VariableSchema.Type;
 
 /**
  * @since 0.1.0
@@ -826,10 +868,26 @@ export const TripleSchema: Schema.declare<Triple> = Schema.declare(isTriple, {
 });
 
 /**
+ * The type `TripleSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type TripleSchema = typeof TripleSchema.Type;
+
+/**
  * @since 0.1.0
  * @category schemas
  */
 export const QuadSchema: Schema.declare<Quad> = Schema.declare(isQuad, { identifier: 'Quad' });
+
+/**
+ * The type `QuadSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type QuadSchema = typeof QuadSchema.Type;
 
 /**
  * @since 0.1.0
@@ -838,9 +896,25 @@ export const QuadSchema: Schema.declare<Quad> = Schema.declare(isQuad, { identif
 export const TermSchema: Schema.declare<Term> = Schema.declare(isTerm, { identifier: 'Term' });
 
 /**
+ * The type `TermSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type TermSchema = typeof TermSchema.Type;
+
+/**
  * @since 0.1.0
  * @category schemas
  */
 export const GroundTermSchema: Schema.declare<GroundTerm> = Schema.declare(isGroundTerm, {
   identifier: 'GroundTerm',
 });
+
+/**
+ * The type `GroundTermSchema` decodes to.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type GroundTermSchema = typeof GroundTermSchema.Type;

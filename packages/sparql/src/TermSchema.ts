@@ -19,7 +19,9 @@
  * @since 0.1.0
  */
 import * as BigDecimal from 'effect/BigDecimal';
+import * as DateTime from 'effect/DateTime';
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
@@ -68,7 +70,7 @@ export const make = <A>(
         encode: (value: A) => Effect.succeed(options.encode(value)),
       }),
     ),
-  ) as any;
+  );
 
 const numericValue = (t: Term.GroundTerm): number | undefined => {
   if (t._tag !== 'Literal' || !Xsd.isNumericDatatype(t.datatype.value)) return undefined;
@@ -93,7 +95,7 @@ const numericValue = (t: Term.GroundTerm): number | undefined => {
  * @since 0.1.0
  * @category schemas
  */
-export const term: TermCodec<Term.GroundTerm> = Term.GroundTermSchema as any;
+export const term: TermCodec<Term.GroundTerm> = Term.GroundTermSchema;
 
 /**
  * An IRI, decoded to a `NamedNode`.
@@ -296,8 +298,9 @@ export const date: TermCodec<Date> = make(Schema.Date, {
   decode: (t) => {
     if (t._tag !== 'Literal') return undefined;
     const v = Xsd.toValue(t);
+    // An instant outside the range of `Date` does not decode.
     return v._tag === 'DateTime' && (v.kind === 'dateTime' || v.kind === 'date')
-      ? new Date(v.epochMillis)
+      ? Option.getOrUndefined(Option.map(DateTime.make(v.epochMillis), DateTime.toDateUtc))
       : undefined;
   },
   encode: (d) => Xsd.dateTime(d),

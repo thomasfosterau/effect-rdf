@@ -61,11 +61,11 @@ const isUpdate = (t: TestCase): boolean => t.type.includes('Update') || t.query!
 /** Parses, prints, re-parses and re-prints; returns both printed texts. */
 const roundTrip = (t: TestCase): readonly [string, string] => {
   const parsed = parse(fs.readFileSync(t.query!, 'utf8'), t.query!, isUpdate(t));
-  if (Result.isFailure(parsed)) throw new Error(parsed.failure.message);
+  if (Result.isFailure(parsed)) return expect.fail(parsed.failure.message);
   const printed = Generator.print(parsed.success);
   const reparsed = parse(printed, t.query!, isUpdate(t));
   if (Result.isFailure(reparsed)) {
-    throw new Error(`Re-parse failed: ${reparsed.failure.message}\n${printed}`);
+    return expect.fail(`Re-parse failed: ${reparsed.failure.message}\n${printed}`);
   }
   return [printed, Generator.print(reparsed.success)];
 };

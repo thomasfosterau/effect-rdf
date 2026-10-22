@@ -2,6 +2,7 @@
   "extends": "./tsconfig.base.json",
   "include": [
     "vite.config.ts",
+    "vite.package.ts",
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
     "packages/*/vite.config.ts"

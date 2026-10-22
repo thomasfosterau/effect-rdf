@@ -2,7 +2,9 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import * as Lexical from '../Lexical.ts';
 import { LineParser, splitLines, SyntaxFailure } from './lineParser.ts';
@@ -20,15 +22,17 @@ const makeLineParser = (syntax: Syntax, options?: Serialization.ParseOptions): L
     graph: options?.graph ?? Term.defaultGraph,
   });
 
-const toParseError = (syntax: Syntax, error: unknown): Serialization.RdfParseError =>
-  error instanceof SyntaxFailure
-    ? new Serialization.RdfParseError({
-        format: syntax.name,
-        message: error.message,
-        line: error.line,
-        column: error.column,
-      })
-    : new Serialization.RdfParseError({ format: syntax.name, message: String(error) });
+const toParseError =
+  (syntax: Syntax) =>
+  (cause: unknown): Serialization.RdfParseError =>
+    cause instanceof SyntaxFailure
+      ? new Serialization.RdfParseError({
+          format: syntax.name,
+          message: cause.message,
+          line: cause.line,
+          column: cause.column,
+        })
+      : new Serialization.RdfParseError({ format: syntax.name, message: String(cause) });
 
 const stripBom = (line: string, lineNumber: number): string =>
   lineNumber === 1 && line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
@@ -55,7 +59,7 @@ export const parseQuads = (
       }
       return out;
     },
-    catch: (error) => toParseError(syntax, error),
+    catch: toParseError(syntax),
   });
 
 /** @internal */
@@ -83,19 +87,19 @@ export const parseStream =
         Stream.splitLines,
         Stream.mapAccumArrayEffect(
           () => 0,
-          (lineNumber, lines) => {
-            const out: Array<Term.Quad> = [];
-            try {
-              for (const line of lines) {
-                lineNumber++;
-                const q = parser.parseLine(stripBom(line, lineNumber), lineNumber);
-                if (q !== undefined) out.push(q);
-              }
-            } catch (error) {
-              return Effect.fail(toParseError(syntax, error));
-            }
-            return Effect.succeed([lineNumber, out] as const);
-          },
+          (lineNumber, lines) =>
+            Effect.try({
+              try: () => {
+                const out: Array<Term.Quad> = [];
+                for (const line of lines) {
+                  lineNumber++;
+                  const q = parser.parseLine(stripBom(line, lineNumber), lineNumber);
+                  if (q !== undefined) out.push(q);
+                }
+                return [lineNumber, out] as const;
+              },
+              catch: toParseError(syntax),
+            }),
         ),
       );
     });
@@ -173,11 +177,13 @@ const formatAll = (syntax: Syntax, quads: Iterable<Term.Quad>): string => {
   return out;
 };
 
-const toSerializeError = (syntax: Syntax, error: unknown): Serialization.RdfSerializeError =>
-  new Serialization.RdfSerializeError({
-    format: syntax.name,
-    message: error instanceof Error ? error.message : String(error),
-  });
+const toSerializeError =
+  (syntax: Syntax) =>
+  (cause: unknown): Serialization.RdfSerializeError =>
+    new Serialization.RdfSerializeError({
+      format: syntax.name,
+      message: Predicate.isError(cause) ? cause.message : String(cause),
+    });
 
 /** @internal */
 export const serialize = (
@@ -187,8 +193,8 @@ export const serialize = (
 ): Effect.Effect<string, Serialization.RdfSerializeError> =>
   Effect.try({
     try: () =>
-      formatAll(syntax, options?.sort === true ? Array.from(quads).sort(Term.compareQuads) : quads),
-    catch: (error) => toSerializeError(syntax, error),
+      formatAll(syntax, options?.sort === true ? Arr.sort(quads, Term.compareQuads) : quads),
+    catch: toSerializeError(syntax),
   });
 
 /** @internal */
@@ -203,7 +209,7 @@ export const serializeStream =
       Stream.mapEffect((chunk) =>
         Effect.try({
           try: () => formatAll(syntax, chunk),
-          catch: (error) => toSerializeError(syntax, error),
+          catch: toSerializeError(syntax),
         }),
       ),
     );

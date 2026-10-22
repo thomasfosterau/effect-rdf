@@ -4,6 +4,8 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
+import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { type NodeMap, generateNodeMap } from './flatten.ts';
 import {
@@ -38,6 +40,7 @@ import {
   getOrInit,
   hasOwn,
 } from './util.ts';
+import { parseJson } from './json.ts';
 
 /** @internal */
 export type RdfDirection = 'i18n-datatype' | 'compound-literal';
@@ -66,7 +69,7 @@ export const toRdf = (expanded: Json, options: ToRdfOptions): Array<Term.Quad> =
   const nodeMap: NodeMap = { '@default': {} };
   generateNodeMap(expanded, nodeMap, issuer);
   const quads: Array<Term.Quad> = [];
-  for (const graphName of Object.keys(nodeMap).sort(compareStrings)) {
+  for (const graphName of Arr.sort(Object.keys(nodeMap), compareStrings)) {
     let graphTerm: Term.Graph;
     if (graphName === '@default') graphTerm = Term.defaultGraph;
     else {
@@ -75,11 +78,11 @@ export const toRdf = (expanded: Json, options: ToRdfOptions): Array<Term.Quad> =
       graphTerm = g;
     }
     const graph = nodeMap[graphName]!;
-    for (const subject of Object.keys(graph).sort(compareStrings)) {
+    for (const subject of Arr.sort(Object.keys(graph), compareStrings)) {
       const s = toResource(subject);
       if (s === null) continue;
       const node = graph[subject]!;
-      for (const property of Object.keys(node).sort(compareStrings)) {
+      for (const property of Arr.sort(Object.keys(node), compareStrings)) {
         const values: Array<Json> = node[property];
         if (property === '@type') {
           for (const type of values) {
@@ -229,7 +232,8 @@ const DOUBLE_RE = /^(\+|-)?([0-9]+(\.[0-9]*)?|\.[0-9]+)([Ee](\+|-)?[0-9]+)?$|^(\
  */
 export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Array<JsonObject> => {
   const defaultGraph: Record<string, JsonObject> = {};
-  const graphMap: Record<string, Record<string, JsonObject>> = { '@default': defaultGraph };
+  const graphMap: Record<string, Record<string, JsonObject>> = {};
+  graphMap['@default'] = defaultGraph;
   const referencedOnce: Record<string, Usage | false> = {};
   const compoundLiteralSubjects: Record<string, Set<string>> = {};
   const nilUsages: Record<string, Array<Usage>> = {};
@@ -322,14 +326,16 @@ export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Ar
   }
   const result: Array<JsonObject> = [];
   const subjects = options.ordered
-    ? Object.keys(defaultGraph).sort(compareStrings)
+    ? Arr.sort(Object.keys(defaultGraph), compareStrings)
     : Object.keys(defaultGraph);
   for (const subject of subjects) {
     const node = defaultGraph[subject]!;
     if (hasOwn(graphMap, subject) && subject !== '@default') {
       const nodes: Array<JsonObject> = (node['@graph'] = []);
       const graph = graphMap[subject]!;
-      const keys = options.ordered ? Object.keys(graph).sort(compareStrings) : Object.keys(graph);
+      const keys = options.ordered
+        ? Arr.sort(Object.keys(graph), compareStrings)
+        : Object.keys(graph);
       for (const k of keys) {
         const n = graph[k]!;
         if (!(Object.keys(n).length === 1 && '@id' in n)) nodes.push(n);
@@ -370,11 +376,7 @@ const rdfToObject = (object: Term.Object, options: FromRdfOptions): JsonObject =
   let type: string | null = null;
   const datatype = object.datatype.value;
   if (options.processingMode !== 'json-ld-1.0' && datatype === RDF_JSON) {
-    try {
-      converted = JSON.parse(converted);
-    } catch {
-      fail('invalid JSON literal');
-    }
+    converted = Result.getOrElse(parseJson(converted), () => fail('invalid JSON literal'));
     type = '@json';
   } else if (options.useNativeTypes) {
     if (datatype === XSD_STRING) {

@@ -1,0 +1,204 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "packages/*/src/*.ts",
+    "packages/*/test/**/*.test.ts",
+    "packages/*/bench/*.ts",
+    "packages/sparql-server/bin/*.mjs",
+    "**/vite.config.ts",
+    "vite.package.ts",
+    "scripts/check-dist-imports.mjs"
+  ],
+  "ignorePatterns": ["**/dist/**", "**/coverage/**", ".test-suites/**"],
+  "ignoreDependencies": [
+    "@types/node",
+    "@effect/language-service",
+    "@effect/tsgo",
+    "@typescript/native",
+    "typescript",
+    "vite",
+    "vitest",
+    "vite-plus",
+    "@vitest/coverage-istanbul",
+    "@changesets/cli",
+    "@changesets/changelog-github",
+    "fallow"
+  ],
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-types": "error",
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "warn",
+    "unused-enum-members": "error",
+    "unused-class-members": "warn",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "duplicate-exports": "error",
+    "circular-dependencies": "error",
+    "boundary-violation": "error",
+    "stale-suppressions": "warn"
+  },
+  "boundaries": {
+    "zones": [
+      {
+        "name": "core",
+        "patterns": ["packages/core/**"]
+      },
+      {
+        "name": "jsonld",
+        "patterns": ["packages/jsonld/**"]
+      },
+      {
+        "name": "n3",
+        "patterns": ["packages/n3/**"]
+      },
+      {
+        "name": "ntriples",
+        "patterns": ["packages/ntriples/**"]
+      },
+      {
+        "name": "rdfjson",
+        "patterns": ["packages/rdfjson/**"]
+      },
+      {
+        "name": "rdfxml",
+        "patterns": ["packages/rdfxml/**"]
+      },
+      {
+        "name": "shacl",
+        "patterns": ["packages/shacl/**"]
+      },
+      {
+        "name": "shacl-sparql",
+        "patterns": ["packages/shacl-sparql/**"]
+      },
+      {
+        "name": "shex",
+        "patterns": ["packages/shex/**"]
+      },
+      {
+        "name": "sparql",
+        "patterns": ["packages/sparql/**"]
+      },
+      {
+        "name": "sparql-client",
+        "patterns": ["packages/sparql-client/**"]
+      },
+      {
+        "name": "sparql-server",
+        "patterns": ["packages/sparql-server/**"]
+      },
+      {
+        "name": "sparql-sql",
+        "patterns": ["packages/sparql-sql/**"]
+      },
+      {
+        "name": "turtle",
+        "patterns": ["packages/turtle/**"]
+      }
+    ],
+    "rules": [
+      {
+        "from": "core",
+        "allow": []
+      },
+      {
+        "from": "jsonld",
+        "allow": ["core"]
+      },
+      {
+        "from": "n3",
+        "allow": ["core", "turtle"]
+      },
+      {
+        "from": "ntriples",
+        "allow": ["core"]
+      },
+      {
+        "from": "rdfjson",
+        "allow": ["core"]
+      },
+      {
+        "from": "rdfxml",
+        "allow": ["core"]
+      },
+      {
+        "from": "shacl",
+        "allow": ["core", "turtle"]
+      },
+      {
+        "from": "shacl-sparql",
+        "allow": ["core", "jsonld", "shacl", "sparql", "turtle"]
+      },
+      {
+        "from": "shex",
+        "allow": ["core", "turtle"]
+      },
+      {
+        "from": "sparql",
+        "allow": ["core", "ntriples", "rdfxml", "turtle"]
+      },
+      {
+        "from": "sparql-client",
+        "allow": [
+          "core",
+          "jsonld",
+          "n3",
+          "ntriples",
+          "rdfjson",
+          "rdfxml",
+          "sparql",
+          "sparql-server",
+          "turtle"
+        ]
+      },
+      {
+        "from": "sparql-server",
+        "allow": ["core", "jsonld", "n3", "ntriples", "rdfjson", "rdfxml", "sparql", "turtle"]
+      },
+      {
+        "from": "sparql-sql",
+        "allow": ["core", "sparql"]
+      },
+      {
+        "from": "turtle",
+        "allow": ["core", "ntriples"]
+      }
+    ]
+  },
+  // Each package's benchmark is a standalone Node script over that package's
+  // own corpus; sharing their timing loops would need a workspace module that
+  // no published package should depend on.
+  "duplicates": {
+    "ignore": ["packages/*/bench/**"],
+    // Reviewed clones that predate fallow, between packages that may not
+    // depend on each other (AGENTS.md: each package stays lean): JSON-LD and
+    // RDF/JSON each locate JSON syntax errors, the N-Triples, Turtle and
+    // RDF/XML parsers each map a thrown parse failure to `RdfParseError`, and
+    // the SPARQL evaluator dedupes path results the way core's `Dataset`
+    // dedupes terms without core exporting that helper. A content change on
+    // either side makes the group reportable again.
+    "ignoredClones": [
+      "dup:9c54618a:2",
+      "dup:ec5793a2:2",
+      "dup:0a9d0de4:2",
+      "dup:5c48d303:2",
+      "dup:71613c48:2"
+    ]
+  },
+  // The complexity and duplication already on `main` when fallow was adopted
+  // (saved from main's sources with real coverage): the audit fails on what a
+  // change adds or worsens, not on that inherited debt. Re-save a baseline
+  // only to shrink it.
+  "audit": {
+    "healthBaseline": ".fallow-baselines/health.json",
+    "dupesBaseline": ".fallow-baselines/dupes.json"
+  },
+  "health": {
+    "maxCyclomatic": 20,
+    "maxCognitive": 15,
+    "maxCrap": 30,
+    "coverage": "coverage/coverage-final.json"
+  }
+}

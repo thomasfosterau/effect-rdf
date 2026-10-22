@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Equal from 'effect/Equal';
 import * as Option from 'effect/Option';
 import { Dataset, Namespace, Term, Vocab } from '../src/index.ts';
@@ -53,7 +53,9 @@ describe('Dataset', () => {
       Term.quad(l2, rdf.first, Term.literal('2')),
       Term.quad(l2, rdf.rest, rdf.nil),
     );
-    expect(Option.getOrThrow(Dataset.list(ds, l1)).map((t) => t.key)).toEqual(['"1"', '"2"']);
+    const list = Dataset.list(ds, l1);
+    assert(Option.isSome(list));
+    expect(list.value.map((t) => t.key)).toEqual(['"1"', '"2"']);
     expect(Dataset.toNQuads(ds).split('\n')).toHaveLength(5);
   });
 

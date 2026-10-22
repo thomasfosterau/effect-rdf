@@ -7,6 +7,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as Xml from '../src/Xml.ts';
+import * as Arr from 'effect/Array';
+import * as Order from 'effect/Order';
 
 const suites =
   process.env.RDF_TEST_SUITES ?? path.resolve(import.meta.dirname, '../../../.test-suites');
@@ -50,8 +52,8 @@ const bench = (name: string, docs: ReadonlyArray<string>) => {
     all();
     samples.push(performance.now() - t);
   }
-  samples.sort((a, b) => a - b);
-  const median = samples[Math.floor(samples.length / 2)]!;
+  const sorted = Arr.sort(samples, Order.Number);
+  const median = sorted[Math.floor(sorted.length / 2)]!;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${docs.length} docs, ${(size / 1e6).toFixed(2)} MB, median ${median.toFixed(1)} ms` +

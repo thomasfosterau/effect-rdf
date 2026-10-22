@@ -10,7 +10,9 @@ import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { commonPrefixes, rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
+import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 
 /** @internal */
 export class SerializeFailure extends Error {}
@@ -218,7 +220,10 @@ export class Writer {
       entry.quads.push(q);
       this.index(q);
     }
-    const graphs = Array.from(byGraph.values()).sort((a, b) => compareTerms(a.graph, b.graph));
+    const graphs = Arr.sort(
+      byGraph.values(),
+      Order.mapInput(compareTerms, (g: { readonly graph: Term.Graph }) => g.graph),
+    );
     let body = '';
     for (const { graph, quads } of graphs) {
       const name = graph._tag === 'DefaultGraph' ? '' : this.term(graph);
@@ -240,9 +245,10 @@ export class Writer {
         ? `BASE <${Term.escapeIri(this.options.baseIri)}>\n`
         : `@base <${Term.escapeIri(this.options.baseIri)}> .\n`;
     }
-    const used = this.prefixes
-      .filter(([p]) => this.usedPrefixes.has(p))
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const used = Arr.sort(
+      this.prefixes.filter(([p]) => this.usedPrefixes.has(p)),
+      byPrefixName,
+    );
     for (const [p, ns] of used) {
       out += sparql
         ? `PREFIX ${p}: <${Term.escapeIri(ns)}>\n`
@@ -440,7 +446,7 @@ export class Writer {
 
   private renderGraph(level: number): string {
     const plan = this.plan;
-    const roots = Array.from(plan.subjects.values()).filter(
+    const unsorted = Array.from(plan.subjects.values()).filter(
       (s) =>
         !(
           s._tag === 'BlankNode' &&
@@ -449,7 +455,7 @@ export class Writer {
             plan.blockReifiers.has(s.value))
         ),
     );
-    roots.sort(compareSubjects);
+    const roots = Arr.sort(unsorted, compareTerms);
     const blocks: Array<string> = [];
     for (const s of roots) {
       const quads = plan.bySubject.get(s.key)!.filter((q) => !plan.consumed.has(q.key));
@@ -487,14 +493,18 @@ export class Writer {
       if (list === undefined) byPredicate.set(q.predicate.value, (list = []));
       list.push(q);
     }
-    const predicates = Array.from(byPredicate.keys()).sort((a, b) =>
-      a === RDF_TYPE ? -1 : b === RDF_TYPE ? 1 : a < b ? -1 : a > b ? 1 : 0,
+    // `rdf:type` first (written `a`), then by IRI.
+    const predicates = Arr.sort(
+      byPredicate.keys(),
+      Order.make((a: string, b: string) =>
+        a === RDF_TYPE ? -1 : b === RDF_TYPE ? 1 : a < b ? -1 : a > b ? 1 : 0,
+      ),
     );
     const parts = predicates.map((p) => {
-      const objects = byPredicate
-        .get(p)!
-        .sort((a, b) => compareTerms(a.object, b.object))
-        .map((q) => this.objectWithAnnotations(q, level));
+      const objects = Arr.sort(
+        byPredicate.get(p)!,
+        Order.mapInput(compareTerms, (q: Term.Quad) => q.object),
+      ).map((q) => this.objectWithAnnotations(q, level));
       const verb = p === RDF_TYPE ? 'a' : this.iri(p);
       return `${verb} ${objects.join(', ')}`;
     });
@@ -509,7 +519,10 @@ export class Writer {
     // reifier, so blocks come first, then bare `~`, then `~ id`.
     let bare = '';
     let ids = '';
-    for (const a of annotations.slice().sort((x, y) => compareTerms(x.reifier, y.reifier))) {
+    for (const a of Arr.sort(
+      annotations,
+      Order.mapInput(compareTerms, (a: Annotation) => a.reifier),
+    )) {
       if (a._tag === 'Id') {
         ids += ` ~ ${this.term(a.reifier)}`;
       } else {
@@ -651,18 +664,19 @@ export class Writer {
   }
 }
 
-const tagRank: Record<string, number> = {
-  DefaultGraph: 0,
-  NamedNode: 1,
-  BlankNode: 2,
-  Literal: 3,
-  Triple: 4,
-};
+/** Term kinds in writing order; anything else (a variable) sorts last. */
+const tagRank = new Map<string, number>([
+  ['DefaultGraph', 0],
+  ['NamedNode', 1],
+  ['BlankNode', 2],
+  ['Literal', 3],
+  ['Triple', 4],
+]);
 
-const compareTerms = (a: Term.Term, b: Term.Term): number => {
-  const ra = tagRank[a._tag] ?? 5;
-  const rb = tagRank[b._tag] ?? 5;
-  if (ra !== rb) return ra - rb;
+const compareTerms: Order.Order<Term.Term> = (a, b) => {
+  const ra = tagRank.get(a._tag) ?? 5;
+  const rb = tagRank.get(b._tag) ?? 5;
+  if (ra !== rb) return ra < rb ? -1 : 1;
   if (a._tag === 'Literal' && b._tag === 'Literal') {
     const na = numericValue(a);
     const nb = numericValue(b);
@@ -678,7 +692,11 @@ const numericValue = (l: Term.Literal): number | undefined => {
   return Number.isNaN(n) ? undefined : n;
 };
 
-const compareSubjects = (a: Term.Subject, b: Term.Subject): number => compareTerms(a, b);
+/** Prefix declarations by prefix name. */
+export const byPrefixName: Order.Order<readonly [string, string]> = Order.mapInput(
+  Order.String,
+  ([prefix]: readonly [string, string]) => prefix,
+);
 
 /**
  * Finds namespaces worth declaring: well-known vocabularies that are used,
@@ -726,7 +744,7 @@ const detectPrefixes = (
   );
   const out: Array<readonly [string, string]> = [];
   let n = 0;
-  const namespaces = Array.from(counts.keys()).sort();
+  const namespaces = Arr.sort(counts.keys(), Order.String);
   for (const ns of namespaces) {
     const name = known.get(ns);
     if (name !== undefined) {

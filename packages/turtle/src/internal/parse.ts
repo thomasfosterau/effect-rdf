@@ -3,6 +3,7 @@ import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import { SyntaxFailure, TurtleParser } from './parser.ts';
 
@@ -31,7 +32,11 @@ const makeParser = (syntax: Syntax, options?: Serialization.ParseOptions): Turtl
     graph: (syntax.trig ? undefined : options?.graph) ?? Term.defaultGraph,
   });
 
-const toParseError = (syntax: Syntax, error: unknown): Serialization.RdfParseError =>
+/**
+ * Maps what a parse threw — a `SyntaxFailure`, or a defect as an `Error` or
+ * its string form — to an `RdfParseError`.
+ */
+const toParseError = (syntax: Syntax, error: Error | string): Serialization.RdfParseError =>
   error instanceof SyntaxFailure
     ? new Serialization.RdfParseError({
         format: syntax.name,
@@ -41,7 +46,7 @@ const toParseError = (syntax: Syntax, error: unknown): Serialization.RdfParseErr
       })
     : new Serialization.RdfParseError({
         format: syntax.name,
-        message: error instanceof Error ? error.message : String(error),
+        message: Predicate.isString(error) ? error : error.message,
       });
 
 /** @internal */
@@ -60,7 +65,7 @@ export const parseQuads = (
         baseIri: parser.base,
       };
     },
-    catch: (error) => toParseError(syntax, error),
+    catch: (error) => toParseError(syntax, Predicate.isError(error) ? error : String(error)),
   });
 
 /** @internal */
@@ -92,18 +97,19 @@ export const parseStream =
       ).pipe(
         Stream.mapAccumArrayEffect(
           () => undefined,
-          (_, chunks) => {
-            const out: Array<Term.Quad> = [];
-            try {
-              for (const chunk of chunks) {
-                const quads = chunk === END ? parser.end() : parser.feed(chunk);
-                for (const q of quads) out.push(q);
-              }
-            } catch (error) {
-              return Effect.fail(toParseError(syntax, error));
-            }
-            return Effect.succeed([undefined, out] as const);
-          },
+          (_, chunks) =>
+            Effect.try({
+              try: () => {
+                const out: Array<Term.Quad> = [];
+                for (const chunk of chunks) {
+                  const quads = chunk === END ? parser.end() : parser.feed(chunk);
+                  for (const q of quads) out.push(q);
+                }
+                return [undefined, out] as const;
+              },
+              catch: (error) =>
+                toParseError(syntax, Predicate.isError(error) ? error : String(error)),
+            }),
         ),
       );
     });

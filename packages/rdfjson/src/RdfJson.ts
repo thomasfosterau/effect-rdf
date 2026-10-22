@@ -40,7 +40,10 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Order from 'effect/Order';
+import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
@@ -48,6 +51,7 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import { parseJson } from './internal/json.ts';
 
 const FORMAT_NAME = 'RDF/JSON';
 const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
@@ -77,10 +81,10 @@ export const format: Serialization.Format = Serialization.makeFormat({
  * @since 0.1.0
  * @category models
  */
-export interface UriValue {
+export type UriValue = {
   readonly type: 'uri';
   readonly value: string;
-}
+};
 
 /**
  * A blank node value: `{ "type": "bnode", "value": "_:label" }`.
@@ -88,10 +92,10 @@ export interface UriValue {
  * @since 0.1.0
  * @category models
  */
-export interface BlankNodeValue {
+export type BlankNodeValue = {
   readonly type: 'bnode';
   readonly value: string;
-}
+};
 
 /**
  * A literal value. `lang` and `datatype` are mutually exclusive;
@@ -100,13 +104,13 @@ export interface BlankNodeValue {
  * @since 0.1.0
  * @category models
  */
-export interface LiteralValue {
+export type LiteralValue = {
   readonly type: 'literal';
   readonly value: string;
   readonly lang?: string;
   readonly datatype?: string;
   readonly direction?: Term.Direction;
-}
+};
 
 /**
  * An RDF 1.2 triple term value (extension).
@@ -114,14 +118,14 @@ export interface LiteralValue {
  * @since 0.1.0
  * @category models
  */
-export interface TripleTermValue {
+export type TripleTermValue = {
   readonly type: 'triple';
   readonly value: {
     readonly subject: UriValue | BlankNodeValue;
     readonly predicate: UriValue;
     readonly object: ObjectValue;
   };
-}
+};
 
 /**
  * Any value in the object position.
@@ -184,18 +188,30 @@ export const LiteralValue: Schema.Codec<LiteralValue> = Schema.Struct({
   direction: Schema.optionalKey(Direction),
 })
   .check(
-    Schema.makeFilter((l) =>
-      l.lang !== undefined &&
-      l.datatype !== undefined &&
-      l.datatype !== RDF_LANG_STRING &&
-      l.datatype !== RDF_DIR_LANG_STRING
-        ? { path: ['datatype'], issue: '"datatype" cannot be combined with "lang"' }
-        : undefined,
+    Schema.makeFilter(
+      (l) =>
+        l.lang !== undefined &&
+        l.datatype !== undefined &&
+        l.datatype !== RDF_LANG_STRING &&
+        l.datatype !== RDF_DIR_LANG_STRING
+          ? { path: ['datatype'], issue: '"datatype" cannot be combined with "lang"' }
+          : undefined,
+      {
+        identifier: 'LiteralLangDatatype',
+        title: 'Language or datatype',
+        description: 'A literal with a "lang" has no "datatype" other than rdf:langString',
+      },
     ),
-    Schema.makeFilter((l) =>
-      l.direction !== undefined && l.lang === undefined
-        ? { path: ['direction'], issue: '"direction" requires "lang"' }
-        : undefined,
+    Schema.makeFilter(
+      (l) =>
+        l.direction !== undefined && l.lang === undefined
+          ? { path: ['direction'], issue: '"direction" requires "lang"' }
+          : undefined,
+      {
+        identifier: 'LiteralDirectionLang',
+        title: 'Direction requires language',
+        description: 'A literal with a "direction" also has a "lang"',
+      },
     ),
   )
   .annotate({ identifier: 'LiteralValue', description: 'An RDF/JSON literal value' });
@@ -233,6 +249,15 @@ export const ObjectValue: Schema.Codec<ObjectValue> = Schema.Union([
 });
 
 /**
+ * The type of an object value in strict RDF/JSON (the `StrictObjectValue`
+ * schema's decoded type).
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export type StrictObjectValue = typeof StrictObjectValue.Type;
+
+/**
  * An object value in strict RDF/JSON: no triple terms and no base
  * direction.
  *
@@ -244,13 +269,19 @@ export const StrictObjectValue: Schema.Codec<UriValue | BlankNodeValue | Literal
     UriValue,
     BlankNodeValue,
     LiteralValue.check(
-      Schema.makeFilter((l) =>
-        l.direction !== undefined
-          ? {
-              path: ['direction'],
-              issue: '"direction" is an RDF 1.2 extension (disabled in strict mode)',
-            }
-          : undefined,
+      Schema.makeFilter(
+        (l) =>
+          l.direction !== undefined
+            ? {
+                path: ['direction'],
+                issue: '"direction" is an RDF 1.2 extension (disabled in strict mode)',
+              }
+            : undefined,
+        {
+          identifier: 'StrictLiteralDirection',
+          title: 'No base direction',
+          description: 'A strict RDF/JSON literal has no "direction"',
+        },
       ),
     ),
   ]).annotate({
@@ -279,6 +310,14 @@ export const Document: Schema.Codec<Document> = makeDocument(ObjectValue).annota
 export const StrictDocument: Schema.Codec<Document> = makeDocument(StrictObjectValue).annotate({
   description: 'A strict RDF/JSON document',
 });
+
+/**
+ * The decoded type of `RdfJsonFromString`: a validated `Document`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export type RdfJsonFromString = typeof RdfJsonFromString.Type;
 
 /**
  * Decodes RDF/JSON text into a validated `Document` (and encodes documents
@@ -383,6 +422,12 @@ class SerializeFailure {
   }
 }
 
+const quadOrder: Order.Order<Term.Quad> = Order.combineAll([
+  Order.mapInput(Term.compare, (q: Term.Quad) => q.subject),
+  Order.mapInput(Term.compare, (q: Term.Quad) => q.predicate),
+  Order.mapInput(Term.compare, (q: Term.Quad) => q.object),
+]);
+
 const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions): Document => {
   const extensions = options.extensions ?? false;
   const fail = (message: string): never => {
@@ -433,12 +478,7 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
   };
   const merge = options.mergeGraphs ?? false;
   const seen = new Set<string>();
-  const sorted = Array.from(quads).sort(
-    (a, b) =>
-      Term.compare(a.subject, b.subject) ||
-      Term.compare(a.predicate, b.predicate) ||
-      Term.compare(a.object, b.object),
-  );
+  const sorted = Arr.sort(quads, quadOrder);
   const document: Record<string, Record<string, Array<ObjectValue>>> = {};
   for (const q of sorted) {
     if (q.graph._tag !== 'DefaultGraph' && !merge) {
@@ -468,17 +508,15 @@ export const fromQuads = (
   quads: Iterable<Term.Quad>,
   options?: FromQuadsOptions,
 ): Effect.Effect<Document, Serialization.RdfSerializeError> =>
-  Effect.suspend(() => {
-    try {
-      return Effect.succeed(fromQuadsUnsafe(quads, options ?? {}));
-    } catch (e) {
+  Effect.try({
+    try: () => fromQuadsUnsafe(quads, options ?? {}),
+    // Anything but a `SerializeFailure` is a bug: rethrown, it becomes a defect.
+    catch: (e) => {
       if (e instanceof SerializeFailure) {
-        return Effect.fail(
-          new Serialization.RdfSerializeError({ format: FORMAT_NAME, message: e.message }),
-        );
+        return new Serialization.RdfSerializeError({ format: FORMAT_NAME, message: e.message });
       }
       throw e;
-    }
+    },
   });
 
 /**
@@ -513,6 +551,14 @@ export const makeDatasetSchema = (
  * @category schemas
  */
 export const DatasetFromRdfJson: Schema.Codec<Dataset.Dataset, Document> = makeDatasetSchema();
+
+/**
+ * The decoded type of `DatasetFromString`: a `Dataset`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export type DatasetFromString = typeof DatasetFromString.Type;
 
 /**
  * A schema transforming RDF/JSON text into datasets and back.
@@ -625,13 +671,17 @@ const jsonErrorOffset = (input: string): number => {
       i += m[0].length;
     }
   };
-  try {
-    value();
-    ws();
-    return i;
-  } catch (offset) {
-    return offset as number;
-  }
+  // `fail` throws at the offending offset, which is `i`.
+  return Result.merge(
+    Result.try({
+      try: () => {
+        value();
+        ws();
+        return i;
+      },
+      catch: () => i,
+    }),
+  );
 };
 
 const jsonErrorPosition = (input: string) => {
@@ -654,17 +704,16 @@ export const parse = (
   options?: ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
   Effect.gen(function* () {
-    const json = yield* Effect.try({
-      try: (): unknown => JSON.parse(input),
-      catch: (e) => {
-        const message = e instanceof Error ? e.message : String(e);
-        return new Serialization.RdfParseError({
-          format: FORMAT_NAME,
-          message: `Invalid JSON: ${message}`,
-          ...jsonErrorPosition(input),
-        });
-      },
-    });
+    const json = yield* Effect.fromResult(parseJson(input)).pipe(
+      Effect.mapError(
+        (e) =>
+          new Serialization.RdfParseError({
+            format: FORMAT_NAME,
+            message: `Invalid JSON: ${e.message}`,
+            ...jsonErrorPosition(input),
+          }),
+      ),
+    );
     const document = yield* Schema.decodeUnknownEffect(
       options?.strict === true ? StrictDocument : Document,
     )(json).pipe(
@@ -701,7 +750,16 @@ export const serialize = (
   options?: SerializeOptions,
 ): Effect.Effect<string, Serialization.RdfSerializeError> =>
   fromQuads(quads, options).pipe(
-    Effect.map((document) => `${JSON.stringify(document, null, options?.space ?? 2)}\n`),
+    Effect.flatMap((document) =>
+      Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown, { space: options?.space ?? 2 }))(
+        document,
+      ).pipe(
+        Effect.mapError(
+          (e) => new Serialization.RdfSerializeError({ format: FORMAT_NAME, message: e.message }),
+        ),
+      ),
+    ),
+    Effect.map((text) => `${text}\n`),
   );
 
 /**

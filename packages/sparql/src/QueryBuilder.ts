@@ -74,7 +74,7 @@ export type PatternInput =
   | Ast.Pattern
   | ReadonlyArray<PatternInput>;
 
-const isTerm = (u: unknown): u is Term.Term => Term.isTerm(u);
+const isTerm = <T extends Term.Term>(u: T | JsValue): u is T => Term.isTerm(u);
 
 /**
  * Converts a JS value to a literal (terms and expressions are returned
@@ -87,7 +87,7 @@ export const toExpression = (input: ExpressionInput): Ast.Expression =>
   typeof input === 'object' && !(input instanceof Date) ? input : Xsd.fromJs(input);
 
 const toObject = (input: ObjectInput): Ast.TermPattern =>
-  isTerm(input) ? (input as Ast.TermPattern) : Xsd.fromJs(input as JsValue);
+  isTerm(input) ? input : Xsd.fromJs(input);
 
 // -----------------------------------------------------------------------------
 // Variables
@@ -102,15 +102,25 @@ const toObject = (input: ObjectInput): Ast.TermPattern =>
 export const variable = <const N extends string>(name: N): Term.Variable<N> => Term.variable(name);
 
 /**
+ * Variables by name, as `v` provides them.
+ *
+ * @since 0.1.0
+ * @category variables
+ */
+export interface Variables {
+  readonly [name: string]: Term.Variable<string>;
+}
+
+/**
  * A proxy creating variables by property access: `v.name` is `?name`.
  *
  * @since 0.1.0
  * @category variables
  */
-export const v: { readonly [K in string]: Term.Variable<K> } = new Proxy(
+export const v: Variables = new Proxy<Variables>(
   {},
   { get: (_, name) => (typeof name === 'string' ? Term.variable(name) : undefined) },
-) as any;
+);
 
 /**
  * Creates several variables at once, typed by name:
@@ -122,7 +132,25 @@ export const v: { readonly [K in string]: Term.Variable<K> } = new Proxy(
 export const vars = <const N extends ReadonlyArray<string>>(
   ...names: N
 ): { readonly [K in N[number]]: Term.Variable<K> } =>
-  Object.fromEntries(names.map((n) => [n, Term.variable(n)])) as any;
+  // SAFETY: one entry per name in `names`, each the variable of that name.
+  Object.fromEntries(names.map((n) => [n, Term.variable(n)])) as {
+    readonly [K in N[number]]: Term.Variable<K>;
+  };
+
+/**
+ * The `as` constructor: an alias that is required unless marked optional.
+ *
+ * @since 0.1.0
+ * @category projection
+ */
+export interface AsAlias {
+  <const N extends string>(expression: ExpressionInput, name: N): Alias<N, false>;
+  <const N extends string>(
+    expression: ExpressionInput,
+    name: N,
+    options: { readonly optional: true },
+  ): Alias<N, true>;
+}
 
 /**
  * Marks a selected variable as possibly unbound (e.g. bound in an
@@ -165,14 +193,11 @@ export interface Alias<N extends string, Optional extends boolean = false> {
  * @since 0.1.0
  * @category projection
  */
-export const as: {
-  <const N extends string>(expression: ExpressionInput, name: N): Alias<N, false>;
-  <const N extends string>(
-    expression: ExpressionInput,
-    name: N,
-    options: { readonly optional: true },
-  ): Alias<N, true>;
-} = (expression: ExpressionInput, name: string, options?: { readonly optional: true }): any => ({
+export const as: AsAlias = (
+  expression: ExpressionInput,
+  name: string,
+  options?: { readonly optional: true },
+): any => ({
   _tag: 'Alias',
   name,
   expression: toExpression(expression),
@@ -353,11 +378,7 @@ export const values = (
     rows.map((r) =>
       names.map((n) => {
         const x = r[n];
-        return x === undefined
-          ? undefined
-          : isTerm(x)
-            ? (x as Term.GroundTerm)
-            : Xsd.fromJs(x as JsValue);
+        return x === undefined ? undefined : isTerm(x) ? x : Xsd.fromJs(x);
       }),
     ),
   );
@@ -620,7 +641,9 @@ export class Builder<
     this.query = query;
   }
 
-  private with(patch: Partial<Ast.QueryBase> & Record<string, unknown>): Builder<K, R, O> {
+  private with(
+    patch: Partial<Ast.QueryBase> & Partial<Pick<Ast.SelectQuery, 'distinct' | 'reduced'>>,
+  ): Builder<K, R, O> {
     return new Builder({ ...this.query, ...patch } as QueryOf<K>);
   }
 

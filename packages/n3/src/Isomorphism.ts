@@ -13,8 +13,10 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
 import { rdf } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Model from './Model.ts';
@@ -245,7 +247,7 @@ const refine = (tuples: ReadonlyArray<Tuple>): Partition => {
   let colour = new Uint32Array(nN);
   for (let n = 0; n < nN; n++) colour[n] = hashString(kindOf(nodes[n]!));
   const countClasses = (c: Uint32Array) => {
-    const sorted = c.slice().sort();
+    const sorted = Arr.sort(c, Order.Number);
     let count = sorted.length > 0 ? 1 : 0;
     for (let k = 1; k < sorted.length; k++) if (sorted[k] !== sorted[k - 1]) count++;
     return count;
@@ -335,10 +337,11 @@ const bijectionTuples = (
   }
   for (const n of mapping.keys()) if (!consistent(n)) return Option.none();
   // Iterative backtracking over the ambiguous nodes, smallest classes first.
-  const order = ambiguous.sort(
-    (x, y) => groupsA.get(pa.labels.get(x)!)!.length - groupsA.get(pa.labels.get(y)!)!.length,
+  const order = Arr.sort(
+    ambiguous,
+    Order.mapInput(Order.Number, (x: string) => groupsA.get(pa.labels.get(x)!)!.length),
   );
-  const next = new Array<number>(order.length).fill(0);
+  const next = Array.from({ length: order.length }, () => 0);
   let i = 0;
   while (i >= 0 && i < order.length) {
     const node = order[i]!;
