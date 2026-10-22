@@ -96,6 +96,10 @@
       {
         "name": "turtle",
         "patterns": ["packages/turtle/**"]
+      },
+      {
+        "name": "xmp",
+        "patterns": ["packages/xmp/**"]
       }
     ],
     "rules": [
@@ -164,6 +168,10 @@
       {
         "from": "turtle",
         "allow": ["core", "ntriples"]
+      },
+      {
+        "from": "xmp",
+        "allow": ["core", "rdfxml"]
       }
     ]
   },

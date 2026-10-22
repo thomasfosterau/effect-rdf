@@ -23,6 +23,7 @@ const packages = [
   'effect-jsonld',
   'effect-rdfxml',
   'effect-rdfjson',
+  'effect-xmp',
   'effect-sparql',
   'effect-shacl',
   'effect-shacl-sparql',
