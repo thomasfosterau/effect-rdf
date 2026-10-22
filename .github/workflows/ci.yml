@@ -1,24 +1,65 @@
 name: CI
 
+# ONE required job, ONE required check: the pipeline's task graph lives in
+# vite.config.ts (the root `check` and `check:dist` tasks and every package's
+# `test:unit` / `build`), not in GitHub Actions `needs:`. Shaped after the
+# effect-web library's workflow, plus the W3C conformance suites the tests
+# read: nothing here needs a database, a stage or a credential (the
+# PostgreSQL suite runs on PGlite in-process), so every PR runs the whole gate.
+
 on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
   push:
     branches: [main]
-  pull_request:
 
-permissions:
-  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# No permissions by default; the single job grants only read access.
+permissions: {}
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # A ceiling for every Node process in the pipeline. NODE_OPTIONS is
+      # inherited by every child, including each vitest fork; the
+      # conformance suites hold whole W3C manifests in memory.
+      NODE_OPTIONS: --max-old-space-size=4096
+      VITEST_MAX_WORKERS: 2
     steps:
-      - uses: actions/checkout@v4
-      - uses: voidzero-dev/setup-vp@v1.9.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '24'
-          cache: true
-      - run: vp check
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Restore the Vite+ task cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.vite/task-cache
+          key: vp-task-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            vp-task-v1-${{ runner.os }}-
+      - name: Format and lint
+        run: vp check
+      # Two at a time: fourteen native `tsc` processes at once exhaust the
+      # runner's memory.
+      - name: Type gates
+        run: vp run --concurrency-limit 2 check
+      # The conformance tests skip when the suites are absent; CI always runs
+      # them. Shallow clones of the upstream W3C / community repositories.
       - name: Fetch conformance test suites
         run: ./scripts/fetch-test-suites.sh
-      - run: vp test
-      - run: vp run -r build
+      - name: Unit and conformance tests
+        run: vp run --concurrency-limit 2 -r test:unit
+      - name: Build
+        run: vp run -r build
+      - name: Dist import guard (no effect/unstable)
+        run: vp run check:dist
+      - name: Audit
+        run: pnpm audit --audit-level high
