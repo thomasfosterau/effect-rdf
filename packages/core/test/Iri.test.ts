@@ -44,6 +44,27 @@ describe('Iri', () => {
     expect(Iri.resolve(ref, base)).toBe(expected);
   });
 
+  it('normalizes the dot segments of an absolute reference', () => {
+    expect(Iri.resolve('http://x/a/./b/../c', base)).toBe('http://x/a/c');
+    expect(Iri.resolve('g:./h', base)).toBe('g:h');
+    expect(Iri.resolve('http://x/a/b?c=./..#.', base)).toBe('http://x/a/b?c=./..#.');
+  });
+
+  it('resolves against alternating bases', () => {
+    // Each call's base, not a remembered one, decides the result.
+    expect(Iri.resolve('g', 'http://one/a/b')).toBe('http://one/a/g');
+    expect(Iri.resolve('g', 'http://two/x/')).toBe('http://two/x/g');
+    expect(Iri.resolve('g', 'http://one/a/b')).toBe('http://one/a/g');
+    expect(Iri.resolve('?q', 'http://two/x/y?p')).toBe('http://two/x/y?q');
+  });
+
+  it('leaves a path without dot segments unchanged', () => {
+    for (const path of ['', '/', '/a/b', 'a/b/', '/a..b/.c/d.', '/a/...']) {
+      expect(Iri.removeDotSegments(path)).toBe(path);
+    }
+    expect(Iri.removeDotSegments('/a/b/../c/./d')).toBe('/a/c/d');
+  });
+
   it('relativizes', () => {
     const b = 'http://example.org/a/b';
     for (const iri of [

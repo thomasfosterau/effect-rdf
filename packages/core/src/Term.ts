@@ -775,6 +775,14 @@ export const escapeString = (value: string): string => {
   return out;
 };
 
+// The characters an IRIREF cannot contain unescaped, hoisted so the hot
+// `NamedNode.key` path does not build a regex per call. `replace` resets the
+// global one's `lastIndex`, and `test` on the non-global one keeps no state.
+// eslint-disable-next-line no-control-regex
+const IRI_UNSAFE = /[\u0000- <>"{}|^`\\]/;
+// eslint-disable-next-line no-control-regex
+const IRI_UNSAFE_ALL = /[\u0000- <>"{}|^`\\]/g;
+
 /**
  * Escapes characters that are not allowed inside `<...>` IRI references.
  *
@@ -782,11 +790,9 @@ export const escapeString = (value: string): string => {
  * @category formatting
  */
 export const escapeIri = (value: string): string =>
-  // eslint-disable-next-line no-control-regex
-  /[\u0000- <>"{}|^`\\]/.test(value)
+  IRI_UNSAFE.test(value)
     ? value.replace(
-        // eslint-disable-next-line no-control-regex
-        /[\u0000- <>"{}|^`\\]/g,
+        IRI_UNSAFE_ALL,
         (ch) => `\\u${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`,
       )
     : value;

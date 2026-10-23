@@ -246,21 +246,20 @@ const expect = (
 const eat = (kind: string): P<boolean> =>
   Parser.opt(tok(kind)).pipe(Parser.map((o) => o._tag === 'Some'));
 
-/** Whether the next token's kind is one of `kinds` (not consumed). */
-const peekKind = (kinds: ReadonlySet<string>): P<void> => {
-  const expected = Array.from(kinds);
-  return Parser.make<void, Failure, never, ReadonlyArray<Tok>>((state) => {
-    const t = state.input[state.pos];
-    return t !== undefined && kinds.has(t.kind) ? undefined : state.backtrack('Token', expected);
-  });
-};
+/**
+ * Whether the next token's kind is one of `kinds` (not consumed). A peeked
+ * token set, like `tok`, so the compiler inlines it.
+ */
+const peekKind = (kinds: ReadonlySet<string>): P<void> =>
+  Parser.peek(Token.oneOf<ReadonlyArray<Tok>>((t) => kinds.has(t.kind))).pipe(
+    Parser.asVoid,
+    Parser.expected(Array.from(kinds, (k) => `'${k}'`).join(' or ')),
+  );
 
-const anyToken: P<Tok> = Parser.make<Tok, Failure, never, ReadonlyArray<Tok>>((state) => {
-  const t = state.input[state.pos];
-  if (t === undefined || t.type === 'ERROR') return state.backtrack('Token', ['a token']);
-  state.pos++;
-  return t;
-});
+/** Any token but a lexer error token (consumed). A token set, like `tok`. */
+const anyToken: P<Tok> = Token.oneOf<ReadonlyArray<Tok>>((t) => t.type !== 'ERROR').pipe(
+  Parser.expected('a token'),
+);
 
 /**
  * Chooses a parser by the kind of the next token; when no case matches,
