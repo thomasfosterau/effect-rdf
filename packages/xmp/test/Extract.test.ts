@@ -2,6 +2,7 @@ import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
+import { deflateSync } from 'node:zlib';
 import { Extract, Metadata, Namespaces, Xmp } from '../src/index.ts';
 import { pdfA2b, some } from './fixtures.ts';
 
@@ -131,10 +132,18 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const chunk = (type: string, data: Uint8Array) =>
   concat(u32(data.length), bytes(type), data, [0, 0, 0, 0]);
 
-const itxt = (keyword: string, text: string, compressed = 0) =>
+const itxt = (keyword: string, text: string | Uint8Array, compressed = 0, method = 0) =>
   chunk(
     'iTXt',
-    concat(bytes(keyword), [0, compressed, 0], bytes('en'), [0], bytes('XMP'), [0], bytes(text)),
+    concat(
+      bytes(keyword),
+      [0, compressed, method],
+      bytes('en'),
+      [0],
+      bytes('XMP'),
+      [0],
+      text instanceof Uint8Array ? text : bytes(text),
+    ),
   );
 
 const IHDR = chunk('IHDR', new Uint8Array(13));
@@ -159,6 +168,38 @@ describe('Extract.png', () => {
     }),
   );
 
+  it.effect('inflates a compressed XMP iTXt chunk', () =>
+    Effect.gen(function* () {
+      const png = concat(
+        PNG_SIGNATURE,
+        IHDR,
+        itxt('XML:com.adobe.xmp', deflateSync(bytes(pdfA2b)), 1),
+        IEND,
+      );
+      expect(some(yield* Extract.png(png))).toBe(pdfA2b);
+      // Inflating is asynchronous, so the synchronous reader says to use `png`.
+      const sync = Extract.pngResult(png);
+      expect(Result.isFailure(sync) && sync.failure.message).toBe(
+        'A compressed XMP iTXt chunk needs Extract.png, which inflates it',
+      );
+    }),
+  );
+
+  it.effect('fails a compressed chunk that inflates past the cap', () =>
+    Effect.gen(function* () {
+      // 64 MiB of spaces deflates to about 64 KiB: a small deflate bomb.
+      const bomb = deflateSync(new Uint8Array(64 * 1024 * 1024).fill(0x20));
+      const png = concat(PNG_SIGNATURE, IHDR, itxt('XML:com.adobe.xmp', bomb, 1), IEND);
+      const error = yield* Effect.flip(Extract.png(png));
+      expect(error.message).toBe(
+        `Compressed XMP iTXt chunk inflates to more than ${Extract.DEFAULT_MAX_XMP_BYTES} bytes`,
+      );
+      const small = concat(PNG_SIGNATURE, itxt('XML:com.adobe.xmp', deflateSync(bytes(pdfA2b)), 1));
+      const capped = yield* Effect.flip(Extract.png(small, { maxXmpBytes: 100 }));
+      expect(capped.message).toBe('Compressed XMP iTXt chunk inflates to more than 100 bytes');
+    }),
+  );
+
   it('is None for a PNG without XMP', () => {
     expect(Extract.pngResult(concat(PNG_SIGNATURE, IHDR, IEND))).toEqual(
       Result.succeed(Option.none()),
@@ -176,8 +217,12 @@ describe('Extract.png', () => {
           'Truncated PNG chunk at offset 8',
         ],
         [
-          concat(PNG_SIGNATURE, itxt('XML:com.adobe.xmp', 'x', 1)),
-          'Compressed XMP iTXt chunks are not supported',
+          concat(PNG_SIGNATURE, itxt('XML:com.adobe.xmp', 'not zlib', 1)),
+          'Malformed compressed iTXt chunk',
+        ],
+        [
+          concat(PNG_SIGNATURE, itxt('XML:com.adobe.xmp', 'x', 1, 7)),
+          'Unknown iTXt compression method',
         ],
         [
           concat(

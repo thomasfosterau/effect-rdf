@@ -2,7 +2,8 @@
  * Reading the XMP packet embedded in an image file, as XMP Specification
  * Part 3 places it: a JPEG's APP1 segment (with Extended XMP split across
  * further APP1 segments) or a PNG's `iTXt` chunk with the keyword
- * `XML:com.adobe.xmp`. Any other format (TIFF, WebP, GIF, MP4, PDF, …) can
+ * `XML:com.adobe.xmp` (stored or, read with `png`, zlib-compressed). Any
+ * other format (TIFF, WebP, GIF, MP4, PDF, …) can
  * be scanned for its packet with `Packet.find`.
  *
  * @since 0.1.0
@@ -194,23 +195,120 @@ const pngChunks = (bytes: Uint8Array): ReadonlyArray<PngChunk> => {
   });
 };
 
-/** The text of an `iTXt` chunk, when its keyword is XMP's. */
-const xmpText = (chunk: Uint8Array): Option.Option<string> => {
+/** The text of an XMP `iTXt` chunk: stored, or zlib-compressed. */
+interface XmpChunk {
+  readonly compressed: boolean;
+  readonly text: Uint8Array;
+}
+
+/** The XMP of an `iTXt` chunk, when its keyword is XMP's. */
+const xmpChunk = (chunk: Uint8Array): Option.Option<XmpChunk> => {
   const keywordEnd = chunk.indexOf(0);
   if (keywordEnd < 0 || latin1(chunk.subarray(0, keywordEnd)) !== XMP_KEYWORD) {
     return Option.none();
   }
-  if (chunk[keywordEnd + 1] !== 0) return fail('Compressed XMP iTXt chunks are not supported');
+  const compressed = chunk[keywordEnd + 1] !== 0;
+  // Compression method 0 (zlib) is the only one PNG defines.
+  if (compressed && chunk[keywordEnd + 2] !== 0) return fail('Unknown iTXt compression method');
   const languageEnd = chunk.indexOf(0, keywordEnd + 3);
   const translatedEnd = languageEnd < 0 ? -1 : chunk.indexOf(0, languageEnd + 1);
   if (translatedEnd < 0) return fail('Malformed iTXt chunk');
-  return Option.some(utf8(chunk.subarray(translatedEnd + 1)));
+  return Option.some({ compressed, text: chunk.subarray(translatedEnd + 1) });
+};
+
+const pngXmpChunk = (bytes: Uint8Array): Option.Option<XmpChunk> => {
+  if (!startsWith(bytes, PNG_SIGNATURE)) return fail('Not a PNG file');
+  return Option.firstSomeOf(
+    Arr.map(
+      Arr.filter(pngChunks(bytes), (c) => c.type === 'iTXt'),
+      (c) => xmpChunk(c.data),
+    ),
+  );
 };
 
 /**
+ * The most bytes `Extract.png` inflates a compressed XMP chunk to by
+ * default: 4 MiB, far above any real packet, so a small deflate bomb fails
+ * instead of exhausting memory.
+ *
+ * @since 0.1.0
+ * @category constants
+ */
+export const DEFAULT_MAX_XMP_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Options for `Extract.png`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface PngOptions {
+  /**
+   * The most bytes a compressed `iTXt` chunk may inflate to; past it the
+   * read fails. Defaults to `DEFAULT_MAX_XMP_BYTES`.
+   */
+  readonly maxXmpBytes?: number | undefined;
+}
+
+const concatChunks = (chunks: ReadonlyArray<Uint8Array>, total: number): Uint8Array => {
+  const out = new Uint8Array(total);
+  Arr.reduce(chunks, 0, (offset, chunk) => {
+    out.set(chunk, offset);
+    return offset + chunk.length;
+  });
+  return out;
+};
+
+/**
+ * Reads a stream to its end, failing (and cancelling it) as soon as the
+ * running total passes `max`, so nothing past the cap is buffered.
+ */
+const readCapped = (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  max: number,
+  chunks: Array<Uint8Array>,
+  total: number,
+): Promise<Uint8Array> =>
+  reader.read().then((result) => {
+    if (result.done) return concatChunks(chunks, total);
+    const next = total + result.value.length;
+    if (next > max) {
+      void reader.cancel();
+      return fail(`Compressed XMP iTXt chunk inflates to more than ${max} bytes`);
+    }
+    chunks.push(result.value);
+    return readCapped(reader, max, chunks, next);
+  });
+
+/** Inflates zlib data with the platform's `DecompressionStream`, up to `max` bytes. */
+const inflate = (data: Uint8Array, max: number): Effect.Effect<Uint8Array, XmpExtractError> =>
+  Effect.tryPromise({
+    try: () => {
+      const source = new ReadableStream<BufferSource>({
+        start: (controller) => {
+          // A copy: `BufferSource` excludes a view over a `SharedArrayBuffer`.
+          controller.enqueue(data.slice());
+          controller.close();
+        },
+      });
+      return readCapped(
+        source.pipeThrough(new DecompressionStream('deflate')).getReader(),
+        max,
+        [],
+        0,
+      );
+    },
+    catch: (e) =>
+      e instanceof XmpExtractError
+        ? e
+        : new XmpExtractError({ message: 'Malformed compressed iTXt chunk' }),
+  });
+
+/**
  * Reads the XMP packet of a PNG file, returning a `Result`: `None` when the
- * file has no XMP. A compressed `iTXt` chunk fails (the XMP specification
- * writes them uncompressed, so a scanner can find the packet).
+ * file has no XMP. Decompression is asynchronous, so a compressed `iTXt`
+ * chunk fails here; `png` inflates it. (The XMP specification writes the
+ * chunk uncompressed, so a scanner can find the packet.)
  *
  * @since 0.1.0
  * @category extraction
@@ -218,21 +316,36 @@ const xmpText = (chunk: Uint8Array): Option.Option<string> => {
 export const pngResult = (
   bytes: Uint8Array,
 ): Result.Result<Option.Option<string>, XmpExtractError> =>
-  catchExtract(() => {
-    if (!startsWith(bytes, PNG_SIGNATURE)) return fail('Not a PNG file');
-    return Option.firstSomeOf(
-      Arr.map(
-        Arr.filter(pngChunks(bytes), (c) => c.type === 'iTXt'),
-        (c) => xmpText(c.data),
-      ),
-    );
-  });
+  catchExtract(() =>
+    Option.map(pngXmpChunk(bytes), (chunk) =>
+      chunk.compressed
+        ? fail('A compressed XMP iTXt chunk needs Extract.png, which inflates it')
+        : utf8(chunk.text),
+    ),
+  );
 
 /**
- * Reads the XMP packet of a PNG file: `None` when the file has no XMP.
+ * Reads the XMP packet of a PNG file: `None` when the file has no XMP. A
+ * zlib-compressed `iTXt` chunk is inflated with the platform's
+ * `DecompressionStream` (Node, browsers and Workers all provide it), and
+ * fails once it inflates past `maxXmpBytes` (default `DEFAULT_MAX_XMP_BYTES`).
  *
  * @since 0.1.0
  * @category extraction
  */
-export const png = (bytes: Uint8Array): Effect.Effect<Option.Option<string>, XmpExtractError> =>
-  Effect.suspend(() => Effect.fromResult(pngResult(bytes)));
+export const png = (
+  bytes: Uint8Array,
+  options?: PngOptions,
+): Effect.Effect<Option.Option<string>, XmpExtractError> =>
+  Effect.flatMap(
+    Effect.suspend(() => Effect.fromResult(catchExtract(() => pngXmpChunk(bytes)))),
+    Option.match({
+      onNone: () => Effect.succeed(Option.none()),
+      onSome: (chunk) =>
+        chunk.compressed
+          ? Effect.map(inflate(chunk.text, options?.maxXmpBytes ?? DEFAULT_MAX_XMP_BYTES), (text) =>
+              Option.some(utf8(text)),
+            )
+          : Effect.succeed(Option.some(utf8(chunk.text))),
+    }),
+  );

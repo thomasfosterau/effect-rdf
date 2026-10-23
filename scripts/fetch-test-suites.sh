@@ -20,4 +20,18 @@ fetch json-ld-framing w3c/json-ld-framing
 fetch data-shapes w3c/data-shapes
 fetch shexTest shexSpec/shexTest
 fetch N3 w3c/N3
+# veraPDF's PDF/A and PDF/UA corpus, for XMP (effect-xmp): only its metadata
+# sections, checked out sparsely (the whole corpus is several hundred MB).
+fetch_sparse() {
+  name="$1"
+  repo="$2"
+  shift 2
+  if [ ! -d "$DIR/$name/.git" ]; then
+    git clone -q --depth 1 --filter=blob:none --no-checkout "https://github.com/$repo" "$DIR/$name"
+  fi
+  git -C "$DIR/$name" sparse-checkout set --no-cone "$@"
+  git -C "$DIR/$name" checkout -q
+  git -C "$DIR/$name" pull -q --depth 1 || true
+}
+fetch_sparse veraPDF-corpus veraPDF/veraPDF-corpus '/*/*Metadata/' '/Isartor test files/*/*Metadata/'
 echo "Test suites available in $DIR"

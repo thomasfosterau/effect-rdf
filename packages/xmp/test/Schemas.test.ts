@@ -5,10 +5,13 @@ import { pipe } from 'effect/Function';
 import * as Option from 'effect/Option';
 import {
   DublinCore,
+  Exif,
   Metadata,
   Namespaces,
   Pdf,
   PdfA,
+  Photoshop,
+  Tiff,
   Xmp,
   XmpBasic,
   XmpMM,
@@ -216,6 +219,49 @@ describe('PdfA', () => {
       expect(text).toContain('xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#"');
       expect(PdfA.extensionSchemas(yield* Xmp.parseMetadata(text))).toEqual([schema]);
       expect(pipe(meta, PdfA.setExtensionSchemas([]))).toEqual(Metadata.empty);
+    }),
+  );
+});
+
+describe('Photoshop, Exif and Tiff', () => {
+  it.effect('round-trip their typed properties', () =>
+    Effect.gen(function* () {
+      const meta = pipe(
+        Metadata.empty,
+        Photoshop.setHeadline('Harbour at dawn'),
+        Photoshop.setCity('Hobart'),
+        Photoshop.setCountry('Australia'),
+        Photoshop.setCredit('Agency'),
+        Photoshop.setDateCreated(DateTime.makeUnsafe('2024-05-01T06:30:00Z')),
+        Photoshop.setSupplementalCategories(['boats', 'weather']),
+        Photoshop.setUrgency(3),
+        Exif.setDateTimeOriginal('2024-05-01T06:30:00+10:00'),
+        Exif.setUserComment('Taken from the pier'),
+        Exif.setPixelXDimension(4000),
+        Tiff.setMake('Canon'),
+        Tiff.setModel('EOS R5'),
+        Tiff.setOrientation(6),
+        Tiff.setCopyright('© Ada'),
+      );
+      const read = yield* roundTrip(meta);
+      expect(Photoshop.headline(read)).toEqual(Option.some('Harbour at dawn'));
+      expect(Photoshop.city(read)).toEqual(Option.some('Hobart'));
+      expect(Photoshop.country(read)).toEqual(Option.some('Australia'));
+      expect(Photoshop.credit(read)).toEqual(Option.some('Agency'));
+      expect(Photoshop.dateCreated(read)).toEqual(Option.some('2024-05-01T06:30:00.000Z'));
+      expect(Photoshop.supplementalCategories(read)).toEqual(Option.some(['boats', 'weather']));
+      expect(Photoshop.urgency(read)).toEqual(Option.some(3));
+      expect(Photoshop.state(read)).toEqual(Option.none());
+      expect(Exif.dateTimeOriginal(read)).toEqual(Option.some('2024-05-01T06:30:00+10:00'));
+      expect(Exif.userComment(read)).toEqual(Option.some('Taken from the pier'));
+      expect(Exif.pixelXDimension(read)).toEqual(Option.some(4000));
+      expect(Tiff.make(read)).toEqual(Option.some('Canon'));
+      expect(Tiff.model(read)).toEqual(Option.some('EOS R5'));
+      expect(Tiff.orientation(read)).toEqual(Option.some(6));
+      expect(Tiff.copyright(read)).toEqual(Option.some('© Ada'));
+      const text = yield* Xmp.serializeMetadata(meta);
+      expect(text).toContain(`xmlns:photoshop="${Namespaces.PHOTOSHOP}"`);
+      expect(text).toContain('<tiff:Make>Canon</tiff:Make>');
     }),
   );
 });
