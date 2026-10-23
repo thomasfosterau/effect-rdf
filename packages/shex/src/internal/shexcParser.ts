@@ -14,6 +14,7 @@
  *
  * @internal
  */
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
@@ -1125,7 +1126,7 @@ const statement: P<Statement | undefined> = select('a directive or shape declara
   [['ABSTRACT', 'BLANK_NODE_LABEL', ...IRI_KINDS], Parser.cut(shapeExprDecl)],
 ]);
 
-const document = Parser.compile(
+const document = Compiler.jit(
   Parser.terminated(
     Parser.seq(Parser.repeat(directive), optional(codeDecls), Parser.repeat(statement)),
     Parser.eof,

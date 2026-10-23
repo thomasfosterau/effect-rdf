@@ -9,7 +9,7 @@
  * delimiters removed. The parsers neither skip whitespace nor resolve IRIs;
  * a grammar adds its own whitespace (`skip` here, for Turtle) and resolves
  * prefixed names and relative IRIs, typically after parsing so that the
- * grammar itself can be compiled with `Parser.compile`.
+ * grammar itself can be compiled with `Compiler.jit`.
  *
  * @since 0.1.0
  */

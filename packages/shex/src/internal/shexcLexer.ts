@@ -8,6 +8,7 @@
  *
  * @internal
  */
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -255,7 +256,7 @@ const token: Parser.Parser<Partial> = Parser.dispatch(
   prefixedOrWord,
 );
 
-const lexer = Parser.compile(
+const lexer = Compiler.jit(
   Parser.seq(
     Parser.repeat(
       Parser.preceded(
