@@ -226,16 +226,82 @@ const pngXmpChunk = (bytes: Uint8Array): Option.Option<XmpChunk> => {
   );
 };
 
-/** Inflates zlib data with the platform's `DecompressionStream`. */
-const inflate = (data: Uint8Array): Effect.Effect<Uint8Array, XmpExtractError> =>
+/**
+ * The most bytes `Extract.png` inflates a compressed XMP chunk to by
+ * default: 4 MiB, far above any real packet, so a small deflate bomb fails
+ * instead of exhausting memory.
+ *
+ * @since 0.1.0
+ * @category constants
+ */
+export const DEFAULT_MAX_XMP_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Options for `Extract.png`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface PngOptions {
+  /**
+   * The most bytes a compressed `iTXt` chunk may inflate to; past it the
+   * read fails. Defaults to `DEFAULT_MAX_XMP_BYTES`.
+   */
+  readonly maxXmpBytes?: number | undefined;
+}
+
+const concatChunks = (chunks: ReadonlyArray<Uint8Array>, total: number): Uint8Array => {
+  const out = new Uint8Array(total);
+  Arr.reduce(chunks, 0, (offset, chunk) => {
+    out.set(chunk, offset);
+    return offset + chunk.length;
+  });
+  return out;
+};
+
+/**
+ * Reads a stream to its end, failing (and cancelling it) as soon as the
+ * running total passes `max`, so nothing past the cap is buffered.
+ */
+const readCapped = (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  max: number,
+  chunks: Array<Uint8Array>,
+  total: number,
+): Promise<Uint8Array> =>
+  reader.read().then((result) => {
+    if (result.done) return concatChunks(chunks, total);
+    const next = total + result.value.length;
+    if (next > max) {
+      void reader.cancel();
+      return fail(`Compressed XMP iTXt chunk inflates to more than ${max} bytes`);
+    }
+    chunks.push(result.value);
+    return readCapped(reader, max, chunks, next);
+  });
+
+/** Inflates zlib data with the platform's `DecompressionStream`, up to `max` bytes. */
+const inflate = (data: Uint8Array, max: number): Effect.Effect<Uint8Array, XmpExtractError> =>
   Effect.tryPromise({
-    try: async () =>
-      new Uint8Array(
-        await new Response(
-          new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate')),
-        ).arrayBuffer(),
-      ),
-    catch: () => new XmpExtractError({ message: 'Malformed compressed iTXt chunk' }),
+    try: () => {
+      const source = new ReadableStream<BufferSource>({
+        start: (controller) => {
+          // A copy: `BufferSource` excludes a view over a `SharedArrayBuffer`.
+          controller.enqueue(data.slice());
+          controller.close();
+        },
+      });
+      return readCapped(
+        source.pipeThrough(new DecompressionStream('deflate')).getReader(),
+        max,
+        [],
+        0,
+      );
+    },
+    catch: (e) =>
+      e instanceof XmpExtractError
+        ? e
+        : new XmpExtractError({ message: 'Malformed compressed iTXt chunk' }),
   });
 
 /**
@@ -261,19 +327,25 @@ export const pngResult = (
 /**
  * Reads the XMP packet of a PNG file: `None` when the file has no XMP. A
  * zlib-compressed `iTXt` chunk is inflated with the platform's
- * `DecompressionStream` (Node, browsers and Workers all provide it).
+ * `DecompressionStream` (Node, browsers and Workers all provide it), and
+ * fails once it inflates past `maxXmpBytes` (default `DEFAULT_MAX_XMP_BYTES`).
  *
  * @since 0.1.0
  * @category extraction
  */
-export const png = (bytes: Uint8Array): Effect.Effect<Option.Option<string>, XmpExtractError> =>
+export const png = (
+  bytes: Uint8Array,
+  options?: PngOptions,
+): Effect.Effect<Option.Option<string>, XmpExtractError> =>
   Effect.flatMap(
     Effect.suspend(() => Effect.fromResult(catchExtract(() => pngXmpChunk(bytes)))),
     Option.match({
       onNone: () => Effect.succeed(Option.none()),
       onSome: (chunk) =>
         chunk.compressed
-          ? Effect.map(inflate(chunk.text), (text) => Option.some(utf8(text)))
+          ? Effect.map(inflate(chunk.text, options?.maxXmpBytes ?? DEFAULT_MAX_XMP_BYTES), (text) =>
+              Option.some(utf8(text)),
+            )
           : Effect.succeed(Option.some(utf8(chunk.text))),
     }),
   );

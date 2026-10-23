@@ -185,6 +185,21 @@ describe('Extract.png', () => {
     }),
   );
 
+  it.effect('fails a compressed chunk that inflates past the cap', () =>
+    Effect.gen(function* () {
+      // 64 MiB of spaces deflates to about 64 KiB: a small deflate bomb.
+      const bomb = deflateSync(new Uint8Array(64 * 1024 * 1024).fill(0x20));
+      const png = concat(PNG_SIGNATURE, IHDR, itxt('XML:com.adobe.xmp', bomb, 1), IEND);
+      const error = yield* Effect.flip(Extract.png(png));
+      expect(error.message).toBe(
+        `Compressed XMP iTXt chunk inflates to more than ${Extract.DEFAULT_MAX_XMP_BYTES} bytes`,
+      );
+      const small = concat(PNG_SIGNATURE, itxt('XML:com.adobe.xmp', deflateSync(bytes(pdfA2b)), 1));
+      const capped = yield* Effect.flip(Extract.png(small, { maxXmpBytes: 100 }));
+      expect(capped.message).toBe('Compressed XMP iTXt chunk inflates to more than 100 bytes');
+    }),
+  );
+
   it('is None for a PNG without XMP', () => {
     expect(Extract.pngResult(concat(PNG_SIGNATURE, IHDR, IEND))).toEqual(
       Result.succeed(Option.none()),

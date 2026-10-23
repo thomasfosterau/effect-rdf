@@ -104,7 +104,7 @@ Extract.png(bytes); // Effect<Option<string>, XmpExtractError>
 `Packet.find` scans any file (TIFF, WebP, GIF, MP4, PDF, …) for a UTF-8, UTF-16 or UTF-32
 packet (either byte order) without parsing it. `Extract.jpeg` reads the APP1 packet and
 reassembles Extended XMP; `Extract.png` reads the `iTXt` chunk with the keyword
-`XML:com.adobe.xmp`, inflating a compressed one with the platform's `DecompressionStream`. Each
+`XML:com.adobe.xmp`, inflating a compressed one with the platform's `DecompressionStream` up to `maxXmpBytes` (4 MiB by default). Each
 has a synchronous `…Result` variant; `Extract.pngResult` fails on a compressed chunk, since
 inflating is asynchronous.
 
