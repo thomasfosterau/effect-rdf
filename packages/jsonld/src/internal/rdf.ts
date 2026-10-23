@@ -41,6 +41,7 @@ import {
   hasOwn,
 } from './util.ts';
 import { parseJson } from './json.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** @internal */
 export type RdfDirection = 'i18n-datatype' | 'compound-literal';
@@ -133,16 +134,16 @@ const objectToRdf = (
   if (datatype === '@json') {
     value = canonicalJson(value);
     datatype = RDF_JSON;
-  } else if (typeof value === 'boolean') {
+  } else if (Predicate.isBoolean(value)) {
     value = value ? 'true' : 'false';
     datatype ??= XSD_BOOLEAN;
   } else if (
-    typeof value === 'number' &&
+    Predicate.isNumber(value) &&
     (!Number.isInteger(value) || Math.abs(value) >= 1e21 || datatype === XSD_DOUBLE)
   ) {
     value = toDoubleString(value);
     datatype ??= XSD_DOUBLE;
-  } else if (typeof value === 'number') {
+  } else if (Predicate.isNumber(value)) {
     value = value.toFixed(0);
     datatype ??= XSD_INTEGER;
   } else if (datatype === null) {
@@ -291,7 +292,7 @@ export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Ar
         clReference['@value'] = clNode[RDF_VALUE]?.[0]?.['@value'];
         if (RDF_LANGUAGE in clNode) {
           const lang = clNode[RDF_LANGUAGE][0]['@value'];
-          if (typeof lang !== 'string' || !isWellFormedLanguage(lang)) {
+          if (!Predicate.isString(lang) || !isWellFormedLanguage(lang)) {
             fail('invalid language-tagged string');
           }
           clReference['@language'] = lang;

@@ -15,7 +15,7 @@ import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
-import { hasProperty } from 'effect/Predicate';
+import { hasProperty, isString } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
@@ -439,7 +439,7 @@ export const literal = (
     | { readonly language: string; readonly direction?: Direction | undefined },
 ): Literal => {
   if (languageOrDatatype === undefined) return new Literal(value, xsdString);
-  if (typeof languageOrDatatype === 'string') {
+  if (isString(languageOrDatatype)) {
     return new Literal(value, rdfLangString, languageOrDatatype.toLowerCase());
   }
   if ('language' in languageOrDatatype) {

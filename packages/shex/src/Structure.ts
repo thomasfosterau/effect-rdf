@@ -10,6 +10,7 @@
 import * as Effect from 'effect/Effect';
 import { ShExStructureError } from './ShExError.ts';
 import type * as ShExJ from './ShExJ.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * An index of the declarations of a schema.
@@ -54,7 +55,7 @@ const collectTripleExprs = (
   duplicates: Array<string>,
 ): void => {
   const visitShape = (e: ShExJ.ShapeExprOrRef): void => {
-    if (typeof e === 'string') return;
+    if (Predicate.isString(e)) return;
     if (e.type === 'Shape') {
       e.extends?.forEach(visitShape);
       if (e.expression !== undefined) visitTriple(e.expression);
@@ -63,7 +64,7 @@ const collectTripleExprs = (
     forEachShapeExprChild(e, visitShape);
   };
   const visitTriple = (t: ShExJ.TripleExprOrRef): void => {
-    if (typeof t === 'string') return;
+    if (Predicate.isString(t)) return;
     if (t.id !== undefined) {
       const existing = out.get(t.id);
       if (existing !== undefined && existing !== t) duplicates.push(t.id);
@@ -92,7 +93,7 @@ export const nestedShapes = (
   const out: Array<ShExJ.Shape> = [];
   const seen = new Set<string>();
   const go = (x: ShExJ.ShapeExprOrRef): void => {
-    if (typeof x === 'string') {
+    if (Predicate.isString(x)) {
       if (seen.has(x)) return;
       seen.add(x);
       const decl = shapes.get(x);
@@ -108,7 +109,7 @@ export const nestedShapes = (
 
 /** All shape labels referenced inside a shape expression (anywhere). */
 const refsOf = (e: ShExJ.ShapeExprOrRef, out: Array<string>): void => {
-  if (typeof e === 'string') {
+  if (Predicate.isString(e)) {
     out.push(e);
     return;
   }
@@ -234,7 +235,7 @@ export const problems = (
     isDirect: boolean,
     visitingIncludes: Set<string>,
   ): void => {
-    if (typeof e === 'string') {
+    if (Predicate.isString(e)) {
       checkRef(e);
       deps.get(from)!.push({ to: e, negative });
       if (isDirect) direct.get(from)!.push(e);
@@ -266,7 +267,7 @@ export const problems = (
     extra: ReadonlySet<string>,
     visitingIncludes: Set<string>,
   ): void => {
-    if (typeof t === 'string') {
+    if (Predicate.isString(t)) {
       checkInclude(t);
       const target = tripleExprs.get(t);
       if (target !== undefined && !visitingIncludes.has(t)) {

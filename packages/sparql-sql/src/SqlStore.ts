@@ -136,9 +136,9 @@ const chunks = <A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A
   return out;
 };
 
-const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v));
+const num = (v: unknown): number => (Predicate.isNumber(v) ? v : Number(v));
 const str = (v: unknown): string =>
-  typeof v === 'string' ? v : v === null || v === undefined ? '' : String(v as number);
+  Predicate.isString(v) ? v : v === null || v === undefined ? '' : String(v as number);
 
 const depth = (t: Term.GroundTerm): number =>
   t._tag === 'Triple'

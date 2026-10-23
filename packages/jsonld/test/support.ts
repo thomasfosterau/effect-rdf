@@ -11,6 +11,7 @@ import * as Schema from 'effect/Schema';
 import * as DocumentLoader from '../src/DocumentLoader.ts';
 import * as JsonLdError from '../src/JsonLdError.ts';
 import type { Json } from '../src/internal/util.ts';
+import * as Predicate from 'effect/Predicate';
 
 export type { Json };
 
@@ -123,8 +124,8 @@ export const jsonLdEqual = (a: Json, b: Json, key: string | null = null): boolea
     }
     return true;
   }
-  if (typeof a === 'object' && a !== null) {
-    if (typeof b !== 'object' || b === null || Array.isArray(b)) return false;
+  if (Predicate.isObject(a)) {
+    if (!Predicate.isObject(b)) return false;
     const ka = Object.keys(a);
     const kb = Object.keys(b);
     if (ka.length !== kb.length) return false;
@@ -132,7 +133,7 @@ export const jsonLdEqual = (a: Json, b: Json, key: string | null = null): boolea
       if (!(k in b)) return false;
       const va = a[k];
       const vb = b[k];
-      if (k === '@language' && typeof va === 'string' && typeof vb === 'string') {
+      if (k === '@language' && Predicate.isString(va) && Predicate.isString(vb)) {
         if (va.toLowerCase() !== vb.toLowerCase()) return false;
         continue;
       }

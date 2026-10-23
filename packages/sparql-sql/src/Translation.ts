@@ -41,6 +41,7 @@ import * as Expression from '@thomasfosterau/effect-sparql/Expression';
 import type * as Store from '@thomasfosterau/effect-sparql/Store';
 import type * as Dialect from './Dialect.ts';
 import * as Enc from './internal/encoding.ts';
+import * as Predicate from 'effect/Predicate';
 
 // -----------------------------------------------------------------------------
 // Models
@@ -448,8 +449,8 @@ class Compiler {
 
   lit(v: Static): string {
     if (v === null) return 'NULL';
-    if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-    if (typeof v === 'number') {
+    if (Predicate.isBoolean(v)) return v ? 'TRUE' : 'FALSE';
+    if (Predicate.isNumber(v)) {
       if (!Number.isFinite(v)) return 'NULL';
       return Number.isInteger(v) && Math.abs(v) < 1e15
         ? String(v)
@@ -766,7 +767,7 @@ class Compiler {
     return {
       items: [
         {
-          source: `(SELECT ${typeof select === 'string' ? select : select.join(', ')} FROM (VALUES ${rows.join(', ')}) AS ${a}_rows)`,
+          source: `(SELECT ${Predicate.isString(select) ? select : select.join(', ')} FROM (VALUES ${rows.join(', ')}) AS ${a}_rows)`,
           alias: a,
         },
       ],
@@ -1441,7 +1442,7 @@ class Compiler {
 
   clsIn(o: Operand, classes: ReadonlyArray<number>): C {
     const f = o.cls;
-    if (isStatic(f)) return typeof f.s === 'number' && classes.includes(f.s);
+    if (isStatic(f)) return Predicate.isNumber(f.s) && classes.includes(f.s);
     return classes.length === 1 ? `${f.q} = ${classes[0]}` : `${f.q} IN (${classes.join(', ')})`;
   }
 
@@ -1500,7 +1501,7 @@ class Compiler {
       if (c.tag !== 'const' || t.tag === 'const' || !isStatic(c.num) || !isStatic(c.cls)) return;
       const v = c.num.s;
       const cc = c.cls.s;
-      if (typeof v !== 'number') return;
+      if (!Predicate.isNumber(v)) return;
       const add = (cls: number, value: number) => {
         if (!Number.isFinite(value)) return;
         const cmp = flip

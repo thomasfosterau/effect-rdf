@@ -16,6 +16,7 @@ import * as Result from 'effect/Result';
 import * as S from 'effect/Schema';
 import { ShExJError } from './ShExError.ts';
 import * as Json from './internal/json.ts';
+import * as Predicate from 'effect/Predicate';
 
 // -----------------------------------------------------------------------------
 // Models
@@ -746,7 +747,7 @@ export const stringify = (schema: Schema, space: number | string = 2): string =>
 export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
   const label = (l: string) => (isBlankLabel(l) ? l : f(l));
   const objectValue = (v: ObjectValue): ObjectValue =>
-    typeof v === 'string' ? f(v) : v.type === undefined ? v : { ...v, type: f(v.type) };
+    Predicate.isString(v) ? f(v) : v.type === undefined ? v : { ...v, type: f(v.type) };
   const semActs = (acts: ReadonlyArray<SemAct> | undefined) =>
     acts?.map((a) => ({ ...a, name: f(a.name) }));
   const annotations = (as: ReadonlyArray<Annotation> | undefined) =>
@@ -762,7 +763,7 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
     return out;
   };
   const value = (v: ValueSetValue): ValueSetValue => {
-    if (typeof v === 'string') return f(v);
+    if (Predicate.isString(v)) return f(v);
     if ('value' in v) return objectValue(v);
     switch (v.type) {
       case 'IriStem':
@@ -770,9 +771,9 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
       case 'IriStemRange':
         return {
           ...v,
-          stem: typeof v.stem === 'string' ? f(v.stem) : v.stem,
+          stem: Predicate.isString(v.stem) ? f(v.stem) : v.stem,
           exclusions: v.exclusions.map((e) =>
-            typeof e === 'string' ? f(e) : { ...e, stem: f(e.stem) },
+            Predicate.isString(e) ? f(e) : { ...e, stem: f(e.stem) },
           ),
         };
       default:
@@ -780,7 +781,7 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
     }
   };
   const shapeExpr = (e: ShapeExprOrRef): ShapeExprOrRef => {
-    if (typeof e === 'string') return label(e);
+    if (Predicate.isString(e)) return label(e);
     switch (e.type) {
       case 'ShapeOr':
       case 'ShapeAnd':
@@ -805,7 +806,7 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
     }
   };
   const tripleExpr = (t: TripleExprOrRef): TripleExprOrRef => {
-    if (typeof t === 'string') return label(t);
+    if (Predicate.isString(t)) return label(t);
     const out: any = withMeta(t, t.semActs, t.annotations);
     if (t.id !== undefined) out.id = label(t.id);
     if (t.type === 'TripleConstraint') {
@@ -858,7 +859,7 @@ export const isBlankLabel = (label: Label): boolean => label.startsWith('_:');
  * @category guards
  */
 export const isObjectLiteral = (v: unknown): v is ObjectLiteral =>
-  typeof v === 'object' && v !== null && 'value' in v;
+  Predicate.hasProperty(v, 'value');
 
 /**
  * Inclusive repetition bounds of a triple expression; `max` may be

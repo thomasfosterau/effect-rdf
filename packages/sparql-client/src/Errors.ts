@@ -136,7 +136,7 @@ const TAGS = new Set([
  */
 export const isSparqlClientError = (u: unknown): u is SparqlClientError =>
   Predicate.isTagged(u, 'HttpStatusError') ||
-  (Predicate.hasProperty(u, '_tag') && typeof u._tag === 'string' && TAGS.has(u._tag));
+  (Predicate.hasProperty(u, '_tag') && Predicate.isString(u._tag) && TAGS.has(u._tag));
 
 /**
  * Whether an error is worth retrying: transport failures, timeouts, and the

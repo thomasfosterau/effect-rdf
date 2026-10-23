@@ -25,6 +25,7 @@
  * @since 0.1.0
  */
 import { Term } from '@thomasfosterau/effect-rdf';
+import * as Predicate from 'effect/Predicate';
 
 const placeholder = /\{[?$]([\p{L}\p{N}_\p{M}]+)\}/gu;
 
@@ -97,7 +98,7 @@ export const substitute = (
  * @category utils
  */
 export const localName = (iri: Term.NamedNode | string): string => {
-  const value = typeof iri === 'string' ? iri : iri.value;
+  const value = Predicate.isString(iri) ? iri : iri.value;
   const match = /[\p{L}\p{N}\p{M}_.-]*$/u.exec(value);
   // An NCName cannot start with a digit, `-` or `.`.
   return (match?.[0] ?? '').replace(/^[\p{N}\p{M}.-]+/u, '');

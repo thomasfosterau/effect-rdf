@@ -1,5 +1,6 @@
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Lexical from '../Lexical.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** @internal */
 export class SyntaxFailure extends Error {
@@ -267,7 +268,7 @@ export class LineParser {
       annotation = this.iri();
     }
     const literal = Lexical.makeLiteral(value, annotation);
-    if (typeof literal === 'string') this.fail(literal, start);
+    if (Predicate.isString(literal)) this.fail(literal, start);
     return literal;
   }
 }

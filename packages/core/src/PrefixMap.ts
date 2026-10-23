@@ -6,6 +6,7 @@
 import * as Option from 'effect/Option';
 import { NamedNode } from './Term.ts';
 import { commonPrefixes } from './Vocab.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * @since 0.1.0
@@ -97,7 +98,7 @@ export const compact = (
   self: PrefixMap,
   iri: string | NamedNode,
 ): Option.Option<readonly [string, string]> => {
-  const value = typeof iri === 'string' ? iri : iri.value;
+  const value = Predicate.isString(iri) ? iri : iri.value;
   let best: readonly [string, string] | undefined;
   let bestLength = -1;
   for (const [prefix, ns] of self.prefixes) {

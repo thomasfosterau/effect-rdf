@@ -17,6 +17,7 @@ import { RdfParseError } from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Tokens from './internal/tokens.ts';
+import * as Predicate from 'effect/Predicate';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
@@ -49,7 +50,7 @@ export type ShapeSelector = string | Start;
  * @since 0.1.0
  * @category guards
  */
-export const isStart = (s: ShapeSelector): s is Start => typeof s !== 'string';
+export const isStart = (s: ShapeSelector): s is Start => !Predicate.isString(s);
 
 /**
  * A triple pattern selecting focus nodes: exactly one of `subject` and

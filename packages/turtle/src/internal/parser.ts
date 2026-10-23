@@ -27,6 +27,7 @@ import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
 import * as Result from 'effect/Result';
 import * as Grammar from '../Grammar.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** @internal */
 export class SyntaxFailure extends Error {
@@ -511,7 +512,7 @@ const languageTag: P<Lexical.LanguageTag> = Parser.preceded(
 
 const literal = (annotation: Lexical.LanguageTag | Term.NamedNode | undefined): Term.Literal => {
   const literal = Lexical.makeLiteral(b.literalValue, annotation);
-  if (typeof literal === 'string') throw new Stop(literal, b.literalStart);
+  if (Predicate.isString(literal)) throw new Stop(literal, b.literalStart);
   return literal;
 };
 

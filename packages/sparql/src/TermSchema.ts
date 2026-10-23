@@ -27,6 +27,7 @@ import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
+import * as Predicate from 'effect/Predicate';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 
@@ -333,7 +334,7 @@ export const value: TermCodec<string | number | bigint | boolean | Date> = make(
  * @category schemas
  */
 export const typed = (datatype: string | Term.NamedNode): TermCodec<string> => {
-  const iri = typeof datatype === 'string' ? datatype : datatype.value;
+  const iri = Predicate.isString(datatype) ? datatype : datatype.value;
   return make(Schema.String, {
     expected: `a literal of type <${iri}>`,
     decode: (t) => (t._tag === 'Literal' && t.datatype.value === iri ? t.value : undefined),

@@ -101,14 +101,13 @@ export default defineConfig({
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
       'effect/imperative-loops': 'warn', // 899
-      'effect/avoid-direct-tag-checks': 'warn', // 722
+      'effect/avoid-direct-tag-checks': 'warn', // 721
       'effect/avoid-non-null-assertion': 'warn', // 640
       'effect/avoid-native-object-helpers': 'warn', // 544
-      'effect/require-safety-comment-for-type-assertion': 'warn', // 299
+      'effect/require-safety-comment-for-type-assertion': 'warn', // 296
       'effect/no-length-comparison': 'warn', // 261
       'effect/prefer-arr-match': 'warn', // 261
-      'effect/prefer-match-over-switch': 'warn', // 179
-      'effect/prefer-effect-is': 'warn', // 121
+      'effect/prefer-match-over-switch': 'warn', // 178
       'effect/yield-in-for-loop': 'warn', // 113
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
@@ -117,11 +116,6 @@ export default defineConfig({
       // `undefined` in a return type is still a finding to read (692 at
       // adoption, listed in the issue above).
       'effect/prefer-option-over-null': 'warn',
-      // `typeof` is how a JSON-LD / RDF/JSON / SPARQL-JSON processor reads
-      // the JSON value it is specified over (the algorithms branch on "is
-      // a string / number / boolean / map"); 122 at adoption, listed in the
-      // issue above.
-      'effect/no-runtime-typeof': 'warn',
       'typescript/no-explicit-any': 'off',
       'typescript/no-empty-object-type': 'off',
       'typescript/ban-ts-comment': 'off',

@@ -15,6 +15,7 @@
  * @since 0.1.0
  */
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Predicate from 'effect/Predicate';
 
 // -----------------------------------------------------------------------------
 // Terms
@@ -158,11 +159,7 @@ export interface PathNegated {
  * @category guards
  */
 export const isPath = (u: unknown): u is Path =>
-  typeof u === 'object' &&
-  u !== null &&
-  '_tag' in u &&
-  typeof u._tag === 'string' &&
-  u._tag.startsWith('Path');
+  Predicate.hasProperty(u, '_tag') && Predicate.isString(u._tag) && u._tag.startsWith('Path');
 
 // -----------------------------------------------------------------------------
 // Triple and quad patterns
@@ -900,17 +897,14 @@ export interface Update {
  * @category guards
  */
 export const isQuery = (u: unknown): u is Query =>
-  typeof u === 'object' &&
-  u !== null &&
-  '_tag' in u &&
+  Predicate.hasProperty(u, '_tag') &&
   (u._tag === 'Select' || u._tag === 'Construct' || u._tag === 'Ask' || u._tag === 'Describe');
 
 /**
  * @since 0.1.0
  * @category guards
  */
-export const isUpdate = (u: unknown): u is Update =>
-  typeof u === 'object' && u !== null && '_tag' in u && u._tag === 'Update';
+export const isUpdate = (u: unknown): u is Update => Predicate.isTagged(u, 'Update');
 
 // -----------------------------------------------------------------------------
 // Constructors

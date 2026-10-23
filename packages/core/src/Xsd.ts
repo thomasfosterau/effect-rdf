@@ -15,6 +15,7 @@ import {
   literal,
 } from './Term.ts';
 import { xsd } from './Vocab.ts';
+import * as Predicate from 'effect/Predicate';
 
 const XSD = xsd.base;
 
@@ -443,7 +444,7 @@ export const boolean = (value: boolean): Literal => new Literal(String(value), d
  */
 export const integer = (value: number | bigint): Literal =>
   new Literal(
-    typeof value === 'bigint' ? value.toString() : Math.trunc(value).toString(),
+    Predicate.isBigInt(value) ? value.toString() : Math.trunc(value).toString(),
     dts.integer,
   );
 
@@ -456,7 +457,7 @@ export const decimal = (value: BigDecimal.BigDecimal | number | string): Literal
     canonicalDecimal(
       BigDecimal.isBigDecimal(value)
         ? value
-        : typeof value === 'number'
+        : Predicate.isNumber(value)
           ? BigDecimal.fromNumberUnsafe(value)
           : BigDecimal.fromStringUnsafe(value),
     ),
@@ -512,18 +513,11 @@ export const typed = (value: string, datatype: NamedNode): Literal => new Litera
  * @category constructors
  */
 export const fromJs = (value: string | number | bigint | boolean | Date): Literal => {
-  switch (typeof value) {
-    case 'string':
-      return string(value);
-    case 'boolean':
-      return boolean(value);
-    case 'bigint':
-      return integer(value);
-    case 'number':
-      return Number.isInteger(value) ? integer(value) : double(value);
-    default:
-      return dateTime(value);
-  }
+  if (Predicate.isString(value)) return string(value);
+  if (Predicate.isBoolean(value)) return boolean(value);
+  if (Predicate.isBigInt(value)) return integer(value);
+  if (Predicate.isNumber(value)) return Number.isInteger(value) ? integer(value) : double(value);
+  return dateTime(value);
 };
 
 /**

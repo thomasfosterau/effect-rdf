@@ -13,6 +13,7 @@ import type * as ShExJ from '../src/ShExJ.ts';
 import * as Validator from '../src/Validator.ts';
 import { exists, hasShexTest, readJson, readText, suiteBase } from './utils/suite.ts';
 import { parseTurtle } from './utils/turtle.ts';
+import * as Predicate from 'effect/Predicate';
 
 interface Entry {
   readonly name: string;
@@ -124,7 +125,7 @@ describe.skipIf(!hasShexTest)('shexTest validation', () => {
       const expectedPrints = entry['tst:parms']?.prints;
       if (expectedPrints !== undefined && entry.status === 'conformant') {
         const expected = Arr.sort(
-          expectedPrints.map((p) => (typeof p === 'string' ? p : p.line)),
+          expectedPrints.map((p) => (Predicate.isString(p) ? p : p.line)),
           Order.String,
         );
         assert.deepStrictEqual(Arr.sort(exit.value.prints, Order.String), expected);

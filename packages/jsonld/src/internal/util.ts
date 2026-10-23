@@ -5,6 +5,7 @@ import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as JsonLdError from '../JsonLdError.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** @internal */
 export type Json = any;
@@ -128,31 +129,30 @@ export const getOrInit = (o: JsonObject, k: string, init: () => Json): Json => {
 };
 
 /** @internal */
-export const isKeyword = (v: Json): boolean => typeof v === 'string' && KEYWORDS.has(v);
+export const isKeyword = (v: Json): boolean => Predicate.isString(v) && KEYWORDS.has(v);
 
 /** @internal */
 export const hasKeywordForm = (v: string): boolean => /^@[a-zA-Z]+$/.test(v);
 
 /** @internal */
-export const isObject = (v: unknown): v is JsonObject =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
+export const isObject = (v: unknown): v is JsonObject => Predicate.isObject(v);
 
 /** @internal */
 export const isEmptyObject = (v: Json): boolean => isObject(v) && Object.keys(v).length === 0;
 
 /** @internal */
-export const isString = (v: unknown): v is string => typeof v === 'string';
+export const isString = (v: unknown): v is string => Predicate.isString(v);
 
 /** @internal */
 export const isScalar = (v: unknown): v is string | number | boolean =>
-  typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+  Predicate.isString(v) || Predicate.isNumber(v) || Predicate.isBoolean(v);
 
 /** @internal */
 export const asArray = (v: Json): Array<Json> => (Array.isArray(v) ? v : [v]);
 
 /** @internal */
 export const isBlankNodeId = (v: unknown): v is string =>
-  typeof v === 'string' && v.startsWith('_:');
+  Predicate.isString(v) && v.startsWith('_:');
 
 /** @internal */
 export const isAbsoluteIri = (v: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]*$/.test(v);
@@ -247,7 +247,7 @@ export const clone = <A>(v: A): A => (v === undefined ? v : structuredClone(v));
  * @internal
  */
 export const canonicalJson = (v: Json): string => {
-  if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
+  if (v === null || Predicate.isBoolean(v) || Predicate.isNumber(v) || Predicate.isString(v)) {
     return stringifyJson(v);
   }
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;

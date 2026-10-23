@@ -22,6 +22,7 @@ import * as Result from 'effect/Result';
 import type * as ShExJ from '../ShExJ.ts';
 import { quote } from './lexer.ts';
 import { resolve, type Tok, tokenize } from './shexcLexer.ts';
+import * as Predicate from 'effect/Predicate';
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
@@ -202,7 +203,7 @@ const junction = (
 ): AnyShapeExpr => {
   if (juncts.length === 0) return atom.e;
   const e = atom.e;
-  if (typeof e === 'object' && e.type === type && !atom.nested) {
+  if (!Predicate.isString(e) && e.type === type && !atom.nested) {
     return { ...e, shapeExprs: (e as ShExJ.ShapeAnd).shapeExprs.concat(juncts) };
   }
   return { type, shapeExprs: [e, ...juncts] };
@@ -231,7 +232,7 @@ const prependAtom = (atom: Atom, rest: Rest | undefined): AnyShapeExpr => {
   if (rest === undefined) return atom.e;
   const e = atom.e;
   if (
-    typeof e === 'object' &&
+    !Predicate.isString(e) &&
     e.type === 'ShapeAnd' &&
     rest._tag === 'And' &&
     rest.ors.length === 0 &&
@@ -791,7 +792,7 @@ const shapeOrRest: P<Rest> = select("'AND' or 'OR'", [
       Parser.map(([conjuncts, ors]): Rest => {
         const ands: Array<AnyShapeExpr> = [];
         for (const c of conjuncts) {
-          if (typeof c.e === 'object' && c.e.type === 'ShapeAnd' && !c.nested) {
+          if (!Predicate.isString(c.e) && c.e.type === 'ShapeAnd' && !c.nested) {
             ands.push(...c.e.shapeExprs);
           } else ands.push(c.e);
         }
@@ -953,7 +954,7 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
     if (card === undefined && annotations.length === 0 && semActs === undefined) {
       return Result.succeed(expr);
     }
-    if (typeof expr === 'string') {
+    if (Predicate.isString(expr)) {
       return failAt<ShExJ.TripleExprOrRef>(
         `a group containing only the inclusion &<${expr}> can't take a cardinality, an annotation or a semantic action`,
         at,
@@ -995,7 +996,7 @@ const unaryTripleExpr: P<ShExJ.TripleExprOrRef> = select('a triple expression', 
       Parser.cut(bracketedOrConstraint),
     ).pipe(
       Parser.tryMap(([[at, id], expr]) => {
-        if (typeof expr === 'string') {
+        if (Predicate.isString(expr)) {
           return failAt<ShExJ.TripleExprOrRef>(
             `a group containing only the inclusion &<${expr}> can't take a label`,
             at,
@@ -1143,7 +1144,7 @@ const document = Compiler.jit(
  */
 const eachLabelled = (e: AnyShapeExpr, f: (t: ShExJ.TripleExpr) => void): void => {
   const shape = (s: AnyShapeExpr): void => {
-    if (typeof s === 'string') return;
+    if (Predicate.isString(s)) return;
     switch (s.type) {
       case 'ShapeOr':
       case 'ShapeAnd':
@@ -1161,7 +1162,7 @@ const eachLabelled = (e: AnyShapeExpr, f: (t: ShExJ.TripleExpr) => void): void =
     }
   };
   const triple = (t: ShExJ.TripleExprOrRef): void => {
-    if (typeof t === 'string') return;
+    if (Predicate.isString(t)) return;
     if (t.type === 'TripleConstraint') {
       if (t.valueExpr !== undefined) shape(t.valueExpr);
     } else t.expressions.forEach(triple);
