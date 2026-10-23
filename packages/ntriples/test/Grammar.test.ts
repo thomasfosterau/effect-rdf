@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Result from 'effect/Result';
@@ -19,7 +20,7 @@ describe('Grammar', () => {
     ];
     const mismatches: Array<string> = [];
     for (const [set, predicate] of sets) {
-      const one = Parser.compile(Token.oneOf(set));
+      const one = Compiler.jit(Token.oneOf(set));
       for (let c = 0; c <= 0x10ffff; c += c < 0x10000 ? 1 : 97) {
         if (c >= 0xd800 && c <= 0xdfff) continue;
         if (Result.isSuccess(Parser.parse(one, String.fromCodePoint(c))) !== predicate(c)) {

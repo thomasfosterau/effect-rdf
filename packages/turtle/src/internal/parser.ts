@@ -18,6 +18,7 @@
  * @internal
  */
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -1018,7 +1019,7 @@ const startRun: P<void> = Parser.make<void, never, never, string>((state) => {
 });
 
 const statements = (statement: P<unknown>): P<number> =>
-  Parser.compile(
+  Compiler.jit(
     Parser.preceded(
       startRun,
       Parser.preceded(

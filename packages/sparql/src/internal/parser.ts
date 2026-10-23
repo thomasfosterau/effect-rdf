@@ -13,8 +13,10 @@
  *
  * @internal
  */
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Result from 'effect/Result';
 import * as Ast from '../Ast.ts';
@@ -226,16 +228,13 @@ const unexpectedAt = (t: Tok | undefined, expected?: string): never =>
 const unexpectedHere = <A = never>(expected?: string): P<A> =>
   hook((t): A => unexpectedAt(t, expected));
 
-/** A token of the given kind (see `Tok.kind`). */
-const tok = (kind: string): P<Tok> => {
-  const expected = [`'${kind}'`];
-  return Parser.make<Tok, Failure, never, ReadonlyArray<Tok>>((state) => {
-    const t = state.input[state.pos];
-    if (t === undefined || t.kind !== kind) return state.backtrack('Token', expected);
-    state.pos++;
-    return t;
-  });
-};
+/**
+ * A token of the given kind (see `Tok.kind`). A token set rather than a
+ * `Parser.make` hook, so the compiler inlines the match instead of calling
+ * back into an interpreted step.
+ */
+const tok = (kind: string): P<Tok> =>
+  Token.oneOf<ReadonlyArray<Tok>>((t) => t.kind === kind).pipe(Parser.expected(`'${kind}'`));
 
 /** `kind`, or the "Unexpected …, expected …" error. */
 const expect = (
@@ -1788,7 +1787,7 @@ const checked =
       return a;
     });
 
-const queryUnit = Parser.compile(
+const queryUnit = Compiler.jit(
   Parser.preceded(
     Parser.seq(start, prologueDecls),
     Parser.seq(
@@ -2047,7 +2046,7 @@ const update1Indexed: P<Ast.UpdateOperation> = Parser.terminated(
   }),
 );
 
-const updateUnit = Parser.compile(
+const updateUnit = Compiler.jit(
   Parser.preceded(
     Parser.seq(start, prologueDecls),
     Parser.terminated(

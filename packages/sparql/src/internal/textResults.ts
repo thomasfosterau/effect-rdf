@@ -6,6 +6,7 @@
  * @internal
  */
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -178,9 +179,7 @@ const term: Parser.Parser<Term.GroundTerm> = Parser.preceded(
  * A complete term, with optional surrounding whitespace: IRIs in `<>`,
  * blank nodes, quoted literals, numbers, booleans and triple terms.
  */
-export const groundTerm: Parser.Parser<Term.GroundTerm> = Parser.compile(
-  Parser.terminated(term, ws),
-);
+export const groundTerm: Parser.Parser<Term.GroundTerm> = Compiler.jit(Parser.terminated(term, ws));
 
 // -----------------------------------------------------------------------------
 // CSV
@@ -212,7 +211,7 @@ const csvLineEnding = Parser.alt(Token.literal('\r\n'), Token.literal('\r'), Tok
  * The rows of a CSV document. Lines end with CRLF, CR or LF, and the line
  * ending of the last row is optional.
  */
-export const csvRows: Parser.Parser<Array<Array<CsvField>>> = Parser.compile(
+export const csvRows: Parser.Parser<Array<Array<CsvField>>> = Compiler.jit(
   Parser.repeat(
     Parser.preceded(
       Parser.not(Parser.eof),

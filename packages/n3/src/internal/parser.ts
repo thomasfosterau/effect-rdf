@@ -16,6 +16,7 @@
  * @internal
  */
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
@@ -547,7 +548,7 @@ const statements = (inFormula: boolean): P<ReadonlyArray<Statement>> =>
 const formulaStatements = statements(true);
 const documentStatements = statements(false);
 
-const document = Parser.compile(
+const document = Compiler.jit(
   Parser.terminated(documentStatements, Parser.preceded(ws, Parser.eof)),
 );
 

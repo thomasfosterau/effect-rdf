@@ -21,6 +21,7 @@
  *
  * @internal
  */
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Result from 'effect/Result';
@@ -965,7 +966,7 @@ const prologOrEpilog = (node: Xml.Comment | Xml.ProcessingInstruction): void => 
   (x.root === undefined ? x.prolog : x.epilog).push(node);
 };
 
-const document: P<unknown> = Parser.compile(
+const document: P<unknown> = Compiler.jit(
   Parser.asVoid(
     Parser.seq(
       Parser.opt(xmlDecl),

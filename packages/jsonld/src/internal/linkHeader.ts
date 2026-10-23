@@ -6,6 +6,7 @@
  * @internal
  */
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 
@@ -48,7 +49,7 @@ const linkValue = Parser.delimited(
   Parser.seq(ows, Parser.opt(Token.literal(','))),
 ).pipe(Parser.map(([target, params]): Link => ({ target, params })));
 
-const links = Parser.compile(Parser.repeat(linkValue));
+const links = Compiler.jit(Parser.repeat(linkValue));
 
 /** The links of a header value (up to the first that cannot be read). */
 export const parse = (value: string): ReadonlyArray<Link> => {
