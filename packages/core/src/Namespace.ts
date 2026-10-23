@@ -14,6 +14,7 @@
  * @since 0.1.0
  */
 import { NamedNode } from './Term.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * A function that mints IRIs within a namespace.
@@ -46,13 +47,13 @@ export const make = <const Base extends string>(base: Base): Namespace<Base> => 
     return node;
   }) as Namespace<Base>;
   const contains = (iri: string | NamedNode) =>
-    (typeof iri === 'string' ? iri : iri.value).startsWith(base);
+    (Predicate.isString(iri) ? iri : iri.value).startsWith(base);
   return Object.assign(ns, {
     base,
     node: new NamedNode(base),
     contains,
     localName: (iri: string | NamedNode) => {
-      const value = typeof iri === 'string' ? iri : iri.value;
+      const value = Predicate.isString(iri) ? iri : iri.value;
       return value.startsWith(base) ? value.slice(base.length) : undefined;
     },
   });

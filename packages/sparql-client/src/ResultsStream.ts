@@ -146,7 +146,7 @@ export const json = (): Incremental => {
         return;
       }
       case 'boolean':
-        if (typeof value !== 'boolean') return fail('json', '"boolean" must be true or false');
+        if (!Predicate.isBoolean(value)) return fail('json', '"boolean" must be true or false');
         sawBody = true;
         out.push({ _tag: 'Boolean', value });
         return;

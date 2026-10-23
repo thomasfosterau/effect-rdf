@@ -27,6 +27,7 @@ import * as Parser from './Parser.ts';
 import type * as Results from './Results.ts';
 import * as Store from './Store.ts';
 import * as Translate from './Translate.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * Any error produced by the engine.
@@ -266,7 +267,7 @@ export const make = (
   };
 
   const parseQuery = (query: string | Ast.Query, request: RequestOptions | undefined) =>
-    typeof query === 'string'
+    Predicate.isString(query)
       ? Parser.parseQuery(query, {
           baseIri: request?.baseIri ?? options.baseIri,
           prefixes: request?.prefixes,
@@ -564,13 +565,12 @@ export const make = (
 
   const update: SparqlEngineShape['update'] = (u, request) =>
     Effect.gen(function* () {
-      const ast =
-        typeof u === 'string'
-          ? yield* Parser.parseUpdate(u, {
-              baseIri: request?.baseIri ?? options.baseIri,
-              prefixes: request?.prefixes,
-            })
-          : u;
+      const ast = Predicate.isString(u)
+        ? yield* Parser.parseUpdate(u, {
+            baseIri: request?.baseIri ?? options.baseIri,
+            prefixes: request?.prefixes,
+          })
+        : u;
       const baseIri = ast.prologue.base ?? request?.baseIri ?? options.baseIri;
       yield* store.transaction(
         Effect.forEach(ast.operations, (op) => executeOperation(op, baseIri, request), {

@@ -21,6 +21,7 @@ import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as LinkHeader from './internal/linkHeader.ts';
 import { parseJson } from './internal/json.ts';
 import * as JsonLdError from './JsonLdError.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * A loaded document (the `RemoteDocument` interface of the JSON-LD API).
@@ -112,7 +113,7 @@ export interface Link {
  * @category utils
  */
 export const parseLinkHeader = (header: string | ReadonlyArray<string>): ReadonlyArray<Link> =>
-  (typeof header === 'string' ? [header] : header).flatMap(LinkHeader.parse);
+  (Predicate.isString(header) ? [header] : header).flatMap(LinkHeader.parse);
 
 const mediaTypeOf = (contentType: string | undefined): string | undefined =>
   contentType === undefined ? undefined : contentType.split(';')[0]!.trim().toLowerCase();
@@ -367,7 +368,7 @@ export const makeStatic = (
         if (!map.has(key)) return Effect.fail(loadingFailed(url, 'not found'));
         const value = map.get(key);
         if (isRemoteDocument(value)) return Effect.succeed(value);
-        if (typeof value === 'string') {
+        if (Predicate.isString(value)) {
           return Result.match(parseJson(value), {
             onFailure: (e) => Effect.fail(loadingFailed(url, `invalid JSON: ${String(e)}`)),
             onSuccess: (document) =>
@@ -384,11 +385,9 @@ export const makeStatic = (
 };
 
 const isRemoteDocument = (u: unknown): u is RemoteDocument =>
-  typeof u === 'object' &&
-  u !== null &&
-  'documentUrl' in u &&
-  'document' in u &&
-  typeof (u as RemoteDocument).documentUrl === 'string';
+  Predicate.hasProperty(u, 'documentUrl') &&
+  Predicate.hasProperty(u, 'document') &&
+  Predicate.isString(u.documentUrl);
 
 /**
  * A loader that fails for every URL (no remote loading).

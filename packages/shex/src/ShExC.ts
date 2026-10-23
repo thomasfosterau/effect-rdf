@@ -12,6 +12,7 @@ import { RdfParseError } from '@thomasfosterau/effect-rdf/Serialization';
 import { lineColumn } from './internal/lexer.ts';
 import { parseShExC } from './internal/shexcParser.ts';
 import type * as ShExJ from './ShExJ.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * @since 0.1.0
@@ -179,7 +180,7 @@ class Printer {
   }
 
   objectValue(v: ShExJ.ObjectValue): string {
-    return typeof v === 'string' ? this.iri(v) : this.literal(v);
+    return Predicate.isString(v) ? this.iri(v) : this.literal(v);
   }
 
   semActs(acts: ReadonlyArray<ShExJ.SemAct> | undefined): string {
@@ -209,8 +210,8 @@ class Printer {
   }
 
   valueSetValue(v: ShExJ.ValueSetValue): string {
-    if (typeof v === 'string') return this.iri(v);
-    if (!('type' in v) || typeof v.type !== 'string' || 'value' in v) {
+    if (Predicate.isString(v)) return this.iri(v);
+    if (!('type' in v) || !Predicate.isString(v.type) || 'value' in v) {
       return this.literal(v as ShExJ.ObjectLiteral);
     }
     const lit = (s: string) => `"${escapeString(s)}"`;
@@ -224,16 +225,16 @@ class Printer {
       case 'LanguageStem':
         return v.stem === '' ? '@~' : `@${v.stem}~`;
       case 'IriStemRange':
-        return `${typeof v.stem === 'string' ? `${this.iri(v.stem)}~` : '.'}${v.exclusions
-          .map((e) => ` - ${typeof e === 'string' ? this.iri(e) : `${this.iri(e.stem)}~`}`)
+        return `${Predicate.isString(v.stem) ? `${this.iri(v.stem)}~` : '.'}${v.exclusions
+          .map((e) => ` - ${Predicate.isString(e) ? this.iri(e) : `${this.iri(e.stem)}~`}`)
           .join('')}`;
       case 'LiteralStemRange':
-        return `${typeof v.stem === 'string' ? `${lit(v.stem)}~` : '.'}${v.exclusions
-          .map((e) => ` - ${typeof e === 'string' ? lit(e) : `${lit(e.stem)}~`}`)
+        return `${Predicate.isString(v.stem) ? `${lit(v.stem)}~` : '.'}${v.exclusions
+          .map((e) => ` - ${Predicate.isString(e) ? lit(e) : `${lit(e.stem)}~`}`)
           .join('')}`;
       case 'LanguageStemRange':
-        return `${typeof v.stem === 'string' ? (v.stem === '' ? '@~' : `@${v.stem}~`) : '.'}${v.exclusions
-          .map((e) => ` - @${typeof e === 'string' ? e : `${e.stem}~`}`)
+        return `${Predicate.isString(v.stem) ? (v.stem === '' ? '@~' : `@${v.stem}~`) : '.'}${v.exclusions
+          .map((e) => ` - @${Predicate.isString(e) ? e : `${e.stem}~`}`)
           .join('')}`;
       default:
         return '';
@@ -265,7 +266,7 @@ class Printer {
    * actions at the top level, which are then wrapped in parentheses.
    */
   shapeExpr(e: ShExJ.ShapeExprOrRef, indent: string, inline: boolean): string {
-    if (typeof e === 'string') return `@${this.label(e)}`;
+    if (Predicate.isString(e)) return `@${this.label(e)}`;
     switch (e.type) {
       case 'ShapeOr':
         return e.shapeExprs.map((s) => this.junct(s, indent, 'ShapeOr')).join(' OR ');
@@ -287,7 +288,7 @@ class Printer {
   }
 
   junct(e: ShExJ.ShapeExprOrRef, indent: string, parent: string): string {
-    if (typeof e === 'string') return `@${this.label(e)}`;
+    if (Predicate.isString(e)) return `@${this.label(e)}`;
     const needsParens =
       e.type === 'ShapeOr' ||
       (e.type === 'ShapeAnd' && parent !== 'ShapeOr') ||
@@ -312,7 +313,7 @@ class Printer {
   }
 
   tripleExpr(t: ShExJ.TripleExprOrRef, indent: string, nested: boolean): string {
-    if (typeof t === 'string') return `&${this.label(t)}`;
+    if (Predicate.isString(t)) return `&${this.label(t)}`;
     const id = t.id !== undefined ? `$${this.label(t.id)} ` : '';
     switch (t.type) {
       case 'TripleConstraint': {
@@ -324,7 +325,7 @@ class Printer {
         const sep = t.type === 'EachOf' ? ` ;\n${indent}` : `\n${indent}| `;
         const inner = indent + this.unit;
         const items = t.expressions.map((e) =>
-          this.tripleExpr(e, inner, typeof e !== 'string' && e.type !== 'TripleConstraint'),
+          this.tripleExpr(e, inner, !Predicate.isString(e) && e.type !== 'TripleConstraint'),
         );
         const decorated =
           id !== '' ||
@@ -352,9 +353,9 @@ class Printer {
         .map((r) => ` RESTRICTS ${this.junct(r, '', 'ShapeNot')}`)
         .join('');
       const body =
-        typeof decl.shapeExpr === 'object' && decl.shapeExpr.type === 'ShapeExternal'
+        !Predicate.isString(decl.shapeExpr) && decl.shapeExpr.type === 'ShapeExternal'
           ? 'EXTERNAL'
-          : typeof decl.shapeExpr === 'string'
+          : Predicate.isString(decl.shapeExpr)
             ? `@${this.label(decl.shapeExpr)}`
             : this.shapeExpr(decl.shapeExpr, '', false);
       out.push(`${head}${restricts} ${body}`);

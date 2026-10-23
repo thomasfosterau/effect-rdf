@@ -37,6 +37,7 @@ import { cleanupNull, frame as frameAlgorithm } from './internal/frame.ts';
 import * as Rdf from './internal/rdf.ts';
 import { type Json, type JsonObject, fail, isObject, isString } from './internal/util.ts';
 import { parseJson } from './internal/json.ts';
+import * as Predicate from 'effect/Predicate';
 
 /**
  * Any JSON value.
@@ -228,7 +229,7 @@ interface ResolvedInput {
 }
 
 const isRemoteDocument = (u: unknown): u is DocumentLoader.RemoteDocument =>
-  isObject(u) && typeof u['documentUrl'] === 'string' && 'document' in u;
+  isObject(u) && Predicate.isString(u['documentUrl']) && 'document' in u;
 
 const resolveInput = (
   input: Input,

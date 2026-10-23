@@ -175,7 +175,7 @@ const literalEquals = (n: Term.Literal, v: ShExJ.ObjectLiteral): boolean => {
  * @internal
  */
 export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
-  if (typeof v === 'string') return n._tag === 'NamedNode' && n.value === v;
+  if (Predicate.isString(v)) return n._tag === 'NamedNode' && n.value === v;
   if (!('type' in v) || 'value' in v) {
     return n._tag === 'Literal' && literalEquals(n, v as ShExJ.ObjectLiteral);
   }
@@ -184,18 +184,18 @@ export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
       return n._tag === 'NamedNode' && n.value.startsWith(v.stem);
     case 'IriStemRange': {
       if (n._tag !== 'NamedNode') return false;
-      if (typeof v.stem === 'string' && !n.value.startsWith(v.stem)) return false;
+      if (Predicate.isString(v.stem) && !n.value.startsWith(v.stem)) return false;
       return !v.exclusions.some((e) =>
-        typeof e === 'string' ? n.value === e : n.value.startsWith(e.stem),
+        Predicate.isString(e) ? n.value === e : n.value.startsWith(e.stem),
       );
     }
     case 'LiteralStem':
       return n._tag === 'Literal' && n.value.startsWith(v.stem);
     case 'LiteralStemRange': {
       if (n._tag !== 'Literal') return false;
-      if (typeof v.stem === 'string' && !n.value.startsWith(v.stem)) return false;
+      if (Predicate.isString(v.stem) && !n.value.startsWith(v.stem)) return false;
       return !v.exclusions.some((e) =>
-        typeof e === 'string' ? n.value === e : n.value.startsWith(e.stem),
+        Predicate.isString(e) ? n.value === e : n.value.startsWith(e.stem),
       );
     }
     case 'Language':
@@ -204,9 +204,9 @@ export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
       return n._tag === 'Literal' && n.language !== '' && languageMatches(n.language, v.stem);
     case 'LanguageStemRange': {
       if (n._tag !== 'Literal' || n.language === '') return false;
-      if (typeof v.stem === 'string' && !languageMatches(n.language, v.stem)) return false;
+      if (Predicate.isString(v.stem) && !languageMatches(n.language, v.stem)) return false;
       return !v.exclusions.some((e) =>
-        typeof e === 'string' ? lowerEq(n.language, e) : languageMatches(n.language, e.stem),
+        Predicate.isString(e) ? lowerEq(n.language, e) : languageMatches(n.language, e.stem),
       );
     }
     default:

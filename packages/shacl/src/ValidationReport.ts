@@ -11,6 +11,7 @@ import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Path from './Path.ts';
 import { sh } from './Vocabulary.ts';
+import * as Predicate from 'effect/Predicate';
 
 const { rdf, xsd } = Vocab;
 
@@ -100,7 +101,7 @@ export const make = (results: ReadonlyArray<ValidationResult>): ValidationReport
  * @category guards
  */
 export const isValidationReport = (u: unknown): u is ValidationReport =>
-  typeof u === 'object' && u !== null && (u as { _tag?: unknown })._tag === 'ValidationReport';
+  Predicate.isTagged(u, 'ValidationReport');
 
 /**
  * @since 0.1.0
@@ -320,7 +321,7 @@ export const fromDataset = (
     const details: Array<ValidationResult> = [];
     for (const d of Dataset.objectsOf(dataset, r, sh.detail)) {
       const detail = readResult(d, depth + 1);
-      if (typeof detail === 'string') return detail;
+      if (Predicate.isString(detail)) return detail;
       details.push(detail);
     }
     return makeResult({
@@ -341,7 +342,7 @@ export const fromDataset = (
   const results: Array<ValidationResult> = [];
   for (const r of Dataset.objectsOf(dataset, node, sh.result)) {
     const result = readResult(r, 0);
-    if (typeof result === 'string') return err(result);
+    if (Predicate.isString(result)) return err(result);
     results.push(result);
   }
   return Result.succeed({

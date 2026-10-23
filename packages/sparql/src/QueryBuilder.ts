@@ -33,6 +33,7 @@ import * as Ast from './Ast.ts';
 import * as B from './Bindings.ts';
 import * as Engine from './Engine.ts';
 import * as Generator from './Generator.ts';
+import * as Predicate from 'effect/Predicate';
 
 // -----------------------------------------------------------------------------
 // Inputs
@@ -74,6 +75,13 @@ export type PatternInput =
   | Ast.Pattern
   | ReadonlyArray<PatternInput>;
 
+const isJsValue = <A>(u: A | JsValue): u is JsValue =>
+  Predicate.isString(u) ||
+  Predicate.isNumber(u) ||
+  Predicate.isBigInt(u) ||
+  Predicate.isBoolean(u) ||
+  Predicate.isDate(u);
+
 const isTerm = <T extends Term.Term>(u: T | JsValue): u is T => Term.isTerm(u);
 
 /**
@@ -84,7 +92,7 @@ const isTerm = <T extends Term.Term>(u: T | JsValue): u is T => Term.isTerm(u);
  * @category constructors
  */
 export const toExpression = (input: ExpressionInput): Ast.Expression =>
-  typeof input === 'object' && !(input instanceof Date) ? input : Xsd.fromJs(input);
+  isJsValue(input) ? Xsd.fromJs(input) : input;
 
 const toObject = (input: ObjectInput): Ast.TermPattern =>
   isTerm(input) ? input : Xsd.fromJs(input);
@@ -119,7 +127,7 @@ export interface Variables {
  */
 export const v: Variables = new Proxy<Variables>(
   {},
-  { get: (_, name) => (typeof name === 'string' ? Term.variable(name) : undefined) },
+  { get: (_, name) => (Predicate.isString(name) ? Term.variable(name) : undefined) },
 );
 
 /**
@@ -360,7 +368,7 @@ export const filter = (expression: ExpressionInput): Ast.FilterPattern =>
  * @category patterns
  */
 export const bind = (expression: ExpressionInput, name: string | Term.Variable): Ast.BindPattern =>
-  Ast.bind(toExpression(expression), typeof name === 'string' ? Term.variable(name) : name);
+  Ast.bind(toExpression(expression), Predicate.isString(name) ? Term.variable(name) : name);
 
 /**
  * Inline data from records: `values([{ x: ex.a, y: 1 }, { x: ex.b }])`.
@@ -699,7 +707,7 @@ export class Builder<
       groupBy: [
         ...this.query.groupBy,
         ...conditions.map((c): Ast.GroupCondition =>
-          typeof c === 'object' && !(c instanceof Date) && c._tag === 'Alias'
+          !isJsValue(c) && c._tag === 'Alias'
             ? { expression: c.expression, variable: Term.variable(c.name) }
             : { expression: toExpression(c as ExpressionInput) },
         ),
@@ -718,9 +726,7 @@ export class Builder<
       orderBy: [
         ...this.query.orderBy,
         ...conditions.map((c) =>
-          typeof c === 'object' && !(c instanceof Date) && 'descending' in c
-            ? c
-            : asc(c as ExpressionInput),
+          !isJsValue(c) && 'descending' in c ? c : asc(c as ExpressionInput),
         ),
       ],
     });
@@ -786,7 +792,7 @@ export class Builder<
 const empty = Ast.group([]);
 
 const projectionItem = (item: SelectItem): Term.Variable | Ast.Projection => {
-  if (typeof item === 'string') return Term.variable(item);
+  if (Predicate.isString(item)) return Term.variable(item);
   switch (item._tag) {
     case 'Variable':
       return item;

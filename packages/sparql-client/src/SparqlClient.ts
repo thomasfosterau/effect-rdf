@@ -34,6 +34,7 @@ import type * as Results from '@thomasfosterau/effect-sparql/Results';
 import * as Errors from './Errors.ts';
 import * as Formats from './Formats.ts';
 import * as ResultsStream from './ResultsStream.ts';
+import * as Predicate from 'effect/Predicate';
 
 // -----------------------------------------------------------------------------
 // Models
@@ -325,13 +326,13 @@ export const DEFAULT_RESULTS_ACCEPT =
  * @category utils
  */
 export const toSparql = (input: QueryInput | UpdateInput): string =>
-  typeof input === 'string'
+  Predicate.isString(input)
     ? input
     : input instanceof QueryBuilder.Builder
       ? input.toString()
       : Generator.print(input);
 
-const iriOf = (g: GraphIri): string => (typeof g === 'string' ? g : g.value);
+const iriOf = (g: GraphIri): string => (Predicate.isString(g) ? g : g.value);
 
 const mediaTypeOf = (response: HttpClientResponse.HttpClientResponse): string =>
   (response.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();

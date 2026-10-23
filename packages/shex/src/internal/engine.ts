@@ -16,6 +16,7 @@ import type * as ShExJ from '../ShExJ.ts';
 import { cardinality } from '../ShExJ.ts';
 import type { SchemaIndex } from '../Structure.ts';
 import { checkNodeConstraint } from './nodeConstraint.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** An arc of a node's neighbourhood. */
 export interface Arc {
@@ -205,7 +206,7 @@ export class Engine {
     deps: Set<string>,
     declLabel: string | undefined,
   ): Outcome {
-    if (typeof e === 'string') {
+    if (Predicate.isString(e)) {
       if (ctx.arcs === undefined) return this.validateLabel(n, e, deps);
       const r = this.satisfiesDecl(n, e, ctx, deps);
       if (r === undefined && ctx.target !== undefined && ctx.target.label === e) ctx.target.count++;
@@ -263,7 +264,7 @@ export class Engine {
     seen: Set<string>,
   ): void {
     if (te === undefined) return;
-    if (typeof te === 'string') {
+    if (Predicate.isString(te)) {
       if (seen.has(te)) return;
       seen.add(te);
       this.tcsOf(this.index.tripleExprs.get(te), out, seen);
@@ -290,7 +291,7 @@ export class Engine {
     out: Array<ShExJ.TripleConstraint>,
     seen: Set<string>,
   ): void {
-    if (typeof e === 'string') {
+    if (Predicate.isString(e)) {
       if (seen.has(e)) return;
       seen.add(e);
       const decl = this.index.shapes.get(e);
@@ -479,7 +480,7 @@ export class Engine {
   }
 
   private resolveTe(te: ShExJ.TripleExprOrRef): ShExJ.TripleExpr | undefined {
-    return typeof te === 'string' ? this.index.tripleExprs.get(te) : te;
+    return Predicate.isString(te) ? this.index.tripleExprs.get(te) : te;
   }
 
   /** All bags remaining after `te` (with its cardinality) consumes part of `bag`. */
@@ -543,7 +544,7 @@ export class Engine {
     triples: ReadonlyArray<Term.Triple>,
   ): Outcome {
     const visit = (te0: ShExJ.TripleExprOrRef, seen: Set<string>): Visit => {
-      if (typeof te0 === 'string') {
+      if (Predicate.isString(te0)) {
         if (seen.has(te0)) return { used: false, r: undefined };
         seen.add(te0);
       }

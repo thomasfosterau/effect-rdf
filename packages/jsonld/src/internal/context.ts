@@ -18,6 +18,7 @@ import {
   isString,
   hasOwn,
 } from './util.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** @internal */
 export type ProcessingMode = 'json-ld-1.0' | 'json-ld-1.1';
@@ -176,7 +177,7 @@ export const processContext = (
   let result = cloneContext(active);
   // 2
   if (isObject(localContext) && '@propagate' in localContext) {
-    if (typeof localContext['@propagate'] !== 'boolean') fail('invalid @propagate value');
+    if (!Predicate.isBoolean(localContext['@propagate'])) fail('invalid @propagate value');
     propagate = localContext['@propagate'];
   }
   // 3
@@ -295,9 +296,9 @@ export const processContext = (
     // 5.11
     if ('@propagate' in context) {
       if (env.processingMode === 'json-ld-1.0') fail('invalid context entry');
-      if (typeof context['@propagate'] !== 'boolean') fail('invalid @propagate value');
+      if (!Predicate.isBoolean(context['@propagate'])) fail('invalid @propagate value');
     }
-    if ('@protected' in context && typeof context['@protected'] !== 'boolean') {
+    if ('@protected' in context && !Predicate.isBoolean(context['@protected'])) {
       fail('invalid @protected value');
     }
     // 5.12, 5.13
@@ -434,7 +435,7 @@ export const createTermDefinition = (
   // 11
   if ('@protected' in value) {
     if (env.processingMode === 'json-ld-1.0') fail('invalid term definition');
-    if (typeof value['@protected'] !== 'boolean') fail('invalid @protected value');
+    if (!Predicate.isBoolean(value['@protected'])) fail('invalid @protected value');
     def.protected = value['@protected'];
   }
   // 12
@@ -585,7 +586,7 @@ export const createTermDefinition = (
       fail('invalid term definition');
     }
     const p = value['@prefix'];
-    if (typeof p !== 'boolean') fail('invalid @prefix value');
+    if (!Predicate.isBoolean(p)) fail('invalid @prefix value');
     def.prefix = p;
     if (p && def.iri !== null && isKeyword(def.iri)) fail('invalid term definition');
   }

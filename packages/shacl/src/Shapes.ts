@@ -25,6 +25,7 @@ import * as Schema from 'effect/Schema';
 import * as Regex from './internal/regex.ts';
 import * as Path from './Path.ts';
 import { SH, sh } from './Vocabulary.ts';
+import * as Predicate from 'effect/Predicate';
 
 const { rdfs, xsd } = Vocab;
 
@@ -253,8 +254,7 @@ export interface ShapesGraph {
  * @since 0.1.0
  * @category guards
  */
-export const isShapesGraph = (u: unknown): u is ShapesGraph =>
-  typeof u === 'object' && u !== null && (u as { _tag?: unknown })._tag === 'ShapesGraph';
+export const isShapesGraph = (u: unknown): u is ShapesGraph => Predicate.isTagged(u, 'ShapesGraph');
 
 /**
  * Looks up a shape by its identifier.

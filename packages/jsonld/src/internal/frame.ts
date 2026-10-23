@@ -25,6 +25,7 @@ import {
   isValueObject,
   stringifyJson,
 } from './util.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** @internal */
 export type Embed = '@once' | '@always' | '@never' | '@link' | '@first' | '@last';
@@ -113,7 +114,7 @@ const getFlag = (
     else if (!['@always', '@never', '@link', '@first', '@last', '@once'].includes(value)) {
       fail('invalid @embed value', String(value));
     }
-  } else if (typeof value === 'string') {
+  } else if (Predicate.isString(value)) {
     value = value === 'true';
   }
   return value;

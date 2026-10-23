@@ -429,7 +429,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     return cells[0]!;
   };
   const objectValue = (v: ShExJ.ObjectValue): Term.Object =>
-    typeof v === 'string'
+    Predicate.isString(v)
       ? Term.namedNode(v)
       : v.language !== undefined
         ? Term.literal(v.value, v.language)
@@ -467,7 +467,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
       }),
     );
   const stem = (s: string | ShExJ.Wildcard, iri: boolean): Term.Object => {
-    if (typeof s !== 'string') {
+    if (!Predicate.isString(s)) {
       const b = Term.blankNode();
       add(b, rdfType, sx('Wildcard'));
       return b;
@@ -475,7 +475,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     return iri ? Term.literal(s, Term.namedNode(`${XSD}anyURI`)) : Term.literal(s);
   };
   const valueSetValue = (v: ShExJ.ValueSetValue): Term.Object => {
-    if (typeof v === 'string' || !('type' in v) || 'value' in v)
+    if (Predicate.isString(v) || !('type' in v) || 'value' in v)
       return objectValue(v as ShExJ.ObjectValue);
     const b = Term.blankNode();
     add(b, rdfType, sx(v.type));
@@ -496,7 +496,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
           sx('exclusion'),
           list(
             (v.exclusions as ReadonlyArray<string | { readonly stem: string }>).map((e) => {
-              if (typeof e === 'string')
+              if (Predicate.isString(e))
                 return v.type === 'IriStemRange' ? Term.namedNode(e) : Term.literal(e);
               const x = Term.blankNode();
               add(x, rdfType, sx(stemType));
@@ -510,7 +510,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     return b;
   };
   const shapeExpr = (e: ShExJ.ShapeExprOrRef, subject?: Term.Subject): Term.Object => {
-    if (typeof e === 'string') return node(e);
+    if (Predicate.isString(e)) return node(e);
     const s = subject ?? Term.blankNode();
     add(s, rdfType, sx(e.type));
     switch (e.type) {
@@ -553,7 +553,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     return s;
   };
   const tripleExpr = (t: ShExJ.TripleExprOrRef): Term.Object => {
-    if (typeof t === 'string') return node(t);
+    if (Predicate.isString(t)) return node(t);
     const s = t.id !== undefined ? node(t.id) : Term.blankNode();
     add(s, rdfType, sx(t.type));
     if (t.type === 'TripleConstraint') {
