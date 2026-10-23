@@ -1,6 +1,6 @@
 # @thomasfosterau/effect-xmp
 
-XMP (Extensible Metadata Platform, ISO 16684-1) packets as RDF: packet scanning and padding (`Packet`), the XMP data model over a `Dataset` (`Metadata`), the syntax (`Xmp`), typed accessors for the core schemas (`DublinCore`, `XmpBasic`, `XmpRights`, `XmpMM`, `Pdf`, `PdfA`) and JPEG / PNG extraction (`Extract`).
+XMP (Extensible Metadata Platform, ISO 16684-1) packets as RDF: packet scanning and padding (`Packet`), the XMP data model over a `Dataset` (`Metadata`), the syntax (`Xmp`), typed accessors for the core schemas (`DublinCore`, `XmpBasic`, `XmpRights`, `XmpMM`, `Pdf`, `PdfA`) and the image ones (`Photoshop`, `Exif`, `Tiff`), and JPEG / PNG extraction (`Extract`).
 
 ## Boundary
 

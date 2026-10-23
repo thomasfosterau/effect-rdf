@@ -52,6 +52,30 @@ describe('Packet.find', () => {
     });
   });
 
+  it('finds UTF-32 packets in either byte order', () => {
+    const text = packet('<x:xmpmeta xmlns:x="adobe:ns:meta/"><a>é 😀</a></x:xmpmeta>');
+    const utf32 = (littleEndian: boolean): Uint8Array => {
+      const points = Array.from(text, (c) => c.codePointAt(0) ?? 0);
+      const out = new Uint8Array(points.length * 4);
+      const view = new DataView(out.buffer);
+      points.forEach((p, i) => view.setUint32(i * 4, p, littleEndian));
+      return out;
+    };
+    const orders = [
+      [false, 'utf-32be'],
+      [true, 'utf-32le'],
+    ] as const;
+    orders.forEach(([littleEndian, encoding]) => {
+      const body = utf32(littleEndian);
+      const found = some(Packet.find(concat(Uint8Array.of(9, 9), body, Uint8Array.of(0))));
+      expect(found.encoding).toBe(encoding);
+      expect(found.offset).toBe(2);
+      expect(found.length).toBe(body.length);
+      expect(found.writable).toBe(true);
+      expect(found.text).toBe(text);
+    });
+  });
+
   it('finds nothing without a header, or with a header but no trailer', () => {
     expect(Option.isNone(Packet.find(utf8('<x:xmpmeta/>')))).toBe(true);
     expect(Option.isNone(Packet.find(utf8('<?xpacket begin="" id="x"?><x:xmpmeta/>')))).toBe(true);

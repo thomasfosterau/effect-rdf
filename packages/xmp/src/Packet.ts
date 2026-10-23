@@ -4,8 +4,8 @@
  * a packet with the whitespace padding that lets a writer update it in
  * place.
  *
- * Packets are found in UTF-8, UTF-16BE and UTF-16LE, the encodings the
- * packet header's byte-order mark can announce and a byte scanner can
+ * Packets are found in UTF-8, UTF-16 and UTF-32 (either byte order), the
+ * encodings ISO 16684-1 §7.3.2 lets a packet use and a byte scanner can
  * recognise without parsing the host file.
  *
  * @since 0.1.0
@@ -37,7 +37,7 @@ export const DEFAULT_PADDING = 2048;
  * @since 0.1.0
  * @category models
  */
-export type Encoding = 'utf-8' | 'utf-16be' | 'utf-16le';
+export type Encoding = 'utf-8' | 'utf-16be' | 'utf-16le' | 'utf-32be' | 'utf-32le';
 
 /**
  * A packet found in a byte sequence.
@@ -75,16 +75,54 @@ const HEADER = '<?xpacket begin=';
 const TRAILER = '<?xpacket end=';
 const PI_END = '?>';
 
-const ENCODINGS: ReadonlyArray<Encoding> = ['utf-8', 'utf-16be', 'utf-16le'];
+const ENCODINGS: ReadonlyArray<Encoding> = [
+  'utf-8',
+  'utf-16be',
+  'utf-16le',
+  'utf-32be',
+  'utf-32le',
+];
 
-const encodeAscii = (text: string, encoding: Encoding): Uint8Array => {
-  const codes = Arr.map(Arr.fromIterable(text), (c) => c.charCodeAt(0));
-  return Uint8Array.from(
-    encoding === 'utf-8'
-      ? codes
-      : Arr.flatMap(codes, (c) => (encoding === 'utf-16be' ? [0, c] : [c, 0])),
-  );
+const WIDTHS: Readonly<Record<Encoding, number>> = {
+  'utf-8': 1,
+  'utf-16be': 2,
+  'utf-16le': 2,
+  'utf-32be': 4,
+  'utf-32le': 4,
 };
+
+const isLittleEndian = (encoding: Encoding): boolean => encoding.endsWith('le');
+
+/** One ASCII code unit in an encoding: the code, zero-padded to the unit's width. */
+const asciiUnit = (code: number, encoding: Encoding): ReadonlyArray<number> => {
+  // `Arr.replicate` never returns an empty array, and UTF-8 needs none.
+  const padding = Array.from({ length: WIDTHS[encoding] - 1 }, () => 0);
+  return isLittleEndian(encoding) ? [code, ...padding] : [...padding, code];
+};
+
+const encodeAscii = (text: string, encoding: Encoding): Uint8Array =>
+  Uint8Array.from(Arr.flatMap(Arr.fromIterable(text), (c) => asciiUnit(c.charCodeAt(0), encoding)));
+
+/**
+ * Decodes UTF-32, which the WHATWG `TextDecoder` does not support. A code
+ * point outside Unicode, or a surrogate, decodes to U+FFFD as `TextDecoder`
+ * would.
+ */
+const decodeUtf32 = (bytes: Uint8Array, littleEndian: boolean): string => {
+  const data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const units = Math.floor(bytes.length / 4);
+  return Array.from({ length: units }, (_, i) => {
+    const code = data.getUint32(i * 4, littleEndian);
+    return code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+      ? '\uFFFD'
+      : String.fromCodePoint(code);
+  }).join('');
+};
+
+const decode = (bytes: Uint8Array, encoding: Encoding): string =>
+  WIDTHS[encoding] === 4
+    ? decodeUtf32(bytes, isLittleEndian(encoding))
+    : new TextDecoder(encoding).decode(bytes);
 
 // windows-1252 decodes every byte to exactly one UTF-16 code unit, so a
 // string search over the decoded bytes finds byte offsets natively.
@@ -117,7 +155,7 @@ const findIn = (bytes: Uint8Array, haystack: string, from: number): Option.Optio
     ),
   );
   return Option.flatMap(first, ({ offset, encoding }) => {
-    const width = encoding === 'utf-8' ? 1 : 2;
+    const width = WIDTHS[encoding];
     const end = Option.flatMap(
       indexIn(haystack, marker(TRAILER, encoding), offset + HEADER.length * width),
       (trailer) =>
@@ -129,7 +167,7 @@ const findIn = (bytes: Uint8Array, haystack: string, from: number): Option.Optio
     // A header with no trailer after it is not a packet, and neither is any
     // later header.
     return Option.map(end, (close): Packet => {
-      const text = new TextDecoder(encoding).decode(bytes.subarray(offset, close));
+      const text = decode(bytes.subarray(offset, close), encoding);
       return {
         offset,
         length: close - offset,

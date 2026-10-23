@@ -12,9 +12,10 @@ consumers expect.
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `Xmp`                                                         | `parse` / `serialize` (the core `Serialization` interfaces), `parseMetadata`, `serializeMetadata` |
 | `Metadata`                                                    | the data model: `Simple`, `Struct`, `ArrayValue`, qualifiers; `fromDataset` / `toDataset`         |
-| `Packet`                                                      | `find` / `findAll` packets in bytes (UTF-8, UTF-16), `unwrap`, `wrap`, `wrapToSize`               |
-| `Extract`                                                     | `jpeg` (APP1, with Extended XMP) and `png` (`iTXt`)                                               |
+| `Packet`                                                      | `find` / `findAll` packets in bytes (UTF-8, UTF-16, UTF-32), `unwrap`, `wrap`, `wrapToSize`       |
+| `Extract`                                                     | `jpeg` (APP1, with Extended XMP) and `png` (`iTXt`, stored or compressed)                         |
 | `DublinCore`, `XmpBasic`, `XmpRights`, `XmpMM`, `Pdf`, `PdfA` | typed getters and setters                                                                         |
+| `Photoshop`, `Exif`, `Tiff`                                   | typed getters and setters for the image schemas' common properties                                |
 | `Namespaces`                                                  | the schema namespace IRIs and their conventional prefixes                                         |
 
 Peers: `effect` and `@thomasfosterau/effect-parse` (the XML grammar behind effect-rdfxml).
@@ -100,13 +101,19 @@ Extract.jpeg(bytes); // Effect<Option<{ standard, extended }>, XmpExtractError>
 Extract.png(bytes); // Effect<Option<string>, XmpExtractError>
 ```
 
-`Packet.find` scans any file (TIFF, WebP, GIF, MP4, PDF, …) for a UTF-8 or UTF-16 packet without
-parsing it. `Extract.jpeg` reads the APP1 packet and reassembles Extended XMP; `Extract.png`
-reads the uncompressed `iTXt` chunk with the keyword `XML:com.adobe.xmp`. Each has a
-synchronous `…Result` variant.
+`Packet.find` scans any file (TIFF, WebP, GIF, MP4, PDF, …) for a UTF-8, UTF-16 or UTF-32
+packet (either byte order) without parsing it. `Extract.jpeg` reads the APP1 packet and
+reassembles Extended XMP; `Extract.png` reads the `iTXt` chunk with the keyword
+`XML:com.adobe.xmp`, inflating a compressed one with the platform's `DecompressionStream`. Each
+has a synchronous `…Result` variant; `Extract.pngResult` fails on a compressed chunk, since
+inflating is asynchronous.
 
 ## Conformance
 
 There is no public XMP conformance suite; the unit tests are modelled on the ISO 16684-1
-examples and on the PDF/A metadata veraPDF validates. The Adobe XMP Toolkit SDK samples and
-veraPDF's PDF/A metadata corpus are not yet wired into `scripts/fetch-test-suites.sh`.
+examples. `scripts/fetch-test-suites.sh` checks out the metadata sections of
+[veraPDF's PDF/A and PDF/UA corpus](https://github.com/veraPDF/veraPDF-corpus), and
+`test/Conformance.test.ts` reads the packet of every file in them: all 497 files that should
+pass validation parse (and give the PDF/A part their section tests), and none of the 568 that
+should fail makes the reader throw. The ISO 16684-1 examples are not freely published, and the
+Adobe XMP Toolkit SDK ships no sample XMP files, only the C++ samples that generate them.
