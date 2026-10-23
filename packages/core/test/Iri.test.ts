@@ -58,10 +58,14 @@ describe('Iri', () => {
     expect(Iri.resolve('?q', 'http://two/x/y?p')).toBe('http://two/x/y?q');
   });
 
-  it('leaves a path without dot segments unchanged', () => {
-    for (const path of ['', '/', '/a/b', 'a/b/', '/a..b/.c/d.', '/a/...']) {
+  it.each(['', '/', '/a/b', 'a/b/', '/a..b/.c/d.', '/a/...'])(
+    'leaves %j (no dot segments) unchanged',
+    (path) => {
       expect(Iri.removeDotSegments(path)).toBe(path);
-    }
+    },
+  );
+
+  it('removes dot segments', () => {
     expect(Iri.removeDotSegments('/a/b/../c/./d')).toBe('/a/c/d');
   });
 
