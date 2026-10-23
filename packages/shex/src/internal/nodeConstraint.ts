@@ -170,6 +170,14 @@ const literalEquals = (n: Term.Literal, v: ShExJ.ObjectLiteral): boolean => {
 };
 
 /**
+ * Whether a value is in an IRI or literal stem range: under its stem (any
+ * value, for a wildcard) and under none of its exclusions.
+ */
+const inStemRange = (value: string, range: ShExJ.IriStemRange | ShExJ.LiteralStemRange): boolean =>
+  (!Predicate.isString(range.stem) || value.startsWith(range.stem)) &&
+  !range.exclusions.some((e) => (Predicate.isString(e) ? value === e : value.startsWith(e.stem)));
+
+/**
  * Whether a term matches a value set value.
  *
  * @internal
@@ -182,22 +190,12 @@ export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
   switch (v.type) {
     case 'IriStem':
       return n._tag === 'NamedNode' && n.value.startsWith(v.stem);
-    case 'IriStemRange': {
-      if (n._tag !== 'NamedNode') return false;
-      if (Predicate.isString(v.stem) && !n.value.startsWith(v.stem)) return false;
-      return !v.exclusions.some((e) =>
-        Predicate.isString(e) ? n.value === e : n.value.startsWith(e.stem),
-      );
-    }
+    case 'IriStemRange':
+      return n._tag === 'NamedNode' && inStemRange(n.value, v);
     case 'LiteralStem':
       return n._tag === 'Literal' && n.value.startsWith(v.stem);
-    case 'LiteralStemRange': {
-      if (n._tag !== 'Literal') return false;
-      if (Predicate.isString(v.stem) && !n.value.startsWith(v.stem)) return false;
-      return !v.exclusions.some((e) =>
-        Predicate.isString(e) ? n.value === e : n.value.startsWith(e.stem),
-      );
-    }
+    case 'LiteralStemRange':
+      return n._tag === 'Literal' && inStemRange(n.value, v);
     case 'Language':
       return n._tag === 'Literal' && n.language !== '' && lowerEq(n.language, v.languageTag);
     case 'LanguageStem':
