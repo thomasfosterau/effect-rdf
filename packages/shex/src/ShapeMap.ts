@@ -9,6 +9,7 @@
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -246,12 +247,14 @@ const shapeSelector: Parser.Parser<ShapeSelector, string, Options> = Parser.prec
   ),
 );
 
-const shapeMap: Parser.Parser<QueryShapeMap, string, Options> = Parser.terminated(
-  Parser.separated(
-    Parser.struct({ node: nodeSelector, shape: shapeSelector }),
-    lex(Token.literal(',')),
+const shapeMap: Parser.Parser<QueryShapeMap, string, Options> = Compiler.jit(
+  Parser.terminated(
+    Parser.separated(
+      Parser.struct({ node: nodeSelector, shape: shapeSelector }),
+      lex(Token.literal(',')),
+    ),
+    Tokens.skip,
   ),
-  Tokens.skip,
 );
 
 /**
@@ -265,7 +268,7 @@ export const parse = (
   options: ParseOptions = {},
 ): Effect.Effect<QueryShapeMap, RdfParseError> =>
   Effect.suspend(() => {
-    const result = Parser.parse(Parser.provideService(shapeMap, Options, options), input);
+    const result = Parser.parse(shapeMap, input, { context: Context.make(Options, options) });
     if (Result.isSuccess(result)) return Effect.succeed(result.success);
     const error = result.failure;
     const { line, column } = error.position;
@@ -273,7 +276,9 @@ export const parse = (
     return Effect.fail(new RdfParseError({ format: 'ShapeMap', message, line, column }));
   });
 
-const groundTerm = Parser.terminated(term, Tokens.skip);
+// Compiled once; the options reach `Parser.service(Options)` through the run's
+// context rather than a `provideService` wrapper built per call.
+const groundTerm = Compiler.jit(Parser.terminated(term, Tokens.skip));
 
 /**
  * Parses a single RDF term in N-Triples / Turtle notation (`<iri>`,
@@ -284,7 +289,7 @@ const groundTerm = Parser.terminated(term, Tokens.skip);
  * @category parsing
  */
 export const parseTerm = (input: string, options: ParseOptions = {}): Term.GroundTerm => {
-  const result = Parser.parse(Parser.provideService(groundTerm, Options, options), input);
+  const result = Parser.parse(groundTerm, input, { context: Context.make(Options, options) });
   if (Result.isSuccess(result)) return result.success;
   if (input.startsWith('_:')) return Term.blankNode(input.slice(2));
   return Term.namedNode(

@@ -28,6 +28,19 @@ const parse = (iri: string): Parts => {
   };
 };
 
+// A document resolves many references against one base, so the last base's
+// parts are kept. `Parts` are never mutated once parsed.
+let lastBase = '';
+let lastBaseParts: Parts = parse('');
+
+const parseBase = (base: string): Parts => {
+  if (base !== lastBase) {
+    lastBaseParts = parse(base);
+    lastBase = base;
+  }
+  return lastBaseParts;
+};
+
 const recompose = (p: Parts): string => {
   let out = '';
   if (p.scheme !== undefined) out += `${p.scheme}:`;
@@ -38,12 +51,17 @@ const recompose = (p: Parts): string => {
   return out;
 };
 
+// A `.` or `..` segment: the only thing `removeDotSegments` changes.
+const DOT_SEGMENT = /(?:^|\/)\.\.?(?:\/|$)/;
+
 /**
  * Removes `.` and `..` segments from a path (RFC 3986 §5.2.4).
  *
  * @since 0.1.0
  */
 export const removeDotSegments = (path: string): string => {
+  // Most paths have no dot segment, and the algorithm leaves those unchanged.
+  if (!DOT_SEGMENT.test(path)) return path;
   let input = path;
   const output: Array<string> = [];
   while (input.length > 0) {
@@ -91,7 +109,10 @@ export const isAbsolute = (iri: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:/.
 export const resolve = (reference: string, base: string | undefined): string => {
   if (base === undefined || base === '') return reference;
   const r = parse(reference);
-  const b = parse(base);
+  // An absolute reference without dot segments resolves to itself (§5.2.2:
+  // only its path is rewritten, by `removeDotSegments`).
+  if (r.scheme !== undefined && !DOT_SEGMENT.test(r.path)) return reference;
+  const b = parseBase(base);
   const t: Parts = {
     scheme: undefined,
     authority: undefined,
