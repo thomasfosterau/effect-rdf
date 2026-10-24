@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdf",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model",
   "keywords": [
     "effect",

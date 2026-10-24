@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdfxml",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "RDF 1.2 XML Syntax (RDF/XML) parser and serializer for effect-rdf",
   "keywords": [
     "effect",

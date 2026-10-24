@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-shacl",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic SHACL Core validator for @thomasfosterau/effect-rdf",
   "keywords": [
     "effect",

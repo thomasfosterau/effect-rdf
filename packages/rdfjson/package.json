@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdfjson",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "RDF/JSON parser, serializer and Effect Schemas for effect-rdf",
   "keywords": [
     "effect",

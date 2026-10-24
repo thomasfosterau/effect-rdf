@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-xmp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "XMP (Extensible Metadata Platform, ISO 16684-1) packets as RDF for effect-rdf",
   "keywords": [
     "effect",
