@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-turtle",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic RDF 1.2 Turtle and TriG parsers and pretty serializers",
   "keywords": [
     "effect",

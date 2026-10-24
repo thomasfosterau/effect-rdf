@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-jsonld",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic JSON-LD 1.1 processor: expansion, compaction, flattening, framing and RDF conversion",
   "keywords": [
     "effect",

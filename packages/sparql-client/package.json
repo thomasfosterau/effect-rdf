@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql-client",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic, strongly-typed SPARQL 1.1 Protocol and Graph Store Protocol client",
   "keywords": [
     "effect",
