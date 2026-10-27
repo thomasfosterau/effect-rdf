@@ -19,7 +19,7 @@ catalog:
   '@changesets/changelog-github': ^1.0.1
   '@changesets/cli': ^3.0.3
   # Test-only: the SPARQL-to-SQL backend's PostgreSQL suite runs on PGlite.
-  '@electric-sql/pglite': 0.5.10
+  '@electric-sql/pglite': 0.5.11
   # The Effect Language Service plugin named in tsconfig.base.json; the
   # patched native `tsc` (see @effect/tsgo) runs its diagnostics.
   '@effect/language-service': ^0.87.5
