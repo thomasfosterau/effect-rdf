@@ -19,6 +19,7 @@ import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Result from 'effect/Result';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
 
 /** The kinds of SPARQL tokens. */
 export type TokenType =
@@ -385,43 +386,58 @@ export const resolve = (
   baseIri: string | undefined,
   initialPrefixes: Readonly<Record<string, string>> | undefined,
 ): Resolved => {
-  let base = baseIri;
-  const prefixes: PrefixTable = { ...initialPrefixes };
-  const resolveIri = (iri: string) => (base !== undefined ? Iri.resolve(iri, base) : iri);
+  const state: ResolveState = {
+    base: Option.fromUndefinedOr(baseIri),
+    prefixes: { ...initialPrefixes },
+  };
   for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i]!;
-    // How many of the following tokens a directive consumed.
-    const consumed = Match.value(t.type).pipe(
-      Match.when('IRI', () => {
-        t.value = resolveIri(t.value);
-        return 0;
-      }),
-      Match.when('PNAME', () => {
-        const ns = prefixes[t.extra];
-        if (ns === undefined) t.error = `Undefined prefix '${t.extra}:'`;
-        else t.value = ns + t.value;
-        return 0;
-      }),
-      Match.when('WORD', () => {
-        const next = tokens[i + 1];
-        if (t.kind === 'BASE' && next?.type === 'IRI') {
-          next.value = resolveIri(next.value);
-          base = next.value;
-          return 1;
-        }
-        if (t.kind === 'PREFIX' && next?.type === 'PNAME' && next.value === '') {
-          const value = tokens[i + 2];
-          if (value?.type === 'IRI') {
-            value.value = resolveIri(value.value);
-            prefixes[next.extra] = value.value;
-            return 2;
-          }
-        }
-        return 0;
-      }),
-      Match.orElse(() => 0),
-    );
-    i += consumed;
+    // Skips the tokens a directive consumed.
+    i += resolveToken(tokens[i]!, tokens, i, state);
   }
-  return { base, prefixes };
+  return { base: Option.getOrUndefined(state.base), prefixes: state.prefixes };
 };
+
+/** The base and prefixes in effect at a point of the token stream. */
+interface ResolveState {
+  base: Option.Option<string>;
+  readonly prefixes: PrefixTable;
+}
+
+const resolveIri = (state: ResolveState, iri: string) =>
+  Option.match(state.base, { onNone: () => iri, onSome: (base) => Iri.resolve(iri, base) });
+
+/**
+ * Resolves one token in place and returns how many of the following tokens
+ * it consumed (a `BASE` or `PREFIX` directive's IRI and name).
+ */
+const resolveToken: (t: Tok, tokens: Array<Tok>, i: number, state: ResolveState) => number =
+  Match.fn((t: Tok, _tokens: Array<Tok>, _i: number, _state: ResolveState) => t.type).pipe(
+    Match.when('IRI', (_type, t, _tokens, _i, state) => {
+      t.value = resolveIri(state, t.value);
+      return 0;
+    }),
+    Match.when('PNAME', (_type, t, _tokens, _i, state) => {
+      const ns = state.prefixes[t.extra];
+      if (ns === undefined) t.error = `Undefined prefix '${t.extra}:'`;
+      else t.value = ns + t.value;
+      return 0;
+    }),
+    Match.when('WORD', (_type, t, tokens, i, state) => {
+      const next = tokens[i + 1];
+      if (t.kind === 'BASE' && next?.type === 'IRI') {
+        next.value = resolveIri(state, next.value);
+        state.base = Option.some(next.value);
+        return 1;
+      }
+      if (t.kind === 'PREFIX' && next?.type === 'PNAME' && next.value === '') {
+        const value = tokens[i + 2];
+        if (value?.type === 'IRI') {
+          value.value = resolveIri(state, value.value);
+          state.prefixes[next.extra] = value.value;
+          return 2;
+        }
+      }
+      return 0;
+    }),
+    Match.orElse(() => 0),
+  );

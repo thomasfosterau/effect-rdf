@@ -174,7 +174,7 @@ const groundTemplateTerm = (
   bnodes: Map<string, Term.BlankNode>,
 ): Term.Term | undefined => {
   return Match.value(t).pipe(
-    Match.tag('Variable', (v): Term.Term | undefined => b.map.get(v.value)),
+    Match.tag('Variable', (v) => b.map.get(v.value)),
     Match.tag('BlankNode', (blank) => {
       let n = bnodes.get(blank.value);
       if (n === undefined) bnodes.set(blank.value, (n = Term.blankNode()));

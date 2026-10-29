@@ -579,12 +579,10 @@ const build = (subject: Ast.TermPattern, pl: PropertyList, out: Triples = []): T
 };
 
 /** Whether a token can start a triples block (`undefined`: it cannot). */
-const startsTriplesToken: (t: Tok, next: Tok | undefined) => true | undefined = Match.fn(
-  (t: Tok, _next: Tok | undefined) => t.type,
-).pipe(
+const startsTriplesToken = Match.fn((t: Tok, _next?: Tok) => t.type).pipe(
   Match.when(
     Match.is('VAR', 'IRI', 'PNAME', 'BNODE', 'STRING', 'INTEGER', 'DECIMAL', 'DOUBLE'),
-    (): true | undefined => true,
+    () => true as const,
   ),
   Match.when('WORD', (_type, t) => (t.kind === 'TRUE' || t.kind === 'FALSE' ? true : undefined)),
   Match.when('PUNCT', (_type, t, next) =>

@@ -79,7 +79,7 @@ const numericValue = (t: Term.GroundTerm): number | undefined => {
   if (!Xsd.isValidLexical(t.datatype.value, t.value)) return undefined;
   const v = Xsd.toValue(t);
   return Match.value(v).pipe(
-    Match.tag('Integer', (i): number | undefined => Number(i.value)),
+    Match.tag('Integer', (i) => Number(i.value)),
     Match.tag('Decimal', (d) => BigDecimal.toNumberUnsafe(d.value)),
     Match.tag('Float', 'Double', (f) => f.value),
     Match.orElse(() => undefined),

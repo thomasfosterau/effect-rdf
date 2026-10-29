@@ -55,7 +55,7 @@ const ground: (t: PatternTerm, b: Bindings) => Term.GroundTerm | undefined = Mat
   (t: PatternTerm, _b: Bindings) => t,
 ).pipe(
   Match.tag('Variable', (v, _t, b) => b.map.get(v.value)),
-  Match.tag('Triple', (t, _t, b): Term.GroundTerm | undefined => {
+  Match.tag('Triple', (t, _t, b) => {
     const s = ground(t.subject, b);
     const p = ground(t.predicate, b);
     const o = ground(t.object, b);
@@ -654,10 +654,7 @@ const aggregateOf = (
   defined: ReadonlyArray<Term.GroundTerm>,
 ): Term.GroundTerm | undefined => {
   return Match.value(agg.name).pipe(
-    Match.when(
-      'COUNT',
-      (): Term.GroundTerm | undefined => new Term.Literal(String(defined.length), V.dt.integer),
-    ),
+    Match.when('COUNT', () => new Term.Literal(String(defined.length), V.dt.integer)),
     Match.when('SUM', () => {
       if (defined.length !== values.length) return undefined;
       let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);

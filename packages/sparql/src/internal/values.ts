@@ -101,7 +101,7 @@ export const DOUBLE = 3;
 
 const numCache = new WeakMap<Term.Literal, Num | null>();
 
-const numOfValue: (v: Xsd.Value) => Num | undefined = Match.type<Xsd.Value>().pipe(
+const numOfValue = Match.type<Xsd.Value>().pipe(
   Match.tag('Integer', (v): Num => ({ kind: 0, v: v.value })),
   Match.tag('Decimal', (v): Num => ({ kind: 1, v: v.value })),
   Match.tag('Float', (v): Num => ({ kind: 2, v: v.value })),

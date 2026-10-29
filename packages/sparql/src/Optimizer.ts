@@ -48,7 +48,7 @@ const subset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
 const push = (e: Algebra.Expression, op: Algebra.Operation): Algebra.Operation | undefined => {
   const vars = Algebra.expressionVariables(e);
   return Match.value(op).pipe(
-    Match.tag('Join', (j): Algebra.Operation | undefined => {
+    Match.tag('Join', (j) => {
       if (subset(vars, Algebra.certainVariables(j.left))) {
         return { ...j, left: pushOrWrap(e, j.left) };
       }
