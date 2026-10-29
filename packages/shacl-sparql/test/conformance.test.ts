@@ -54,11 +54,15 @@ const collect = (manifestIri: string, out: Array<TestCase>) => {
   const ds = load(manifestIri);
   const self = Term.namedNode(manifestIri);
   for (const inc of Dataset.objectsOf(ds, self, mf('include'))) {
+    // SAFETY: W3C manifests name included manifests with IRIs.
     collect((inc as Term.NamedNode).value, out);
   }
   for (const list of Dataset.objectsOf(ds, self, mf('entries'))) {
     for (const entry of Option.getOrElse(Dataset.list(ds, list), () => [])) {
+      // SAFETY: manifest entries are IRIs (the test suite's own convention), which also makes them
+      // subjects.
       const name = (entry as Term.NamedNode).value.slice(pathToFileURL(root).href.length + 1);
+      // SAFETY: manifest entries are IRIs, so they can be subjects.
       out.push({ name, ds, node: entry as Term.Subject });
     }
   }
@@ -78,10 +82,13 @@ const blankKeys = (ds: Dataset.Dataset): Set<string> => {
 
 const runCase = (tc: TestCase) =>
   Effect.gen(function* () {
+    // SAFETY: only called with manifest nodes, which are IRIs or blank nodes.
     const one = (s: Term.Term, p: Term.NamedNode) =>
       Dataset.objectsOf(tc.ds, s as Term.Subject, p)[0];
     const action = one(tc.node, mf('action'))!;
+    // SAFETY: `sht:dataGraph` is the IRI of the data file in every suite manifest.
     const data = load((one(action, sht('dataGraph')) as Term.NamedNode).value);
+    // SAFETY: `sht:shapesGraph` is the IRI of the shapes file in every suite manifest.
     const shapes = load((one(action, sht('shapesGraph')) as Term.NamedNode).value);
     const expectedNode = one(tc.node, mf('result'))!;
 
@@ -95,6 +102,7 @@ const runCase = (tc: TestCase) =>
     if (Exit.isFailure(exit)) assert.fail(`validation failed: ${String(exit.cause)}`);
     const actual = exit.value;
 
+    // SAFETY: a test's `mf:result` is a blank-node validation report in the suite manifests.
     const expectedResult = ValidationReport.fromDataset(tc.ds, expectedNode as Term.BlankNode);
     if (Result.isFailure(expectedResult)) assert.fail(expectedResult.failure.message);
     const expected = expectedResult.success;

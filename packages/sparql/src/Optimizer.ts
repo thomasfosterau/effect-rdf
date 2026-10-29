@@ -110,6 +110,7 @@ const patternVariables = (p: Ast.TriplePattern): ReadonlyArray<string> => {
 };
 
 const constant = (t: Ast.TermPattern): Term.GroundTerm | undefined =>
+  // SAFETY: neither a variable nor a triple pattern with variables, so the pattern is ground.
   t._tag === 'Variable' ||
   (t._tag === 'Triple' &&
     Arr.isReadonlyArrayNonEmpty(

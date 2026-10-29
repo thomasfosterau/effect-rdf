@@ -185,6 +185,7 @@ const inStemRange = (value: string, range: ShExJ.IriStemRange | ShExJ.LiteralSte
 export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
   if (Predicate.isString(v)) return n._tag === 'NamedNode' && n.value === v;
   if (!('type' in v) || 'value' in v) {
+    // SAFETY: a value without `type`, or with a `value`, is an object literal in ShExJ.
     return n._tag === 'Literal' && literalEquals(n, v as ShExJ.ObjectLiteral);
   }
   switch (v.type) {
@@ -277,6 +278,7 @@ export const checkNodeConstraint = (n: Term.Term, nc: ShExJ.NodeConstraint): str
     ['maxexclusive', (c) => c < 0],
   ];
   for (const [facet, ok] of numericFacets) {
+    // SAFETY: the numeric facets are numbers in ShExJ.
     const limit = nc[facet] as number | undefined;
     if (limit === undefined) continue;
     const v = numericValue(n);

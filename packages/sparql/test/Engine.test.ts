@@ -303,6 +303,7 @@ describe('Results formats', () => {
         const text = codec.serializeString(set);
         const parsed = yield* codec.parse(text);
         assert.strictEqual(parsed._tag, 'ResultSet');
+        // SAFETY: asserted to be a `ResultSet` on the line above.
         const back = parsed as Results.ResultSet;
         expect(back.variables).toEqual(set.variables);
         expect(back.bindings.map((b) => b.key)).toEqual(set.bindings.map((b) => b.key));
@@ -316,6 +317,7 @@ describe('Results formats', () => {
     Effect.gen(function* () {
       const text = Results.Csv.serializeString(set);
       expect(text.split('\r\n')[0]).toBe('x,y,z');
+      // SAFETY: the CSV serialization of a result set parses back to a result set.
       const parsed = (yield* Results.Csv.parse(text)) as Results.ResultSet;
       expect(lex(Bindings.getUndefined(parsed.bindings[0]!, 'y'))).toBe('hello, "world"\n');
       expect(Bindings.getUndefined(parsed.bindings[1]!, 'x')?._tag).toBe('BlankNode');

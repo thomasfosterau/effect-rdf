@@ -192,6 +192,8 @@ const toSelect = (result: ParsedResult | AskResult): SelectResult | AskResult =>
       ? { _tag: 'Ask', value: result.value }
       : result;
 
+// SAFETY: the chunks come from an in-memory serializer that does not fail; the error type is only
+// erased for `runSync`.
 const stringify = <E>(chunks: Stream.Stream<string, E>): string =>
   Effect.runSync(Stream.mkString(chunks as Stream.Stream<string>));
 
@@ -356,6 +358,8 @@ export const termFromJson = (j: JsonTerm): Term.GroundTerm => {
         : Term.literal(j.value);
     }
     case 'triple':
+      // SAFETY: the JSON results grammar puts a subject, an IRI predicate and an object in a triple
+      // term's three fields.
       return Term.triple(
         termFromJson(j.value.subject) as Term.Subject,
         termFromJson(j.value.predicate) as Term.Predicate,
@@ -526,6 +530,8 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
         }
         return xmlToTerm(inner);
       };
+      // SAFETY: the XML results grammar puts a subject, an IRI predicate and an object in a triple
+      // term's three parts.
       return Term.triple(
         part('subject') as Term.Subject,
         part('predicate') as Term.Predicate,

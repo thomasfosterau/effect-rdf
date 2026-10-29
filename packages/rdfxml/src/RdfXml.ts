@@ -207,6 +207,7 @@ class RdfXmlParser {
       if (dir.value !== 'ltr' && dir.value !== 'rtl' && dir.value !== '') {
         this.fail(`Invalid its:dir value "${dir.value}"`, dir);
       }
+      // SAFETY: the value was checked to be `ltr` or `rtl` above.
       direction = dir.value as Context['direction'];
     }
     return { base, language, direction, version };
@@ -902,6 +903,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
           Xml.isValidText(t.object.value),
       );
       if (typeTriple !== undefined) {
+        // SAFETY: the `rdf:type` triple was selected for an IRI object.
         element = writer.qname((typeTriple.object as Term.NamedNode).value, 'type');
         ts = ts.filter((t) => t !== typeTriple);
       }

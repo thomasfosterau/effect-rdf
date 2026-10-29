@@ -59,6 +59,8 @@ const ground = (t: PatternTerm, b: Bindings): Term.GroundTerm | undefined => {
       const p = ground(t.predicate, b);
       const o = ground(t.object, b);
       if (s === undefined || p === undefined || o === undefined) return undefined;
+      // SAFETY: unchanged components keep the triple pattern ground; otherwise substitution keeps
+      // each position's kind.
       return t.subject === s && t.predicate === p && t.object === o
         ? (t as Term.Triple)
         : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
@@ -76,6 +78,7 @@ const unify = (t: PatternTerm, value: Term.Term, map: Map<string, Term.GroundTer
     case 'Variable': {
       const bound = map.get(t.value);
       if (bound !== undefined) return bound.key === value.key;
+      // SAFETY: only ground terms are bound in solutions.
       map.set(t.value, value as Term.GroundTerm);
       return true;
     }

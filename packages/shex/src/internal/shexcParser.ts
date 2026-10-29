@@ -205,6 +205,8 @@ const junction = (
   if (Arr.isReadonlyArrayEmpty(juncts)) return atom.e;
   const e = atom.e;
   if (!Predicate.isString(e) && e.type === type && !atom.nested) {
+    // SAFETY: `e.type === type` and `type` is `ShapeAnd` or `ShapeOr`, both of which have
+    // `shapeExprs`.
     return { ...e, shapeExprs: (e as ShExJ.ShapeAnd).shapeExprs.concat(juncts) };
   }
   return { type, shapeExprs: [e, ...juncts] };
@@ -388,6 +390,7 @@ const facets = (strings: boolean, numerics: boolean): P<Mutable<ShExJ.Facets>> =
         out[key] = value;
         if (flags !== undefined && flags !== '') out['flags'] = flags;
       }
+      // SAFETY: every field was set with its facet's type.
       return Result.succeed(out as Mutable<ShExJ.Facets>);
     }),
     Parser.cut,
@@ -429,6 +432,7 @@ const stemmed = <A, X>(
   );
 
 /** The exclusions after a `.` wildcard: their kind is chosen by the first one. */
+// SAFETY: each branch builds the value set value for its exclusion kind.
 const wildcardExclusions: P<ShExJ.ValueSetValue> = Parser.preceded(
   Parser.peek(tok('-')),
   Parser.dispatch(
@@ -963,6 +967,8 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
         at,
       );
     }
+    // SAFETY: it is not an inclusion string, and an `EachOf` is the triple expression shape that
+    // carries all of these fields.
     let out = expr as Mutable<ShExJ.EachOf>;
     if (
       card !== undefined &&

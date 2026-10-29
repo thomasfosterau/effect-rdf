@@ -93,6 +93,7 @@ export class Engine {
       }
     }
     if (n._tag !== 'Variable' && n._tag !== 'DefaultGraph') {
+      // SAFETY: not a variable or the default graph, so the node can be an object.
       for (const q of Dataset.match(this.dataset, { object: n as Term.Object })) {
         const t = Term.triple(q.subject, q.predicate, q.object);
         if (seen.has(`i${t.key}`)) continue;

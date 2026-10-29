@@ -562,9 +562,12 @@ export const make = (
         }
       });
 
+    // SAFETY: both overloads of `select` are one implementation over `QueryInput`;
+    // `SparqlClientShape['select']` restores the builder's row typing.
     const select = ((query: QueryInput, options?: QueryOptions) =>
       Stream.map(selectBindings(query, options), B.toRecord)) as SparqlClientShape['select'];
 
+    // SAFETY: empty seeds of the fold's accumulator, typed as what the fold collects.
     const selectAll: SparqlClientShape['selectAll'] = (query, options) =>
       Effect.map(
         Stream.runFold(
@@ -833,6 +836,8 @@ export interface SelectAccessor {
  * @since 0.1.0
  * @category accessors
  */
+// SAFETY: both overloads of `select` are one implementation over `QueryInput`; `SelectAccessor`
+// restores the builder's row typing.
 export const select = ((query: QueryInput, options?: QueryOptions) =>
   Stream.unwrap(
     Effect.map(Effect.service(SparqlClient), (c) =>

@@ -181,6 +181,7 @@ describe('Validator', () => {
     Effect.gen(function* () {
       const report = yield* Validator.validate(personData, personShapes);
       expect(report.conforms).toBe(false);
+      // SAFETY: the test data has IRI focus nodes, and constraint components are IRIs.
       const summary = sorted(
         report.results.map(
           (r) =>
@@ -243,6 +244,7 @@ describe('Validator', () => {
       const report = yield* Validator.validate(data, shapes);
       const counts = new Map<string, number>();
       for (const r of report.results) {
+        // SAFETY: constraint components are IRIs.
         const name = sh.localName(r.sourceConstraintComponent as Term.NamedNode)!;
         counts.set(name, (counts.get(name) ?? 0) + 1);
       }
@@ -270,6 +272,7 @@ describe('Validator', () => {
       `);
       const data = ttl(`ex:a a ex:T ; ex:p 1 ; ex:q 2 . ex:b ex:p 1 .`);
       const report = yield* Validator.validate(data, shapes, { details: true });
+      // SAFETY: the test data has IRI focus nodes, and constraint components are IRIs.
       const tags = sorted(
         report.results.map(
           (r) =>
@@ -406,6 +409,7 @@ describe('SHACL-SPARQL extension point', () => {
         Layer.succeed(Sparql.SparqlConstraintEvaluator, {
           evaluateConstraint: (input) =>
             Effect.succeed(
+              // SAFETY: the test data has IRI focus nodes.
               Dataset.objectsOf(input.dataGraph, input.focusNode as Term.NamedNode, ex('bad')).map(
                 (value) => ({ value }),
               ),

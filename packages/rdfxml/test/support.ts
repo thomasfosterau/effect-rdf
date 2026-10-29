@@ -48,8 +48,11 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
     ws();
     if (input.startsWith('<<(', pos)) {
       pos += 3;
+      // SAFETY: the test's N-Triples reader parses a subject here.
       const s = term() as Term.Subject;
+      // SAFETY: the test's N-Triples reader parses an IRI predicate here.
       const p = term() as Term.NamedNode;
+      // SAFETY: the test's N-Triples reader parses an object here.
       const o = term() as Term.Object;
       ws();
       if (!input.startsWith(')>>', pos)) assert.fail(`Expected )>> at ${pos}`);
@@ -89,12 +92,14 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
           input.slice(pos),
         )!;
         pos += m[0].length;
+        // SAFETY: the regex only captures `ltr` or `rtl`.
         return m[2] !== undefined
           ? Term.literal(value, { language: m[1]!, direction: m[2] as Term.Direction })
           : Term.literal(value, m[1]!);
       }
       if (input.startsWith('^^', pos)) {
         pos += 2;
+        // SAFETY: the `^^` datatype is an IRI.
         return Term.literal(value, term() as Term.NamedNode);
       }
       return Term.literal(value);
@@ -104,8 +109,11 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
   for (;;) {
     ws();
     if (pos >= input.length) break;
+    // SAFETY: the test's N-Triples reader parses a subject here.
     const s = term() as Term.Subject;
+    // SAFETY: the test's N-Triples reader parses an IRI predicate here.
     const p = term() as Term.NamedNode;
+    // SAFETY: the test's N-Triples reader parses an object here.
     const o = term() as Term.Object;
     ws();
     if (input[pos] !== '.') assert.fail(`Expected . at ${pos}`);
@@ -276,16 +284,19 @@ export const readManifest = (file: string): Array<TestCase> => {
   for (const [subject, preds] of graph) {
     const types = preds.get(RDF_TYPE) ?? [];
     if (!types.some((t) => t.kind === 'iri' && t.value === `${MF}Manifest`)) continue;
+    // SAFETY: `mf:assumedTestBase` is an IRI string.
     const assumed = preds.get(`${MF}assumedTestBase`)?.[0]?.value as string | undefined;
     for (const inc of preds.get(`${MF}include`) ?? []) {
       if (inc.kind !== 'list') continue;
       for (const item of inc.items) {
+        // SAFETY: list items in the manifest are IRIs, which carry a `value`.
         out.push(...readManifest((item as { value: string }).value.replace(/^file:\/\//, '')));
       }
     }
     for (const entries of preds.get(`${MF}entries`) ?? []) {
       if (entries.kind !== 'list') continue;
       for (const entry of entries.items) {
+        // SAFETY: list items in the manifest are IRIs, which carry a `value`.
         const id = (entry as { value: string }).value;
         const e = graph.get(id);
         if (e === undefined) continue;

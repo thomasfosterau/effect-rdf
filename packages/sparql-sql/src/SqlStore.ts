@@ -138,9 +138,12 @@ const chunks = <A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A
 };
 
 const num = (v: unknown): number => (Predicate.isNumber(v) ? v : Number(v));
+// SAFETY: strings and nullish values returned above; what the driver hands back otherwise is a
+// number.
 const str = (v: unknown): string =>
   Predicate.isString(v) ? v : v === null || v === undefined ? '' : String(v as number);
 
+// SAFETY: a stored triple term is ground, so its subject and object are ground terms.
 const depth = (t: Term.GroundTerm): number =>
   t._tag === 'Triple'
     ? 1 +
@@ -209,6 +212,8 @@ const termOf = (state: DecodeState, id: number): Term.GroundTerm => {
   if (known !== undefined) return known;
   const comps = state.triples.get(id);
   if (comps === undefined) throw new Store.StoreError({ message: `Unknown term id ${id}` });
+  // SAFETY: a decoded triple term's components were stored from a subject, a predicate and an
+  // object.
   const t = Term.triple(
     termOf(state, comps[0]) as Term.Subject,
     termOf(state, comps[1]) as Term.Predicate,
@@ -402,8 +407,10 @@ export const make = (
           if (levels[d]!.has(t.key)) return;
           levels[d]!.set(t.key, t);
           if (t._tag === 'Triple') {
+            // SAFETY: a ground triple term's subject is a ground term.
             add(t.subject as Term.GroundTerm);
             add(t.predicate);
+            // SAFETY: a ground triple term's object is a ground term.
             add(t.object as Term.GroundTerm);
           }
         };
@@ -456,8 +463,13 @@ export const make = (
         str(row[at + 3]),
         str(row[at + 4]),
       );
-      if (Array.isArray(t)) state.triples.set(id, t as readonly [number, number, number]);
-      else state.known.set(id, t as Term.GroundTerm);
+      if (Array.isArray(t)) {
+        // SAFETY: `Enc.decode` returns a triple term as the array of its three component ids.
+        state.triples.set(id, t as readonly [number, number, number]);
+      } else {
+        // SAFETY: `Enc.decode` returns any other term as the ground term itself.
+        state.known.set(id, t as Term.GroundTerm);
+      }
     };
 
     /** Reads the dictionary rows of `ids` (one chunk) into a decode state. */
@@ -520,7 +532,11 @@ export const make = (
       Effect.gen(function* () {
         const terms: Array<Term.GroundTerm> = [];
         for (const t of [pattern.subject, pattern.predicate, pattern.object, pattern.graph]) {
-          if (t !== undefined && t._tag !== 'DefaultGraph') terms.push(t as Term.GroundTerm);
+          if (t !== undefined && t._tag !== 'DefaultGraph') {
+            // SAFETY: the pattern positions hold ground terms or `undefined`, and the default
+            // graph was excluded.
+            terms.push(t as Term.GroundTerm);
+          }
         }
         const ids = yield* resolveTerms(terms, false);
         const conds: Array<readonly [string, number]> = [];
@@ -575,6 +591,8 @@ export const make = (
         yield* remember(state);
         return rows.map((r) => {
           const g = num(r[3]);
+          // SAFETY: the store only inserts quads, so each column decodes to its position's kind and
+          // a non-zero graph to an IRI or blank node.
           return new Term.Quad(
             termOf(state, num(r[0])) as Term.Subject,
             termOf(state, num(r[1])) as Term.Predicate,
@@ -605,6 +623,7 @@ export const make = (
             }
             return `SELECT q.s, q.p, q.o, q.g, ${attrs} FROM (SELECT s, p, o, g FROM ${Qt}${Arr.isReadonlyArrayNonEmpty(w) ? ` WHERE ${w.join(' AND ')}` : ''} ORDER BY ${order.join(', ')} LIMIT ${pageSize}) q${joins}`;
           };
+          // SAFETY: `undefined` seeds the first page (no cursor yet).
           return Stream.paginate(undefined as ReadonlyArray<number> | undefined, (after) =>
             Effect.gen(function* () {
               const rows = yield* run(page(after));
@@ -733,6 +752,8 @@ export const make = (
           `SELECT id FROM ${Gt} UNION SELECT DISTINCT g FROM ${Qt} WHERE g <> 0`,
         );
         const terms = yield* decodeIds(rows.map((r) => num(r[0])));
+        // SAFETY: the graph ids come from the graph table and the quads' graph column, so they
+        // decode to IRIs or blank nodes.
         return Stream.fromArray(terms as ReadonlyArray<Term.NamedNode | Term.BlankNode>);
       }),
     ).pipe(Stream.mapError(storeError('graphs failed')));
@@ -783,13 +804,12 @@ export const make = (
     const transaction = <A, E, R>(
       effect: Effect.Effect<A, E, R>,
     ): Effect.Effect<A, E | Store.StoreError, R> =>
-      sql
-        .withTransaction(effect)
-        .pipe(
-          Effect.mapError((e) =>
-            SqlError.isSqlError(e) ? storeError('transaction failed')(e) : (e as E),
-          ),
-        );
+      sql.withTransaction(effect).pipe(
+        Effect.mapError((e) =>
+          // SAFETY: `withTransaction` adds only `SqlError` to `E`, and that case was handled.
+          SqlError.isSqlError(e) ? storeError('transaction failed')(e) : (e as E),
+        ),
+      );
 
     // --- SPARQL to SQL ------------------------------------------------------------
 

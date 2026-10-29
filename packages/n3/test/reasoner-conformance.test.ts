@@ -58,9 +58,11 @@ const readManifest = (): ReadonlyArray<Entry> => {
     for (const o of objects(e, `${TEST}options`)) {
       for (const t of statements.filter((t) => t.subject.key === o.key)) {
         if (t.object.key.startsWith('"true"'))
+          // SAFETY: the options' predicates are IRIs.
           options.add((t.predicate as Term.NamedNode).value.slice(TEST.length));
       }
     }
+    // SAFETY: test entries, actions and results are IRIs in the reasoner manifests.
     return {
       id: (e as Term.NamedNode).value.slice((e as Term.NamedNode).value.lastIndexOf('#') + 1),
       action: (objects(e, `${MF}action`)[0] as Term.NamedNode).value,

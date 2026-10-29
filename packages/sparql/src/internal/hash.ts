@@ -98,6 +98,7 @@ export const sha1 = (input: string): string => {
   for (let off = 0; off < m.length; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4) | 0;
     for (let i = 16; i < 80; i++) w[i] = rotl(w[i - 3]! ^ w[i - 8]! ^ w[i - 14]! ^ w[i - 16]!, 1);
+    // SAFETY: `h` holds the five SHA-1 state words.
     let [a, b, c, d, e] = h as [number, number, number, number, number];
     for (let i = 0; i < 80; i++) {
       let f: number;
@@ -158,6 +159,7 @@ export const sha256 = (input: string): string => {
       const s1 = rotr(w[i - 2]!, 17) ^ rotr(w[i - 2]!, 19) ^ (w[i - 2]! >>> 10);
       w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) | 0;
     }
+    // SAFETY: `h` holds the eight SHA-256 state words.
     let [a, b, c, d, e, f, g, hh] = h as [
       number,
       number,
@@ -291,6 +293,7 @@ const sha512core = (input: string, init: ReadonlyArray<string>, outWords: number
       const s1 = rotr64(y, 19n) ^ rotr64(y, 61n) ^ (y >> 6n);
       w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) & MASK64;
     }
+    // SAFETY: `h` holds the eight SHA-512 state words.
     let [a, b, c, d, e, f, g, hh] = h as [
       bigint,
       bigint,

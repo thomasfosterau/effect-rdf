@@ -286,6 +286,8 @@ export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Ar
       const clNode = graphObject[cl];
       delete graphObject[cl];
       if (clNode === undefined) continue;
+      // SAFETY: the property of a node object in the node map holds an array of node references
+      // (JSON-LD fromRdf §8.6).
       for (const clReference of node[property] as Array<JsonObject>) {
         if (clReference['@id'] !== cl) continue;
         delete clReference['@id'];
@@ -313,6 +315,8 @@ export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Ar
       while (property === RDF_REST && isWellFormedListNode(node, referencedOnce)) {
         list.push(node[RDF_FIRST][0]);
         listNodes.push(node['@id']);
+        // SAFETY: `isWellFormedListNode` checked that this node is referenced exactly once, so it
+        // has a usage entry.
         const nodeUsage = referencedOnce[node['@id']] as Usage;
         node = nodeUsage.node;
         property = nodeUsage.property;

@@ -403,6 +403,7 @@ describe('SPARQL endpoint', () => {
       Effect.gen(function* () {
         const r = yield* get(client, q('SELECT (<rel> AS ?x) {}'));
         const set = yield* Results.Json.parse(yield* r.text);
+        // SAFETY: the query binds `?x` to an IRI.
         expect(
           set._tag === 'ResultSet' &&
             (set.bindings[0]!.map.get('x') as Term.NamedNode | undefined)?.value,

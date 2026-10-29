@@ -69,15 +69,19 @@ export const fromRdf = (quads: ReadonlyArray<Term.Quad>): Results.ParsedResult |
   const bool = objects(rs, `${RS}boolean`)[0];
   if (bool !== undefined && bool._tag === 'Literal')
     return { _tag: 'Boolean', value: bool.value === 'true' };
+  // SAFETY: `rs:resultVariable` values are literals in result-set graphs.
   const variables = objects(rs, `${RS}resultVariable`).map((v) => (v as Term.Literal).value);
   const solutions = objects(rs, `${RS}solution`).map((sol) => {
     const index = objects(sol, `${RS}index`)[0];
     const bindings = B.fromEntries(
       objects(sol, `${RS}binding`).map((b) => {
+        // SAFETY: a binding's `rs:variable` is a literal and its `rs:value` a ground term.
         const name = (objects(b, `${RS}variable`)[0] as Term.Literal).value;
+        // SAFETY: a binding's `rs:value` is a ground term.
         return [name, objects(b, `${RS}value`)[0] as Term.GroundTerm] as const;
       }),
     );
+    // SAFETY: `rs:index` is an integer literal.
     return { index: index === undefined ? 0 : Number((index as Term.Literal).value), bindings };
   });
   const ordered = Arr.sort(

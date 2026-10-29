@@ -173,13 +173,16 @@ export const equals = (a: Path, b: Path): boolean => {
   if (a._tag !== b._tag) return false;
   switch (a._tag) {
     case 'PredicatePath':
+      // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       return a.predicate.value === (b as PredicatePath).predicate.value;
     case 'SequencePath':
     case 'AlternativePath': {
+      // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       const bs = (b as SequencePath | AlternativePath).paths;
       return a.paths.length === bs.length && a.paths.every((p, i) => equals(p, bs[i]!));
     }
     default:
+      // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       return equals(a.path, (b as InversePath).path);
   }
 };
@@ -228,6 +231,7 @@ const step = (
     case 'PredicatePath': {
       for (const node of nodes.values()) {
         if (inverse) {
+          // SAFETY: path values are nodes, which can be objects.
           for (const q of Dataset.match(data, {
             predicate: path.predicate,
             object: node as Term.Object,
@@ -247,6 +251,7 @@ const step = (
       const parts = inverse ? [...path.paths].reverse() : path.paths;
       let current: ReadonlyMap<string, Node> = nodes;
       for (const p of parts) current = step(data, current, p, inverse);
+      // SAFETY: `step` returns a fresh map for every path kind.
       return current as Map<string, Node>;
     }
     case 'AlternativePath': {

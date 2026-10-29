@@ -38,6 +38,8 @@ export const prefetch = <A, E>(
       Effect.onError(() => Fiber.interrupt(fiber)),
     );
     if (Option.isNone(first)) return Stream.empty;
+    // SAFETY: the queue only receives `A` values and `QueryTimeout` or `E` failures; the cast drops
+    // the queue's `Done` end-of-stream type.
     return Stream.concat(Stream.succeed(first.value), Stream.fromQueue(queue)).pipe(
       Stream.ensuring(Fiber.interrupt(fiber)),
     ) as Stream.Stream<A, E | QueryTimeout>;

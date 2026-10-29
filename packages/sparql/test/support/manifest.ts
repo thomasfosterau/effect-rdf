@@ -57,6 +57,7 @@ class Graph {
     }
   }
   objects(s: Term.Term, p: string): Array<Node> {
+    // SAFETY: the manifest's objects are IRIs, blank nodes or literals, the `Node` union.
     return (this.bySubject.get(s.key) ?? [])
       .filter((q) => q.predicate.value === p)
       .map((q) => q.object as Node);

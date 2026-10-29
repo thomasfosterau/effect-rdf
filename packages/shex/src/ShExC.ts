@@ -43,6 +43,7 @@ export interface ParseResult {
 const toRecord = (
   prefixes: ParseOptions['prefixes'],
 ): Readonly<Record<string, string>> | undefined =>
+  // SAFETY: not a `PrefixMap`, so it is the plain record form.
   prefixes === undefined
     ? undefined
     : 'prefixes' in prefixes && prefixes.prefixes instanceof Map
@@ -213,6 +214,7 @@ class Printer {
   valueSetValue(v: ShExJ.ValueSetValue): string {
     if (Predicate.isString(v)) return this.iri(v);
     if (!('type' in v) || !Predicate.isString(v.type) || 'value' in v) {
+      // SAFETY: a value without a string `type`, or with a `value`, is an object literal in ShExJ.
       return this.literal(v as ShExJ.ObjectLiteral);
     }
     const lit = (s: string) => `"${escapeString(s)}"`;

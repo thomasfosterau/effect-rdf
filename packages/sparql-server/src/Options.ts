@@ -108,6 +108,7 @@ export interface Resolved {
   readonly prefixes: Readonly<Record<string, string>>;
 }
 
+// SAFETY: removing a trailing slash from a path that starts with `/` keeps it starting with `/`.
 const trimSlash = <P extends `/${string}`>(path: P): P =>
   (path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path) as P;
 

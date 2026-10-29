@@ -177,12 +177,18 @@ export const arithmetic = (op: '+' | '-' | '*' | '/', a: Term.Term, b: Term.Term
   const py = promote(y, kind);
   switch (kind) {
     case INTEGER: {
+      // SAFETY: `kind === INTEGER` means both operands were promoted to the integer representation
+      // (`bigint`).
       const u = px.v as bigint;
+      // SAFETY: `kind === INTEGER` means both operands were promoted to the integer representation
+      // (`bigint`).
       const v = py.v as bigint;
       return numLiteral({ kind: 0, v: op === '+' ? u + v : op === '-' ? u - v : u * v });
     }
     case DECIMAL: {
+      // SAFETY: `kind === DECIMAL` means both operands were promoted to `BigDecimal`.
       const u = px.v as BigDecimal.BigDecimal;
+      // SAFETY: `kind === DECIMAL` means both operands were promoted to `BigDecimal`.
       const v = py.v as BigDecimal.BigDecimal;
       if (op === '/') {
         if (BigDecimal.isZero(v)) return fail('Division by zero');
@@ -199,9 +205,12 @@ export const arithmetic = (op: '+' | '-' | '*' | '/', a: Term.Term, b: Term.Term
       });
     }
     default: {
+      // SAFETY: the remaining kinds (float, double) carry a JS `number`.
       const u = px.v as number;
+      // SAFETY: the remaining kinds (float, double) carry a JS `number`.
       const v = py.v as number;
       const r = op === '+' ? u + v : op === '-' ? u - v : op === '*' ? u * v : u / v;
+      // SAFETY: integer and decimal returned above, so `kind` is float (2) or double (3).
       return numLiteral({ kind: kind as 2 | 3, v: kind === FLOAT ? Math.fround(r) : r });
     }
   }
@@ -240,7 +249,9 @@ export const compareNum = (x: Num, y: Num): number => {
   const kind = Math.max(x.kind, y.kind);
   if (kind <= DECIMAL) {
     if (kind === INTEGER) {
+      // SAFETY: `kind === INTEGER` means both values are `bigint`.
       const u = x.v as bigint;
+      // SAFETY: `kind === INTEGER` means both values are `bigint`.
       const v = y.v as bigint;
       return u < v ? -1 : u > v ? 1 : 0;
     }
@@ -493,8 +504,12 @@ export const orderCompare = (a: Term.Term | undefined, b: Term.Term | undefined)
   switch (a._tag) {
     case 'BlankNode':
     case 'NamedNode':
+      // SAFETY: `rank` gave both terms the same rank, and blank nodes and IRIs share this case, so
+      // `b` has a `value` too.
       return compareCodepoints(a.value, (b as Term.NamedNode).value);
     case 'Triple': {
+      // SAFETY: `rank` gave both terms the same rank, and only triple terms have this one, so `b`
+      // is a triple term too.
       const t = b as Term.Triple;
       return (
         orderCompare(a.subject, t.subject) ||
@@ -503,6 +518,8 @@ export const orderCompare = (a: Term.Term | undefined, b: Term.Term | undefined)
       );
     }
     case 'Literal': {
+      // SAFETY: `rank` gave both terms the same rank, and only literals have this one, so `b` is a
+      // literal too.
       const l = b as Term.Literal;
       // Where the values cannot be compared, fall through to the syntactic
       // ordering.

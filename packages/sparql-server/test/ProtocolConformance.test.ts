@@ -57,6 +57,8 @@ const toRequest = (spec: RequestSpec, authority: string, vars: Map<string, strin
     for (const [k, v] of vars) out = out.split(k).join(v);
     return out;
   };
+  // SAFETY: the protocol tests' methods are valid HTTP method names; `HttpClientRequest.make` only
+  // needs the literal type.
   let request = HttpClientRequest.make(spec.method as 'GET')(
     `http://${authority}${sub(spec.path)}`,
   );
@@ -216,6 +218,7 @@ describe.skipIf(!exists)('SPARQL 1.1 Service Description', () => {
           );
         }
         for (const ds of Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}defaultDataset`))) {
+          // SAFETY: an `sd:defaultDataset` value is a node, so it can be a subject.
           expect(
             Dataset.has(
               dataset,

@@ -202,6 +202,8 @@ const toDatasetPattern = (pattern: QuadPattern): Dataset.Pattern | undefined => 
   ) {
     return undefined;
   }
+  // SAFETY: the guards above rejected a non-IRI predicate, a literal subject and a non-graph graph
+  // term, which is exactly what `Dataset.Pattern` excludes.
   return pattern as Dataset.Pattern;
 };
 

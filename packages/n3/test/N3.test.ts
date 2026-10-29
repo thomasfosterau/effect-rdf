@@ -111,6 +111,7 @@ describe('N3.parse', () => {
 
   it('scopes blank node labels to the document', () => {
     const [a] = statements('_:x :p { _:x :q :r } .');
+    // SAFETY: the test document's object is a formula.
     expect(a!.subject).toEqual((a!.object as Model.Formula).statements[0]!.subject);
   });
 

@@ -56,6 +56,7 @@ const runManifest = (
     if (!exists) return;
     const manifest = readJson(manifestFile);
     const entry = (stats[name] = { pass: 0, fail: 0, skip: 0 });
+    // SAFETY: the JSON-LD test manifests' `sequence` is an array of test entries.
     for (const test of manifest.sequence as ReadonlyArray<TestEntry>) {
       const id = `${manifestFile.replace('-manifest.jsonld', '')}${test['@id']}`;
       const option = test.option ?? {};

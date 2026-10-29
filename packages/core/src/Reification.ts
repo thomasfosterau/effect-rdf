@@ -81,6 +81,7 @@ export const toStandardReification = (self: Dataset.Dataset): Dataset.Dataset =>
     if (existing !== undefined) return existing;
     const node = Term.blankNode();
     nodes.set(t.key + graph.key, node);
+    // SAFETY: conversion maps a subject to a subject and an object to an object.
     extra.push(
       new Term.Quad(node, rdf.type, rdf.Statement, graph),
       new Term.Quad(node, rdf.subject, convert(t.subject, graph) as Term.Subject, graph),
@@ -89,6 +90,7 @@ export const toStandardReification = (self: Dataset.Dataset): Dataset.Dataset =>
     );
     return node;
   };
+  // SAFETY: conversion maps a subject to a subject and an object to an object.
   const converted = Dataset.map(
     self,
     (q) =>

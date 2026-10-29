@@ -122,6 +122,7 @@ describe('Serialization', () => {
                 baseIri: undefined,
               }),
       });
+      // SAFETY: the test's serializer only receives quads with IRI subjects.
       const serializer = Serialization.makeSerializer({
         format,
         serialize: (quads) =>

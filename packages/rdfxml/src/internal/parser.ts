@@ -448,6 +448,8 @@ const attributeDef: P<unknown> = Parser.seq(
   defaultDecl,
 ).pipe(
   Parser.tap(([, , , , v]) => {
+    // SAFETY: the default declaration yields the default value string, or `undefined` for
+    // `#REQUIRED` / `#IMPLIED`.
     const value = v as string | undefined;
     let types = x.attributeTypes.get(x.attlistElement);
     if (types === undefined) x.attributeTypes.set(x.attlistElement, (types = new Map()));
@@ -661,8 +663,11 @@ const openElement = (empty: boolean): void => {
     }
     if (prefix === 'xml') continue;
     if (inScope === parentNs) inScope = new Map(parentNs);
-    if (a.value === '') (inScope as Map<string, string>).delete('');
-    else (inScope as Map<string, string>).set(prefix, a.value);
+    // SAFETY: `inScope` was copied into a fresh mutable map on the line above when it was still
+    // the parent's.
+    const own = inScope as Map<string, string>;
+    if (a.value === '') own.delete('');
+    else own.set(prefix, a.value);
     declarations.push({ prefix, namespace: a.value });
   }
 
@@ -875,6 +880,7 @@ const reference: P<unknown> = Parser.seq(
     flush(frame);
     const position = x.position(start);
     for (const n of replacementNodes(body, replacement, start)) {
+      // SAFETY: adding a position to a node keeps its kind.
       const positioned = { ...n, position } as Xml.Node;
       if (positioned._tag === 'Text') pushText(frame, positioned.value, start);
       else {
@@ -915,6 +921,7 @@ const rootElement: P<unknown> = Parser.terminated(
     ),
   ),
   act(() => {
+    // SAFETY: the document element is the root frame's only child.
     x.root = x.stack[0]!.children.pop() as Xml.Element;
   }),
 );

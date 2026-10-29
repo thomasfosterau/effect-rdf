@@ -444,7 +444,10 @@ const uniqueTerms = <T extends Term.Term>(terms: ReadonlyArray<T>): ReadonlyArra
 
 const termsAt = <T extends Term.Term>(self: Dataset, i: number): ReadonlyArray<T> =>
   Array.from(HashMap.values(self.spog[i]!), (inner) => {
+    // SAFETY: an inner map is removed from the index when its last quad goes, so it always holds
+    // one.
     const q = HashMap.values(inner).next().value as Term.Quad;
+    // SAFETY: position `i` (0–3) selects the term kind `T` the caller asked for.
     return [q.subject, q.predicate, q.object, q.graph][i] as T;
   });
 

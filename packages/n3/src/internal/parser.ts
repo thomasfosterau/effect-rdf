@@ -245,6 +245,7 @@ const FALSE = Term.literal('false', xsd.boolean);
  * that ends a statement, rather than after it.
  */
 const numberStart: P<void> = Parser.make<void>((state) => {
+  // SAFETY: the N3 parser runs on string input, never bytes.
   const input = state.input as string;
   const isDigit = (k: number) => {
     const c = input.charCodeAt(k);
@@ -377,6 +378,7 @@ const pathItem: P<Item> = Parser.preceded(
   Parser.alt(bracket, collection, formula, leafItem).pipe(Parser.expected('a term')),
 );
 
+// SAFETY: the alternatives only match `!` or `^`.
 const path_: P<Path> = Parser.seq(
   pathItem,
   Parser.repeat(
@@ -692,6 +694,7 @@ class Builder {
           ? I18N_DATATYPE.exec(datatype.slice(i18n.base.length))
           : null;
         if (dir !== null) {
+          // SAFETY: the base-direction regex only captures `ltr` or `rtl`.
           return Term.literal(item.value, {
             language: dir[1]!,
             direction: dir[2] as Term.Direction,

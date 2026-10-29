@@ -95,6 +95,7 @@ const readExpected = (file: string): Results.ParsedResult | Dataset.Dataset => {
   return fromRdf(quads) ?? Dataset.fromIterable(quads);
 };
 
+// SAFETY: every order key was checked to be a variable just above.
 const orderVariables = (query: Ast.Query): ReadonlyArray<string> =>
   query.orderBy.every((o) => o.expression._tag === 'Variable')
     ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
@@ -159,16 +160,19 @@ const runQueryTest = (t: TestCase, optimize = true) =>
       case 'Graph': {
         const quads = yield* Stream.runCollect(result.quads);
         const actual = Dataset.fromIterable(quads);
+        // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
         expectIsomorphic(actual, expected as Dataset.Dataset);
         return;
       }
       case 'Select': {
         const set = yield* Results.collect(result);
         let actual = set.bindings;
+        // SAFETY: a SELECT test's expected result was loaded as a result set.
         let exp = (expected as Results.ResultSet).bindings;
         if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
           // Round-trip our results through CSV, as CSV is lossy.
           const csv = Results.Csv.serializeString(set);
+          // SAFETY: the CSV serialization of a result set parses back to a result set.
           actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
         }
         if (t.result!.endsWith('.tsv') || t.result!.endsWith('.csv')) {

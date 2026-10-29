@@ -453,6 +453,8 @@ export const xml = (): Incremental => {
       while (step(out)) {
         // keep consuming
       }
+      // SAFETY: `step` may move `phase` to `whole`; TypeScript keeps the narrowing from before the
+      // loop.
       if ((phase as string) === 'whole') {
         whole = buffer;
         buffer = '';

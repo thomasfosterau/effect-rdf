@@ -137,6 +137,7 @@ export const compactElement = (
       if (isString(expandedValue)) {
         compactedValue = compactIri(env, typeScoped, expandedValue, null, true, false, options);
       } else {
+        // SAFETY: a `@type` value that is not a string is an array of IRIs after expansion.
         compactedValue = (expandedValue as Array<string>).map((t) =>
           compactIri(env, typeScoped, t, null, true, false, options),
         );
@@ -426,6 +427,7 @@ export const inverseContext = (active: ActiveContext): InverseContext => {
       : Arr.sort(def.container, Order.String).join('');
     let containerMap = result.get(def.iri);
     if (containerMap === undefined) {
+      // SAFETY: `Object.create(null)` returns an empty prototype-less object used as a record.
       containerMap = Object.create(null) as Record<string, ContainerEntry>;
       result.set(def.iri, containerMap);
     }

@@ -137,6 +137,7 @@ const expectIsomorphic = (actual: Dataset.Dataset, exp: Dataset.Dataset): void =
 };
 
 /** The `ORDER BY` variables of a query, when every key is a plain variable. */
+// SAFETY: every order key was checked to be a variable just above.
 const orderVariables = (query: Ast.Query): ReadonlyArray<string> =>
   query.orderBy.every((o) => Term.isVariable(o.expression))
     ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
@@ -176,6 +177,7 @@ const runQueryTest = (t: TestCase, accept: string) =>
         case 'Construct':
         case 'Describe': {
           const actual = yield* client.constructDataset(text);
+          // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
           expectIsomorphic(actual, expected as Dataset.Dataset);
           return;
         }
@@ -184,8 +186,10 @@ const runQueryTest = (t: TestCase, accept: string) =>
           let actual = set.bindings;
           if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
             const csv = Results.Csv.serializeString(set);
+            // SAFETY: the CSV serialization of a result set parses back to a result set.
             actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
           }
+          // SAFETY: a SELECT test's expected result was loaded as a result set.
           expectSameSolutions(
             actual,
             (expected as Results.ResultSet).bindings,
