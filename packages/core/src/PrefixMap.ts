@@ -26,6 +26,7 @@ export const empty: PrefixMap = { prefixes: new Map() };
  * @since 0.1.0
  * @category constructors
  */
+// SAFETY: `Symbol.iterator in prefixes` holds, so it is the iterable form.
 export const make = (
   prefixes: Readonly<Record<string, string>> | Iterable<readonly [string, string]>,
 ): PrefixMap => ({

@@ -496,6 +496,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       const path = single(param, sh.path);
       if (path === undefined || path._tag !== 'NamedNode')
         fail(`parameter ${param.key} of ${c.key} must have an IRI sh:path`, param);
+      // SAFETY: a non-IRI path failed above.
       (isTrue(single(param, sh.optional)) ? optional : mandatory).push(path as Term.NamedNode);
     }
     if (Arr.isReadonlyArrayNonEmpty(mandatory))
@@ -539,6 +540,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     for (const n of objects(id, sh.targetNode)) targets.push({ _tag: 'TargetNode', node: n });
     for (const c of objects(id, sh.targetClass)) {
       if (!isShapeId(c)) fail(`the value of sh:targetClass on ${id.key} must be an IRI`, id);
+      // SAFETY: `isShapeId` holds (checked above), so it is an IRI or blank node.
       targets.push({ _tag: 'TargetClass', class: c as Term.Resource, implicit: false });
     }
     if (id._tag === 'NamedNode' && classInstances.has(id.key)) {
@@ -562,6 +564,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
 
     for (const c of objects(id, sh.class)) {
       if (!isShapeId(c)) fail(`the value of sh:class on ${id.key} must be an IRI`, id);
+      // SAFETY: `isShapeId` holds (checked above), so it is an IRI or blank node.
       push({ _tag: 'Class', class: c as Term.Resource });
     }
     for (const d of objects(id, sh.datatype)) {
@@ -721,6 +724,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       const path = Path.fromRdf(g, pathNode);
       if (Result.isFailure(path))
         fail(`ill-formed sh:path of ${id.key}: ${path.failure.message}`, id);
+      // SAFETY: a failure called `fail` above, which throws.
       return {
         _tag: 'PropertyShape',
         id,

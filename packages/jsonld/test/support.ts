@@ -91,6 +91,8 @@ export const parseNQuads = (text: string): Array<Term.Quad> => {
     }
     if (rest.trim() !== '.') throw new BadNQuadsLine({ message: `Bad N-Quads line: ${line}` });
     const [s, p, o, g] = terms;
+    // SAFETY: the test's N-Quads reader yields a subject, an IRI predicate, an object and an
+    // optional graph in that order.
     quads.push(
       Term.quad(
         s as Term.Subject,

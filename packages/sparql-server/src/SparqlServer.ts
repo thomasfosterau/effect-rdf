@@ -484,6 +484,8 @@ export const layerRoutes = (
  * @since 0.1.0
  * @category layers
  */
+// SAFETY: the routes' own requirements are `Requirements`; the cast restates them without the
+// router internals.
 export const layerServe = (
   options?: Options.Options,
 ): Layer.Layer<never, never, HttpServer.HttpServer | Requirements> =>
@@ -514,6 +516,8 @@ export const layer = (
   options: ServeOptions,
 ): Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError, Requirements> => {
   const { port, host, ...rest } = options;
+  // SAFETY: providing the Node HTTP server leaves `HttpServer` and `Requirements`; the cast
+  // restates the layer type.
   return layerServe(rest).pipe(
     Layer.provideMerge(
       NodeHttpServer.layer(createServer, host === undefined ? { port } : { port, host }),

@@ -56,6 +56,7 @@ const endpoints = (servers: Readonly<Record<string, Dataset.Dataset>>) =>
             Formats.layer,
           ),
         );
+        // SAFETY: the endpoint URLs in the test are absolute, so their path starts with `/`.
         apps[url.origin] = Testing.provideServices(
           SparqlServer.handler({ path: url.pathname as `/${string}` }),
           context,
@@ -97,6 +98,7 @@ describe('Federation', () => {
           SERVICE <http://remote.test/sparql> { ?person <http://example.org/name> ?name }
         } ORDER BY ?name`);
       const rows = yield* Stream.runCollect(result.bindings);
+      // SAFETY: the query binds `?name` to a literal.
       expect(rows.map((b) => (b.map.get('name') as Term.Literal).value)).toEqual(['Alice', 'Bob']);
 
       const silent = yield* engine.select(
@@ -254,6 +256,7 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
                 Term.quad(
                   Term.namedNode(`urn:row:${i}`),
                   Term.namedNode(`urn:var:${k}`),
+                  // SAFETY: the bound values in this test are object-position terms.
                   v as Term.Object,
                 ),
               ),

@@ -291,9 +291,11 @@ const flatten = (inputs: ReadonlyArray<PatternInput>): Array<Ast.Pattern> => {
   const out: Array<Ast.Pattern> = [];
   const go = (input: PatternInput): void => {
     if (Array.isArray(input)) {
+      // SAFETY: `Array.isArray` holds, and the array form of `PatternInput` is a list of inputs.
       (input as ReadonlyArray<PatternInput>).forEach(go);
       return;
     }
+    // SAFETY: not an array, so it is a single pattern of one of these kinds.
     const p = input as Ast.TriplePattern | Ast.PathPattern | Ast.Pattern;
     if (p._tag === 'TriplePattern' || p._tag === 'PathPattern') {
       const last = out[out.length - 1];
@@ -653,6 +655,8 @@ export class Builder<
   private with(
     patch: Partial<Ast.QueryBase> & Partial<Pick<Ast.SelectQuery, 'distinct' | 'reduced'>>,
   ): Builder<K, R, O> {
+    // SAFETY: patching fields of a query keeps its kind `K`; the spread only loses the
+    // discriminant's narrowing.
     return new Builder({ ...this.query, ...patch } as QueryOf<K>);
   }
 
@@ -704,6 +708,7 @@ export class Builder<
   groupBy(
     ...conditions: ReadonlyArray<ExpressionInput | Alias<string, boolean>>
   ): Builder<K, R, O> {
+    // SAFETY: not an alias, so it is an expression input.
     return this.with({
       groupBy: [
         ...this.query.groupBy,
@@ -723,6 +728,7 @@ export class Builder<
 
   /** Adds `ORDER BY` conditions (ascending unless wrapped with `desc`). */
   orderBy(...conditions: ReadonlyArray<ExpressionInput | Ast.OrderCondition>): Builder<K, R, O> {
+    // SAFETY: not an order condition, so it is an expression input.
     return this.with({
       orderBy: [
         ...this.query.orderBy,
@@ -872,6 +878,8 @@ export const execute = <R extends string, O extends string>(
     Effect.gen(function* () {
       const engine = yield* Engine.SparqlEngine;
       const result = yield* engine.select(builder.build(), options);
+      // SAFETY: the builder's type parameters track the projected variables, so a row has exactly
+      // `R` and optional `O` keys.
       return Stream.map(result.bindings, (b) => B.toRecord(b) as Row<R, O>);
     }),
   );

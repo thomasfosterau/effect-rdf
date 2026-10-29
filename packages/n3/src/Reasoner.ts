@@ -119,6 +119,8 @@ const blanksToVariables = <T extends Model.N3Term>(t: T, blanks: ReadonlySet<str
       : x._tag === 'Collection'
         ? new Model.Collection(x.items.map(go))
         : x;
+  // SAFETY: `go` keeps the kind of a term (blank nodes become variables only where `T` allows any
+  // N3 term).
   return go(t) as T;
 };
 
@@ -195,6 +197,7 @@ const walk = (t: Model.N3Term, b: Bindings): Model.N3Term => {
   return cur;
 };
 
+// SAFETY: substituting into a term gives a term.
 const resolve = (t: Model.N3Term, b: Bindings): Model.N3Term =>
   b.size === 0 ? t : (Model.substitute(t, b) as Model.N3Term);
 
@@ -283,6 +286,7 @@ const solve = (
       out.push(cur);
       return;
     }
+    // SAFETY: `remaining` was checked to be non-empty above.
     const [goal, ...rest] = remaining as [Model.Statement, ...Array<Model.Statement>];
     const builtin = engine.builtins ? Builtins.builtinFor(walk(goal.predicate, cur)) : undefined;
     if (builtin !== undefined) {

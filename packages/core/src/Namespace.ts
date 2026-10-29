@@ -38,6 +38,8 @@ export interface Namespace<Base extends string> {
  */
 export const make = <const Base extends string>(base: Base): Namespace<Base> => {
   const cache = new Map<string, NamedNode>();
+  // SAFETY: the function gets its vocabulary members (`contains`, `localName`, …) assigned below
+  // before it is returned.
   const ns = ((local: string) => {
     let node = cache.get(local);
     if (node === undefined) {
@@ -86,5 +88,6 @@ export const vocabulary = <const Base extends string, const Terms extends string
   for (const term of terms) {
     props[term] = { value: ns(term), enumerable: true };
   }
+  // SAFETY: `props` defines one property per term in `Terms`.
   return Object.defineProperties(ns, props) as Vocabulary<Base, Terms>;
 };

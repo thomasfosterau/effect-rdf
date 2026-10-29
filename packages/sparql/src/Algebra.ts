@@ -670,6 +670,8 @@ export const mapChildren = (op: Operation, f: (op: Operation) => Operation): Ope
     case 'Reduced':
     case 'Slice':
     case 'Service':
+      // SAFETY: every case listed here has an `input`, and replacing it keeps the operation's own
+      // tag.
       return { ...op, input: f(op.input) } as Operation;
   }
 };
@@ -840,12 +842,14 @@ export const prebind = (op: Operation, bindings: Bindings): Operation => {
   const term = (t: Ast.TermPattern): Ast.TermPattern => {
     if (t._tag === 'Variable') {
       const v = bindings.map.get(t.value);
+      // SAFETY: a bound value is a ground term, which is also a term pattern.
       return v === undefined ? t : (v as Ast.TermPattern);
     }
     if (t._tag === 'Triple') {
       const s = term(t.subject);
       const p = term(t.predicate);
       const o = term(t.object);
+      // SAFETY: substituting ground terms into a triple pattern keeps each position's kind.
       return s === t.subject && p === t.predicate && o === t.object
         ? t
         : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);

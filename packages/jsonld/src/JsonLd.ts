@@ -288,6 +288,7 @@ const expandSync = (
   const base = options?.base !== undefined ? options.base : input.documentUrl;
   let active: ActiveContext = initialContext(base);
   if (options?.expandContext !== undefined && options.expandContext !== null) {
+    // SAFETY: `expandContext` is a JSON value supplied by the caller.
     let ctx = options.expandContext as Json;
     if (isObject(ctx) && '@context' in ctx) ctx = ctx['@context'];
     active = processContext(env, active, ctx, active.originalBase);
@@ -416,6 +417,8 @@ export const frame = (
 ): Effect.Effect<JsonObjectValue, JsonLdError.JsonLdError> =>
   Effect.gen(function* () {
     const resolved = yield* resolveInput(input, options);
+    // SAFETY: a frame is a JSON-LD input (document, URL or object), the same shape `resolveInput`
+    // takes.
     const resolvedFrame = yield* resolveInput(frame as Input, options);
     return yield* run(options, (env) => frameSync(env, resolved, resolvedFrame, options));
   });
@@ -430,6 +433,7 @@ const frameSync = (
   if (!isObject(frameDocument) && !Array.isArray(frameDocument)) {
     return fail('invalid frame', 'a frame must be a JSON object');
   }
+  // SAFETY: `isObject(frameDocument)` holds in this branch.
   const context: Json = isObject(frameDocument)
     ? ((frameDocument as JsonObject)['@context'] ?? null)
     : null;
@@ -680,6 +684,7 @@ export const parse = (
       ),
     );
     const base = options?.base !== undefined ? options.base : (options?.baseIri ?? null);
+    // SAFETY: the parsed JSON document is a JSON-LD input.
     const quads = yield* toQuads(json as Input, { ...options, base }).pipe(
       Effect.mapError(
         (e) => new Serialization.RdfParseError({ format: format.name, message: e.message }),

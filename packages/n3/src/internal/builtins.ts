@@ -187,6 +187,7 @@ const comparison =
 
 const sum = (ns: Array<Num>): Num => {
   const kind = resultKind(ns);
+  // SAFETY: `kind === 'integer'` means every value is a `bigint`.
   return kind === 'integer'
     ? { kind, value: ns.reduce((a, n) => a + (n.value as bigint), 0n) }
     : { kind, value: ns.reduce((a, n) => a + asNumber(n), 0) };
@@ -194,6 +195,7 @@ const sum = (ns: Array<Num>): Num => {
 
 const product = (ns: Array<Num>): Num => {
   const kind = resultKind(ns);
+  // SAFETY: `kind === 'integer'` means every value is a `bigint`.
   return kind === 'integer'
     ? { kind, value: ns.reduce((a, n) => a * (n.value as bigint), 1n) }
     : { kind, value: ns.reduce((a, n) => a * asNumber(n), 1) };
@@ -206,10 +208,13 @@ const binary =
     forceReal = false,
   ) =>
   (ns: Array<Num>): Num | undefined => {
+    // SAFETY: `binary` is only used as `listFunction(binary(…), 2)`, which passes exactly two
+    // numbers.
     const [a, c] = ns as [Num, Num];
     const kind = resultKind(ns);
     let outKind: Num['kind'] = kind === 'integer' ? 'decimal' : kind;
     if (kind === 'integer' && int !== undefined && !forceReal) {
+      // SAFETY: `kind === 'integer'` means both values are `bigint`.
       const r = int(a.value as bigint, c.value as bigint);
       if (r !== undefined) return { kind, value: r };
       outKind = 'double';
@@ -234,10 +239,12 @@ const mathBuiltins = {
     2,
   ),
   integerQuotient: listFunction((ns) => {
+    // SAFETY: `listFunction(f, 2)` only calls `f` with two numbers.
     const [a, b] = ns.map(asNumber) as [number, number];
     return b === 0 ? undefined : { kind: 'integer', value: BigInt(Math.trunc(a / b)) };
   }, 2),
   remainder: listFunction((ns) => {
+    // SAFETY: `listFunction(f, 2)` only calls `f` with two numbers.
     const [a, b] = ns as [Num, Num];
     if (a.kind !== 'integer' || b.kind !== 'integer' || b.value === 0n) return undefined;
     // The result has the sign of the divisor (floored division).
@@ -411,6 +418,7 @@ const listBuiltins = {
   append: (s, o, b, ctx) => {
     if (!ready(s)) return undefined;
     if (s._tag !== 'Collection' || !s.items.every(Model.isCollection)) return [];
+    // SAFETY: every item was checked with `Model.isCollection` above.
     return ctx.unify(
       o,
       new Model.Collection(s.items.flatMap((l) => (l as Model.Collection).items)),
@@ -426,6 +434,7 @@ const listBuiltins = {
   memberAt: (s, o, b, ctx) => {
     if (!ready(s)) return undefined;
     if (s._tag !== 'Collection' || s.items.length !== 2) return [];
+    // SAFETY: the collection was checked to have two items above.
     const [l, idx] = s.items as [Model.N3Term, Model.N3Term];
     const n = toNum(idx);
     if (l._tag !== 'Collection' || n === undefined) return [];
@@ -434,6 +443,7 @@ const listBuiltins = {
   remove: (s, o, b, ctx) => {
     if (!ready(s)) return undefined;
     if (s._tag !== 'Collection' || s.items.length !== 2) return [];
+    // SAFETY: the collection was checked to have two items above.
     const [l, x] = s.items as [Model.N3Term, Model.N3Term];
     if (l._tag !== 'Collection') return [];
     return ctx.unify(o, new Model.Collection(l.items.filter((i) => i.key !== x.key)), b);
@@ -500,6 +510,7 @@ const logBuiltins = {
   },
   dtlit: (s, o, b, ctx) => {
     if (s._tag === 'Collection' && s.items.length === 2 && ready(s)) {
+      // SAFETY: the collection was checked to have two items.
       const [lex, dt] = s.items as [Model.N3Term, Model.N3Term];
       if (lex._tag !== 'Literal' || dt._tag !== 'NamedNode') return [];
       return ctx.unify(o, Term.literal(lex.value, dt), b);
@@ -511,6 +522,7 @@ const logBuiltins = {
   },
   langlit: (s, o, b, ctx) => {
     if (s._tag === 'Collection' && s.items.length === 2 && ready(s)) {
+      // SAFETY: the collection was checked to have two items.
       const [lex, lang] = s.items as [Model.N3Term, Model.N3Term];
       if (lex._tag !== 'Literal' || lang._tag !== 'Literal') return [];
       return ctx.unify(o, Term.literal(lex.value, lang.value), b);
@@ -538,10 +550,12 @@ const logBuiltins = {
   },
   collectAllIn: (s, o, b, ctx) => {
     if (s._tag !== 'Collection' || s.items.length !== 3) return [];
+    // SAFETY: the collection was checked to have three items above.
     const [template, where, result] = s.items as [Model.N3Term, Model.N3Term, Model.N3Term];
     const scope = scopeOf(o, ctx);
     const goals = goalsOf(where);
     if (scope === undefined || goals === undefined) return [];
+    // SAFETY: substituting into a term gives a term.
     const values = ctx
       .query(scope, goals, b, true)
       .map((sol) => Model.substitute(template, sol) as Model.N3Term);

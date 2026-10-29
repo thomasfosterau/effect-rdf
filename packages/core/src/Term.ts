@@ -512,6 +512,7 @@ export const toQuad = <
   self: Triple<S, P, O>,
   graph?: G,
 ): Quad<S, P, O, G> =>
+  // SAFETY: `G` defaults to the default graph type when no graph is given.
   new Quad(self.subject, self.predicate, self.object, (graph ?? defaultGraph) as G);
 
 // -----------------------------------------------------------------------------
@@ -672,6 +673,7 @@ export function mapTerms(
   self: Quad | Triple,
   f: (term: NamedNode | BlankNode | Literal | DefaultGraph) => Term,
 ): Quad | Triple {
+  // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
   const go = (term: Subject | Predicate | Object | Graph): Term =>
     term._tag === 'Triple'
       ? new Triple(
@@ -680,7 +682,11 @@ export function mapTerms(
           go(term.object) as Object,
         )
       : f(term);
-  if (self._tag === 'Triple') return go(self) as Triple;
+  if (self._tag === 'Triple') {
+    // SAFETY: a triple maps to a triple.
+    return go(self) as Triple;
+  }
+  // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
   return new Quad(
     go(self.subject) as Subject,
     go(self.predicate) as Predicate,

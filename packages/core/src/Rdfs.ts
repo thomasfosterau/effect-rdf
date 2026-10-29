@@ -99,6 +99,7 @@ export const isInstanceOf = (
 ): boolean => {
   const asserted = types(self, resource);
   if (asserted.some((t) => t.key === cls.key)) return true;
+  // SAFETY: not a literal, so the type is an IRI or blank node.
   return asserted.some(
     (t) =>
       t._tag !== 'Literal' && superClasses(self, t as Term.Resource).some((s) => s.key === cls.key),
@@ -207,9 +208,13 @@ const closeGraph = (input: Dataset.Dataset, graph: Term.Graph, full: boolean): D
           if (os !== undefined)
             for (const x of Dataset.objectsOf(ds, os, rdfs.subClassOf, graph)) add(s, rdf.type, x);
           if (full) {
-            if (o.key === rdf.Property.key) add(s, rdfs.subPropertyOf, s as Term.Object); // rdfs6
+            if (o.key === rdf.Property.key) {
+              // SAFETY: a subject is also a valid object.
+              add(s, rdfs.subPropertyOf, s as Term.Object); // rdfs6
+            }
             if (o.key === rdfs.Class.key) {
               add(s, rdfs.subClassOf, rdfs.Resource); // rdfs8
+              // SAFETY: a subject is also a valid object.
               add(s, rdfs.subClassOf, s as Term.Object); // rdfs10
             }
             if (o.key === rdfs.ContainerMembershipProperty.key)

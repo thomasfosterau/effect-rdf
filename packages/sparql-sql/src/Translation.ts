@@ -147,8 +147,10 @@ const collectTerm = (t: Ast.TermPattern | Term.Term, out: Map<string, Term.Groun
       out.set(t.key, t);
       return;
     case 'Triple':
-      if (Term.isGround(t)) out.set(t.key, t as Term.Triple);
-      else {
+      if (Term.isGround(t)) {
+        // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
+        out.set(t.key, t as Term.Triple);
+      } else {
         collectTerm(t.subject, out);
         collectTerm(t.predicate, out);
         collectTerm(t.object, out);
@@ -237,6 +239,8 @@ export const constants = (
   collectOperation(op, out);
   const { defaultGraph, namedGraphs } = context.dataset;
   if (Array.isArray(defaultGraph)) {
+    // SAFETY: `Array.isArray` holds, and the array form of the dataset's default graph lists graph
+    // terms.
     for (const g of defaultGraph as ReadonlyArray<Term.Graph>) {
       if (g._tag !== 'DefaultGraph') out.set(g.key, g);
     }
@@ -660,6 +664,7 @@ class Compiler {
           return;
         case 'Triple': {
           if (Term.isGround(t)) {
+            // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
             constants.push(`${sql} = ${this.idOf(t as Term.Triple)}`);
             return;
           }
@@ -683,6 +688,8 @@ class Compiler {
         // The default graph is a merge of several graphs: match each triple once.
         const inner: Array<string> = [];
         if (defaultGraph !== 'union') {
+          // SAFETY: not `union`, `default` or `all` was handled before, so the default graph is the
+          // list of graph terms.
           inner.push(
             `g IN (${(defaultGraph as ReadonlyArray<Term.Graph>).map((x) => this.idOf(x)).join(', ')})`,
           );
@@ -708,6 +715,7 @@ class Compiler {
         case 'default':
           if (defaultGraph === 'default') where.push(`${a}.g = 0`);
           else if (Array.isArray(defaultGraph) && defaultGraph.length === 1) {
+            // SAFETY: `Array.isArray` holds, so the default graph is a list of graph terms.
             where.push(`${a}.g = ${this.idOf((defaultGraph as ReadonlyArray<Term.Graph>)[0]!)}`);
           } else where.push('1 = 0');
           break;
@@ -1228,6 +1236,7 @@ class Compiler {
         return unsupported('Blank node in an expression');
       case 'Triple':
         if (!Term.isGround(e)) return unsupported('Triple term pattern in an expression');
+        // SAFETY: `Term.isGround` holds, so the triple term has no variables.
         return this.constOperand(e as Term.Triple);
       case 'FunctionCall':
         return unsupported(`Function <${e.function.value}>`);

@@ -350,6 +350,8 @@ const rdfLiteral: P<Term.Literal> = Parser.seq(
       if (direction !== 'ltr' && direction !== 'rtl') {
         fail(`Invalid base direction '${direction}'`, offsetOf(next));
       }
+      // SAFETY: `direction` was checked to be `ltr` or `rtl` just above (the failing branch never
+      // returns).
       return { tag: tag.slice(0, i), direction: direction as Term.Direction };
     }),
     Parser.preceded(tok('^^'), iriOrError),
@@ -417,6 +419,7 @@ const dataTerm: P<Term.NamedNode | Term.Literal> = Parser.alt(
   unexpectedHere<Term.Literal>('an RDF term'),
 );
 
+// SAFETY: the object comes from `tripleTermData` or `dataTerm`, all object-position terms.
 const tripleTermData: P<Term.Triple> = Parser.preceded(
   tok('<<('),
   Parser.seq(
@@ -1046,6 +1049,7 @@ const aggregate = (name: Ast.AggregateName): P<Ast.Expression> =>
     }),
   );
 
+// SAFETY: `Object.keys` of the `builtInArity` record are exactly its `BuiltInName` keys.
 const BUILT_INS = Object.keys(Ast.builtInArity) as Array<Ast.BuiltInName>;
 
 const builtInCall: P<Ast.Expression> = Parser.alt(
@@ -1055,6 +1059,7 @@ const builtInCall: P<Ast.Expression> = Parser.alt(
     Parser.seq(anyToken, expressionList),
   ).pipe(
     Parser.map(([t, args]) => {
+      // SAFETY: `peekKind(BUILT_INS)` only lets a token whose kind is a built-in name through.
       const name = t.kind as Ast.BuiltInName;
       const [min, max] = Ast.builtInArity[name];
       return args.length < min || args.length > max
@@ -1062,6 +1067,7 @@ const builtInCall: P<Ast.Expression> = Parser.alt(
         : Ast.operation(name, ...args);
     }),
   ),
+  // SAFETY: `peekKind` admitted only built-in names (the zero-arity ones) here.
   Parser.preceded(
     peekKind(new Set(BUILT_INS.filter((n) => Ast.builtInArity[n][1] === 0))),
     Parser.seq(
@@ -1080,6 +1086,7 @@ const builtInCall: P<Ast.Expression> = Parser.alt(
     Parser.map((g) => Ast.exists(g, true)),
   ),
   ...Array.from(AGGREGATES, (name) =>
+    // SAFETY: `AGGREGATES` holds the aggregate names, so each one is an `Ast.AggregateName`.
     Parser.preceded(peekKind(new Set([name])), aggregate(name as Ast.AggregateName)),
   ),
 );
@@ -1592,6 +1599,7 @@ const selectQuery = (sub: boolean): P<Ast.SelectQuery> =>
     ),
   );
 
+// SAFETY: `templateTriples` parses no property paths, so a template yields triple patterns only.
 const constructTemplate: P<Array<Ast.TriplePattern>> = Parser.delimited(
   tok('{'),
   Parser.cut(
@@ -1634,6 +1642,8 @@ const constructQuery: P<Ast.ConstructQuery> = Parser.preceded(
       solutionModifiers,
     ).pipe(
       Parser.map(([dataset, triples, modifiers]): Ast.ConstructQuery => {
+        // SAFETY: `templateTriples` parses no property paths, so the short-form template holds
+        // triple patterns only.
         const template = triples as Array<Ast.TriplePattern>;
         return withDataset(
           {
@@ -1771,6 +1781,8 @@ const validateGrouping = (query: Ast.Query, offset: number): void => {
         return;
     }
   };
+  // SAFETY: `SELECT *` failed just above (`fail` throws), so the projection is a list of variables
+  // and `(expr AS ?v)` items.
   for (const item of query.projection as ReadonlyArray<Term.Variable | Ast.Projection>) {
     if (item._tag === 'Variable') {
       if (!allowed.has(item.value)) fail(`Variable ?${item.value} is not grouped`, offset);
@@ -1845,6 +1857,8 @@ const quadPattern: P<Array<Ast.QuadPattern>> = Parser.delimited(
         ).pipe(
           Parser.map(([g, triples]) =>
             triples.map((t) => {
+              // SAFETY: `templateTriples` parses no property paths, so every quad-data item is a
+              // triple pattern.
               const tp = t as Ast.TriplePattern;
               return Ast.quadPattern(tp.subject, tp.predicate, tp.object, g);
             }),
@@ -1862,6 +1876,8 @@ const quadPattern: P<Array<Ast.QuadPattern>> = Parser.delimited(
         ).pipe(
           Parser.map((triples) =>
             triples.map((t) => {
+              // SAFETY: `templateTriples` parses no property paths, so every quad-data item is a
+              // triple pattern.
               const tp = t as Ast.TriplePattern;
               return Ast.quadPattern(tp.subject, tp.predicate, tp.object, Term.defaultGraph);
             }),

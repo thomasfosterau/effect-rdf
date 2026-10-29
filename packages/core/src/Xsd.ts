@@ -316,6 +316,8 @@ export const toValue = (self: Literal): Value => {
       let d = 31;
       if (local === 'gYear') y = +body;
       else if (local === 'gYearMonth')
+        // SAFETY: `toValue` only gets here for a lexical form `isValidLexical` accepted, so a
+        // `gYearMonth` body matches.
         [y, mo] = /^(-?\d+)-(\d\d)$/.exec(body)!.slice(1).map(Number) as [number, number];
       else if (local === 'gMonth') mo = +body.slice(2);
       else if (local === 'gMonthDay') [mo, d] = [+body.slice(2, 4), +body.slice(5, 7)];
@@ -371,6 +373,7 @@ export const canonicalDouble = (n: number): string => {
   if (n === Infinity) return 'INF';
   if (n === -Infinity) return '-INF';
   if (n === 0) return Object.is(n, -0) ? '-0.0E0' : '0.0E0';
+  // SAFETY: `toExponential` always produces `<mantissa>e<exponent>`.
   const [mantissa, exponent] = n.toExponential().split('e') as [string, string];
   const m = mantissa.includes('.') ? mantissa : `${mantissa}.0`;
   return `${m}E${exponent.replace('+', '')}`;

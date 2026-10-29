@@ -75,6 +75,7 @@ const substitute = (t: Term.Term, solution: Bindings): Term.GroundTerm => {
     case 'Variable':
       return solution.map.get(t.value) ?? V.fail(`Unbound variable ?${t.value}`);
     case 'Triple':
+      // SAFETY: substituting bound ground terms keeps each triple position's kind.
       return Term.triple(
         substitute(t.subject, solution) as Term.Subject,
         substitute(t.predicate, solution) as Term.Predicate,
@@ -224,6 +225,8 @@ const operation = (
       const f = Functions.builtIns[e.operator];
       if (f === undefined) return V.fail(`Unsupported operator ${e.operator}`);
       const values = args.map((a) => evaluateUnsafe(a, solution, ctx));
+      // SAFETY: `BuiltInArgs` types the first three slots as present; each built-in checks its own
+      // arity before reading them.
       return f(values as unknown as Functions.BuiltInArgs, ctx, solution);
     }
   }

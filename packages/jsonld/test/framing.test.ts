@@ -67,6 +67,7 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
 
 (exists ? describe : describe.skip)('frame', () => {
   const manifest = exists ? readJson('frame-manifest.jsonld') : { sequence: [] };
+  // SAFETY: the JSON-LD test manifests' `sequence` is an array of test entries.
   for (const test of manifest.sequence as ReadonlyArray<TestEntry>) {
     const id = `frame${test['@id']}`;
     const skipReason =

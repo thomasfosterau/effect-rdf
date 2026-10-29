@@ -157,6 +157,7 @@ class Writer {
     // Inlinable blank nodes that were never reached (reference cycles) are
     // written with labels.
     for (const key of deferred) {
+      // SAFETY: deferred keys are blank-node subjects.
       const subject = groups.get(key)![0]!.subject as Term.BlankNode;
       if (this.emitted.has(subject.value)) continue;
       this.inlinable.delete(subject.value);

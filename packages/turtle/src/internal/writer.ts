@@ -739,6 +739,7 @@ const detectPrefixes = (
     visit(q.object);
     visit(q.graph);
   }
+  // SAFETY: `commonPrefixes` maps prefixes to namespace strings.
   const known = new Map<string, string>(
     Object.entries(commonPrefixes).map(([p, ns]) => [ns as string, p]),
   );

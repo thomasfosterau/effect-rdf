@@ -48,6 +48,7 @@ describe('NTriples', () => {
         '<http://a/s> <http://a/p> "caf\\u00E9" .\r\n<http://a/s> <http://a/p> "\u{1F600}" .\n';
       const chunks = Array.from(text);
       const quads = yield* Stream.runCollect(NTriples.parseStream(Stream.fromIterable(chunks)));
+      // SAFETY: the test input has literal objects only.
       expect(quads.map((q) => (q.object as Term.Literal).value)).toEqual(['café', '\u{1F600}']);
       const error = yield* Effect.flip(
         Stream.runCollect(NTriples.parseStream(Stream.make('<http://a/s> <http://a/p>\n', 'x'))),

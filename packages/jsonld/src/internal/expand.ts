@@ -374,6 +374,7 @@ const expandObject = (
           const ev = expandElement(env, active, '@reverse', value, baseUrl, options);
           if (isObject(ev)) {
             if ('@reverse' in ev) {
+              // SAFETY: an expanded `@reverse` value is a JSON object of reverse properties.
               for (const [property, items] of Object.entries(ev['@reverse'] as JsonObject)) {
                 if (!hasOwn(result, property)) result[property] = [];
                 result[property].push(...asArray(items));

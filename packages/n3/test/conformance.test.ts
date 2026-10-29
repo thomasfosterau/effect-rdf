@@ -60,11 +60,13 @@ const readManifest = (relative: string): ReadonlyArray<Entry> => {
   const entries = one(manifest, `${MF}entries`);
   if (entries === undefined || entries._tag !== 'Collection') return [];
   return entries.items.map((e) => {
+    // SAFETY: manifest types are IRIs.
     const types = objects(e, `${RDF}type`).map((t) => (t as Term.NamedNode).value);
     const type =
       types.map((t) => t.replace(TEST, '').replace(RDFT, '')).find((t) => t.startsWith('Test')) ??
       '';
     const result = one(e, `${MF}result`);
+    // SAFETY: test actions and results are IRIs in the N3 manifests.
     return {
       id: e._tag === 'NamedNode' ? e.value.slice(e.value.lastIndexOf('#') + 1) : e.key,
       type,

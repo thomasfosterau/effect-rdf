@@ -98,6 +98,7 @@ class Reader {
 
   list(n: Term.Term | undefined): ReadonlyArray<Term.Object> {
     if (n === undefined) return [];
+    // SAFETY: list heads are nodes, which can be objects.
     const l = Dataset.list(this.dataset, n as Term.Object);
     if (Option.isNone(l)) return this.fail(`${n.key} is not a well-formed RDF list`);
     return l.value;
@@ -166,6 +167,7 @@ class Reader {
   meta<T extends object>(n: Term.Term, out: T): T {
     const acts = this.semActs(n);
     const annots = this.annotations(n);
+    // SAFETY: `out` is a ShExJ object, which may carry `semActs` and `annotations`.
     const o = out as Mutable<{ semActs?: unknown; annotations?: unknown }>;
     if (acts !== undefined) o.semActs = acts;
     if (annots !== undefined) o.annotations = annots;
@@ -259,10 +261,12 @@ class Reader {
       case 'IriStem':
       case 'LiteralStem':
       case 'LanguageStem':
+        // SAFETY: the stem kinds carry a string stem.
         return { type: t, stem: stem() as string } as ShExJ.ValueSetValue;
       case 'IriStemRange':
       case 'LiteralStemRange':
       case 'LanguageStemRange':
+        // SAFETY: the stem-range kinds carry a stem and their exclusions.
         return { type: t, stem: stem(), exclusions: exclusions() } as ShExJ.ValueSetValue;
       case 'Language':
         return {
@@ -327,6 +331,7 @@ class Reader {
     const max = this.one(n, 'max');
     if (max !== undefined) te.max = this.num(max, 'sx:max');
     this.meta(n, te);
+    // SAFETY: a labelled triple expression is the expression with its `id`.
     return labelled ? ({ id: this.label(n), ...te } as ShExJ.TripleExpr) : te;
   }
 
@@ -476,6 +481,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
   };
   const valueSetValue = (v: ShExJ.ValueSetValue): Term.Object => {
     if (Predicate.isString(v) || !('type' in v) || 'value' in v)
+      // SAFETY: a value without `type`, or with a `value`, is an object value in ShExJ.
       return objectValue(v as ShExJ.ObjectValue);
     const b = Term.blankNode();
     add(b, rdfType, sx(v.type));
@@ -491,6 +497,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
       default: {
         add(b, sx('stem'), stem(v.stem, false));
         const stemType = v.type.replace('Range', '');
+        // SAFETY: the stem-range kinds' exclusions are strings or stems.
         add(
           b,
           sx('exclusion'),

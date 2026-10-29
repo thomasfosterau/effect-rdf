@@ -68,6 +68,7 @@ abstract class N3Base implements Equal.Equal, Pipeable {
   }
 
   equals(that: unknown): boolean {
+    // SAFETY: `hasProperty(that, TypeId)` holds, so it is an N3 term.
     return hasProperty(that, TypeId) && (that as N3Base).key === this.key;
   }
 
@@ -358,6 +359,7 @@ const collect = (
 export const variables = (self: N3Term | Statement): ReadonlyArray<Term.Variable> => {
   const out = new Map<string, N3Term>();
   collect(self, Term.isVariable, out);
+  // SAFETY: `collect` was given `Term.isVariable`, so it only kept variables.
   return Array.from(out.values()) as Array<Term.Variable>;
 };
 
@@ -371,6 +373,7 @@ export const variables = (self: N3Term | Statement): ReadonlyArray<Term.Variable
 export const blankNodes = (self: N3Term | Statement): ReadonlyArray<Term.BlankNode> => {
   const out = new Map<string, N3Term>();
   collect(self, Term.isBlankNode, out);
+  // SAFETY: `collect` was given `Term.isBlankNode`, so it only kept blank nodes.
   return Array.from(out.values()) as Array<Term.BlankNode>;
 };
 
@@ -396,10 +399,13 @@ export function mapTerms(
   const go = (t: N3Term | Statement): N3Term | Statement => {
     switch (t._tag) {
       case 'Collection':
+        // SAFETY: `go` maps a term to a term.
         return new Collection(t.items.map((i) => go(i) as N3Term));
       case 'Formula':
+        // SAFETY: `go` maps a statement to a statement.
         return new Formula(t.statements.map((s) => go(s) as Statement));
       case 'Statement':
+        // SAFETY: `go` maps a term to a term.
         return new Statement(
           go(t.subject) as N3Term,
           go(t.predicate) as N3Term,

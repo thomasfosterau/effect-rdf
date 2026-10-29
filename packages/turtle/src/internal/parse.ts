@@ -91,6 +91,8 @@ export const parseStream =
   ): Stream.Stream<Term.Quad, Serialization.RdfParseError | E, R> =>
     Stream.suspend(() => {
       const parser = makeParser(syntax, options);
+      // SAFETY: an input that never emits `END` is a subtype of one that may; the cast only widens
+      // the element type.
       return Stream.concat(
         input as Stream.Stream<string | typeof END, E, R>,
         Stream.succeed(END),

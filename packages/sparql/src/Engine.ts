@@ -186,6 +186,7 @@ const groundTemplateTerm = (
       const o = groundTemplateTerm(t.object, b, bnodes);
       if (s === undefined || p === undefined || o === undefined) return undefined;
       if (!isValidTriple(s, p, o)) return undefined;
+      // SAFETY: `isValidTriple` checked the subject, predicate and object positions.
       return Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
     }
     default:
@@ -214,6 +215,7 @@ const instantiate = (
     if (s === undefined || p === undefined || o === undefined || g === undefined) continue;
     if (!isValidTriple(s, p, o)) continue;
     if (g._tag !== 'NamedNode' && g._tag !== 'DefaultGraph') continue;
+    // SAFETY: `isValidTriple` checked the subject, predicate and object positions.
     out.push(new Term.Quad(s as Term.Subject, p as Term.Predicate, o as Term.Object, g));
   }
   return out;

@@ -134,6 +134,8 @@ describe('SparqlClient ↔ SparqlServer', () => {
           // CSV loses term kinds, so only the other formats are compared as graphs.
           const isomorphicRows = () => {
             const expected = Dataset.filter(data, (q) => q.graph._tag === 'DefaultGraph');
+            // SAFETY: the query projects `?s ?p ?o` from the default graph, so the row holds a
+            // subject, an IRI predicate and an object.
             const quads = rows.map((r) =>
               Term.quad(r['s'] as Term.Subject, r['p'] as Term.NamedNode, r['o'] as Term.Object),
             );

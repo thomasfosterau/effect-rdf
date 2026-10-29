@@ -90,6 +90,7 @@ const positiveInt = (name: string, value: string | undefined) =>
       : Effect.fail(new CliError({ message: `--${name} expects a non-negative integer` }));
   });
 
+// SAFETY: checked to start with `/` just above.
 const pathOption = (name: string, value: string | undefined) =>
   value === undefined
     ? Effect.succeed(undefined)

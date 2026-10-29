@@ -181,6 +181,8 @@ export const resolveImports = Effect.fnUntraced(function* (
     queue.push(...(imported.imports ?? []));
   }
   const { imports: _, ...rest } = schema;
+  // SAFETY: dropping the optional `imports` (and re-adding `shapes` only when non-empty) leaves a
+  // valid `ShExJ.Schema`; the spread just loses the nominal type.
   return (Arr.isReadonlyArrayNonEmpty(shapes) ? { ...rest, shapes } : rest) as ShExJ.Schema;
 });
 
@@ -217,6 +219,7 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
     shapeMap: ShapeMap.QueryShapeMap,
   ): Effect.Effect<ValidationReport, ShExValidationError> =>
     Effect.suspend(() => {
+      // SAFETY: `isQueryMap` is false, and a shape map is either a query map or a fixed map.
       const fixed = isQueryMap(shapeMap)
         ? ShapeMap.resolve(shapeMap, dataset)
         : (shapeMap as ShapeMap.FixedShapeMap);
@@ -255,6 +258,8 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
       });
     });
 
+  // SAFETY: `satisfies Validator` checks the literal; the assertion only widens it to the
+  // interface.
   return { schema: resolved, index, validate } satisfies Validator as Validator;
 });
 

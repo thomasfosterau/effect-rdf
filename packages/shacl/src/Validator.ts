@@ -419,6 +419,7 @@ const makeEngine = (
   const objectsOf = (s: Term.GroundTerm, p: Term.NamedNode): ReadonlyArray<Term.GroundTerm> =>
     s._tag === 'Literal' ? [] : Dataset.objectsOf(data, s, p);
 
+  // SAFETY: a shape id is an IRI or blank node, and only those index the shapes.
   const shapeById = (id: Term.Term): Shapes.Shape =>
     shapes.index.get(id.key) ?? {
       _tag: 'NodeShape',

@@ -97,6 +97,7 @@ export const frame = (expanded: Json, expandedFrame: Json, options: FrameOptions
   const bnodesToClear = options.is11
     ? new Set(Object.keys(state.bnodeMap).filter((id) => state.bnodeMap[id]!.length === 1))
     : new Set<string>();
+  // SAFETY: framing's top level is an array of node objects, and cleanup keeps it an array.
   return cleanupPreserve(framed, bnodesToClear, new Set()) as Array<Json>;
 };
 
@@ -166,7 +167,10 @@ const createsCircularReference = (
 
 const addFrameOutput = (parent: Json, property: string | null, output: Json): void => {
   if (isObject(parent)) addValue(parent, property!, output, true);
-  else (parent as Array<Json>).push(output);
+  else {
+    // SAFETY: a non-object parent in framing output is the top-level array.
+    (parent as Array<Json>).push(output);
+  }
 };
 
 const isSubjectReference = (v: Json): boolean =>
@@ -264,6 +268,7 @@ const frameSubjects = (
         continue;
       }
       if (flags.explicit && !hasOwn(frame, prop)) continue;
+      // SAFETY: properties of a flattened subject hold arrays of values.
       for (const o of subject[prop] as Array<Json>) {
         const subframe = hasOwn(frame, prop) ? frame[prop] : createImplicitFrame(flags);
         if (isListObject(o)) {

@@ -68,6 +68,7 @@ export const fromTerm = (term: RdfJsTerm): Term.Term => {
     case 'DefaultGraph':
       return Term.defaultGraph;
     case 'Quad':
+      // SAFETY: an RDF/JS quad term's components are a subject, a predicate and an object.
       return new Term.Triple(
         fromTerm(term.subject) as Term.Subject,
         fromTerm(term.predicate) as Term.Predicate,
@@ -82,6 +83,7 @@ export const fromTerm = (term: RdfJsTerm): Term.Term => {
  * @since 0.1.0
  * @category conversions
  */
+// SAFETY: an RDF/JS quad's components are a subject, a predicate, an object and a graph.
 export const fromQuad = (quad: RdfJsQuad): Term.Quad =>
   new Term.Quad(
     fromTerm(quad.subject) as Term.Subject,

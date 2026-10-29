@@ -222,6 +222,7 @@ export const fromQuadsUnsafe = (quads: Iterable<Term.Quad>): Model.Formula => {
       if (formulaGraphs.has(t.value)) return formulaOf(t.value);
       return t;
     };
+    // SAFETY: the data graph's quads have ground subjects and objects.
     return new Model.Formula(
       quads
         .filter((q) => !lists.consumed.has(q))
@@ -304,7 +305,11 @@ export const fromQuadsUnsafe = (quads: Iterable<Term.Quad>): Model.Formula => {
         }
         seen.add(cur.value);
         cells.push(cur.value);
+        // SAFETY: `isCell` held for this label (checked above): exactly one `rdf:first` and one
+        // `rdf:rest`.
         items.push(first.get(cur.value)![0]!.object as Ground);
+        // SAFETY: `isCell` held for this label (checked above): exactly one `rdf:first` and one
+        // `rdf:rest`.
         cur = rest.get(cur.value)![0]!.object as Ground;
       }
       if (!ok) continue;

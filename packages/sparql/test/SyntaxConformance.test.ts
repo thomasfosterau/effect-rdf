@@ -48,6 +48,8 @@ const parse = (
   update: boolean,
 ): Result.Result<Ast.Query | Ast.Update, Parser.SparqlParseError> => {
   const options = { baseIri: pathToFileURL(file).href };
+  // SAFETY: an update parse result is assignable to the wider query-or-update result; the cast only
+  // widens it.
   return update
     ? (Parser.parseUpdateResult(text, options) as Result.Result<
         Ast.Query | Ast.Update,
