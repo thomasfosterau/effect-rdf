@@ -25,6 +25,7 @@
  * @since 0.1.0
  */
 import { Dataset, Term, Vocab, Xsd } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -390,7 +391,7 @@ const makeEngine = (
     if (cached !== undefined) return cached;
     const seen = new Set<string>([cls.key]);
     const stack: Array<Term.GroundTerm> = [cls];
-    while (stack.length > 0) {
+    while (Arr.isReadonlyArrayNonEmpty(stack)) {
       const c = stack.pop()!;
       if (c._tag === 'Literal') continue;
       for (const sup of Dataset.objectsOf(data, c, rdfs.subClassOf)) {
@@ -479,7 +480,7 @@ const makeEngine = (
     });
 
   const conforms = (id: Term.Term, node: Term.GroundTerm): Effect.Effect<boolean, EngineError> =>
-    Effect.map(validateShape(shapeById(id), node), (rs) => rs.length === 0);
+    Effect.map(validateShape(shapeById(id), node), (rs) => Arr.isReadonlyArrayEmpty(rs));
 
   const evaluate = Effect.fnUntraced(function* (
     shape: Shapes.Shape,
@@ -503,21 +504,20 @@ const makeEngine = (
         severity: shape.severity,
         resultPath,
         value: Option.fromNullishOr(value),
-        messages:
-          shape.messages.length > 0
-            ? substituteMessages(shape.messages, (name) => {
-                switch (name) {
-                  case 'this':
-                    return focus;
-                  case 'value':
-                    return value;
-                  case 'path':
-                    return Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined;
-                  default:
-                    return parameters.get(name);
-                }
-              })
-            : [Term.literal(defaultMessage(c, value))],
+        messages: Arr.isReadonlyArrayNonEmpty(shape.messages)
+          ? substituteMessages(shape.messages, (name) => {
+              switch (name) {
+                case 'this':
+                  return focus;
+                case 'value':
+                  return value;
+                case 'path':
+                  return Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined;
+                default:
+                  return parameters.get(name);
+              }
+            })
+          : [Term.literal(defaultMessage(c, value))],
         details: withDetails ? (extra.details ?? []) : [],
       });
     };
@@ -623,7 +623,7 @@ const makeEngine = (
             Effect.map(
               Effect.forEach(shapes, (s) => nestedResults(s, v), { concurrency: 1 }),
               (nested) => {
-                const conforming = nested.filter((rs) => rs.length === 0).length;
+                const conforming = nested.filter((rs) => Arr.isReadonlyArrayEmpty(rs)).length;
                 const failed =
                   tag === 'And'
                     ? conforming < shapes.length
@@ -643,7 +643,7 @@ const makeEngine = (
           valueNodes,
           (v) =>
             Effect.map(nestedResults(shape, v), (rs) =>
-              rs.length > 0 ? [result(v, { details: rs })] : [],
+              Arr.isReadonlyArrayNonEmpty(rs) ? [result(v, { details: rs })] : [],
             ),
           { concurrency: 1 },
         );
@@ -727,7 +727,7 @@ const makeEngine = (
             }
           };
           const templates =
-            violation.messages !== undefined && violation.messages.length > 0
+            violation.messages !== undefined && Arr.isReadonlyArrayNonEmpty(violation.messages)
               ? violation.messages
               : shape.messages;
           return ValidationReport.makeResult({
@@ -738,10 +738,9 @@ const makeEngine = (
             severity: violation.severity ?? shape.severity,
             resultPath,
             value: Option.fromNullishOr(violation.value),
-            messages:
-              templates.length > 0
-                ? substituteMessages(templates, lookup)
-                : [Term.literal(defaultMessage(c, violation.value))],
+            messages: Arr.isReadonlyArrayNonEmpty(templates)
+              ? substituteMessages(templates, lookup)
+              : [Term.literal(defaultMessage(c, violation.value))],
           });
         });
       }
@@ -837,7 +836,7 @@ export const validate: (
     const perShape = yield* Effect.forEach(
       shapes.shapes,
       (shape) =>
-        shape.deactivated || shape.targets.length === 0
+        shape.deactivated || Arr.isReadonlyArrayEmpty(shape.targets)
           ? Effect.succeed<ReadonlyArray<ValidationReport.ValidationResult>>([])
           : Effect.flatMap(engine.focusNodes(shape), (foci) =>
               Effect.map(

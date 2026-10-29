@@ -103,7 +103,7 @@ export default defineConfig({
       'effect/imperative-loops': 'warn', // 836
       'effect/avoid-direct-tag-checks': 'warn', // 719
       'effect/avoid-non-null-assertion': 'warn', // 639
-      'effect/avoid-native-object-helpers': 'warn', // 544
+      'effect/avoid-native-object-helpers': 'warn', // 539
       'effect/require-safety-comment-for-type-assertion': 'warn', // 296
       'effect/prefer-match-over-switch': 'warn', // 178
       // ---- Effect preset: rules this workspace's conventions cut across ----

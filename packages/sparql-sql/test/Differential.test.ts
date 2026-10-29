@@ -346,7 +346,8 @@ describe('Differential: SQL store vs in-memory store', () => {
                   expect(outcome(actual)).toEqual(outcome(expected));
                   if (Exit.isFailure(expected)) return;
                   compared++;
-                  if (expected.value.length > 0 && expected.value[0] !== 'false') nonEmpty++;
+                  if (Arr.isReadonlyArrayNonEmpty(expected.value) && expected.value[0] !== 'false')
+                    nonEmpty++;
                   if (events[0]?._tag === 'Executed') rootInSql++;
                   if (events.some((e) => e._tag === 'Executed')) sqlUsed++;
                 }),
