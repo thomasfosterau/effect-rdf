@@ -194,6 +194,58 @@ export const json = (): Incremental => {
       primitive = false;
       if (capture !== undefined && stack.length === captureDepth) finish(i);
     };
+    // Built once per chunk: a `Match.value` per character would allocate the
+    // pipeline and its handlers on every byte of the response.
+    const scanChar = Match.fn((c: number, _i: number) => c).pipe(
+      Match.when(Match.is(32, 9, 10, 13), (_n, _c, i) => {
+        endPrimitive(i);
+      }),
+      Match.when(Match.is(123 /* { */, 91 /* [ */), (c, _c, i) => {
+        endPrimitive(i);
+        valueStart(i);
+        stack.push({
+          type: c === 123 ? 'object' : 'array',
+          key: undefined,
+          expectKey: c === 123,
+        });
+      }),
+      Match.when(Match.is(125 /* } */, 93 /* ] */), (c, _c, i) => {
+        endPrimitive(i);
+        const frame = stack.pop();
+        if (frame === undefined || frame.type !== (c === 125 ? 'object' : 'array')) {
+          fail('json', 'Unbalanced brackets');
+        }
+        if (capture !== undefined && stack.length === captureDepth) finish(i + 1);
+        if (Arr.isReadonlyArrayEmpty(stack)) done = true;
+      }),
+      Match.when(58 /* : */, (_n, _c, i) => {
+        endPrimitive(i);
+      }),
+      Match.when(44 /* , */, (_n, _c, i) => {
+        endPrimitive(i);
+        const top = stack[stack.length - 1];
+        if (top !== undefined && top.type === 'object') top.expectKey = true;
+      }),
+      Match.when(34 /* " */, (_n, _c, i) => {
+        endPrimitive(i);
+        const top = stack[stack.length - 1];
+        inString = true;
+        if (top !== undefined && top.type === 'object' && top.expectKey) {
+          stringIsKey = true;
+          keyRaw = '';
+        } else {
+          stringIsKey = false;
+          valueStart(i);
+        }
+      }),
+      Match.orElse((_n, _c, i) => {
+        if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
+        if (!primitive) {
+          primitive = true;
+          valueStart(i);
+        }
+      }),
+    );
     for (let i = 0; i < chunk.length; i++) {
       const c = chunk.charCodeAt(i);
       if (inString) {
@@ -223,56 +275,7 @@ export const json = (): Incremental => {
         if (c !== 32 && c !== 9 && c !== 10 && c !== 13) fail('json', 'Trailing data');
         continue;
       }
-      Match.value(c).pipe(
-        Match.when(Match.is(32, 9, 10, 13), () => {
-          endPrimitive(i);
-        }),
-        Match.when(Match.is(123 /* { */, 91 /* [ */), () => {
-          endPrimitive(i);
-          valueStart(i);
-          stack.push({
-            type: c === 123 ? 'object' : 'array',
-            key: undefined,
-            expectKey: c === 123,
-          });
-        }),
-        Match.when(Match.is(125 /* } */, 93 /* ] */), () => {
-          endPrimitive(i);
-          const frame = stack.pop();
-          if (frame === undefined || frame.type !== (c === 125 ? 'object' : 'array')) {
-            fail('json', 'Unbalanced brackets');
-          }
-          if (capture !== undefined && stack.length === captureDepth) finish(i + 1);
-          if (Arr.isReadonlyArrayEmpty(stack)) done = true;
-        }),
-        Match.when(58 /* : */, () => {
-          endPrimitive(i);
-        }),
-        Match.when(44 /* , */, () => {
-          endPrimitive(i);
-          const top = stack[stack.length - 1];
-          if (top !== undefined && top.type === 'object') top.expectKey = true;
-        }),
-        Match.when(34 /* " */, () => {
-          endPrimitive(i);
-          const top = stack[stack.length - 1];
-          inString = true;
-          if (top !== undefined && top.type === 'object' && top.expectKey) {
-            stringIsKey = true;
-            keyRaw = '';
-          } else {
-            stringIsKey = false;
-            valueStart(i);
-          }
-        }),
-        Match.orElse(() => {
-          if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
-          if (!primitive) {
-            primitive = true;
-            valueStart(i);
-          }
-        }),
-      );
+      scanChar(c, i);
     }
     if (capture !== undefined) {
       captureBuf += chunk.slice(captureStart);
@@ -653,10 +656,22 @@ export const parserFor = (
   const codec = Results.codecFor(mediaType);
   if (Option.isNone(codec)) return Option.none();
   return Match.value(codec).pipe(
-    Match.when({ value: Results.Json }, () => Option.some({ make: json, format: 'json' })),
-    Match.when({ value: Results.Xml }, () => Option.some({ make: xml, format: 'xml' })),
-    Match.when({ value: Results.Tsv }, () => Option.some({ make: tsv, format: 'tsv' })),
-    Match.when({ value: Results.Csv }, () => Option.some({ make: csv, format: 'csv' })),
+    Match.when(
+      ({ value }) => value === Results.Json,
+      () => Option.some({ make: json, format: 'json' }),
+    ),
+    Match.when(
+      ({ value }) => value === Results.Xml,
+      () => Option.some({ make: xml, format: 'xml' }),
+    ),
+    Match.when(
+      ({ value }) => value === Results.Tsv,
+      () => Option.some({ make: tsv, format: 'tsv' }),
+    ),
+    Match.when(
+      ({ value }) => value === Results.Csv,
+      () => Option.some({ make: csv, format: 'csv' }),
+    ),
     Match.orElse((codec) => {
       const c = codec.value;
       return Option.some({ make: () => buffered(c), format: c.format.extensions[0] ?? 'csv' });

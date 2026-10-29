@@ -15,14 +15,13 @@ type Num =
   | { readonly kind: 'decimal'; readonly value: BigDecimal.BigDecimal }
   | { readonly kind: 'float'; readonly value: number };
 
-const toNum = (v: Xsd.Value): Num | undefined => {
-  return Match.value(v).pipe(
-    Match.tag('Integer', (v): Num => ({ kind: 'integer', value: v.value })),
-    Match.tag('Decimal', (v): Num => ({ kind: 'decimal', value: v.value })),
-    Match.tag('Float', 'Double', (v): Num => ({ kind: 'float', value: v.value })),
-    Match.orElse(() => undefined),
-  );
-};
+// Built once: `toNum` runs for every numeric comparison.
+const toNum: (v: Xsd.Value) => Num | undefined = Match.type<Xsd.Value>().pipe(
+  Match.tag('Integer', (v): Num => ({ kind: 'integer', value: v.value })),
+  Match.tag('Decimal', (v): Num => ({ kind: 'decimal', value: v.value })),
+  Match.tag('Float', 'Double', (v): Num => ({ kind: 'float', value: v.value })),
+  Match.orElse(() => undefined),
+);
 
 const sign = (n: number): -1 | 0 | 1 => (n < 0 ? -1 : n > 0 ? 1 : 0);
 

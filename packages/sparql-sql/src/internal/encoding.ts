@@ -95,49 +95,55 @@ export interface Classification {
   readonly num: number | null;
 }
 
+// Built once: `classify` runs it for every numeric literal.
+const numericClass = Match.type<Xsd.Value>().pipe(
+  Match.withReturnType<Classification>(),
+  Match.tag('Integer', (v) =>
+    v.value <= MAX_SAFE && v.value >= -MAX_SAFE
+      ? { cls: Cls.SafeNumber, num: Number(v.value) }
+      : { cls: Cls.UnsafeNumber, num: Number(v.value) },
+  ),
+  Match.tag('Decimal', (v) =>
+    decimalDigits(v.value) <= 15
+      ? { cls: Cls.SafeNumber, num: Number(BigDecimal.format(v.value)) }
+      : { cls: Cls.UnsafeNumber, num: BigDecimal.toNumberUnsafe(v.value) },
+  ),
+  Match.tag('Float', 'Double', (v) =>
+    Number.isFinite(v.value)
+      ? { cls: v._tag === 'Float' ? Cls.Float : Cls.Double, num: v.value }
+      : { cls: Cls.SpecialFloat, num: null },
+  ),
+  Match.orElse(() => ({ cls: Cls.IllFormedNumeric, num: null })),
+);
+
+// Built once: `classify` runs for every term `encode` writes.
+const classifyTerm = Match.type<Term.GroundTerm>().pipe(
+  Match.withReturnType<Classification>(),
+  Match.tag('NamedNode', 'BlankNode', () => ({ cls: Cls.Resource, num: null })),
+  Match.tag('Triple', () => ({ cls: Cls.Triple, num: null })),
+  Match.tag('Literal', (term) => {
+    if (term.language !== '') return { cls: Cls.LangString, num: null };
+    const dt = term.datatype.value;
+    if (dt === Term.XSD_STRING) return { cls: Cls.String, num: null };
+    if (!Xsd.isKnownDatatype(dt)) return { cls: Cls.Unknown, num: null };
+    const valid = Xsd.isValidLexical(dt, term.value);
+    if (Xsd.isNumericDatatype(dt)) {
+      if (!valid) return { cls: Cls.IllFormedNumeric, num: null };
+      const v = Xsd.toValue(term);
+      return numericClass(v);
+    }
+    if (!valid) return { cls: Cls.IllFormed, num: null };
+    if (dt === `${XSD}boolean`) {
+      return { cls: Cls.Boolean, num: term.value === 'true' || term.value === '1' ? 1 : 0 };
+    }
+    if (TEMPORAL.has(dt)) return { cls: Cls.Temporal, num: null };
+    return { cls: Cls.OtherKnown, num: null };
+  }),
+  Match.exhaustive,
+);
+
 /** The comparison class and numeric value of a term. */
-export const classify = (term: Term.GroundTerm): Classification => {
-  return Match.value(term).pipe(
-    Match.tag('NamedNode', 'BlankNode', () => ({ cls: Cls.Resource, num: null })),
-    Match.tag('Triple', () => ({ cls: Cls.Triple, num: null })),
-    Match.tag('Literal', (term) => {
-      if (term.language !== '') return { cls: Cls.LangString, num: null };
-      const dt = term.datatype.value;
-      if (dt === Term.XSD_STRING) return { cls: Cls.String, num: null };
-      if (!Xsd.isKnownDatatype(dt)) return { cls: Cls.Unknown, num: null };
-      const valid = Xsd.isValidLexical(dt, term.value);
-      if (Xsd.isNumericDatatype(dt)) {
-        if (!valid) return { cls: Cls.IllFormedNumeric, num: null };
-        const v = Xsd.toValue(term);
-        return Match.value(v).pipe(
-          Match.tag('Integer', (v) =>
-            v.value <= MAX_SAFE && v.value >= -MAX_SAFE
-              ? { cls: Cls.SafeNumber, num: Number(v.value) }
-              : { cls: Cls.UnsafeNumber, num: Number(v.value) },
-          ),
-          Match.tag('Decimal', (v) =>
-            decimalDigits(v.value) <= 15
-              ? { cls: Cls.SafeNumber, num: Number(BigDecimal.format(v.value)) }
-              : { cls: Cls.UnsafeNumber, num: BigDecimal.toNumberUnsafe(v.value) },
-          ),
-          Match.tag('Float', 'Double', (v) =>
-            Number.isFinite(v.value)
-              ? { cls: v._tag === 'Float' ? Cls.Float : Cls.Double, num: v.value }
-              : { cls: Cls.SpecialFloat, num: null },
-          ),
-          Match.orElse(() => ({ cls: Cls.IllFormedNumeric, num: null })),
-        );
-      }
-      if (!valid) return { cls: Cls.IllFormed, num: null };
-      if (dt === `${XSD}boolean`) {
-        return { cls: Cls.Boolean, num: term.value === 'true' || term.value === '1' ? 1 : 0 };
-      }
-      if (TEMPORAL.has(dt)) return { cls: Cls.Temporal, num: null };
-      return { cls: Cls.OtherKnown, num: null };
-    }),
-    Match.exhaustive,
-  );
-};
+export const classify = (term: Term.GroundTerm): Classification => classifyTerm(term);
 
 /** A row of the term dictionary (without the id). */
 export interface TermRow {
@@ -154,6 +160,71 @@ export interface TermRow {
   readonly num: number | null;
 }
 
+// Built once: `encode` runs for every term a load or update writes.
+const encodeRow = Match.fn(
+  (
+    term: Term.GroundTerm,
+    _class: Classification,
+    _componentIds?: readonly [number, number, number],
+  ) => term,
+).pipe(
+  Match.withReturnType<TermRow>(),
+  Match.tag('NamedNode', (term, _term, { cls, num }) => ({
+    kind: Kind.NamedNode,
+    value: term.value,
+    datatype: '',
+    lang: '',
+    dir: '',
+    sub: null,
+    pre: null,
+    obj: null,
+    cls,
+    num,
+  })),
+  Match.tag('BlankNode', (term, _term, { cls, num }) => ({
+    kind: Kind.BlankNode,
+    value: term.value,
+    datatype: '',
+    lang: '',
+    dir: '',
+    sub: null,
+    pre: null,
+    obj: null,
+    cls,
+    num,
+  })),
+  Match.tag('Literal', (term, _term, { cls, num }) => ({
+    kind: Kind.Literal,
+    value: term.value,
+    datatype: term.datatype.value,
+    lang: term.language,
+    dir: term.direction ?? '',
+    sub: null,
+    pre: null,
+    obj: null,
+    cls,
+    num,
+  })),
+  Match.tag('Triple', (_triple, _term, { cls, num }, componentIds) => {
+    if (componentIds === undefined) {
+      throw new Store.StoreError({ message: 'Triple terms need component ids' });
+    }
+    return {
+      kind: Kind.Triple,
+      value: componentIds.join(' '),
+      datatype: '',
+      lang: '',
+      dir: '',
+      sub: componentIds[0],
+      pre: componentIds[1],
+      obj: componentIds[2],
+      cls,
+      num,
+    };
+  }),
+  Match.exhaustive,
+);
+
 /**
  * The dictionary row of a term. Triple terms store the ids of their
  * components in `value` (`"s p o"`), so that `(value, kind, datatype, lang,
@@ -162,65 +233,7 @@ export interface TermRow {
 export const encode = (
   term: Term.GroundTerm,
   componentIds?: readonly [number, number, number],
-): TermRow => {
-  const { cls, num } = classify(term);
-  return Match.value(term).pipe(
-    Match.tag('NamedNode', (term) => ({
-      kind: Kind.NamedNode,
-      value: term.value,
-      datatype: '',
-      lang: '',
-      dir: '',
-      sub: null,
-      pre: null,
-      obj: null,
-      cls,
-      num,
-    })),
-    Match.tag('BlankNode', (term) => ({
-      kind: Kind.BlankNode,
-      value: term.value,
-      datatype: '',
-      lang: '',
-      dir: '',
-      sub: null,
-      pre: null,
-      obj: null,
-      cls,
-      num,
-    })),
-    Match.tag('Literal', (term) => ({
-      kind: Kind.Literal,
-      value: term.value,
-      datatype: term.datatype.value,
-      lang: term.language,
-      dir: term.direction ?? '',
-      sub: null,
-      pre: null,
-      obj: null,
-      cls,
-      num,
-    })),
-    Match.tag('Triple', () => {
-      if (componentIds === undefined) {
-        throw new Store.StoreError({ message: 'Triple terms need component ids' });
-      }
-      return {
-        kind: Kind.Triple,
-        value: componentIds.join(' '),
-        datatype: '',
-        lang: '',
-        dir: '',
-        sub: componentIds[0],
-        pre: componentIds[1],
-        obj: componentIds[2],
-        cls,
-        num,
-      };
-    }),
-    Match.exhaustive,
-  );
-};
+): TermRow => encodeRow(term, classify(term), componentIds);
 
 /** The unique key of a dictionary row. */
 export const rowKey = (row: {
@@ -242,6 +255,24 @@ const datatype = (iri: string): Term.NamedNode => {
   return n;
 };
 
+// Built once: `decode` runs for every term a query result reads back.
+const decodeRow = Match.fn(
+  (kind: number, _value: string, _dt: string, _lang: string, _dir: string) => kind,
+).pipe(
+  Match.withReturnType<Term.GroundTerm | readonly [number, number, number]>(),
+  Match.when(Kind.NamedNode, (_kind, _k, value) => Term.namedNode(value)),
+  Match.when(Kind.BlankNode, (_kind, _k, value) => Term.blankNode(value)),
+  Match.when(
+    Kind.Literal,
+    (_kind, _k, value, dt, lang, dir) =>
+      new Term.Literal(value, datatype(dt), lang, dir === 'ltr' || dir === 'rtl' ? dir : undefined),
+  ),
+  Match.orElse((_kind, _k, value) => {
+    const [s, p, o] = value.split(' ').map(Number);
+    return [s!, p!, o!];
+  }),
+);
+
 /**
  * Decodes a non-triple dictionary row; returns the component ids for triple
  * terms.
@@ -252,24 +283,4 @@ export const decode = (
   dt: string,
   lang: string,
   dir: string,
-): Term.GroundTerm | readonly [number, number, number] => {
-  return Match.value(kind).pipe(
-    Match.withReturnType<Term.GroundTerm | readonly [number, number, number]>(),
-    Match.when(Kind.NamedNode, () => Term.namedNode(value)),
-    Match.when(Kind.BlankNode, () => Term.blankNode(value)),
-    Match.when(
-      Kind.Literal,
-      () =>
-        new Term.Literal(
-          value,
-          datatype(dt),
-          lang,
-          dir === 'ltr' || dir === 'rtl' ? dir : undefined,
-        ),
-    ),
-    Match.orElse(() => {
-      const [s, p, o] = value.split(' ').map(Number);
-      return [s!, p!, o!];
-    }),
-  );
-};
+): Term.GroundTerm | readonly [number, number, number] => decodeRow(kind, value, dt, lang, dir);

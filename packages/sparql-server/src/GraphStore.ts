@@ -215,6 +215,14 @@ export const handle = (
     }
     yield* Effect.annotateCurrentSpan({ 'sparql.graph': describeTarget(t) });
 
+    // Runs a write in one transaction and answers 204 if the graph existed, 201 if it is new.
+    const commit = (write: Effect.Effect<void, Store.StoreError>, existed: boolean) =>
+      store
+        .transaction(write)
+        .pipe(
+          Effect.mapError(storeError),
+          Effect.as(HttpServerResponse.empty({ status: existed ? 204 : 201 })),
+        );
     return yield* Match.value(method).pipe(
       Match.when(Match.is('GET', 'HEAD'), () =>
         Effect.gen(function* () {
@@ -253,20 +261,18 @@ export const handle = (
           const base = t._tag === 'Named' ? t.graph.value : url.href;
           const quads = yield* readQuads(request, formats, base);
           const existed = t._tag === 'Named' ? yield* exists(store, t) : true;
-          yield* store
-            .transaction(
-              Effect.gen(function* () {
-                if (t._tag === 'Named') {
-                  yield* store.dropGraph(t.graph);
-                  yield* store.createGraph(t.graph);
-                } else {
-                  yield* store.clear(Term.defaultGraph);
-                }
-                yield* store.insert(intoGraph(quads, graphOf(t)));
-              }),
-            )
-            .pipe(Effect.mapError(storeError));
-          return HttpServerResponse.empty({ status: existed ? 204 : 201 });
+          return yield* commit(
+            Effect.gen(function* () {
+              if (t._tag === 'Named') {
+                yield* store.dropGraph(t.graph);
+                yield* store.createGraph(t.graph);
+              } else {
+                yield* store.clear(Term.defaultGraph);
+              }
+              yield* store.insert(intoGraph(quads, graphOf(t)));
+            }),
+            existed,
+          );
         }),
       ),
       Match.when('POST', () =>
@@ -286,15 +292,13 @@ export const handle = (
           const base = t._tag === 'Named' ? t.graph.value : url.href;
           const quads = yield* readQuads(request, formats, base);
           const existed = yield* exists(store, t);
-          yield* store
-            .transaction(
-              Effect.gen(function* () {
-                if (t._tag === 'Named' && !existed) yield* store.createGraph(t.graph);
-                yield* store.insert(intoGraph(quads, graphOf(t)));
-              }),
-            )
-            .pipe(Effect.mapError(storeError));
-          return HttpServerResponse.empty({ status: existed ? 204 : 201 });
+          return yield* commit(
+            Effect.gen(function* () {
+              if (t._tag === 'Named' && !existed) yield* store.createGraph(t.graph);
+              yield* store.insert(intoGraph(quads, graphOf(t)));
+            }),
+            existed,
+          );
         }),
       ),
       Match.when('DELETE', () =>
