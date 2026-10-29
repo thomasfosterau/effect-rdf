@@ -19,6 +19,7 @@ import {
   fail,
   isAbsoluteIri,
   isBlankNodeId,
+  isEmptyObject,
   isGraphObject,
   isKeyword,
   isListObject,
@@ -30,6 +31,10 @@ import {
   hasOwn,
   stringifyJson,
 } from './util.ts';
+
+/** A frame-expansion `@language` / `@direction` value: `{}` or an array of strings. */
+const isFrameStringValue = (value: Json): boolean =>
+  isEmptyObject(value) || (Array.isArray(value) && value.every(isString));
 
 /** @internal */
 export interface ExpandOptions {
@@ -318,8 +323,7 @@ const expandObject = (
             expandedValue = value;
           } else if (
             options.frameExpansion &&
-            ((isObject(value) && Arr.isReadonlyArrayEmpty(Object.keys(value))) ||
-              (Array.isArray(value) && value.every(isScalar)))
+            (isEmptyObject(value) || (Array.isArray(value) && value.every(isScalar)))
           ) {
             expandedValue = value;
           } else {
@@ -333,11 +337,7 @@ const expandObject = (
         }
         case '@language': {
           if (isString(value)) expandedValue = value;
-          else if (
-            options.frameExpansion &&
-            ((isObject(value) && Arr.isReadonlyArrayEmpty(Object.keys(value))) ||
-              (Array.isArray(value) && value.every(isString)))
-          ) {
+          else if (options.frameExpansion && isFrameStringValue(value)) {
             expandedValue = value;
           } else fail('invalid language-tagged string');
           break;
@@ -345,11 +345,7 @@ const expandObject = (
         case '@direction': {
           if (env.processingMode === 'json-ld-1.0') continue;
           if (value === 'ltr' || value === 'rtl') expandedValue = value;
-          else if (
-            options.frameExpansion &&
-            ((isObject(value) && Arr.isReadonlyArrayEmpty(Object.keys(value))) ||
-              (Array.isArray(value) && value.every(isString)))
-          ) {
+          else if (options.frameExpansion && isFrameStringValue(value)) {
             expandedValue = value;
           } else fail('invalid base direction');
           break;

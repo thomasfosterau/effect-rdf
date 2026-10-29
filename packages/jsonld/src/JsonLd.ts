@@ -36,9 +36,20 @@ import { expandElement } from './internal/expand.ts';
 import { flattenExpanded } from './internal/flatten.ts';
 import { cleanupNull, frame as frameAlgorithm } from './internal/frame.ts';
 import * as Rdf from './internal/rdf.ts';
-import { type Json, type JsonObject, fail, isObject, isString } from './internal/util.ts';
+import {
+  type Json,
+  type JsonObject,
+  fail,
+  isEmptyObject,
+  isObject,
+  isString,
+} from './internal/util.ts';
 import { parseJson } from './internal/json.ts';
 import * as Predicate from 'effect/Predicate';
+
+/** An empty context (`{}` or `[]`), which compaction leaves out of the output. */
+const isEmptyContext = (context: Json): boolean =>
+  isEmptyObject(context) || (Array.isArray(context) && Arr.isReadonlyArrayEmpty(context));
 
 /**
  * Any JSON value.
@@ -326,12 +337,7 @@ const compactSync = (
       : { [compactIri(env, active, '@graph', null, true, false, compactOptions)]: compacted };
   }
   if (compacted === null || compacted === undefined) compacted = {};
-  if (
-    context !== null &&
-    context !== undefined &&
-    !(isObject(context) && Arr.isReadonlyArrayEmpty(Object.keys(context))) &&
-    !(Array.isArray(context) && Arr.isReadonlyArrayEmpty(context))
-  ) {
+  if (context !== null && context !== undefined && !isEmptyContext(context)) {
     compacted = { '@context': context, ...compacted };
   }
   return compacted;
@@ -468,11 +474,7 @@ const frameSync = (
     compacted = { [graphKey]: compacted };
   }
   if (compacted === null || compacted === undefined) compacted = {};
-  if (
-    context !== null &&
-    !(isObject(context) && Arr.isReadonlyArrayEmpty(Object.keys(context))) &&
-    !(Array.isArray(context) && Arr.isReadonlyArrayEmpty(context))
-  ) {
+  if (context !== null && !isEmptyContext(context)) {
     compacted = { '@context': context, ...compacted };
   }
   return cleanupNull(compacted);
