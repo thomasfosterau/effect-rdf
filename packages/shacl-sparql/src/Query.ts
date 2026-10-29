@@ -22,6 +22,7 @@
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
 import { Path, Sparql, Vocabulary } from '@thomasfosterau/effect-shacl';
 import { Ast, Parser } from '@thomasfosterau/effect-sparql';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
 
@@ -61,7 +62,7 @@ export const prefixes = (
   const out: Record<string, string> = {};
   const seen = new Set<string>();
   const stack: Array<Term.GroundTerm> = [...Dataset.objectsOf(shapesGraph, node, sh.prefixes)];
-  while (stack.length > 0) {
+  while (Arr.isReadonlyArrayNonEmpty(stack)) {
     const current = stack.pop()!;
     if (seen.has(current.key) || current._tag === 'Literal' || current._tag === 'Triple') continue;
     seen.add(current.key);

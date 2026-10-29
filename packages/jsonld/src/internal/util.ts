@@ -138,7 +138,8 @@ export const hasKeywordForm = (v: string): boolean => /^@[a-zA-Z]+$/.test(v);
 export const isObject = (v: unknown): v is JsonObject => Predicate.isObject(v);
 
 /** @internal */
-export const isEmptyObject = (v: Json): boolean => isObject(v) && Object.keys(v).length === 0;
+export const isEmptyObject = (v: Json): boolean =>
+  isObject(v) && Arr.isReadonlyArrayEmpty(Object.keys(v));
 
 /** @internal */
 export const isString = (v: unknown): v is string => Predicate.isString(v);
@@ -220,7 +221,7 @@ export const sortedKeys = (o: JsonObject): Array<string> =>
  */
 export const addValue = (object: JsonObject, key: string, value: Json, asArray: boolean): void => {
   if (Array.isArray(value)) {
-    if (value.length === 0 && asArray && !hasOwn(object, key)) object[key] = [];
+    if (Arr.isReadonlyArrayEmpty(value) && asArray && !hasOwn(object, key)) object[key] = [];
     for (const v of value) addValue(object, key, v, asArray);
     return;
   }

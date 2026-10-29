@@ -11,6 +11,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -161,13 +162,13 @@ export const resolveImports = Effect.fnUntraced(function* (
   schema: ShExJ.Schema,
   schemaIri?: string,
 ) {
-  if (schema.imports === undefined || schema.imports.length === 0) return schema;
+  if (schema.imports === undefined || Arr.isReadonlyArrayEmpty(schema.imports)) return schema;
   const loader = yield* SchemaLoader;
   const seen = new Set<string>(schemaIri === undefined ? [] : [schemaIri]);
   const shapes: Array<ShExJ.ShapeDecl> = [...(schema.shapes ?? [])];
   const labels = new Set(shapes.map((s) => s.id));
   const queue = [...schema.imports];
-  while (queue.length > 0) {
+  while (Arr.isReadonlyArrayNonEmpty(queue)) {
     const iri = queue.shift()!;
     if (seen.has(iri)) continue;
     seen.add(iri);
@@ -180,7 +181,7 @@ export const resolveImports = Effect.fnUntraced(function* (
     queue.push(...(imported.imports ?? []));
   }
   const { imports: _, ...rest } = schema;
-  return (shapes.length > 0 ? { ...rest, shapes } : rest) as ShExJ.Schema;
+  return (Arr.isReadonlyArrayNonEmpty(shapes) ? { ...rest, shapes } : rest) as ShExJ.Schema;
 });
 
 // -----------------------------------------------------------------------------

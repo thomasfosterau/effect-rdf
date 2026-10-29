@@ -6,6 +6,7 @@
  * @since 0.1.0
  */
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
@@ -92,7 +93,7 @@ export const makeResult = (fields: {
  */
 export const make = (results: ReadonlyArray<ValidationResult>): ValidationReport => ({
   _tag: 'ValidationReport',
-  conforms: results.length === 0,
+  conforms: Arr.isReadonlyArrayEmpty(results),
   results,
 });
 
@@ -152,7 +153,8 @@ export const violations = (self: ValidationReport): ReadonlyArray<ValidationResu
  * @since 0.1.0
  * @category queries
  */
-export const hasNoViolations = (self: ValidationReport): boolean => violations(self).length === 0;
+export const hasNoViolations = (self: ValidationReport): boolean =>
+  Arr.isReadonlyArrayEmpty(violations(self));
 
 /**
  * A human-readable, multi-line summary of a report.

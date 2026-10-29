@@ -410,7 +410,7 @@ class RdfXmlParser {
         }
         case 'Collection': {
           const items = this.nodeElementList(el.children, ctx);
-          if (items.length === 0) {
+          if (Arr.isReadonlyArrayEmpty(items)) {
             finish(rdfNil);
             return;
           }
@@ -453,7 +453,7 @@ class RdfXmlParser {
       }
     }
 
-    if (elements.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(elements)) {
       if (elements.length > 1)
         this.fail('A property element can contain only one node element', el);
       if (!Xml.isWhitespace(text))
@@ -497,7 +497,7 @@ class RdfXmlParser {
       finish(Term.literal('', this.iri(datatype.value, ctx)));
       return;
     }
-    if (resource === undefined && nodeId === undefined && props.length === 0) {
+    if (resource === undefined && nodeId === undefined && Arr.isReadonlyArrayEmpty(props)) {
       finish(this.literal('', ctx));
       return;
     }
@@ -913,7 +913,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
         attrs = ` rdf:nodeID="${writer.blankLabel(subject)}"`;
       }
     }
-    if (ts.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(ts)) {
       lines.push(`${pad}<${element}${attrs}/>`);
       return;
     }
@@ -937,7 +937,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
       case 'BlankNode': {
         if (nested.has(o.value) && !inTripleTerm.has(o.value)) {
           const entry = graph.bySubject.get(o.key);
-          if (entry === undefined || entry.triples.length === 0) {
+          if (entry === undefined || Arr.isReadonlyArrayEmpty(entry.triples)) {
             lines.push(`${pad}<${name} rdf:parseType="Resource"/>`);
             return;
           }
@@ -1042,7 +1042,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   if (options.baseIri !== undefined) decls.push(`xml:base="${escapeAttr(options.baseIri)}"`);
   if (writer.needsVersion) decls.push('rdf:version="1.2"');
   const sep = `\n${' '.repeat('<rdf:RDF '.length)}`;
-  if (body.length === 0) {
+  if (Arr.isReadonlyArrayEmpty(body)) {
     out.push(`<rdf:RDF ${decls.join(sep)}/>`);
   } else {
     out.push(`<rdf:RDF ${decls.join(sep)}>`);

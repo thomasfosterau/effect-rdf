@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Arr from 'effect/Array';
+import * as Str from 'effect/String';
 import * as Effect from 'effect/Effect';
 import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
@@ -89,7 +90,11 @@ const datasetClauseQuads = (query: Ast.Query, loaded: Dataset.Dataset): Array<Te
   const out: Array<Term.Quad> = [];
   const graphs = [...(query.dataset?.default ?? []), ...(query.dataset?.named ?? [])];
   for (const g of graphs) {
-    if (!g.value.startsWith('file:') || Dataset.match(loaded, { graph: g }).length > 0) continue;
+    if (
+      !g.value.startsWith('file:') ||
+      Arr.isReadonlyArrayNonEmpty(Dataset.match(loaded, { graph: g }))
+    )
+      continue;
     const file = fileURLToPath(g.value);
     if (fs.existsSync(file)) out.push(...parseFile(file, g));
   }
@@ -179,7 +184,7 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
         assert(ok, 'Results differ only in blank node structure');
         // Ordered queries also agree on the order of the solutions.
         const vars = orderVariables(query);
-        const ordered = vars.length > 0 && !t.laxCardinality;
+        const ordered = Arr.isReadonlyArrayNonEmpty(vars) && !t.laxCardinality;
         const order = (rows: ReadonlyArray<Bindings>) =>
           ordered ? rows.map((b) => orderKey(b, vars)) : [];
         expect(order(actual)).toEqual(order(exp));
@@ -233,7 +238,7 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
     const runnable = tests.filter((t) => skipReason(t) === undefined);
     it('documents every skipped test', () => {
       const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
-      expect(skippedTests.every((t) => skipReason(t)!.length > 0)).toBe(true);
+      expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t)!))).toBe(true);
     });
     it.each(
       runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),

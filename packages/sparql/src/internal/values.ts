@@ -8,6 +8,7 @@
  *
  * @internal
  */
+import * as Str from 'effect/String';
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
@@ -447,7 +448,7 @@ export const ebv = (t: Term.Term): boolean => {
     if (!Xsd.isValidLexical(d, t.value)) return fail('Invalid boolean');
     return booleanValue(t);
   }
-  if (t.language === '' && d === Term.XSD_STRING) return t.value.length > 0;
+  if (t.language === '' && d === Term.XSD_STRING) return Str.isNonEmpty(t.value);
   if (Xsd.isNumericDatatype(d)) {
     const n = numeric(t);
     if (n === undefined) return false;

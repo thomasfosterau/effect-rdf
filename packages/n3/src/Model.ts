@@ -111,7 +111,9 @@ export class Collection extends N3Base {
     this.items = items;
   }
   protected computeKey(): string {
-    return this.items.length === 0 ? '()' : `( ${this.items.map((t) => t.key).join(' ')} )`;
+    return Arr.isReadonlyArrayEmpty(this.items)
+      ? '()'
+      : `( ${this.items.map((t) => t.key).join(' ')} )`;
   }
 }
 
@@ -170,7 +172,7 @@ export class Formula extends N3Base {
     return this.statements.length;
   }
   protected computeKey(): string {
-    if (this.statements.length === 0) return '{}';
+    if (Arr.isReadonlyArrayEmpty(this.statements)) return '{}';
     const keys = Arr.sort(
       this.statements.map((s) => s.key),
       Order.String,

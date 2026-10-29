@@ -1,5 +1,6 @@
 /** @internal */
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
+import * as Arr from 'effect/Array';
 
 /** @internal */
 export const resolveIri = (reference: string, base: string | null | undefined): string =>
@@ -30,13 +31,13 @@ export const removeBase = (base: string | null, iri: string): string => {
   const baseSegments = basePath.split('/');
   const iriSegments = relPath.split('/');
   const last = rel[5] !== undefined || rel[4] !== undefined ? 0 : 1;
-  while (baseSegments.length > 0 && iriSegments.length > last) {
+  while (Arr.isReadonlyArrayNonEmpty(baseSegments) && iriSegments.length > last) {
     if (baseSegments[0] !== iriSegments[0]) break;
     baseSegments.shift();
     iriSegments.shift();
   }
   let out = '';
-  if (baseSegments.length > 0) {
+  if (Arr.isReadonlyArrayNonEmpty(baseSegments)) {
     baseSegments.pop();
     for (let i = 0; i < baseSegments.length; i++) out += '../';
   }

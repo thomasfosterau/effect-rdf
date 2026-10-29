@@ -27,6 +27,7 @@ import * as Namespace from '@thomasfosterau/effect-rdf/Namespace';
 import type * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, rdfs } from '@thomasfosterau/effect-rdf/Vocab';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Turtle from './Turtle.ts';
@@ -169,7 +170,7 @@ export const load = <E, R>(
     const seen = new Set<string>();
     const entries: Array<Entry> = [];
     const queue = [iri];
-    while (queue.length > 0) {
+    while (Arr.isReadonlyArrayNonEmpty(queue)) {
       const next = queue.shift()!;
       if (seen.has(next)) continue;
       seen.add(next);

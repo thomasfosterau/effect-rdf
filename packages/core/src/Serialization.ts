@@ -441,7 +441,7 @@ export const negotiate = (
   accept: string | undefined,
   available: ReadonlyArray<string>,
 ): Option.Option<string> => {
-  if (available.length === 0) return Option.none();
+  if (Arr.isReadonlyArrayEmpty(available)) return Option.none();
   if (accept === undefined || accept.trim() === '') return Option.some(available[0]!);
   for (const entry of parseAccept(accept)) {
     if (entry.mediaType === '*/*') return Option.some(available[0]!);

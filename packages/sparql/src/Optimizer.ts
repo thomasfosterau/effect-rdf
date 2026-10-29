@@ -13,6 +13,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
@@ -85,7 +86,7 @@ const pushFilters = (op: Algebra.Operation): Algebra.Operation =>
       if (pushed === undefined) kept.push(c);
       else input = pushed;
     }
-    return kept.length === 0 ? input : Algebra.filter(conjunction(kept), input);
+    return Arr.isReadonlyArrayEmpty(kept) ? input : Algebra.filter(conjunction(kept), input);
   });
 
 const positions = (p: Ast.TriplePattern): ReadonlyArray<Ast.TermPattern> => [
@@ -111,12 +112,14 @@ const patternVariables = (p: Ast.TriplePattern): ReadonlyArray<string> => {
 const constant = (t: Ast.TermPattern): Term.GroundTerm | undefined =>
   t._tag === 'Variable' ||
   (t._tag === 'Triple' &&
-    patternVariables({
-      _tag: 'TriplePattern',
-      subject: t.subject,
-      predicate: t.predicate,
-      object: t.object,
-    }).length > 0)
+    Arr.isReadonlyArrayNonEmpty(
+      patternVariables({
+        _tag: 'TriplePattern',
+        subject: t.subject,
+        predicate: t.predicate,
+        object: t.object,
+      }),
+    ))
     ? undefined
     : (t as Term.GroundTerm);
 
@@ -157,7 +160,7 @@ const orderBgp = (
     const remaining = patterns.map((p, i) => ({ p, cost: costs[i]!, vars: patternVariables(p) }));
     const bound = new Set<string>();
     const out: Array<Ast.TriplePattern> = [];
-    while (remaining.length > 0) {
+    while (Arr.isReadonlyArrayNonEmpty(remaining)) {
       let best = -1;
       let bestScore = Infinity;
       const connected = remaining.some((r) => r.vars.some((v) => bound.has(v)));

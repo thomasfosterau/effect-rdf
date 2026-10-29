@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from '@effect/vitest';
 import * as Arr from 'effect/Array';
+import * as Str from 'effect/String';
 import * as Order from 'effect/Order';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -78,7 +79,11 @@ const loadDataset = (t: TestCase, query: Ast.Query | undefined): Dataset.Dataset
   // Graphs named in FROM / FROM NAMED are loaded from files.
   const graphs = [...(query?.dataset?.default ?? []), ...(query?.dataset?.named ?? [])];
   for (const g of graphs) {
-    if (!g.value.startsWith('file:') || Dataset.match(loaded, { graph: g }).length > 0) continue;
+    if (
+      !g.value.startsWith('file:') ||
+      Arr.isReadonlyArrayNonEmpty(Dataset.match(loaded, { graph: g }))
+    )
+      continue;
     const file = fileURLToPath(g.value);
     if (fs.existsSync(file)) quads.push(...parseFile(file, g));
   }
@@ -150,7 +155,7 @@ const expectSameSolutions = (
   const same = sameResults(actual, exp, { lax });
   expect(same ? [] : sortedStrings(actual)).toEqual(same ? [] : sortedStrings(exp));
   expect(same, 'Results differ only in blank node structure').toBe(true);
-  if (vars.length === 0 || lax) return;
+  if (Arr.isReadonlyArrayEmpty(vars) || lax) return;
   expect(actual.map((b) => orderKey(b, vars))).toEqual(exp.map((b) => orderKey(b, vars)));
 };
 
@@ -222,7 +227,7 @@ describe.skipIf(!exists)('SPARQL evaluation conformance over HTTP (client ↔ se
   const runnable = tests.filter((t) => skipReason(t) === undefined);
   it('runs every evaluation test outside the skipped directories', () => {
     expect(
-      tests.filter((t) => skipReason(t) !== undefined).every((t) => skipReason(t)!.length > 0),
+      tests.filter((t) => skipReason(t) !== undefined).every((t) => Str.isNonEmpty(skipReason(t)!)),
     ).toBe(true);
     expect(runnable.length).toBeGreaterThan(600);
   });

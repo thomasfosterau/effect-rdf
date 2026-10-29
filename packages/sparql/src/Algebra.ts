@@ -16,6 +16,7 @@
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
+import * as Arr from 'effect/Array';
 
 // -----------------------------------------------------------------------------
 // Expressions
@@ -860,7 +861,7 @@ export const prebind = (op: Operation, bindings: Bindings): Operation => {
   const go = (o: Operation): Operation => {
     switch (o._tag) {
       case 'Bgp':
-        return o.patterns.length === 0
+        return Arr.isReadonlyArrayEmpty(o.patterns)
           ? table
           : join(
               table,

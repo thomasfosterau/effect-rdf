@@ -18,6 +18,7 @@ import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import * as Ast from '../Ast.ts';
 import { resolve, type Tok, tokenize } from './lexer.ts';
@@ -562,7 +563,7 @@ const build = (subject: Ast.TermPattern, pl: PropertyList, out: Triples = []): T
         continue;
       }
       out.push(Ast.triplePattern(subject, v.predicate, o.term));
-      if (annotation.length === 0) continue;
+      if (Arr.isReadonlyArrayEmpty(annotation)) continue;
       const triple = Term.triple<any, any, any>(subject, v.predicate, o.term);
       for (const a of annotation) {
         out.push(Ast.triplePattern(a.reifier, rdfReifies, triple));
@@ -705,7 +706,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
       ),
     ).pipe(
       Parser.map(([items, t]) => {
-        if (items.length === 0) return node(rdfNil);
+        if (Arr.isReadonlyArrayEmpty(items)) return node(rdfNil);
         if (!ctx.tc.blankNodes) fail('Blank nodes are not allowed here', offsetOf(t));
         const nodes = items.map(() => ctx.freshBlankNode());
         const triples: Triples = [];
@@ -1204,7 +1205,9 @@ const graphPatternNotTriples: P<Ast.Pattern> = select<Ast.Pattern>([
       groupGraphPattern,
       Parser.repeat(Parser.preceded(tok('UNION'), groupGraphPattern)),
     ).pipe(
-      Parser.map(([first, rest]) => (rest.length === 0 ? first : Ast.union([first, ...rest]))),
+      Parser.map(([first, rest]) =>
+        Arr.isReadonlyArrayEmpty(rest) ? first : Ast.union([first, ...rest]),
+      ),
     ),
   ],
   [
@@ -1438,7 +1441,7 @@ const atLeastOne = <A>(p: P<A>, label: string): P<Array<A>> =>
     hook((t) => t),
   ).pipe(
     Parser.tryMap(([items, t]) =>
-      items.length === 0
+      Arr.isReadonlyArrayEmpty(items)
         ? Result.fail(
             new Failure(
               t?.type === 'ERROR' ? t.value : `Unexpected ${describe(t)}, expected ${label}`,
@@ -1471,7 +1474,7 @@ const solutionModifiers: P<Modifiers> = Parser.seq(
       ),
     ).pipe(
       Parser.map(([having, t]) =>
-        having.length > 0 ? having : unexpectedAt(t, 'a HAVING condition'),
+        Arr.isReadonlyArrayNonEmpty(having) ? having : unexpectedAt(t, 'a HAVING condition'),
       ),
     ),
   ),
@@ -1484,7 +1487,7 @@ const solutionModifiers: P<Modifiers> = Parser.seq(
       ),
     ).pipe(
       Parser.map(([orderBy, t]) =>
-        orderBy.length > 0 ? orderBy : unexpectedAt(t, 'an ORDER BY condition'),
+        Arr.isReadonlyArrayNonEmpty(orderBy) ? orderBy : unexpectedAt(t, 'an ORDER BY condition'),
       ),
     ),
   ),
@@ -1524,7 +1527,7 @@ const datasetClauses: P<Ast.DatasetClause | undefined> = Parser.repeat(
   Parser.preceded(tok('FROM'), Parser.seq(eat('NAMED'), iriOrError)),
 ).pipe(
   Parser.map((clauses) =>
-    clauses.length === 0
+    Arr.isReadonlyArrayEmpty(clauses)
       ? undefined
       : {
           default: clauses.filter(([named]) => !named).map(([, i]) => i),
@@ -1637,7 +1640,7 @@ const constructQuery: P<Ast.ConstructQuery> = Parser.preceded(
             _tag: 'Construct',
             prologue: prologue.value(),
             template,
-            where: Ast.group(template.length > 0 ? [Ast.bgp(template)] : []),
+            where: Ast.group(Arr.isReadonlyArrayNonEmpty(template) ? [Ast.bgp(template)] : []),
             short: true,
             ...modifiers,
           },
@@ -1705,7 +1708,7 @@ const validateSelect = (query: Ast.SelectQuery, offset: number): void => {
   // Variables introduced by AS must not already be in scope.
   if (query.projection !== '*') {
     const grouped =
-      query.groupBy.length > 0 ||
+      Arr.isReadonlyArrayNonEmpty(query.groupBy) ||
       query.projection.some((p) => p._tag !== 'Variable' && Ast.containsAggregate(p.expression));
     // With grouping only the group keys are in scope; otherwise the
     // pattern's variables are.
@@ -1736,7 +1739,7 @@ const validateGrouping = (query: Ast.Query, offset: number): void => {
       ? query.projection.flatMap((p) => (p._tag === 'Variable' ? [] : [p.expression]))
       : [];
   const grouped =
-    query.groupBy.length > 0 ||
+    Arr.isReadonlyArrayNonEmpty(query.groupBy) ||
     projectionExprs.some(Ast.containsAggregate) ||
     query.having.some(Ast.containsAggregate) ||
     query.orderBy.some((o) => Ast.containsAggregate(o.expression));
@@ -1906,7 +1909,7 @@ const modify = (deleteFirst: boolean): P<Ast.ModifyOperation> =>
   ).pipe(
     Parser.map(([[del, ins], using, where]): Ast.ModifyOperation => {
       const modify: Ast.ModifyOperation = { _tag: 'Modify', delete: del, insert: ins, where };
-      return using.length === 0
+      return Arr.isReadonlyArrayEmpty(using)
         ? modify
         : {
             ...modify,

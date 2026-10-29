@@ -9,6 +9,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -292,7 +293,7 @@ export const extractHtml = (
         ),
       );
     }
-    if (scripts.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(scripts)) {
       return Effect.fail(loadingFailed(url, 'no JSON-LD script element'));
     }
     return remote(parse(scripts[0]!.content));

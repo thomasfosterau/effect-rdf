@@ -7,6 +7,7 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { xsd } from '@thomasfosterau/effect-rdf/Vocab';
@@ -402,7 +403,7 @@ const listBuiltins = {
   last: (s, o, b, ctx) =>
     s._tag !== 'Collection' ? (ready(s) ? [] : undefined) : output(o, s.items.at(-1), b, ctx),
   rest: (s, o, b, ctx) =>
-    s._tag !== 'Collection' || s.items.length === 0
+    s._tag !== 'Collection' || Arr.isReadonlyArrayEmpty(s.items)
       ? ready(s)
         ? []
         : undefined
@@ -468,7 +469,7 @@ const logBuiltins = {
     const scope = scopeOf(s, ctx);
     const goals = goalsOf(o);
     if (scope === undefined || goals === undefined) return ready(s) ? [] : undefined;
-    return ctx.query(scope, goals, b, false).length === 0 ? [b] : [];
+    return Arr.isReadonlyArrayEmpty(ctx.query(scope, goals, b, false)) ? [b] : [];
   },
   conjunction: (s, o, b, ctx) => {
     if (!ready(s)) return undefined;
@@ -543,7 +544,7 @@ const logBuiltins = {
     if (scope === undefined || where === undefined || then === undefined) return [];
     return ctx
       .query(scope, where, b, true)
-      .every((sol) => ctx.query(scope, then, sol, true).length > 0)
+      .every((sol) => Arr.isReadonlyArrayNonEmpty(ctx.query(scope, then, sol, true)))
       ? [b]
       : [];
   },

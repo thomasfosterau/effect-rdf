@@ -6,6 +6,7 @@
 import * as Dataset from './Dataset.ts';
 import * as Term from './Term.ts';
 import { rdf, rdfs } from './Vocab.ts';
+import * as Arr from 'effect/Array';
 
 const transitiveClosure = (
   self: Dataset.Dataset,
@@ -15,7 +16,7 @@ const transitiveClosure = (
 ): ReadonlyArray<Term.Object> => {
   const seen = new Map<string, Term.Object>();
   const stack: Array<Term.Object> = [start];
-  while (stack.length > 0) {
+  while (Arr.isReadonlyArrayNonEmpty(stack)) {
     const node = stack.pop()!;
     const next: ReadonlyArray<Term.Object> =
       direction === 'up'

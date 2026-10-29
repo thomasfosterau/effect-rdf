@@ -116,7 +116,7 @@ export const bijection = (
   }
   for (const q of that) if (Term.hasBlankNodes(q)) bBlank.push(q);
   if (aBlank.length !== bBlank.length) return Option.none();
-  if (aBlank.length === 0) return Option.some(new Map());
+  if (Arr.isReadonlyArrayEmpty(aBlank)) return Option.some(new Map());
 
   const a = refine(aBlank);
   const b = refine(bBlank);
@@ -159,7 +159,7 @@ export const bijection = (
 
   // Iterative depth-first search (graphs can have many thousands of blank nodes).
   const cursors: Array<number> = [0];
-  while (cursors.length > 0) {
+  while (Arr.isReadonlyArrayNonEmpty(cursors)) {
     const i = cursors.length - 1;
     if (i === order.length) return Option.some(mapping);
     const node = order[i]!;
@@ -216,7 +216,7 @@ export const isomorphic: {
  */
 export const relabel = (self: Dataset.Dataset, prefix = 'c'): Dataset.Dataset => {
   const blank = Array.from(self).filter(Term.hasBlankNodes);
-  if (blank.length === 0) return self;
+  if (Arr.isReadonlyArrayEmpty(blank)) return self;
   const { nodes, labels } = refine(blank);
   const sorted = Arr.sort(
     nodes,

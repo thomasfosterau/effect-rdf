@@ -35,7 +35,8 @@ const RDF_REST = rdf.rest.value;
 const RDF_NIL = `=${rdf.nil.key}`;
 
 const hasNodes = (t: Model.N3Term): boolean =>
-  Model.blankNodes(t).length > 0 || Model.variables(t).length > 0;
+  Arr.isReadonlyArrayNonEmpty(Model.blankNodes(t)) ||
+  Arr.isReadonlyArrayNonEmpty(Model.variables(t));
 
 const countBlanks = (self: Model.N3Term | Model.Statement, out: Map<string, number>): void => {
   switch (self._tag) {
@@ -118,12 +119,14 @@ const normalizeLists = (root: Model.Formula): Model.Formula => {
           const items = heads.get(t.value);
           return items === undefined
             ? t
-            : items.length === 0
+            : Arr.isReadonlyArrayEmpty(items)
               ? rdf.nil
               : new Model.Collection(items.map(term));
         }
         case 'Collection':
-          return t.items.length === 0 ? rdf.nil : new Model.Collection(t.items.map(term));
+          return Arr.isReadonlyArrayEmpty(t.items)
+            ? rdf.nil
+            : new Model.Collection(t.items.map(term));
         case 'Formula':
           return normalizeFormula(t);
         default:
@@ -151,7 +154,7 @@ const flatten = (self: Model.Formula): Array<Tuple> => {
       case 'Variable':
         return `v:${t.value}`;
       case 'Collection': {
-        if (t.items.length === 0) return RDF_NIL;
+        if (Arr.isReadonlyArrayEmpty(t.items)) return RDF_NIL;
         if (!hasNodes(t)) return `=${t.key}`;
         const l = `l:${counter++}`;
         t.items.forEach((item, i) => add([l, `=#${i}`, atom(item), '=list']));
@@ -248,7 +251,7 @@ const refine = (tuples: ReadonlyArray<Tuple>): Partition => {
   for (let n = 0; n < nN; n++) colour[n] = hashString(kindOf(nodes[n]!));
   const countClasses = (c: Uint32Array) => {
     const sorted = Arr.sort(c, Order.Number);
-    let count = sorted.length > 0 ? 1 : 0;
+    let count = Arr.isReadonlyArrayNonEmpty(sorted) ? 1 : 0;
     for (let k = 1; k < sorted.length; k++) if (sorted[k] !== sorted[k - 1]) count++;
     return count;
   };
@@ -295,7 +298,7 @@ const bijectionTuples = (
   }
   for (const t of b) if (t.some(isNode)) bNodes.push(t);
   if (aNodes.length !== bNodes.length) return Option.none();
-  if (aNodes.length === 0) return Option.some(new Map());
+  if (Arr.isReadonlyArrayEmpty(aNodes)) return Option.some(new Map());
 
   const pa = refine(aNodes);
   const pb = refine(bNodes);

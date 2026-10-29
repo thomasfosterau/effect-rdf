@@ -10,6 +10,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Cause from 'effect/Cause';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
@@ -78,7 +79,7 @@ class Translator {
           result = Algebra.join(result, this.pattern(e));
       }
     }
-    if (filters.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(filters)) {
       const conjunction = filters
         .map((f) => this.expression(f))
         .reduce((a, b) => ({ _tag: 'Operation', operator: '&&', args: [a, b] }));
@@ -125,7 +126,7 @@ class Translator {
     const parts: Array<Algebra.Operation> = [];
     let current: Array<Ast.TriplePattern> = [];
     const flush = () => {
-      if (current.length > 0) parts.push(Algebra.bgp(current));
+      if (Arr.isReadonlyArrayNonEmpty(current)) parts.push(Algebra.bgp(current));
       current = [];
     };
     const emitPath = (s: Ast.TermPattern, path: Ast.Path, o: Ast.TermPattern): void => {
@@ -161,7 +162,7 @@ class Translator {
       else emitPath(s, t.path, o);
     }
     flush();
-    if (parts.length === 0) return Algebra.unit;
+    if (Arr.isReadonlyArrayEmpty(parts)) return Algebra.unit;
     return parts.reduce((a, b) => Algebra.join(a, b));
   }
 
@@ -211,7 +212,7 @@ class Translator {
       (p): p is Ast.Projection => p._tag === 'Projection',
     );
     const grouped =
-      q.groupBy.length > 0 ||
+      Arr.isReadonlyArrayNonEmpty(q.groupBy) ||
       selectExpressions.some((p) => Ast.containsAggregate(p.expression)) ||
       q.having.some(Ast.containsAggregate) ||
       q.orderBy.some((o) => Ast.containsAggregate(o.expression));
@@ -278,14 +279,15 @@ class Translator {
       for (const h of having) op = Algebra.filter(h, op);
       if (q.values !== undefined) op = Algebra.join(op, values(q.values));
       for (const x of extensions) op = Algebra.extend(op, x.variable, x.expression);
-      if (order.length > 0) op = { _tag: 'OrderBy', input: op, conditions: order };
+      if (Arr.isReadonlyArrayNonEmpty(order))
+        op = { _tag: 'OrderBy', input: op, conditions: order };
     } else {
       for (const h of q.having) op = Algebra.filter(this.expression(h), op);
       if (q.values !== undefined) op = Algebra.join(op, values(q.values));
       for (const p of selectExpressions) {
         op = Algebra.extend(op, p.variable, translateLevel(p.expression, new Set()));
       }
-      if (q.orderBy.length > 0) {
+      if (Arr.isReadonlyArrayNonEmpty(q.orderBy)) {
         op = {
           _tag: 'OrderBy',
           input: op,
@@ -338,7 +340,8 @@ const values = (p: Ast.ValuesPattern): Algebra.Values => ({
   ),
 });
 
-const isUnit = (op: Algebra.Operation): boolean => op._tag === 'Bgp' && op.patterns.length === 0;
+const isUnit = (op: Algebra.Operation): boolean =>
+  op._tag === 'Bgp' && Arr.isReadonlyArrayEmpty(op.patterns);
 
 /**
  * Removes joins with the empty BGP (`Join(Z, A)` → `A`).

@@ -9,6 +9,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -336,7 +337,7 @@ export const make = (
     const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
     const resources: Stream.Stream<Term.GroundTerm, SparqlError> = Stream.concat(
       Stream.fromIterable(constants),
-      vars.length === 0
+      Arr.isReadonlyArrayEmpty(vars)
         ? Stream.empty
         : Stream.flatMap(solutions, (b) =>
             Stream.fromIterable(
@@ -505,7 +506,9 @@ export const make = (
         ? Algebra.bgp(triples)
         : { _tag: 'Graph', name: graph, input: Algebra.bgp(triples) },
     );
-    return parts.length === 0 ? Algebra.unit : parts.reduce((a, b) => Algebra.join(a, b));
+    return Arr.isReadonlyArrayEmpty(parts)
+      ? Algebra.unit
+      : parts.reduce((a, b) => Algebra.join(a, b));
   };
 
   const executeOperation = (

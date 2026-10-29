@@ -413,7 +413,7 @@ export const canonicalize = (nodes: ReadonlyArray<Node>): string => {
           Order.make<readonly [string, string]>((a, b) => compareStrings(a[0], b[0])),
         );
         let next = rendered;
-        if (decls.length > 0) {
+        if (Arr.isReadonlyArrayNonEmpty(decls)) {
           const m = new Map(rendered);
           for (const [p, uri] of decls) m.set(p, uri);
           next = m;

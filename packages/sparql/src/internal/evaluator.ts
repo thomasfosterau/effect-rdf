@@ -112,13 +112,13 @@ export const matchQuads = (
   const def = env.dataset.defaultGraph;
   if (def === 'default') return env.store.match({ ...pattern, graph: Term.defaultGraph });
   if (def === 'union') return dedupeTriples(env.store.match({ ...pattern, graph: undefined }));
-  if (def.length === 0) return Stream.empty;
+  if (Arr.isReadonlyArrayEmpty(def)) return Stream.empty;
   if (def.length === 1) return env.store.match({ ...pattern, graph: def[0]! });
   return dedupeTriples(concatAll(def.map((g) => env.store.match({ ...pattern, graph: g }))));
 };
 
 const concatAll = <A, E>(streams: ReadonlyArray<Stream.Stream<A, E>>): Stream.Stream<A, E> =>
-  streams.length === 0 ? Stream.empty : streams.reduce((a, b) => Stream.concat(a, b));
+  Arr.isReadonlyArrayEmpty(streams) ? Stream.empty : streams.reduce((a, b) => Stream.concat(a, b));
 
 const matchTriple = (pattern: Ast.TriplePattern, env: Env, b: Bindings): S => {
   const s = ground(pattern.subject, b);
@@ -209,7 +209,7 @@ const pathFrom = (
     case 'PathNegated': {
       const parts: Array<E<ReadonlyArray<Term.GroundTerm>>> = [];
       const excluded = (list: ReadonlyArray<Term.NamedNode>) => new Set(list.map((i) => i.value));
-      if (path.iris.length > 0 || path.inverse.length === 0) {
+      if (Arr.isReadonlyArrayNonEmpty(path.iris) || Arr.isReadonlyArrayEmpty(path.inverse)) {
         const ex = excluded(path.iris);
         parts.push(
           Effect.map(collect(env, forward ? { subject: start } : { object: start }), (qs) =>
@@ -219,7 +219,7 @@ const pathFrom = (
           ),
         );
       }
-      if (path.inverse.length > 0) {
+      if (Arr.isReadonlyArrayNonEmpty(path.inverse)) {
         const ex = excluded(path.inverse);
         parts.push(
           Effect.map(collect(env, forward ? { object: start } : { subject: start }), (qs) =>
@@ -246,7 +246,7 @@ const closure = (
     if (includeStart) visited.set(start.key, start);
     let frontier: Array<Term.GroundTerm> = [start];
     const expanded = new Set<string>();
-    while (frontier.length > 0) {
+    while (Arr.isReadonlyArrayNonEmpty(frontier)) {
       const next: Array<Term.GroundTerm> = [];
       const unexpanded = frontier.filter((n) => {
         if (expanded.has(n.key)) return false;
@@ -291,7 +291,7 @@ const pathAll = (
       return Effect.flatMap(pathAll(env, first!), (pairs) =>
         forEachFlat(pairs, ([x, m]) =>
           Effect.map(
-            rest.length === 0
+            Arr.isReadonlyArrayEmpty(rest)
               ? Effect.succeed([m])
               : pathFrom(env, { _tag: 'PathSequence', paths: rest }, m, true),
             (ys) => ys.map((y) => [x, y] as const),
@@ -303,7 +303,7 @@ const pathAll = (
       return forEachFlat(path.paths, (p) => pathAll(env, p));
     case 'PathNegated': {
       const out: Array<E<ReadonlyArray<readonly [Term.GroundTerm, Term.GroundTerm]>>> = [];
-      if (path.iris.length > 0 || path.inverse.length === 0) {
+      if (Arr.isReadonlyArrayNonEmpty(path.iris) || Arr.isReadonlyArrayEmpty(path.inverse)) {
         const ex = new Set(path.iris.map((i) => i.value));
         out.push(
           Effect.map(collect(env, {}), (qs) =>
@@ -311,7 +311,7 @@ const pathAll = (
           ),
         );
       }
-      if (path.inverse.length > 0) {
+      if (Arr.isReadonlyArrayNonEmpty(path.inverse)) {
         const ex = new Set(path.inverse.map((i) => i.value));
         out.push(
           Effect.map(collect(env, {}), (qs) =>
@@ -426,7 +426,7 @@ const prepare = (
 ): ((b: Bindings) => Effect.Effect<Expression.Context, Err>) => {
   const nodes: Array<Algebra.ExistsExpression> = [];
   collectExists(expression, nodes);
-  if (nodes.length === 0) return () => Effect.succeed(env.expr);
+  if (Arr.isReadonlyArrayEmpty(nodes)) return () => Effect.succeed(env.expr);
   return (b) =>
     Effect.map(
       Effect.forEach(
@@ -454,7 +454,7 @@ const filterStream = (stream: S, expression: Algebra.Expression, env: Env): S =>
 const Algebra_containsExists = (e: Algebra.Expression): boolean => {
   const out: Array<Algebra.ExistsExpression> = [];
   collectExists(e, out);
-  return out.length > 0;
+  return Arr.isReadonlyArrayNonEmpty(out);
 };
 
 // -----------------------------------------------------------------------------
@@ -484,7 +484,8 @@ const evalWith = (op: Algebra.Operation, env: Env, initial: Bindings): S => {
   }
 };
 
-const isUnit = (op: Algebra.Operation): boolean => op._tag === 'Bgp' && op.patterns.length === 0;
+const isUnit = (op: Algebra.Operation): boolean =>
+  op._tag === 'Bgp' && Arr.isReadonlyArrayEmpty(op.patterns);
 
 /** An index of solutions by the values of the variables bound in all of them. */
 class SolutionIndex {
@@ -501,7 +502,7 @@ class SolutionIndex {
   }
   candidates(b: Bindings): ReadonlyArray<Bindings> {
     const vars = this.keyVars.filter((v) => b.map.has(v));
-    if (vars.length === 0) return this.all;
+    if (Arr.isReadonlyArrayEmpty(vars)) return this.all;
     const sig = vars.join('|');
     const key = `${sig}#${vars.map((v) => b.map.get(v)!.key).join('\u0001')}`;
     if (!this.buckets.has(`${sig}#__built`)) {
@@ -555,7 +556,9 @@ const evalLeftJoin = (op: Algebra.LeftJoin, env: Env): S => {
       ? Effect.succeed(true)
       : Effect.map(ctxFor!(b), (ctx) => Expression.test(expression, b, ctx));
   const extend = (a: Bindings, matches: ReadonlyArray<Bindings>) =>
-    Effect.map(Effect.filter(matches, keep), (kept) => (kept.length > 0 ? kept : [a]));
+    Effect.map(Effect.filter(matches, keep), (kept) =>
+      Arr.isReadonlyArrayNonEmpty(kept) ? kept : [a],
+    );
   if (bindable(op.right)) {
     return Stream.flatMap(left, (a) =>
       Stream.fromIterableEffect(
@@ -672,14 +675,14 @@ const aggregateOf = (
     }
     case 'AVG': {
       if (defined.length !== values.length) return undefined;
-      if (defined.length === 0) return new Term.Literal('0', V.dt.integer);
+      if (Arr.isReadonlyArrayEmpty(defined)) return new Term.Literal('0', V.dt.integer);
       let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
       for (const v of defined) acc = V.arithmetic('+', acc, v);
       return V.arithmetic('/', acc, new Term.Literal(String(defined.length), V.dt.integer));
     }
     case 'MIN':
     case 'MAX': {
-      if (defined.length === 0) return undefined;
+      if (Arr.isReadonlyArrayEmpty(defined)) return undefined;
       let best = defined[0]!;
       for (const v of defined.slice(1)) {
         const c = V.orderCompare(v, best);
@@ -713,7 +716,8 @@ const evalGroup = (op: Algebra.Group, env: Env): S =>
         if (g === undefined) groups.set(id, (g = { keys, members: [] }));
         g.members.push(s);
       }
-      if (groups.size === 0 && op.keys.length === 0) groups.set('', { keys: [], members: [] });
+      if (groups.size === 0 && Arr.isReadonlyArrayEmpty(op.keys))
+        groups.set('', { keys: [], members: [] });
       const out: Array<Bindings> = [];
       for (const g of groups.values()) {
         const map = new Map<string, Term.GroundTerm>();
@@ -833,7 +837,11 @@ export const evaluate = (op: Algebra.Operation, env: Env): S => {
 const evaluateGeneric = (op: Algebra.Operation, env: Env): S => {
   switch (op._tag) {
     case 'Bgp':
-      return evalBgp(op.patterns, env, op.patterns.length === 0 ? env.context : B.empty);
+      return evalBgp(
+        op.patterns,
+        env,
+        Arr.isReadonlyArrayEmpty(op.patterns) ? env.context : B.empty,
+      );
     case 'Path':
       return evalPath(op, env, B.empty);
     case 'Join':

@@ -272,7 +272,7 @@ export const get = (self: ShapesGraph, id: Term.Term): Option.Option<Shape> =>
  * @category accessors
  */
 export const targetedShapes = (self: ShapesGraph): ReadonlyArray<Shape> =>
-  self.shapes.filter((s) => !s.deactivated && s.targets.length > 0);
+  self.shapes.filter((s) => !s.deactivated && Arr.isReadonlyArrayNonEmpty(s.targets));
 
 /**
  * Whether the shapes graph uses SHACL-SPARQL features (SPARQL constraints,
@@ -498,7 +498,8 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
         fail(`parameter ${param.key} of ${c.key} must have an IRI sh:path`, param);
       (isTrue(single(param, sh.optional)) ? optional : mandatory).push(path as Term.NamedNode);
     }
-    if (mandatory.length > 0) components.push({ component: c, mandatory, optional });
+    if (Arr.isReadonlyArrayNonEmpty(mandatory))
+      components.push({ component: c, mandatory, optional });
   }
 
   // --- Collect shapes (§2.1) ------------------------------------------------
@@ -591,7 +592,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     for (const n of objects(id, sh.maxLength))
       push({ _tag: 'MaxLength', maxLength: nonNegativeInteger(id, sh.maxLength, n) });
     const patterns = objects(id, sh.pattern);
-    if (patterns.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(patterns)) {
       const flagsNode = single(id, sh.flags);
       let flags = '';
       if (flagsNode !== undefined) {
@@ -640,7 +641,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
 
     // Qualified value shapes
     const qualifiedShapes = objects(id, sh.qualifiedValueShape);
-    if (qualifiedShapes.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(qualifiedShapes)) {
       const minNode = single(id, sh.qualifiedMinCount);
       const maxNode = single(id, sh.qualifiedMaxCount);
       const disjoint = isTrue(single(id, sh.qualifiedValueShapesDisjoint));
@@ -703,11 +704,11 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       const bindings = [...decl.mandatory, ...decl.optional].map(
         (p) => [p, objects(id, p)] as const,
       );
-      if (decl.mandatory.some((p) => objects(id, p).length === 0)) continue;
+      if (decl.mandatory.some((p) => Arr.isReadonlyArrayEmpty(objects(id, p)))) continue;
       // One constraint per combination of parameter values.
       let combos: Array<Array<{ path: Term.NamedNode; value: Term.GroundTerm }>> = [[]];
       for (const [path, values] of bindings) {
-        if (values.length === 0) continue;
+        if (Arr.isReadonlyArrayEmpty(values)) continue;
         combos = combos.flatMap((combo) => values.map((value) => [...combo, { path, value }]));
       }
       for (const parameters of combos)

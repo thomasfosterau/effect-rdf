@@ -24,6 +24,7 @@ import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
+import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import * as Model from '../Model.ts';
 import { i18n, log, sameAs } from '../Vocab.ts';
@@ -82,7 +83,7 @@ export const isPnChars = (c: number): boolean =>
 /** Whether a string is a valid `PN_PREFIX` (or empty). @internal */
 export const isPnPrefix = (s: string): boolean => {
   const cps = Array.from(s, (ch) => ch.codePointAt(0)!);
-  if (cps.length === 0) return true;
+  if (Arr.isReadonlyArrayEmpty(cps)) return true;
   if (!isPnCharsBase(cps[0]!)) return false;
   if (cps.length > 1 && cps[cps.length - 1] === 0x2e) return false;
   return cps.slice(1).every((c) => c === 0x2e || isPnChars(c));
@@ -91,7 +92,7 @@ export const isPnPrefix = (s: string): boolean => {
 /** Whether a string is a valid quick variable name (without `?`). @internal */
 export const isVarName = (s: string): boolean => {
   const cps = Array.from(s, (ch) => ch.codePointAt(0)!);
-  return cps.length > 0 && isPnCharsU(cps[0]!) && cps.slice(1).every(isPnChars);
+  return Arr.isReadonlyArrayNonEmpty(cps) && isPnCharsU(cps[0]!) && cps.slice(1).every(isPnChars);
 };
 
 // -----------------------------------------------------------------------------
@@ -388,7 +389,9 @@ const path_: P<Path> = Parser.seq(
     ),
   ),
 ).pipe(
-  Parser.map(([head, steps]): Path => (steps.length === 0 ? head : { _tag: 'Path', head, steps })),
+  Parser.map(([head, steps]): Path =>
+    Arr.isReadonlyArrayEmpty(steps) ? head : { _tag: 'Path', head, steps },
+  ),
 );
 
 const fixed = (predicate: Model.N3Term): Verb => ({ _tag: 'Fixed', predicate });
@@ -447,7 +450,7 @@ const pol_: P<ReadonlyArray<Pol>> = Parser.terminated(
   Parser.opt(semicolons),
 ).pipe(
   Parser.map(([first, rest]): ReadonlyArray<Pol> =>
-    rest.length === 0 ? [first] : [first, ...rest],
+    Arr.isReadonlyArrayEmpty(rest) ? [first] : [first, ...rest],
   ),
 );
 
@@ -788,7 +791,7 @@ export const parse = (input: string, options?: ParserOptions): Model.Document =>
     const found = describe(input, error.offset);
     const expected = error.expected.filter((e) => e !== WHITESPACE);
     const message =
-      expected.length === 0 || expected.length > 3
+      Arr.isReadonlyArrayEmpty(expected) || expected.length > 3
         ? `Unexpected ${found}`
         : `Expected ${expected.join(' or ')} but found ${found}`;
     return failAt(input, message, error.offset);

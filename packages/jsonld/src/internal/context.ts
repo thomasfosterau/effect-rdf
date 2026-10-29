@@ -18,6 +18,7 @@ import {
   isString,
   hasOwn,
 } from './util.ts';
+import * as Arr from 'effect/Array';
 import * as Predicate from 'effect/Predicate';
 
 /** @internal */
@@ -250,7 +251,7 @@ export const processContext = (
       context = { ...importContext, ...context };
     }
     // 5.7
-    if ('@base' in context && remoteContexts.length === 0) {
+    if ('@base' in context && Arr.isReadonlyArrayEmpty(remoteContexts)) {
       const value = context['@base'];
       if (value === null) result.base = null;
       else if (!isString(value)) fail('invalid base IRI');
@@ -360,7 +361,7 @@ const validContainer = (env: Env, value: Json): boolean => {
     return isString(value) && ['@list', '@set', '@index', '@language'].includes(value);
   }
   const c = Array.isArray(value) ? value : [value];
-  if (c.length === 0) return false;
+  if (Arr.isReadonlyArrayEmpty(c)) return false;
   if (!c.every((x) => isString(x) && VALID_CONTAINERS.has(x))) return false;
   if (new Set(c).size !== c.length) return false;
   if (c.includes('@list')) return c.length === 1;
@@ -398,7 +399,7 @@ export const createTermDefinition = (
   if (term === '@type' && env.processingMode !== 'json-ld-1.0' && isObject(value)) {
     const keys = Object.keys(value);
     if (
-      keys.length === 0 ||
+      Arr.isReadonlyArrayEmpty(keys) ||
       keys.some((k) => k !== '@container' && k !== '@protected') ||
       ('@container' in value && value['@container'] !== '@set')
     ) {

@@ -14,6 +14,7 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
@@ -320,17 +321,16 @@ const compactSync = (
   };
   let compacted = compactElement(env, active, null, expanded, compactOptions);
   if (Array.isArray(compacted)) {
-    compacted =
-      compacted.length === 0
-        ? {}
-        : { [compactIri(env, active, '@graph', null, true, false, compactOptions)]: compacted };
+    compacted = Arr.isReadonlyArrayEmpty(compacted)
+      ? {}
+      : { [compactIri(env, active, '@graph', null, true, false, compactOptions)]: compacted };
   }
   if (compacted === null || compacted === undefined) compacted = {};
   if (
     context !== null &&
     context !== undefined &&
-    !(isObject(context) && Object.keys(context).length === 0) &&
-    !(Array.isArray(context) && context.length === 0)
+    !(isObject(context) && Arr.isReadonlyArrayEmpty(Object.keys(context))) &&
+    !(Array.isArray(context) && Arr.isReadonlyArrayEmpty(context))
   ) {
     compacted = { '@context': context, ...compacted };
   }
@@ -470,8 +470,8 @@ const frameSync = (
   if (compacted === null || compacted === undefined) compacted = {};
   if (
     context !== null &&
-    !(isObject(context) && Object.keys(context).length === 0) &&
-    !(Array.isArray(context) && context.length === 0)
+    !(isObject(context) && Arr.isReadonlyArrayEmpty(Object.keys(context))) &&
+    !(Array.isArray(context) && Arr.isReadonlyArrayEmpty(context))
   ) {
     compacted = { '@context': context, ...compacted };
   }

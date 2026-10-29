@@ -11,6 +11,7 @@
  */
 import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Option from 'effect/Option';
@@ -126,7 +127,11 @@ const runCase = (tc: TestCase) =>
       e.messages.every((m) => a.messages.some((n) => n.key === m.key));
 
     const describeResults = (rs: ReadonlyArray<ValidationReport.ValidationResult>) =>
-      ValidationReport.format({ _tag: 'ValidationReport', conforms: rs.length === 0, results: rs });
+      ValidationReport.format({
+        _tag: 'ValidationReport',
+        conforms: Arr.isReadonlyArrayEmpty(rs),
+        results: rs,
+      });
 
     // Backtracking bipartite matching of expected to actual results.
     const used = new Set<number>();

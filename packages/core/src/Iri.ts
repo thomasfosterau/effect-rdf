@@ -4,6 +4,7 @@
  *
  * @since 0.1.0
  */
+import * as Str from 'effect/String';
 import * as Option from 'effect/Option';
 
 interface Parts {
@@ -64,7 +65,7 @@ export const removeDotSegments = (path: string): string => {
   if (!DOT_SEGMENT.test(path)) return path;
   let input = path;
   const output: Array<string> = [];
-  while (input.length > 0) {
+  while (Str.isNonEmpty(input)) {
     if (input.startsWith('../')) input = input.slice(3);
     else if (input.startsWith('./')) input = input.slice(2);
     else if (input.startsWith('/./')) input = input.slice(2);
