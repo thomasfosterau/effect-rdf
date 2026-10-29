@@ -300,7 +300,7 @@ export const removeMatches: {
   (self: Dataset, pattern: Pattern): Dataset;
 } = dual(2, (self: Dataset, pattern: Pattern): Dataset => {
   const matches = match(self, pattern);
-  return matches.length === 0 ? self : mutate(self, (b) => matches.forEach(b.remove));
+  return Arr.isReadonlyArrayEmpty(matches) ? self : mutate(self, (b) => matches.forEach(b.remove));
 });
 
 // -----------------------------------------------------------------------------

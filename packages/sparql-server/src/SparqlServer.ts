@@ -15,6 +15,7 @@
  * @since 0.1.0
  */
 import { createServer } from 'node:http';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -285,7 +286,7 @@ const corsHeaders = (
   const headers: Record<string, string> = {};
   const origin = request.headers['origin'];
   const allowed = cors.allowedOrigins;
-  if (allowed === undefined || allowed.length === 0) {
+  if (allowed === undefined || Arr.isReadonlyArrayEmpty(allowed)) {
     headers['access-control-allow-origin'] = '*';
   } else if (origin !== undefined && allowed.includes(origin)) {
     headers['access-control-allow-origin'] = origin;
@@ -294,13 +295,13 @@ const corsHeaders = (
     headers['vary'] = 'Origin';
   }
   if (cors.credentials === true) headers['access-control-allow-credentials'] = 'true';
-  if (cors.exposedHeaders !== undefined && cors.exposedHeaders.length > 0) {
+  if (cors.exposedHeaders !== undefined && Arr.isReadonlyArrayNonEmpty(cors.exposedHeaders)) {
     headers['access-control-expose-headers'] = cors.exposedHeaders.join(', ');
   }
   if (preflight) {
     headers['access-control-allow-methods'] = 'GET, HEAD, POST, PUT, DELETE, OPTIONS';
     const requested = request.headers['access-control-request-headers'];
-    if (cors.allowedHeaders !== undefined && cors.allowedHeaders.length > 0) {
+    if (cors.allowedHeaders !== undefined && Arr.isReadonlyArrayNonEmpty(cors.allowedHeaders)) {
       headers['access-control-allow-headers'] = cors.allowedHeaders.join(', ');
     } else if (requested !== undefined) {
       headers['access-control-allow-headers'] = requested;

@@ -175,7 +175,7 @@ class Reader {
   /** A shape expression or a reference to a declaration. */
   shapeDeclOrExpr(n: Term.Term): ShExJ.ShapeExprOrRef {
     const types = this.types(n);
-    if (types.includes(`${SX}ShapeDecl`) || types.length === 0) return this.label(n);
+    if (types.includes(`${SX}ShapeDecl`) || Arr.isReadonlyArrayEmpty(types)) return this.label(n);
     return this.shapeExpr(n);
   }
 
@@ -281,7 +281,7 @@ class Reader {
     const closed = this.one(n, 'closed');
     if (closed !== undefined) shape.closed = this.bool(closed);
     const extra = this.all(n, 'extra');
-    if (extra.length > 0)
+    if (Arr.isReadonlyArrayNonEmpty(extra))
       shape.extra = Arr.sort(
         extra.map((e) => this.iri(e, 'sx:extra')),
         Order.String,
@@ -301,7 +301,7 @@ class Reader {
     const labelled = n._tag === 'NamedNode' || (this.teUses.get(n.key) ?? 0) > 1;
     if (labelled) {
       const label = this.label(n);
-      if (this.teDefined.has(label) || types.length === 0) return label;
+      if (this.teDefined.has(label) || Arr.isReadonlyArrayEmpty(types)) return label;
       if (!viaExpression && this.expressionSites.has(n.key)) return label;
       this.teDefined.add(label);
     }
@@ -420,7 +420,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     Number.isInteger(v) ? int(v) : Term.literal(String(v), Term.namedNode(`${XSD}decimal`));
   const bool = (v: boolean) => Term.literal(String(v), Term.namedNode(`${XSD}boolean`));
   const list = (items: ReadonlyArray<Term.Object>): Term.Object => {
-    if (items.length === 0) return rdfNil;
+    if (Arr.isReadonlyArrayEmpty(items)) return rdfNil;
     const cells = items.map(() => Term.blankNode());
     items.forEach((item, i) => {
       add(cells[i]!, rdfFirst, item);

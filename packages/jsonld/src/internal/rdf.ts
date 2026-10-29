@@ -177,7 +177,7 @@ const listToRdf = (
   issuer: IdIssuer,
   options: ToRdfOptions,
 ): Term.Object => {
-  if (list.length === 0) return Term.namedNode(RDF_NIL);
+  if (Arr.isReadonlyArrayEmpty(list)) return Term.namedNode(RDF_NIL);
   const bnodes = list.map(() => blankNode(issuer.issue()));
   const first = Term.namedNode(RDF_FIRST);
   const rest = Term.namedNode(RDF_REST);

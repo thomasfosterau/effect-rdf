@@ -3,6 +3,7 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
@@ -161,7 +162,7 @@ class Writer {
       this.inlinable.delete(subject.value);
       render(key);
     }
-    return lines.join('\n') + (lines.length > 0 ? '\n' : '');
+    return lines.join('\n') + (Arr.isReadonlyArrayNonEmpty(lines) ? '\n' : '');
   }
 
   private predicateObjects(
@@ -213,7 +214,7 @@ class Writer {
       case 'Variable':
         return this.variable(t);
       case 'Collection':
-        return t.items.length === 0
+        return Arr.isReadonlyArrayEmpty(t.items)
           ? '()'
           : `( ${t.items.map((i) => this.term(i, depth)).join(' ')} )`;
       case 'Formula':
@@ -222,7 +223,7 @@ class Writer {
   }
 
   private formula(f: Model.Formula, depth: number): string {
-    if (f.statements.length === 0) return '{}';
+    if (Arr.isReadonlyArrayEmpty(f.statements)) return '{}';
     const inner = this.formulaBody(f, depth + 1);
     if (f.statements.length === 1) {
       const line = inner.trim();
@@ -235,7 +236,7 @@ class Writer {
     if (this.inlinable.has(b.value) && !this.emitted.has(b.value)) {
       this.emitted.add(b.value);
       const g = this.inlineGroups.get(b.value);
-      if (g === undefined || g.length === 0) return '[]';
+      if (g === undefined || Arr.isReadonlyArrayEmpty(g)) return '[]';
       const pad = this.unit.repeat(depth + 1);
       return `[ ${this.predicateObjects(g, depth + 1, ` ;\n${pad}`)} ]`;
     }

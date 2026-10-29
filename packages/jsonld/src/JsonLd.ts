@@ -14,6 +14,7 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
@@ -35,9 +36,20 @@ import { expandElement } from './internal/expand.ts';
 import { flattenExpanded } from './internal/flatten.ts';
 import { cleanupNull, frame as frameAlgorithm } from './internal/frame.ts';
 import * as Rdf from './internal/rdf.ts';
-import { type Json, type JsonObject, fail, isObject, isString } from './internal/util.ts';
+import {
+  type Json,
+  type JsonObject,
+  fail,
+  isEmptyObject,
+  isObject,
+  isString,
+} from './internal/util.ts';
 import { parseJson } from './internal/json.ts';
 import * as Predicate from 'effect/Predicate';
+
+/** An empty context (`{}` or `[]`), which compaction leaves out of the output. */
+const isEmptyContext = (context: Json): boolean =>
+  isEmptyObject(context) || (Array.isArray(context) && Arr.isReadonlyArrayEmpty(context));
 
 /**
  * Any JSON value.
@@ -320,18 +332,12 @@ const compactSync = (
   };
   let compacted = compactElement(env, active, null, expanded, compactOptions);
   if (Array.isArray(compacted)) {
-    compacted =
-      compacted.length === 0
-        ? {}
-        : { [compactIri(env, active, '@graph', null, true, false, compactOptions)]: compacted };
+    compacted = Arr.isReadonlyArrayEmpty(compacted)
+      ? {}
+      : { [compactIri(env, active, '@graph', null, true, false, compactOptions)]: compacted };
   }
   if (compacted === null || compacted === undefined) compacted = {};
-  if (
-    context !== null &&
-    context !== undefined &&
-    !(isObject(context) && Object.keys(context).length === 0) &&
-    !(Array.isArray(context) && context.length === 0)
-  ) {
+  if (context !== null && context !== undefined && !isEmptyContext(context)) {
     compacted = { '@context': context, ...compacted };
   }
   return compacted;
@@ -468,11 +474,7 @@ const frameSync = (
     compacted = { [graphKey]: compacted };
   }
   if (compacted === null || compacted === undefined) compacted = {};
-  if (
-    context !== null &&
-    !(isObject(context) && Object.keys(context).length === 0) &&
-    !(Array.isArray(context) && context.length === 0)
-  ) {
+  if (context !== null && !isEmptyContext(context)) {
     compacted = { '@context': context, ...compacted };
   }
   return cleanupNull(compacted);

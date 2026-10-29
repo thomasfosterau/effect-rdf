@@ -6,6 +6,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
@@ -156,7 +157,7 @@ const STATUS_CODES = new Map<string, number>([
 ]);
 
 export const statusMatches = (status: number, expected: ReadonlyArray<string>): boolean =>
-  expected.length === 0 ||
+  Arr.isReadonlyArrayEmpty(expected) ||
   expected.some((e) => {
     const cls = /^StatusCode(\d)xx$/.exec(e);
     if (cls !== null) return Math.floor(status / 100) === Number(cls[1]);

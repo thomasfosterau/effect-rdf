@@ -4,6 +4,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -257,7 +258,7 @@ class Printer {
     if (nc.maxexclusive !== undefined) parts.push(`MAXEXCLUSIVE ${nc.maxexclusive}`);
     if (nc.totaldigits !== undefined) parts.push(`TOTALDIGITS ${nc.totaldigits}`);
     if (nc.fractiondigits !== undefined) parts.push(`FRACTIONDIGITS ${nc.fractiondigits}`);
-    if (parts.length === 0) parts.push('.');
+    if (Arr.isReadonlyArrayEmpty(parts)) parts.push('.');
     return parts.join(' ') + this.annotations(nc.annotations) + this.semActs(nc.semActs);
   }
 
@@ -344,7 +345,7 @@ class Printer {
     if (this.base !== undefined) out.push(`BASE <${escapeIri(this.base)}>`);
     for (const [p, ns] of this.prefixes.prefixes) out.push(`PREFIX ${p}: <${escapeIri(ns)}>`);
     for (const imp of schema.imports ?? []) out.push(`IMPORT ${this.iri(imp)}`);
-    if (out.length > 0) out.push('');
+    if (Arr.isReadonlyArrayNonEmpty(out)) out.push('');
     if (schema.startActs !== undefined) out.push(this.semActs(schema.startActs).trim());
     if (schema.start !== undefined) out.push(`start = ${this.shapeExpr(schema.start, '', false)}`);
     for (const decl of schema.shapes ?? []) {

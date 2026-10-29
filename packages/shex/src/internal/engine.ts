@@ -7,6 +7,7 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -174,7 +175,8 @@ export class Engine {
     const candidates = [label, ...(this.index.descendants.get(label) ?? [])].filter(
       (l) => this.index.shapes.get(l)?.abstract !== true,
     );
-    if (candidates.length === 0) return `${label} is abstract and has no concrete extension`;
+    if (Arr.isReadonlyArrayEmpty(candidates))
+      return `${label} is abstract and has no concrete extension`;
     let first: Outcome;
     for (const c of candidates) {
       const target: Target | undefined = c === label ? undefined : { label, count: 0 };
@@ -376,7 +378,7 @@ export class Engine {
         if (r === undefined) ok.push(tc);
         else firstReason ??= r;
       }
-      if (ok.length === 0) {
+      if (Arr.isReadonlyArrayEmpty(ok)) {
         if (!extra.has(arc.predicate))
           return `${arc.triple.key} does not match its triple constraint: ${firstReason}`;
         continue;
@@ -512,14 +514,14 @@ export class Engine {
       let sets: Array<ReadonlyArray<number>> = [b];
       for (const x of te.expressions) {
         sets = dedupe(sets.flatMap((s) => this.step(x, s, localIndex, depth + 1)));
-        if (sets.length === 0) break;
+        if (Arr.isReadonlyArrayEmpty(sets)) break;
       }
       return sets;
     };
     const result = new Map<string, ReadonlyArray<number>>();
     if (min === 0) result.set(bag.join(','), bag);
     let frontier: Array<ReadonlyArray<number>> = [bag];
-    for (let i = 1; i <= max && frontier.length > 0; i++) {
+    for (let i = 1; i <= max && Arr.isReadonlyArrayNonEmpty(frontier); i++) {
       const next = dedupe(frontier.flatMap(once));
       if (i >= min) {
         frontier = [];

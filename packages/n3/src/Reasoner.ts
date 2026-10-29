@@ -279,7 +279,7 @@ const solve = (
     conclusion: engine.conclusion,
   };
   const go = (remaining: ReadonlyArray<Model.Statement>, cur: Bindings, deferred: number) => {
-    if (remaining.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(remaining)) {
       out.push(cur);
       return;
     }
@@ -303,7 +303,11 @@ const solve = (
       go([...rest, goal], cur, deferred + 1);
       return;
     }
-    if (listPredicate && subject._tag === 'Collection' && subject.items.length > 0) {
+    if (
+      listPredicate &&
+      subject._tag === 'Collection' &&
+      Arr.isReadonlyArrayNonEmpty(subject.items)
+    ) {
       // Collections are lists: answer rdf:first / rdf:rest structurally.
       const value =
         predicate.key === rdf.first.key

@@ -22,6 +22,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import * as Schema from 'effect/Schema';
@@ -816,7 +817,7 @@ export const select = <const Items extends ReadonlyArray<SelectItem>>(
   new Builder(
     Ast.select({
       where: empty,
-      projection: items.length === 0 ? '*' : items.map(projectionItem),
+      projection: Arr.isReadonlyArrayEmpty(items) ? '*' : items.map(projectionItem),
     }),
   );
 
@@ -851,7 +852,7 @@ export const construct = (
  * @category constructors
  */
 export const describe = (...terms: ReadonlyArray<Ast.VarOrIri>): Builder<'Describe'> =>
-  new Builder(Ast.describe({ terms: terms.length === 0 ? '*' : terms }));
+  new Builder(Ast.describe({ terms: Arr.isReadonlyArrayEmpty(terms) ? '*' : terms }));
 
 // -----------------------------------------------------------------------------
 // Execution

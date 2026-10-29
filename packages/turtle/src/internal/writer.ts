@@ -384,7 +384,7 @@ export class Writer {
         r._tag === 'BlankNode' &&
         !demoted.has(r.value) &&
         this.isLocal(r, graph) &&
-        this.info(r).objectRefs.length === 0 &&
+        Arr.isReadonlyArrayEmpty(this.info(r).objectRefs) &&
         bySubject
           .get(r.key)!
           .filter((x) => x.predicate.value === RDF_REIFIES && !consumed.has(x.key)).length === 1;
@@ -461,7 +461,7 @@ export class Writer {
       const quads = plan.bySubject.get(s.key)!.filter((q) => !plan.consumed.has(q.key));
       const reified = s._tag === 'BlankNode' ? plan.reifiedSubjects.get(s.value) : undefined;
       const head = reified !== undefined ? this.reifiedTriple(reified) : this.term(s);
-      if (quads.length === 0) {
+      if (Arr.isReadonlyArrayEmpty(quads)) {
         if (reified !== undefined) blocks.push(`${this.pad(level)}${head} .\n`);
         continue;
       }
@@ -469,7 +469,7 @@ export class Writer {
         s._tag === 'BlankNode' &&
         reified === undefined &&
         !plan.idReifiers.has(s.value) &&
-        this.info(s).objectRefs.length === 0 &&
+        Arr.isReadonlyArrayEmpty(this.info(s).objectRefs) &&
         this.isLocal(s, plan.graph)
       ) {
         // An unreferenced blank node: `[ p o ] .`
@@ -529,7 +529,7 @@ export class Writer {
         const own = (this.plan.bySubject.get(a.reifier.key) ?? []).filter(
           (x) => !this.plan.consumed.has(x.key),
         );
-        if (own.length === 0) bare += ' ~';
+        if (Arr.isReadonlyArrayEmpty(own)) bare += ' ~';
         else out += ` ${this.bracketed('{|', '|}', own, level)}`;
       }
     }
@@ -564,7 +564,7 @@ export class Writer {
         const own = (this.plan.bySubject.get(o.key) ?? []).filter(
           (x) => !this.plan.consumed.has(x.key),
         );
-        if (own.length === 0) return '[]';
+        if (Arr.isReadonlyArrayEmpty(own)) return '[]';
         const only = own.length === 1 ? own[0]! : undefined;
         if (
           only !== undefined &&

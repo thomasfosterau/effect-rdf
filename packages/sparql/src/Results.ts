@@ -7,6 +7,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
@@ -658,7 +659,7 @@ const splitLines = (input: string): Array<string> => {
 const parseTsv = (input: string): Effect.Effect<ParsedResult, ResultsParseError> =>
   Effect.suspend((): Effect.Effect<ParsedResult, ResultsParseError> => {
     const lines = splitLines(input);
-    if (lines.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(lines)) {
       return Effect.fail(new ResultsParseError({ format: 'tsv', message: 'Empty document' }));
     }
     const first = lines[0]!.trim();
@@ -779,7 +780,7 @@ const parseCsv = (input: string): Effect.Effect<ParsedResult, ResultsParseError>
       );
     }
     const rows = parsed.success;
-    if (rows.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(rows)) {
       return Effect.fail(new ResultsParseError({ format: 'csv', message: 'Empty document' }));
     }
     const first = rows[0]!;

@@ -7,6 +7,7 @@
  *
  * @internal
  */
+import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { xsd } from '@thomasfosterau/effect-rdf/Vocab';
@@ -402,7 +403,7 @@ const listBuiltins = {
   last: (s, o, b, ctx) =>
     s._tag !== 'Collection' ? (ready(s) ? [] : undefined) : output(o, s.items.at(-1), b, ctx),
   rest: (s, o, b, ctx) =>
-    s._tag !== 'Collection' || s.items.length === 0
+    s._tag !== 'Collection' || Arr.isReadonlyArrayEmpty(s.items)
       ? ready(s)
         ? []
         : undefined
@@ -455,21 +456,31 @@ const scopeOf = (t: Model.N3Term, ctx: Context): Model.Formula | undefined =>
 const goalsOf = (t: Model.N3Term): ReadonlyArray<Model.Statement> | undefined =>
   Model.isFormula(t) ? t.statements : t.key === TRUE.key ? [] : undefined;
 
+/**
+ * `log:includes` / `log:notIncludes`: queries the subject formula for the
+ * object's statements and maps the solutions with `answer`. An unbound or
+ * non-formula operand gives no solutions once the subject is ground, and is
+ * not ready otherwise.
+ */
+const included = (
+  s: Model.N3Term,
+  o: Model.N3Term,
+  b: Bindings,
+  ctx: Context,
+  answer: (solutions: Array<Bindings>) => Array<Bindings>,
+): ReturnType<Builtin> => {
+  const scope = scopeOf(s, ctx);
+  const goals = goalsOf(o);
+  if (scope === undefined || goals === undefined) return ready(s) ? [] : undefined;
+  return answer(ctx.query(scope, goals, b, false));
+};
+
 const logBuiltins = {
   equalTo: (s, o, b, ctx) => ctx.unify(s, o, b),
   notEqualTo: (s, o, b) => (!ready(s) || !ready(o) ? undefined : s.key !== o.key ? [b] : []),
-  includes: (s, o, b, ctx) => {
-    const scope = scopeOf(s, ctx);
-    const goals = goalsOf(o);
-    if (scope === undefined || goals === undefined) return ready(s) ? [] : undefined;
-    return ctx.query(scope, goals, b, false);
-  },
-  notIncludes: (s, o, b, ctx) => {
-    const scope = scopeOf(s, ctx);
-    const goals = goalsOf(o);
-    if (scope === undefined || goals === undefined) return ready(s) ? [] : undefined;
-    return ctx.query(scope, goals, b, false).length === 0 ? [b] : [];
-  },
+  includes: (s, o, b, ctx) => included(s, o, b, ctx, (solutions) => solutions),
+  notIncludes: (s, o, b, ctx) =>
+    included(s, o, b, ctx, (solutions) => (Arr.isReadonlyArrayEmpty(solutions) ? [b] : [])),
   conjunction: (s, o, b, ctx) => {
     if (!ready(s)) return undefined;
     if (s._tag !== 'Collection') return [];
@@ -543,7 +554,7 @@ const logBuiltins = {
     if (scope === undefined || where === undefined || then === undefined) return [];
     return ctx
       .query(scope, where, b, true)
-      .every((sol) => ctx.query(scope, then, sol, true).length > 0)
+      .every((sol) => Arr.isReadonlyArrayNonEmpty(ctx.query(scope, then, sol, true)))
       ? [b]
       : [];
   },

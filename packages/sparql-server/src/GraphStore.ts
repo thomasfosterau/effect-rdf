@@ -10,6 +10,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
@@ -48,7 +49,7 @@ export const target = (url: URL, root: string): Effect.Effect<Target, Errors.Pro
   const params = Protocol.searchParams(url.href);
   const graphs = params.getAll('graph');
   const isDefault = params.has('default');
-  if (isDefault && graphs.length > 0) {
+  if (isDefault && Arr.isReadonlyArrayNonEmpty(graphs)) {
     return Effect.fail(Errors.badRequest("A request cannot have both 'default' and 'graph'"));
   }
   if (graphs.length > 1) return Effect.fail(Errors.badRequest("Exactly one 'graph' is allowed"));

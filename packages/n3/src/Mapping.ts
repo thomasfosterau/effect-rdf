@@ -104,7 +104,7 @@ export const toQuadsUnsafe = (
       case 'Variable':
         throw new Failure(`Variable ${t.key} cannot be represented in RDF`);
       case 'Collection': {
-        if (t.items.length === 0) return rdf.nil;
+        if (Arr.isReadonlyArrayEmpty(t.items)) return rdf.nil;
         const nodes = t.items.map(fresh);
         t.items.forEach((item, i) => {
           out.push(new Term.Quad(nodes[i]!, rdf.first, term(item, graph), graph));

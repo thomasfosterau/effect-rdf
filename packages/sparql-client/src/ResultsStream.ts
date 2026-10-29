@@ -14,6 +14,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
@@ -244,7 +245,7 @@ export const json = (): Incremental => {
             fail('json', 'Unbalanced brackets');
           }
           if (capture !== undefined && stack.length === captureDepth) finish(i + 1);
-          if (stack.length === 0) done = true;
+          if (Arr.isReadonlyArrayEmpty(stack)) done = true;
           break;
         }
         case 58 /* : */:
@@ -270,7 +271,7 @@ export const json = (): Incremental => {
           break;
         }
         default:
-          if (stack.length === 0) fail('json', 'Expected a JSON object');
+          if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
           if (!primitive) {
             primitive = true;
             valueStart(i);

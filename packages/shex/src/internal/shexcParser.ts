@@ -18,6 +18,7 @@ import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import type * as ShExJ from '../ShExJ.ts';
 import { quote } from './lexer.ts';
@@ -201,7 +202,7 @@ const junction = (
   atom: Atom,
   juncts: ReadonlyArray<AnyShapeExpr>,
 ): AnyShapeExpr => {
-  if (juncts.length === 0) return atom.e;
+  if (Arr.isReadonlyArrayEmpty(juncts)) return atom.e;
   const e = atom.e;
   if (!Predicate.isString(e) && e.type === type && !atom.nested) {
     return { ...e, shapeExprs: (e as ShExJ.ShapeAnd).shapeExprs.concat(juncts) };
@@ -225,7 +226,9 @@ type Rest =
 const prepend = (rest: Rest, atoms: ReadonlyArray<AnyShapeExpr>): AnyShapeExpr => {
   if (rest._tag === 'Or') return { type: 'ShapeOr', shapeExprs: [...atoms, ...rest.ors] };
   const and: ShExJ.ShapeAnd = { type: 'ShapeAnd', shapeExprs: [...atoms, ...rest.ands] };
-  return rest.ors.length > 0 ? { type: 'ShapeOr', shapeExprs: [and, ...rest.ors] } : and;
+  return Arr.isReadonlyArrayNonEmpty(rest.ors)
+    ? { type: 'ShapeOr', shapeExprs: [and, ...rest.ors] }
+    : and;
 };
 
 const prependAtom = (atom: Atom, rest: Rest | undefined): AnyShapeExpr => {
@@ -235,7 +238,7 @@ const prependAtom = (atom: Atom, rest: Rest | undefined): AnyShapeExpr => {
     !Predicate.isString(e) &&
     e.type === 'ShapeAnd' &&
     rest._tag === 'And' &&
-    rest.ors.length === 0 &&
+    Arr.isReadonlyArrayEmpty(rest.ors) &&
     !atom.nested
   ) {
     return prepend(rest, e.shapeExprs);
@@ -468,7 +471,7 @@ const valueSetValue: P<ShExJ.ValueSetValue> = select('a value set value', [
       stemmed(iri, iriExclusion, (stem, isStem, exclusions) =>
         !isStem
           ? stem
-          : exclusions.length > 0
+          : Arr.isReadonlyArrayNonEmpty(exclusions)
             ? { type: 'IriStemRange', stem, exclusions }
             : { type: 'IriStem', stem },
       ),
@@ -480,7 +483,7 @@ const valueSetValue: P<ShExJ.ValueSetValue> = select('a value set value', [
       stemmed(literal, literalExclusion, (lit, isStem, exclusions) =>
         !isStem
           ? lit
-          : exclusions.length > 0
+          : Arr.isReadonlyArrayNonEmpty(exclusions)
             ? { type: 'LiteralStemRange', stem: lit.value, exclusions }
             : { type: 'LiteralStem', stem: lit.value },
       ),
@@ -492,7 +495,7 @@ const valueSetValue: P<ShExJ.ValueSetValue> = select('a value set value', [
       stemmed(langTag, languageExclusion, (tag, isStem, exclusions) =>
         !isStem
           ? { type: 'Language', languageTag: tag }
-          : exclusions.length > 0
+          : Arr.isReadonlyArrayNonEmpty(exclusions)
             ? { type: 'LanguageStemRange', stem: tag, exclusions }
             : { type: 'LanguageStem', stem: tag },
       ),
@@ -505,7 +508,7 @@ const valueSetValue: P<ShExJ.ValueSetValue> = select('a value set value', [
       Parser.cut(Parser.preceded(tok('~'), Parser.repeat(languageExclusion))),
     ).pipe(
       Parser.map((exclusions): ShExJ.ValueSetValue =>
-        exclusions.length > 0
+        Arr.isReadonlyArrayNonEmpty(exclusions)
           ? { type: 'LanguageStemRange', stem: '', exclusions }
           : { type: 'LanguageStem', stem: '' },
       ),
@@ -595,9 +598,9 @@ const nonLitNodeConstraintOpt: P<ShExJ.NodeConstraint | undefined> = optional(
 const withAnnotations = (nc: P<ShExJ.NodeConstraint>): P<ShExJ.NodeConstraint> =>
   Parser.seq(nc, annotations, semanticActions).pipe(
     Parser.map(([nc, annotations, semActs]) => {
-      if (annotations.length === 0 && semActs === undefined) return nc;
+      if (Arr.isReadonlyArrayEmpty(annotations) && semActs === undefined) return nc;
       const out: Mutable<ShExJ.NodeConstraint> = nc;
-      if (annotations.length > 0) out.annotations = annotations;
+      if (Arr.isReadonlyArrayNonEmpty(annotations)) out.annotations = annotations;
       if (semActs !== undefined) out.semActs = semActs;
       return out;
     }),
@@ -677,7 +680,7 @@ const inlineShapeDefinition: P<ShExJ.Shape> = Parser.seq(
   ),
 ).pipe(
   Parser.map(([qualifiers, expression]): ShExJ.Shape => {
-    if (expression === undefined && qualifiers.length === 0) return EMPTY;
+    if (expression === undefined && Arr.isReadonlyArrayEmpty(qualifiers)) return EMPTY;
     let extendsList: Array<AnyShapeExpr> | undefined;
     let extra: Array<string> | undefined;
     let closed: boolean | undefined;
@@ -702,7 +705,7 @@ const shapeDefinition: P<AnyShapeExpr> = Parser.seq(
 ).pipe(
   Parser.map(([def, annotations, semActs]) => {
     const out: Mutable<ShExJ.Shape> = def === EMPTY ? { type: 'Shape' } : def;
-    if (annotations.length > 0) out.annotations = annotations;
+    if (Arr.isReadonlyArrayNonEmpty(annotations)) out.annotations = annotations;
     if (semActs !== undefined) out.semActs = semActs;
     return out;
   }),
@@ -938,7 +941,7 @@ const tripleConstraint: P<ShExJ.TripleConstraint> = Parser.seq(
       tc.max = card.max;
     }
     if (semActs !== undefined) tc.semActs = semActs;
-    if (annotations.length > 0) tc.annotations = annotations;
+    if (Arr.isReadonlyArrayNonEmpty(annotations)) tc.annotations = annotations;
     return tc;
   }),
 );
@@ -951,7 +954,7 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
   semanticActions,
 ).pipe(
   Parser.tryMap(([at, expr, card, annotations, semActs]) => {
-    if (card === undefined && annotations.length === 0 && semActs === undefined) {
+    if (card === undefined && Arr.isReadonlyArrayEmpty(annotations) && semActs === undefined) {
       return Result.succeed(expr);
     }
     if (Predicate.isString(expr)) {
@@ -972,7 +975,7 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
       out.min = card.min;
       out.max = card.max;
     }
-    if (annotations.length > 0) out.annotations = annotations;
+    if (Arr.isReadonlyArrayNonEmpty(annotations)) out.annotations = annotations;
     if (semActs !== undefined) out.semActs = [...(out.semActs ?? []), ...semActs];
     return Result.succeed<ShExJ.TripleExprOrRef>(out);
   }),
@@ -1024,7 +1027,7 @@ const groupTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.terminated(
   Parser.opt(separator),
 ).pipe(
   Parser.map(([first, rest]) =>
-    rest.length === 0 ? first : { type: 'EachOf', expressions: [first, ...rest] },
+    Arr.isReadonlyArrayEmpty(rest) ? first : { type: 'EachOf', expressions: [first, ...rest] },
   ),
 );
 
@@ -1033,7 +1036,7 @@ const tripleExpression_: P<ShExJ.TripleExprOrRef> = Parser.seq(
   Parser.repeat(Parser.preceded(tok('|'), Parser.cut(groupTripleExpr))),
 ).pipe(
   Parser.map(([first, rest]) =>
-    rest.length === 0 ? first : { type: 'OneOf', expressions: [first, ...rest] },
+    Arr.isReadonlyArrayEmpty(rest) ? first : { type: 'OneOf', expressions: [first, ...rest] },
   ),
 );
 
@@ -1116,7 +1119,7 @@ const shapeExprDecl: P<Statement> = Parser.seq(
     const shapeExpr = body === EMPTY ? { type: 'Shape' as const } : body;
     const decl: Mutable<ShExJ.ShapeDecl> = { type: 'ShapeDecl', id: label, shapeExpr };
     if (abstract) decl.abstract = true;
-    if (restricts.length > 0) decl.restricts = restricts;
+    if (Arr.isReadonlyArrayNonEmpty(restricts)) decl.restricts = restricts;
     return { _tag: 'Decl', decl, at };
   }),
 );
@@ -1207,7 +1210,7 @@ const assemble = (
     }
   }
   const schema: Mutable<ShExJ.Schema> = { type: 'Schema' };
-  if (imports.length > 0) schema.imports = imports;
+  if (Arr.isReadonlyArrayNonEmpty(imports)) schema.imports = imports;
   if (startActs !== undefined) schema.startActs = startActs;
   if (start !== undefined) schema.start = start;
   if (shapes.size > 0) schema.shapes = Array.from(shapes.values());

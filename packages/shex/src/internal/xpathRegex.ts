@@ -1,3 +1,4 @@
+import * as Arr from 'effect/Array';
 /**
  * Translation of XPath / XML Schema regular expressions (as used by the
  * ShEx `pattern` facet and `fn:matches`) to JavaScript `RegExp`s.
@@ -175,7 +176,7 @@ class Translator {
     // Ranges were emitted with escaped '-': restore range operators between plain characters.
     body = restoreRanges(body);
     let set: string;
-    if (extra.length === 0) set = `[${negated ? '^' : ''}${body}]`;
+    if (Arr.isReadonlyArrayEmpty(extra)) set = `[${negated ? '^' : ''}${body}]`;
     else {
       const alts = [...(body === '' ? [] : [`[${body}]`]), ...extra];
       const union = `(?:${alts.join('|')})`;

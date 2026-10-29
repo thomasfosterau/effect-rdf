@@ -379,18 +379,18 @@ const filterSubject = (
     let matchThis = false;
     const nodeValues = hasOwn(subject, key) ? asArray(subject[key]) : [];
     const frameValues = asArray(frame[key]);
-    const isEmpty = frameValues.length === 0;
+    const isEmpty = Arr.isReadonlyArrayEmpty(frameValues);
     if (key === '@id') {
-      if (frameValues.length === 0 || isObject(frameValues[0])) matchThis = true;
+      if (Arr.isReadonlyArrayEmpty(frameValues) || isObject(frameValues[0])) matchThis = true;
       else matchThis = frameValues.includes(nodeValues[0]);
       if (!flags.requireAll) return matchThis;
     } else if (key === '@type') {
       wildcard = false;
       if (isEmpty) {
-        if (nodeValues.length > 0) return false;
+        if (Arr.isReadonlyArrayNonEmpty(nodeValues)) return false;
         matchThis = true;
       } else if (frameValues.length === 1 && isEmptyObject(frameValues[0])) {
-        matchThis = nodeValues.length > 0;
+        matchThis = Arr.isReadonlyArrayNonEmpty(nodeValues);
       } else {
         for (const type of frameValues) {
           if (isObject(type) && hasOwn(type, '@default')) matchThis = true;
@@ -408,10 +408,10 @@ const filterSubject = (
         hasDefault = hasOwn(thisFrame, '@default');
       }
       wildcard = false;
-      if (nodeValues.length === 0 && hasDefault) continue;
-      if (nodeValues.length > 0 && isEmpty) return false;
+      if (Arr.isReadonlyArrayEmpty(nodeValues) && hasDefault) continue;
+      if (Arr.isReadonlyArrayNonEmpty(nodeValues) && isEmpty) return false;
       if (thisFrame === undefined) {
-        if (nodeValues.length > 0) return false;
+        if (Arr.isReadonlyArrayNonEmpty(nodeValues)) return false;
         matchThis = true;
       } else if (isListObject(thisFrame)) {
         const listValue = asArray(thisFrame['@list'])[0];
@@ -428,7 +428,7 @@ const filterSubject = (
       } else if (isSubjectReference(thisFrame)) {
         matchThis = nodeValues.some((nv) => nodeMatch(state, thisFrame, nv, flags));
       } else if (isObject(thisFrame)) {
-        matchThis = nodeValues.length > 0;
+        matchThis = Arr.isReadonlyArrayNonEmpty(nodeValues);
       }
     }
     if (!matchThis && flags.requireAll) return false;
@@ -451,11 +451,12 @@ const valueMatch = (pattern: Json, value: Json): boolean => {
   const v2 = hasOwn(pattern, '@value') ? asArray(pattern['@value']) : [];
   const t2 = hasOwn(pattern, '@type') ? asArray(pattern['@type']) : [];
   const l2 = hasOwn(pattern, '@language') ? asArray(pattern['@language']) : [];
-  if (v2.length === 0 && t2.length === 0 && l2.length === 0) return true;
+  if (Arr.isReadonlyArrayEmpty(v2) && Arr.isReadonlyArrayEmpty(t2) && Arr.isReadonlyArrayEmpty(l2))
+    return true;
   if (!(v2.includes(v1) || isEmptyObject(v2[0]))) return false;
   if (
     !(
-      (t1 === undefined && t2.length === 0) ||
+      (t1 === undefined && Arr.isReadonlyArrayEmpty(t2)) ||
       t2.includes(t1) ||
       (t1 !== undefined && isEmptyObject(t2[0]))
     )
@@ -465,7 +466,7 @@ const valueMatch = (pattern: Json, value: Json): boolean => {
   const lower = (s: Json) => (isString(s) ? s.toLowerCase() : s);
   if (
     !(
-      (l1 === undefined && l2.length === 0) ||
+      (l1 === undefined && Arr.isReadonlyArrayEmpty(l2)) ||
       l2.map(lower).includes(lower(l1)) ||
       (l1 !== undefined && isEmptyObject(l2[0]))
     )

@@ -33,6 +33,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Algebra from '@thomasfosterau/effect-sparql/Algebra';
@@ -355,7 +356,11 @@ const and = (...cs: ReadonlyArray<C>): C => {
     if (c === false) return false;
     if (c !== true) parts.push(c);
   }
-  return parts.length === 0 ? true : parts.length === 1 ? parts[0]! : `(${parts.join(' AND ')})`;
+  return Arr.isReadonlyArrayEmpty(parts)
+    ? true
+    : parts.length === 1
+      ? parts[0]!
+      : `(${parts.join(' AND ')})`;
 };
 
 const or = (...cs: ReadonlyArray<C>): C => {
@@ -364,7 +369,11 @@ const or = (...cs: ReadonlyArray<C>): C => {
     if (c === true) return true;
     if (c !== false) parts.push(c);
   }
-  return parts.length === 0 ? false : parts.length === 1 ? parts[0]! : `(${parts.join(' OR ')})`;
+  return Arr.isReadonlyArrayEmpty(parts)
+    ? false
+    : parts.length === 1
+      ? parts[0]!
+      : `(${parts.join(' OR ')})`;
 };
 
 const condSql = (c: C): string => (c === true ? 'TRUE' : c === false ? 'FALSE' : c);
@@ -374,12 +383,12 @@ const caseOf = (branches: ReadonlyArray<readonly [C, string]>, otherwise: string
   for (const [c, v] of branches) {
     if (c === false) continue;
     if (c === true) {
-      if (live.length === 0) return v;
+      if (Arr.isReadonlyArrayEmpty(live)) return v;
       return `(CASE ${live.map(([w, r]) => `WHEN ${w} THEN ${r}`).join(' ')} ELSE ${v} END)`;
     }
     live.push([c, v]);
   }
-  if (live.length === 0) return otherwise;
+  if (Arr.isReadonlyArrayEmpty(live)) return otherwise;
   return `(CASE ${live.map(([w, r]) => `WHEN ${w} THEN ${r}`).join(' ')} ELSE ${otherwise} END)`;
 };
 
@@ -480,7 +489,7 @@ class Compiler {
   // --- rendering --------------------------------------------------------------
 
   from(items: ReadonlyArray<Item>): string {
-    if (items.length === 0) return '';
+    if (Arr.isReadonlyArrayEmpty(items)) return '';
     let out = ` FROM ${items[0]!.source} ${items[0]!.alias}`;
     for (const it of items.slice(1)) {
       out +=
@@ -492,7 +501,7 @@ class Compiler {
   }
 
   whereClause(where: ReadonlyArray<string>): string {
-    return where.length === 0 ? '' : ` WHERE ${where.join(' AND ')}`;
+    return Arr.isReadonlyArrayEmpty(where) ? '' : ` WHERE ${where.join(' AND ')}`;
   }
 
   nullCol(type: 'id' | 'int'): string {
@@ -511,7 +520,7 @@ class Compiler {
       const c = block.cols.get(n);
       return `${c !== undefined ? c.sql : this.nullCol(options.types?.get(n) ?? 'id')} AS ${this.col(n)}`;
     });
-    return `SELECT ${options.distinct === true ? 'DISTINCT ' : ''}${select.length === 0 ? '1 AS one' : select.join(', ')}${this.from(block.items)}${this.whereClause(block.where)}`;
+    return `SELECT ${options.distinct === true ? 'DISTINCT ' : ''}${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')}${this.from(block.items)}${this.whereClause(block.where)}`;
   }
 
   /** Wraps SQL as a subquery item. */
@@ -540,8 +549,10 @@ class Compiler {
   }
 
   join(a: Block, b: Block): Block {
-    if (b.items.length === 0 && b.where.length === 0 && b.cols.size === 0) return a;
-    if (a.items.length === 0 && a.where.length === 0 && a.cols.size === 0) return b;
+    if (Arr.isReadonlyArrayEmpty(b.items) && Arr.isReadonlyArrayEmpty(b.where) && b.cols.size === 0)
+      return a;
+    if (Arr.isReadonlyArrayEmpty(a.items) && Arr.isReadonlyArrayEmpty(a.where) && a.cols.size === 0)
+      return b;
     const cols = new Map(a.cols);
     const where = [...a.where, ...b.where];
     for (const [n, cb] of b.cols) {
@@ -558,7 +569,7 @@ class Compiler {
 
   /** Ensures a block has a FROM item (so that a LEFT JOIN can be appended). */
   anchored(block: Block): Block {
-    if (block.items.length > 0) return block;
+    if (Arr.isReadonlyArrayNonEmpty(block.items)) return block;
     return { ...block, items: [{ source: '(SELECT 1 AS one)', alias: this.alias('u') }] };
   }
 
@@ -567,7 +578,7 @@ class Compiler {
   op(op: Algebra.Operation, g: GraphCtx, unit: Block): Block {
     switch (op._tag) {
       case 'Bgp':
-        return op.patterns.length === 0 ? unit : this.bgp(op.patterns, g);
+        return Arr.isReadonlyArrayEmpty(op.patterns) ? unit : this.bgp(op.patterns, g);
       case 'Join':
         return this.join(this.op(op.left, g, unit), this.op(op.right, g, unit));
       case 'LeftJoin':
@@ -686,7 +697,7 @@ class Compiler {
         positionIn(p.predicate, 'p');
         positionIn(p.object, 'o');
         items.push({
-          source: `(SELECT DISTINCT s, p, o FROM ${this.Q}${inner.length > 0 ? ` WHERE ${inner.join(' AND ')}` : ''})`,
+          source: `(SELECT DISTINCT s, p, o FROM ${this.Q}${Arr.isReadonlyArrayNonEmpty(inner) ? ` WHERE ${inner.join(' AND ')}` : ''})`,
           alias: a,
         });
         deferred.forEach((f) => f());
@@ -719,7 +730,7 @@ class Compiler {
   namedGraphCond(g: string): string {
     const named = this.context.dataset.namedGraphs;
     if (named === 'all') return `${g} <> 0`;
-    if (named.length === 0) return '1 = 0';
+    if (Arr.isReadonlyArrayEmpty(named)) return '1 = 0';
     return `${g} IN (${named.map((n) => this.idOf(n)).join(', ')})`;
   }
 
@@ -729,7 +740,7 @@ class Compiler {
     if (named === 'all') {
       return `(SELECT id AS g FROM ${this.G} UNION SELECT DISTINCT g FROM ${this.Q} WHERE g <> 0)`;
     }
-    if (named.length === 0) return `(SELECT ${this.dialect.nullId} AS g WHERE 1 = 0)`;
+    if (Arr.isReadonlyArrayEmpty(named)) return `(SELECT ${this.dialect.nullId} AS g WHERE 1 = 0)`;
     const alias = this.alias('n');
     return `(SELECT column1 AS g FROM (VALUES ${named.map((n) => `(${this.idOf(n)})`).join(', ')}) AS ${alias})`;
   }
@@ -738,13 +749,13 @@ class Compiler {
 
   values(op: Algebra.Values): Block {
     const vars = op.variables.map((v) => v.value);
-    if (op.bindings.length === 0) {
+    if (Arr.isReadonlyArrayEmpty(op.bindings)) {
       const cols = new Map<string, Col>();
       for (const v of vars) cols.set(v, { sql: this.dialect.nullId, nullable: true, type: 'id' });
       return { items: [], where: ['1 = 0'], cols };
     }
     const rows = op.bindings.map((b) =>
-      vars.length === 0
+      Arr.isReadonlyArrayEmpty(vars)
         ? '(1)'
         : `(${vars
             .map((v) => {
@@ -754,8 +765,9 @@ class Compiler {
             .join(', ')})`,
     );
     const a = this.alias('v');
-    const select =
-      vars.length === 0 ? 'column1 AS one' : vars.map((v, i) => `column${i + 1} AS ${this.col(v)}`);
+    const select = Arr.isReadonlyArrayEmpty(vars)
+      ? 'column1 AS one'
+      : vars.map((v, i) => `column${i + 1} AS ${this.col(v)}`);
     const cols = new Map<string, Col>();
     for (const v of vars) {
       cols.set(v, {
@@ -786,8 +798,8 @@ class Compiler {
     }
     if (
       op.expression === undefined &&
-      right.items.length === 0 &&
-      right.where.length === 0 &&
+      Arr.isReadonlyArrayEmpty(right.items) &&
+      Arr.isReadonlyArrayEmpty(right.where) &&
       right.cols.size === 0
     ) {
       return left;
@@ -818,7 +830,7 @@ class Compiler {
       const e = this.ebv(this.operand(op.expression, { cols: merged, graph: g }));
       if (e !== 'TRUE') conds.push(e);
     }
-    const on = conds.length === 0 ? 'TRUE' : conds.join(' AND ');
+    const on = Arr.isReadonlyArrayEmpty(conds) ? 'TRUE' : conds.join(' AND ');
     return {
       items: [...a.items, { source: r.items[0]!.source, alias: r.items[0]!.alias, left: on }],
       where: a.where,
@@ -858,7 +870,7 @@ class Compiler {
       }
     }
     const overlap = shared.filter((n) => !isHidden(n));
-    if (overlap.length === 0) return a;
+    if (Arr.isReadonlyArrayEmpty(overlap)) return a;
     const m = this.wrap(b);
     const conds: Array<string> = [];
     const overlapConds: Array<C> = [];
@@ -1007,11 +1019,10 @@ class Compiler {
       cols.set(a.target, a.col);
     }
     const inner = this.render(input, Array.from(needed));
-    const groupBy =
-      keyVars.length === 0
-        ? ''
-        : ` GROUP BY ${Array.from(new Set(keyVars.map((k) => `${s}.${this.col(k.source)}`))).join(', ')}`;
-    const sql = `SELECT ${select.length === 0 ? '1 AS one' : select.join(', ')} FROM (${inner}) ${s}${groupBy}`;
+    const groupBy = Arr.isReadonlyArrayEmpty(keyVars)
+      ? ''
+      : ` GROUP BY ${Array.from(new Set(keyVars.map((k) => `${s}.${this.col(k.source)}`))).join(', ')}`;
+    const sql = `SELECT ${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')} FROM (${inner}) ${s}${groupBy}`;
     return this.wrapSql(sql, cols);
   }
 
@@ -1251,7 +1262,7 @@ class Compiler {
       case 'NOT IN': {
         const value = arg(0);
         const tests = args.slice(1).map((_, i) => this.equals(value, arg(i + 1)));
-        const any = tests.length === 0 ? 'FALSE' : `(${tests.join(' OR ')})`;
+        const any = Arr.isReadonlyArrayEmpty(tests) ? 'FALSE' : `(${tests.join(' OR ')})`;
         return bool(e.operator === 'IN' ? any : `(NOT ${any})`);
       }
       case 'BOUND': {
@@ -1414,7 +1425,7 @@ class Compiler {
       }
       case 'COALESCE': {
         const parts = args.map((_, i) => arg(i)).filter((o) => o.tag !== 'null');
-        if (parts.length === 0) return this.NULL;
+        if (Arr.isReadonlyArrayEmpty(parts)) return this.NULL;
         const cols = parts.map((o) => this.termValued(o));
         const type = cols[0]!.type;
         if (cols.some((c) => c.type !== type))
@@ -1674,7 +1685,7 @@ const compileOnce = (
     select.push(name, `${t}.kind`, `${t}.value`, `${t}.datatype`, `${t}.lang`, `${t}.dir`);
     joins.push(` LEFT JOIN ${c.T} ${t} ON ${t}.id = ${name}`);
   });
-  const marked = `SELECT ${select.length === 0 ? '1 AS one' : select.join(', ')} FROM (${inner}) r${joins.join('')}`;
+  const marked = `SELECT ${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')} FROM (${inner}) r${joins.join('')}`;
   // Number the parameters in order of use (fragments of discarded branches
   // may have allocated parameters that are not used).
   const params: Array<unknown> = [];

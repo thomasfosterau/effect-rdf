@@ -16,6 +16,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -159,7 +160,7 @@ export const datasetFromParams = (
   Effect.gen(function* () {
     const defaults = params.getAll(defaultName);
     const named = params.getAll(namedName);
-    if (defaults.length === 0 && named.length === 0) return undefined;
+    if (Arr.isReadonlyArrayEmpty(defaults) && Arr.isReadonlyArrayEmpty(named)) return undefined;
     return {
       defaultGraph: yield* graphList(defaults, baseIri),
       namedGraphs: yield* graphList(named, baseIri),

@@ -7,6 +7,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import { ShExStructureError } from './ShExError.ts';
 import type * as ShExJ from './ShExJ.ts';
@@ -158,7 +159,7 @@ export const makeIndex = (schema: ShExJ.Schema): SchemaIndex => {
     const out: Array<string> = [];
     const seen = new Set<string>([label]);
     const stack = [label];
-    while (stack.length > 0) {
+    while (Arr.isReadonlyArrayNonEmpty(stack)) {
       const l = stack.pop()!;
       for (const c of children.get(l) ?? []) {
         if (!seen.has(c)) {
@@ -400,7 +401,7 @@ export const check = (
 ): Effect.Effect<ShExJ.Schema, ShExStructureError> =>
   Effect.suspend(() => {
     const errs = problems(schema, options);
-    return errs.length === 0
+    return Arr.isReadonlyArrayEmpty(errs)
       ? Effect.succeed(schema)
       : Effect.fail(new ShExStructureError({ message: errs.join('; ') }));
   });

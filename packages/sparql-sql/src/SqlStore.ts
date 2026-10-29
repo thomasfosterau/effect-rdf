@@ -16,6 +16,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -335,7 +336,7 @@ export const make = (
           { concurrency: 1, discard: true },
         );
         const classes = Array.from(new Set(rows.map((r) => r.cls)));
-        if (classes.length > 0) {
+        if (Arr.isReadonlyArrayNonEmpty(classes)) {
           yield* exec(
             `INSERT INTO ${tables.classes} (cls) VALUES ${classes.map((c) => `(${c})`).join(', ')} ON CONFLICT DO NOTHING`,
           );
@@ -373,7 +374,7 @@ export const make = (
         if (!create) return yield* lookupRows(rows);
         const found = yield* insertRows(rows);
         const existing = rows.filter((r) => !found.has(Enc.rowKey(r)));
-        if (existing.length > 0) {
+        if (Arr.isReadonlyArrayNonEmpty(existing)) {
           const more = yield* lookupRows(existing);
           for (const [k, id] of more) found.set(k, id);
         }
@@ -411,7 +412,7 @@ export const make = (
           levels,
           Effect.fnUntraced(function* (level) {
             const rows = encodeLevel(level, result);
-            if (rows.length === 0) return;
+            if (Arr.isReadonlyArrayEmpty(rows)) return;
             const found = yield* findIds(
               rows.map((r) => r.row),
               create,
@@ -602,7 +603,7 @@ export const make = (
             if (after !== undefined) {
               w.push(`(${order.join(', ')}) > (${after.join(', ')})`);
             }
-            return `SELECT q.s, q.p, q.o, q.g, ${attrs} FROM (SELECT s, p, o, g FROM ${Qt}${w.length > 0 ? ` WHERE ${w.join(' AND ')}` : ''} ORDER BY ${order.join(', ')} LIMIT ${pageSize}) q${joins}`;
+            return `SELECT q.s, q.p, q.o, q.g, ${attrs} FROM (SELECT s, p, o, g FROM ${Qt}${Arr.isReadonlyArrayNonEmpty(w) ? ` WHERE ${w.join(' AND ')}` : ''} ORDER BY ${order.join(', ')} LIMIT ${pageSize}) q${joins}`;
           };
           return Stream.paginate(undefined as ReadonlyArray<number> | undefined, (after) =>
             Effect.gen(function* () {
@@ -624,7 +625,7 @@ export const make = (
         const conds = yield* patternConditions(pattern);
         if (Option.isNone(conds)) return 0;
         const where = conds.value.map(([c, id]) => `${c} = ${id}`);
-        const filter = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
+        const filter = Arr.isReadonlyArrayNonEmpty(where) ? ` WHERE ${where.join(' AND ')}` : '';
         const rows = yield* run(
           limit === undefined
             ? `SELECT COUNT(*) FROM ${Qt}${filter}`
@@ -746,7 +747,7 @@ export const make = (
         const rows = yield* run(
           `SELECT 1 WHERE EXISTS (SELECT 1 FROM ${Gt} WHERE id = ${id}) OR EXISTS (SELECT 1 FROM ${Qt} WHERE g = ${id})`,
         );
-        return rows.length > 0;
+        return Arr.isReadonlyArrayNonEmpty(rows);
       }).pipe(Effect.mapError(storeError('hasGraph failed')));
 
     const createGraph = (graph: Term.NamedNode | Term.BlankNode) =>
@@ -881,7 +882,10 @@ export const make = (
               return yield* new Store.StoreError({ message: compiled.failure });
             }
             const q = compiled.success;
-            if (q.risks.length > 0 && Translation.isRisky(q, yield* storeClasses)) {
+            if (
+              Arr.isReadonlyArrayNonEmpty(q.risks) &&
+              Translation.isRisky(q, yield* storeClasses)
+            ) {
               onQuery?.({
                 _tag: 'Declined',
                 operation: op,

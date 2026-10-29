@@ -34,6 +34,7 @@
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import { Message, Path, Shapes, Sparql, Vocabulary } from '@thomasfosterau/effect-shacl';
 import { type Ast, Bindings, Engine, Store } from '@thomasfosterau/effect-sparql';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Stream from 'effect/Stream';
@@ -272,7 +273,7 @@ export const make = (
     const withQuery = (p: Term.NamedNode, query: Term.NamedNode) =>
       Dataset.objectsOf(shapes, component, p)
         .filter(isNode)
-        .find((v) => Dataset.objectsOf(shapes, v, query).length > 0);
+        .find((v) => Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, v, query)));
     const specific =
       shape._tag === 'NodeShape'
         ? withQuery(sh.nodeValidator, sh.select)
@@ -311,10 +312,9 @@ export const make = (
           : undefined,
     });
     const validatorMessages = literals(shapes, validator.node, sh.message);
-    const messages =
-      validatorMessages.length > 0
-        ? validatorMessages
-        : literals(shapes, constraint.component, sh.message);
+    const messages = Arr.isReadonlyArrayNonEmpty(validatorMessages)
+      ? validatorMessages
+      : literals(shapes, constraint.component, sh.message);
     const bound: Array<readonly [string, Term.GroundTerm]> = [
       ['this', input.focusNode],
       ['shapesGraph', shapesGraphNode],
@@ -372,7 +372,7 @@ export const make = (
         });
 
       // SPARQL-based target: the target node carries the query.
-      if (Dataset.objectsOf(shapes, target, sh.select).length > 0) {
+      if (Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, target, sh.select))) {
         const query = yield* compile(context, shapes, target, {
           form: 'select',
           prebound: [],
@@ -384,7 +384,7 @@ export const make = (
       // SPARQL-based target type: a type of the target node carries the query.
       const type = Dataset.objectsOf(shapes, target, rdf.type)
         .filter(isNode)
-        .find((t) => Dataset.objectsOf(shapes, t, sh.select).length > 0);
+        .find((t) => Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, t, sh.select)));
       if (type === undefined) {
         return yield* Effect.fail(
           evaluationError(
@@ -402,7 +402,7 @@ export const make = (
       // The first parameter that is ill-valued or required but missing decides,
       // in declaration order.
       const problem = supplied.find(
-        (s) => invalid(s) || (s.values.length === 0 && !s.parameter.optional),
+        (s) => invalid(s) || (Arr.isReadonlyArrayEmpty(s.values) && !s.parameter.optional),
       );
       if (problem !== undefined) {
         if (!invalid(problem)) return [];

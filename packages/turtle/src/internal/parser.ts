@@ -25,6 +25,8 @@ import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
+import * as Arr from 'effect/Array';
+import * as Str from 'effect/String';
 import * as Result from 'effect/Result';
 import * as Grammar from '../Grammar.ts';
 import * as Predicate from 'effect/Predicate';
@@ -685,7 +687,7 @@ const collection: P<Term.NamedNode | Term.BlankNode> = Parser.preceded(
   ),
 ).pipe(
   Parser.map((items) => {
-    if (items.length === 0) return rdf.nil;
+    if (Arr.isReadonlyArrayEmpty(items)) return rdf.nil;
     const nodes = items.map(() => b.fresh());
     for (let i = 0; i < items.length; i++) {
       b.emit(nodes[i]!, rdf.first, items[i]!);
@@ -1125,7 +1127,7 @@ export class TurtleParser {
 
   private skipBom(): void {
     if (this.started) return;
-    if (this.input.length === 0) return;
+    if (Str.isEmpty(this.input)) return;
     this.started = true;
     if (this.input.charCodeAt(0) === 0xfeff) this.pos = 1;
   }

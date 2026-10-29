@@ -9,6 +9,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
@@ -295,7 +296,7 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   },
   URI: (args, ctx, sol) => builtIns.IRI!(args, ctx, sol),
   BNODE: (args, ctx, sol) =>
-    ctx.blankNode(args.length === 0 ? undefined : simpleArg(args[0]!).value, sol),
+    ctx.blankNode(Arr.isReadonlyArrayEmpty(args) ? undefined : simpleArg(args[0]!).value, sol),
   RAND: (_, ctx) => V.numLiteral({ kind: 3, v: ctx.random() }),
   ABS: ([a]) => {
     const n = numArg(a!);

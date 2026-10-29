@@ -162,7 +162,7 @@ export const compactElement = (
           delete compactedValue[property];
         }
       }
-      if (Object.keys(compactedValue).length > 0) {
+      if (Arr.isReadonlyArrayNonEmpty(Object.keys(compactedValue))) {
         const alias = compactIri(env, active, '@reverse', null, true, false, options);
         result[alias] = compactedValue;
       }
@@ -171,7 +171,7 @@ export const compactElement = (
     // 12.4
     if (expandedProperty === '@preserve') {
       const compactedValue = compactElement(env, active, activeProperty, expandedValue, options);
-      if (!(Array.isArray(expandedValue) && expandedValue.length === 0)) {
+      if (!(Array.isArray(expandedValue) && Arr.isReadonlyArrayEmpty(expandedValue))) {
         result['@preserve'] = compactedValue;
       }
       continue;
@@ -192,7 +192,7 @@ export const compactElement = (
       continue;
     }
     // 12.7
-    if (Array.isArray(expandedValue) && expandedValue.length === 0) {
+    if (Array.isArray(expandedValue) && Arr.isReadonlyArrayEmpty(expandedValue)) {
       const itemActiveProperty = compactIri(
         env,
         active,
@@ -333,11 +333,13 @@ export const compactElement = (
                   options,
                 );
           const values = isObject(compactedItem) ? asArray(compactedItem[containerKey] ?? []) : [];
-          mapKey = values.length > 0 && isString(values[0]) ? values[0] : undefined;
+          mapKey =
+            Arr.isReadonlyArrayNonEmpty(values) && isString(values[0]) ? values[0] : undefined;
           if (mapKey !== undefined) {
             const rest = values.slice(1);
             delete compactedItem[containerKey];
-            if (rest.length > 0) addValue(compactedItem, containerKey, rest, false);
+            if (Arr.isReadonlyArrayNonEmpty(rest))
+              addValue(compactedItem, containerKey, rest, false);
           }
         } else if (container.includes('@id')) {
           mapKey = compactedItem[containerKey];
@@ -347,7 +349,7 @@ export const compactElement = (
           mapKey = values[0];
           const rest = values.slice(1);
           delete compactedItem[containerKey];
-          if (rest.length > 0) addValue(compactedItem, containerKey, rest, false);
+          if (Arr.isReadonlyArrayNonEmpty(rest)) addValue(compactedItem, containerKey, rest, false);
           if (rest.length === 1 && Array.isArray(compactedItem[containerKey])) {
             compactedItem[containerKey] = compactedItem[containerKey][0];
           }
@@ -419,8 +421,9 @@ export const inverseContext = (active: ActiveContext): InverseContext => {
   for (const term of terms) {
     const def = active.terms.get(term)!;
     if (def.iri === null) continue;
-    const container =
-      def.container.length === 0 ? '@none' : Arr.sort(def.container, Order.String).join('');
+    const container = Arr.isReadonlyArrayEmpty(def.container)
+      ? '@none'
+      : Arr.sort(def.container, Order.String).join('');
     let containerMap = result.get(def.iri);
     if (containerMap === undefined) {
       containerMap = Object.create(null) as Record<string, ContainerEntry>;
@@ -543,7 +546,7 @@ export const compactIri = (
       const list: Array<Json> = value['@list'];
       let commonType: string | null = null;
       let commonLanguage: string | null = null;
-      if (list.length === 0) commonLanguage = defaultLanguage;
+      if (Arr.isReadonlyArrayEmpty(list)) commonLanguage = defaultLanguage;
       for (const item of list) {
         let itemLanguage = '@none';
         let itemType = '@none';
@@ -631,7 +634,7 @@ export const compactIri = (
       }
     } else {
       preferredValues.push(typeLanguageValue, '@none');
-      if (isListObject(value) && value['@list'].length === 0) typeLanguage = '@any';
+      if (isListObject(value) && Arr.isReadonlyArrayEmpty(value['@list'])) typeLanguage = '@any';
     }
     preferredValues.push('@any');
     // Iterates a copy: the loop appends to `preferredValues`.

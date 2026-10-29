@@ -5,6 +5,7 @@
  * @since 0.1.0
  */
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import { sh } from './Vocabulary.ts';
@@ -345,7 +346,7 @@ export const fromRdf = (
     return read.success;
   };
   const readNode = (n: Term.BlankNode): Path => {
-    if (Dataset.match(graph, { subject: n, predicate: rdf.first }).length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(Dataset.match(graph, { subject: n, predicate: rdf.first }))) {
       return sequence(...readList(n, n, 'sequence'));
     }
     const single = (p: Term.NamedNode): Term.Term | undefined => {

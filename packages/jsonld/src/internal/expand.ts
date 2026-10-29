@@ -19,6 +19,7 @@ import {
   fail,
   isAbsoluteIri,
   isBlankNodeId,
+  isEmptyObject,
   isGraphObject,
   isKeyword,
   isListObject,
@@ -30,6 +31,10 @@ import {
   hasOwn,
   stringifyJson,
 } from './util.ts';
+
+/** A frame-expansion `@language` / `@direction` value: `{}` or an array of strings. */
+const isFrameStringValue = (value: Json): boolean =>
+  isEmptyObject(value) || (Array.isArray(value) && value.every(isString));
 
 /** @internal */
 export interface ExpandOptions {
@@ -161,7 +166,7 @@ export const expandElement = (
       // any value
     } else {
       const v = result['@value'];
-      if (v === null || (Array.isArray(v) && v.length === 0)) return null;
+      if (v === null || (Array.isArray(v) && Arr.isReadonlyArrayEmpty(v))) return null;
       if (!isString(v) && '@language' in result) {
         if (!options.frameExpansion) fail('invalid language-tagged value');
       }
@@ -195,7 +200,7 @@ const finalize = (result: Json, activeProperty: string | null, options: ExpandOp
     if (keys.length === 1 && keys[0] === '@language') return null;
     // 19 (free-floating nodes are kept in frames)
     if (!options.frameExpansion && (activeProperty === null || activeProperty === '@graph')) {
-      if (keys.length === 0 || '@value' in result || '@list' in result) return null;
+      if (Arr.isReadonlyArrayEmpty(keys) || '@value' in result || '@list' in result) return null;
       if (keys.length === 1 && keys[0] === '@id') return null;
     }
   }
@@ -252,7 +257,11 @@ const expandObject = (
         case '@id': {
           if (isString(value)) {
             expandedValue = expandIri(env, active, value, false, true);
-          } else if (options.frameExpansion && isObject(value) && Object.keys(value).length === 0) {
+          } else if (
+            options.frameExpansion &&
+            isObject(value) &&
+            Arr.isReadonlyArrayEmpty(Object.keys(value))
+          ) {
             expandedValue = [value];
           } else if (options.frameExpansion && Array.isArray(value) && value.every(isString)) {
             expandedValue = value.map((v) => expandIri(env, active, v, false, true));
@@ -262,7 +271,11 @@ const expandObject = (
           break;
         }
         case '@type': {
-          if (options.frameExpansion && isObject(value) && Object.keys(value).length === 0) {
+          if (
+            options.frameExpansion &&
+            isObject(value) &&
+            Arr.isReadonlyArrayEmpty(Object.keys(value))
+          ) {
             expandedValue = value;
           } else if (
             options.frameExpansion &&
@@ -310,8 +323,7 @@ const expandObject = (
             expandedValue = value;
           } else if (
             options.frameExpansion &&
-            ((isObject(value) && Object.keys(value).length === 0) ||
-              (Array.isArray(value) && value.every(isScalar)))
+            (isEmptyObject(value) || (Array.isArray(value) && value.every(isScalar)))
           ) {
             expandedValue = value;
           } else {
@@ -325,11 +337,7 @@ const expandObject = (
         }
         case '@language': {
           if (isString(value)) expandedValue = value;
-          else if (
-            options.frameExpansion &&
-            ((isObject(value) && Object.keys(value).length === 0) ||
-              (Array.isArray(value) && value.every(isString)))
-          ) {
+          else if (options.frameExpansion && isFrameStringValue(value)) {
             expandedValue = value;
           } else fail('invalid language-tagged string');
           break;
@@ -337,11 +345,7 @@ const expandObject = (
         case '@direction': {
           if (env.processingMode === 'json-ld-1.0') continue;
           if (value === 'ltr' || value === 'rtl') expandedValue = value;
-          else if (
-            options.frameExpansion &&
-            ((isObject(value) && Object.keys(value).length === 0) ||
-              (Array.isArray(value) && value.every(isString)))
-          ) {
+          else if (options.frameExpansion && isFrameStringValue(value)) {
             expandedValue = value;
           } else fail('invalid base direction');
           break;
@@ -376,7 +380,7 @@ const expandObject = (
               }
             }
             const others = Object.keys(ev).filter((k) => k !== '@reverse');
-            if (others.length > 0) {
+            if (Arr.isReadonlyArrayNonEmpty(others)) {
               const reverseMap: JsonObject = getOrInit(result, '@reverse', () => ({}));
               for (const property of others) {
                 for (const item of asArray(ev[property])) {

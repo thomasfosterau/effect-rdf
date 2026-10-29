@@ -9,6 +9,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -188,7 +189,7 @@ class Printer {
   }
 
   group(g: Ast.GroupPattern, level: number): string {
-    if (g.patterns.length === 0) return '{}';
+    if (Arr.isReadonlyArrayEmpty(g.patterns)) return '{}';
     const only = g.patterns[0]!;
     if (g.patterns.length === 1 && only._tag === 'SubSelect') {
       return `{\n${this.pad(level + 1)}${this.select(only.query, level + 1)}\n${this.pad(level)}}`;
@@ -246,7 +247,7 @@ class Printer {
 
   modifiers(q: Ast.QueryBase): string {
     let out = '';
-    if (q.groupBy.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(q.groupBy)) {
       out += `\nGROUP BY ${q.groupBy
         .map((g) =>
           g.variable !== undefined
@@ -257,10 +258,10 @@ class Printer {
         )
         .join(' ')}`;
     }
-    if (q.having.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(q.having)) {
       out += `\nHAVING ${q.having.map((h) => `(${this.expression(h)})`).join(' ')}`;
     }
-    if (q.orderBy.length > 0) {
+    if (Arr.isReadonlyArrayNonEmpty(q.orderBy)) {
       out += `\nORDER BY ${q.orderBy
         .map((o) => `${o.descending ? 'DESC' : 'ASC'}(${this.expression(o.expression)})`)
         .join(' ')}`;
@@ -323,7 +324,7 @@ class Printer {
         lines.push(`${this.unit}}`);
       }
     }
-    return lines.length === 0 ? '{}' : `{\n${lines.join('\n')}\n}`;
+    return Arr.isReadonlyArrayEmpty(lines) ? '{}' : `{\n${lines.join('\n')}\n}`;
   }
 
   graphTarget(t: Ast.GraphTarget): string {
@@ -344,10 +345,10 @@ class Printer {
         return `DELETE WHERE ${this.quads(op.patterns)}`;
       case 'Modify': {
         let out = op.with !== undefined ? `WITH ${this.iri(op.with)}\n` : '';
-        if (op.delete.length > 0 || op.insert.length === 0) {
+        if (Arr.isReadonlyArrayNonEmpty(op.delete) || Arr.isReadonlyArrayEmpty(op.insert)) {
           out += `DELETE ${this.quads(op.delete)}\n`;
         }
-        if (op.insert.length > 0) out += `INSERT ${this.quads(op.insert)}\n`;
+        if (Arr.isReadonlyArrayNonEmpty(op.insert)) out += `INSERT ${this.quads(op.insert)}\n`;
         out += this.dataset(op.using, 'USING');
         return `${out}WHERE ${this.group(op.where, 0)}`;
       }

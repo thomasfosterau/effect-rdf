@@ -15,6 +15,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assert, describe, expect, it } from 'vite-plus/test';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -211,7 +212,7 @@ describe.skipIf(!exists)('N3 test suite', () => {
       });
     });
     const rejected = active.filter((e) => e.rejected);
-    describe.skipIf(rejected.length === 0)(
+    describe.skipIf(Arr.isReadonlyArrayEmpty(rejected))(
       `${manifest} (rdft:Rejected, legacy compatibility)`,
       () => {
         it.each(rejected)('$type $id', (entry) => {
