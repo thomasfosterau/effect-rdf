@@ -117,12 +117,12 @@ describe('SparqlClient ↔ SparqlServer', () => {
     ),
   );
 
-  for (const accept of [
+  [
     'application/sparql-results+json',
     'application/sparql-results+xml',
     'text/tab-separated-values',
     'text/csv',
-  ]) {
+  ].forEach((accept) => {
     it.effect(`round-trips results as ${accept}`, () =>
       run(
         Effect.gen(function* () {
@@ -148,28 +148,32 @@ describe('SparqlClient ↔ SparqlServer', () => {
         { resultsAccept: accept },
       ),
     );
-  }
+  });
 
   it.effect('streams CONSTRUCT / DESCRIBE results in every format', () =>
     Effect.gen(function* () {
       const formats = Formats.defaults;
-      for (const parser of formats.parsers) {
-        yield* run(
-          Effect.gen(function* () {
-            const client = yield* SparqlClient.SparqlClient;
-            const dataset = yield* client.constructDataset('CONSTRUCT WHERE { ?s ?p ?o }');
-            const expected = Dataset.filter(data, (q) => q.graph._tag === 'DefaultGraph');
-            assert.isTrue(Isomorphism.isomorphic(dataset, expected), parser.format.name);
-            const described = yield* Stream.runCollect(client.describe(Q.describe(ex('alice'))));
-            expect(described).toHaveLength(3);
-          }).pipe(
-            Effect.provideService(Serialization.Formats, {
-              parsers: [parser],
-              serializers: formats.serializers,
-            }),
-          ),
-        );
-      }
+      yield* Effect.forEach(
+        formats.parsers,
+        Effect.fnUntraced(function* (parser) {
+          yield* run(
+            Effect.gen(function* () {
+              const client = yield* SparqlClient.SparqlClient;
+              const dataset = yield* client.constructDataset('CONSTRUCT WHERE { ?s ?p ?o }');
+              const expected = Dataset.filter(data, (q) => q.graph._tag === 'DefaultGraph');
+              assert.isTrue(Isomorphism.isomorphic(dataset, expected), parser.format.name);
+              const described = yield* Stream.runCollect(client.describe(Q.describe(ex('alice'))));
+              expect(described).toHaveLength(3);
+            }).pipe(
+              Effect.provideService(Serialization.Formats, {
+                parsers: [parser],
+                serializers: formats.serializers,
+              }),
+            ),
+          );
+        }),
+        { concurrency: 1, discard: true },
+      );
     }),
   );
 
@@ -189,27 +193,31 @@ describe('SparqlClient ↔ SparqlServer', () => {
 
   it.effect('sends dataset parameters with GET, POST and auto', () =>
     Effect.gen(function* () {
-      for (const method of ['get', 'post', 'auto'] as const) {
-        yield* run(
-          Effect.gen(function* () {
-            const client = yield* SparqlClient.SparqlClient;
-            const rows = yield* Stream.runCollect(
-              client.select('SELECT ?name { ?s ?p ?name }', { defaultGraphs: [ex('g1')] }),
-            );
-            expect(rows.map((r) => lexical(r['name']))).toEqual(['Carol']);
-            const named = yield* Stream.runCollect(
-              client.select('SELECT ?g { GRAPH ?g { ?s ?p ?o } }', {
-                namedGraphs: ['http://example.org/g1'],
-              }),
-            );
-            expect(named).toHaveLength(1);
-            // A long query is sent with POST in auto mode.
-            const long = `SELECT * { ?s ?p ?o FILTER(?o != "${'x'.repeat(3000)}") }`;
-            expect(yield* Stream.runCollect(client.select(long))).toHaveLength(5);
-          }),
-          { method },
-        );
-      }
+      yield* Effect.forEach(
+        ['get', 'post', 'auto'] as const,
+        Effect.fnUntraced(function* (method) {
+          yield* run(
+            Effect.gen(function* () {
+              const client = yield* SparqlClient.SparqlClient;
+              const rows = yield* Stream.runCollect(
+                client.select('SELECT ?name { ?s ?p ?name }', { defaultGraphs: [ex('g1')] }),
+              );
+              expect(rows.map((r) => lexical(r['name']))).toEqual(['Carol']);
+              const named = yield* Stream.runCollect(
+                client.select('SELECT ?g { GRAPH ?g { ?s ?p ?o } }', {
+                  namedGraphs: ['http://example.org/g1'],
+                }),
+              );
+              expect(named).toHaveLength(1);
+              // A long query is sent with POST in auto mode.
+              const long = `SELECT * { ?s ?p ?o FILTER(?o != "${'x'.repeat(3000)}") }`;
+              expect(yield* Stream.runCollect(client.select(long))).toHaveLength(5);
+            }),
+            { method },
+          );
+        }),
+        { concurrency: 1, discard: true },
+      );
     }),
   );
 

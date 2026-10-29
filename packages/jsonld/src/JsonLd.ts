@@ -210,16 +210,24 @@ const run = <A>(
     const loader = yield* getLoader(options);
     const docs = new Map<string, DocResult>();
     const env = makeEnv(options, docs);
-    for (;;) {
+    // Re-run `f` until it no longer stops on a document it has not seen: each
+    // stop loads that one document into `docs`, which `f` reads on the next run.
+    const go: Effect.Effect<A, JsonLdError.JsonLdError> = Effect.suspend(() => {
       const step = attempt(f, env);
-      if (Result.isSuccess(step)) return step.success;
+      if (Result.isSuccess(step)) return Effect.succeed(step.success);
       const failure = step.failure;
-      if (!(failure instanceof NeedDocument)) return yield* failure;
-      const r = yield* Effect.result(
-        loader.load(failure.url, { profile: 'http://www.w3.org/ns/json-ld#context' }),
+      if (!(failure instanceof NeedDocument)) return Effect.fail(failure);
+      return Effect.flatMap(
+        Effect.result(
+          loader.load(failure.url, { profile: 'http://www.w3.org/ns/json-ld#context' }),
+        ),
+        (r) => {
+          docs.set(failure.url, r);
+          return go;
+        },
       );
-      docs.set(failure.url, r);
-    }
+    });
+    return yield* go;
   });
 
 interface ResolvedInput {

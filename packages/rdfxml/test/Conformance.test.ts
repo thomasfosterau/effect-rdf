@@ -34,7 +34,7 @@ describe.skipIf(!exists)('RDF/XML conformance (rdf11 + rdf12 rdf-xml)', () => {
     expect(evalTests.length + negativeTests.length).toBe(tests.length);
   });
 
-  for (const test of evalTests) {
+  evalTests.forEach((test) => {
     it.effect(`${test.name} (eval)`, () =>
       Effect.gen(function* () {
         const result = yield* parseFile(test);
@@ -58,14 +58,14 @@ describe.skipIf(!exists)('RDF/XML conformance (rdf11 + rdf12 rdf-xml)', () => {
         });
       }),
     );
-  }
+  });
 
-  for (const test of negativeTests) {
+  negativeTests.forEach((test) => {
     it.effect(`${test.name} (negative syntax)`, () =>
       Effect.gen(function* () {
         const exit = yield* Effect.exit(parseFile(test));
         expect(Exit.isFailure(exit)).toBe(true);
       }),
     );
-  }
+  });
 });

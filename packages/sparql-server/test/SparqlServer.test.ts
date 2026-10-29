@@ -75,14 +75,18 @@ describe('SPARQL endpoint', () => {
   it.effect('negotiates SELECT result formats', () =>
     withServer((client) =>
       Effect.gen(function* () {
-        for (const codec of Results.codecs) {
-          const r = yield* get(client, q(SELECT), { accept: codec.format.mediaType });
-          expect(r.status).toBe(200);
-          expect(mediaType(r)).toBe(codec.format.mediaType);
-          const parsed = yield* codec.parse(yield* r.text);
-          assert(parsed._tag === 'ResultSet');
-          expect(parsed.bindings).toHaveLength(3);
-        }
+        yield* Effect.forEach(
+          Results.codecs,
+          Effect.fnUntraced(function* (codec) {
+            const r = yield* get(client, q(SELECT), { accept: codec.format.mediaType });
+            expect(r.status).toBe(200);
+            expect(mediaType(r)).toBe(codec.format.mediaType);
+            const parsed = yield* codec.parse(yield* r.text);
+            assert(parsed._tag === 'ResultSet');
+            expect(parsed.bindings).toHaveLength(3);
+          }),
+          { concurrency: 1, discard: true },
+        );
         // Default: JSON.
         const r = yield* get(client, q(SELECT));
         expect(mediaType(r)).toBe('application/sparql-results+json');
@@ -98,14 +102,15 @@ describe('SPARQL endpoint', () => {
   it.effect('answers ASK in JSON and XML', () =>
     withServer((client) =>
       Effect.gen(function* () {
-        for (const accept of [
-          'application/sparql-results+json',
-          'application/sparql-results+xml',
-        ]) {
-          const r = yield* get(client, q('ASK { ?s ?p "Bob" }'), { accept });
-          const parsed = yield* some(Results.codecFor(accept), accept).parse(yield* r.text);
-          expect(parsed).toEqual({ _tag: 'Boolean', value: true });
-        }
+        yield* Effect.forEach(
+          ['application/sparql-results+json', 'application/sparql-results+xml'],
+          Effect.fnUntraced(function* (accept) {
+            const r = yield* get(client, q('ASK { ?s ?p "Bob" }'), { accept });
+            const parsed = yield* some(Results.codecFor(accept), accept).parse(yield* r.text);
+            expect(parsed).toEqual({ _tag: 'Boolean', value: true });
+          }),
+          { concurrency: 1, discard: true },
+        );
       }),
     ),
   );
@@ -115,14 +120,18 @@ describe('SPARQL endpoint', () => {
       Effect.gen(function* () {
         const construct = 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }';
         const expected = Dataset.filter(data, (quad) => quad.graph._tag === 'DefaultGraph');
-        for (const serializer of formats.serializers) {
-          const r = yield* get(client, q(construct), { accept: serializer.format.mediaType });
-          expect(r.status).toBe(200);
-          expect(mediaType(r)).toBe(serializer.format.mediaType);
-          const parser = some(Serialization.parserFor(formats, mediaType(r)), mediaType(r));
-          const parsed = yield* parser.parse(yield* r.text, { baseIri: BASE });
-          expect(Isomorphism.isomorphic(parsed.dataset, expected)).toBe(true);
-        }
+        yield* Effect.forEach(
+          formats.serializers,
+          Effect.fnUntraced(function* (serializer) {
+            const r = yield* get(client, q(construct), { accept: serializer.format.mediaType });
+            expect(r.status).toBe(200);
+            expect(mediaType(r)).toBe(serializer.format.mediaType);
+            const parser = some(Serialization.parserFor(formats, mediaType(r)), mediaType(r));
+            const parsed = yield* parser.parse(yield* r.text, { baseIri: BASE });
+            expect(Isomorphism.isomorphic(parsed.dataset, expected)).toBe(true);
+          }),
+          { concurrency: 1, discard: true },
+        );
         const d = yield* get(client, q('DESCRIBE <http://example.org/alice>'));
         expect(mediaType(d)).toBe('text/turtle');
         expect(yield* d.text).toContain('Alice');

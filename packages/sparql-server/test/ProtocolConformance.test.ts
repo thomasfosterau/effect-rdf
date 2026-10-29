@@ -75,59 +75,63 @@ const runTest = (t: ProtocolTest) =>
   Effect.gen(function* () {
     const client = yield* Testing.makeClient(SERVER_OPTIONS);
     const vars = new Map<string, string>();
-    for (const [i, spec] of t.requests.entries()) {
-      const request = toRequest(spec, t.authority, vars);
-      const response = yield* client.execute(request);
-      const text = yield* response.text;
-      const label = `request ${i + 1}: ${spec.method} ${spec.path} -> ${response.status} ${text.slice(0, 300)}`;
-      assert.strictEqual(statusMatches(response.status, spec.response.statuses), true, label);
-      const contentType = response.headers['content-type'];
-      if (spec.response.expectedLocation !== undefined) {
-        const location = response.headers['location'];
-        assert.isDefined(location, label);
-        vars.set(spec.response.expectedLocation, location!);
-      }
-      for (const [name, value] of spec.response.headers) {
-        if (name.toLowerCase() === 'content-type') {
-          assert.strictEqual(mediaType(contentType), mediaType(value), label);
+    yield* Effect.forEach(
+      t.requests.entries(),
+      Effect.fnUntraced(function* ([i, spec]) {
+        const request = toRequest(spec, t.authority, vars);
+        const response = yield* client.execute(request);
+        const text = yield* response.text;
+        const label = `request ${i + 1}: ${spec.method} ${spec.path} -> ${response.status} ${text.slice(0, 300)}`;
+        assert.strictEqual(statusMatches(response.status, spec.response.statuses), true, label);
+        const contentType = response.headers['content-type'];
+        if (spec.response.expectedLocation !== undefined) {
+          const location = response.headers['location'];
+          assert.isDefined(location, label);
+          vars.set(spec.response.expectedLocation, location!);
         }
-      }
-      if (spec.response.expectedFormat !== undefined) {
-        const format = spec.response.expectedFormat;
-        if (format === 'boolean' || format === 'tabular') {
-          const codec = Results.codecFor(contentType ?? '');
-          assert.strictEqual(Option.isSome(codec), true, label);
-          const parsed = yield* Option.getOrElse(codec, () => assert.fail(label)).parse(text);
-          assert.strictEqual(parsed._tag, format === 'boolean' ? 'Boolean' : 'ResultSet', label);
-          if (spec.response.expectedBoolean !== undefined && parsed._tag === 'Boolean') {
-            assert.strictEqual(parsed.value, spec.response.expectedBoolean, label);
+        for (const [name, value] of spec.response.headers) {
+          if (name.toLowerCase() === 'content-type') {
+            assert.strictEqual(mediaType(contentType), mediaType(value), label);
           }
-        } else if (format === 'RDF') {
-          yield* parseRdf(contentType, text, request.url);
         }
-      } else if (spec.response.expectedBoolean !== undefined) {
-        const parsed = yield* Option.getOrElse(Results.codecFor(contentType ?? ''), () =>
-          assert.fail(label),
-        ).parse(text);
-        assert.strictEqual(
-          parsed._tag === 'Boolean' && parsed.value,
-          spec.response.expectedBoolean,
-          label,
-        );
-      }
-      if (spec.response.body !== undefined && spec.method !== 'HEAD') {
-        const expectedType =
-          spec.response.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ??
-          'text/turtle';
-        const url = request.url;
-        const expected = yield* parseRdf(expectedType, spec.response.body, url);
-        const actual = yield* parseRdf(contentType, text, url);
-        assert.isTrue(
-          Isomorphism.isomorphic(actual, expected),
-          `${label}\nexpected:\n${Dataset.toNQuads(expected)}\nactual:\n${Dataset.toNQuads(actual)}`,
-        );
-      }
-    }
+        if (spec.response.expectedFormat !== undefined) {
+          const format = spec.response.expectedFormat;
+          if (format === 'boolean' || format === 'tabular') {
+            const codec = Results.codecFor(contentType ?? '');
+            assert.strictEqual(Option.isSome(codec), true, label);
+            const parsed = yield* Option.getOrElse(codec, () => assert.fail(label)).parse(text);
+            assert.strictEqual(parsed._tag, format === 'boolean' ? 'Boolean' : 'ResultSet', label);
+            if (spec.response.expectedBoolean !== undefined && parsed._tag === 'Boolean') {
+              assert.strictEqual(parsed.value, spec.response.expectedBoolean, label);
+            }
+          } else if (format === 'RDF') {
+            yield* parseRdf(contentType, text, request.url);
+          }
+        } else if (spec.response.expectedBoolean !== undefined) {
+          const parsed = yield* Option.getOrElse(Results.codecFor(contentType ?? ''), () =>
+            assert.fail(label),
+          ).parse(text);
+          assert.strictEqual(
+            parsed._tag === 'Boolean' && parsed.value,
+            spec.response.expectedBoolean,
+            label,
+          );
+        }
+        if (spec.response.body !== undefined && spec.method !== 'HEAD') {
+          const expectedType =
+            spec.response.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ??
+            'text/turtle';
+          const url = request.url;
+          const expected = yield* parseRdf(expectedType, spec.response.body, url);
+          const actual = yield* parseRdf(contentType, text, url);
+          assert.isTrue(
+            Isomorphism.isomorphic(actual, expected),
+            `${label}\nexpected:\n${Dataset.toNQuads(expected)}\nactual:\n${Dataset.toNQuads(actual)}`,
+          );
+        }
+      }),
+      { concurrency: 1, discard: true },
+    );
   }).pipe(Effect.provide(SparqlServer.layerMemoryServices(loadGraphData(t))));
 
 const protocolTests = exists ? readManifest(path.join(sparql11, 'protocol', 'manifest.ttl')) : [];
@@ -136,16 +140,16 @@ const gspTests = exists
   : [];
 
 describe.skipIf(!exists)('SPARQL 1.1 Protocol', () => {
-  for (const t of protocolTests) {
+  protocolTests.forEach((t) => {
     it.effect(`${t.id.replace(/.*#/, '')}: ${t.name}`, () => runTest(t));
-  }
+  });
 });
 
 describe.skipIf(!exists)('SPARQL 1.1 Graph Store Protocol', () => {
-  for (const t of gspTests) {
+  gspTests.forEach((t) => {
     const unlisted = t.unlisted ? ' (defined but not listed in mf:entries)' : '';
     it.effect(`${t.id.replace(/.*#/, '')}: ${t.name}${unlisted}`, () => runTest(t));
-  }
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -173,16 +177,15 @@ const fetchDescription = (accept: string | undefined) =>
 describe.skipIf(!exists)('SPARQL 1.1 Service Description', () => {
   it.effect('returns-rdf: GET on endpoint returns RDF', () =>
     Effect.gen(function* () {
-      for (const accept of [
-        undefined,
-        'text/turtle',
-        'application/rdf+xml',
-        'application/ld+json',
-      ]) {
-        const { response, dataset } = yield* fetchDescription(accept);
-        expect(response.status).toBe(200);
-        expect(dataset.size).toBeGreaterThan(0);
-      }
+      yield* Effect.forEach(
+        [undefined, 'text/turtle', 'application/rdf+xml', 'application/ld+json'],
+        Effect.fnUntraced(function* (accept) {
+          const { response, dataset } = yield* fetchDescription(accept);
+          expect(response.status).toBe(200);
+          expect(dataset.size).toBeGreaterThan(0);
+        }),
+        { concurrency: 1, discard: true },
+      );
     }),
   );
 

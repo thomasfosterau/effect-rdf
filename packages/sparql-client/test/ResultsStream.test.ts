@@ -52,23 +52,27 @@ const solutions = (events: ReadonlyArray<ResultsStream.ResultEvent>) =>
   events.flatMap((e) => (e._tag === 'Solution' ? [e.bindings] : []));
 
 describe('ResultsStream', () => {
-  for (const codec of [Results.Json, Results.Xml, Results.Tsv]) {
+  [Results.Json, Results.Xml, Results.Tsv].forEach((codec) => {
     it.effect(`parses ${codec.format.name} incrementally`, () =>
       Effect.gen(function* () {
         const text = codec.serializeString(yield* Results.collect(result));
-        for (const size of [1, 3, 17, 1000, text.length]) {
-          const events = yield* collect(codec.format.mediaType, text, size);
-          expect(events[0]).toEqual({ _tag: 'Variables', variables: ['s', 'o'] });
-          const got = solutions(events);
-          expect(got).toHaveLength(rows.length);
-          got.forEach((b, i) => expect(b.key).toBe(rows[i]!.key));
-        }
+        yield* Effect.forEach(
+          [1, 3, 17, 1000, text.length],
+          Effect.fnUntraced(function* (size) {
+            const events = yield* collect(codec.format.mediaType, text, size);
+            expect(events[0]).toEqual({ _tag: 'Variables', variables: ['s', 'o'] });
+            const got = solutions(events);
+            expect(got).toHaveLength(rows.length);
+            got.forEach((b, i) => expect(b.key).toBe(rows[i]!.key));
+          }),
+          { concurrency: 1, discard: true },
+        );
         const ask = codec.serializeString({ _tag: 'Ask', value: true });
         const events = yield* collect(codec.format.mediaType, ask, 2);
         expect(events.find((e) => e._tag === 'Boolean')).toEqual({ _tag: 'Boolean', value: true });
       }),
     );
-  }
+  });
 
   it.effect('parses CSV incrementally', () =>
     Effect.gen(function* () {
@@ -77,11 +81,15 @@ describe('ResultsStream', () => {
       const whole = yield* Results.Csv.parse(text);
       const expected = whole._tag === 'ResultSet' ? whole.bindings.map((b) => b.key) : [];
       expect(expected).toHaveLength(4);
-      for (const size of [1, 2, 3, 7, 1000]) {
-        const events = yield* collect('text/csv', text, size);
-        expect(events[0]).toEqual({ _tag: 'Variables', variables: ['x', 'y'] });
-        expect(solutions(events).map((b) => b.key)).toEqual(expected);
-      }
+      yield* Effect.forEach(
+        [1, 2, 3, 7, 1000],
+        Effect.fnUntraced(function* (size) {
+          const events = yield* collect('text/csv', text, size);
+          expect(events[0]).toEqual({ _tag: 'Variables', variables: ['x', 'y'] });
+          expect(solutions(events).map((b) => b.key)).toEqual(expected);
+        }),
+        { concurrency: 1, discard: true },
+      );
       expect(solutions(yield* collect('text/csv', text, 4))[0]!.map.get('y')?.key).toBe(
         Term.literal('multi\r\nline "quoted"').key,
       );
@@ -90,11 +98,15 @@ describe('ResultsStream', () => {
       const parser = ResultsStream.csv();
       expect(parser.push('x\r\nhttp://a\r\nhttp://b')).toHaveLength(2);
       expect(parser.end()).toHaveLength(1);
-      for (const bad of ['x\r\na\r\nb\r\n"c\r\n', 'x\r\na\r\n"b"c\r\nd\r\n']) {
-        const streamed = yield* Effect.flip(collect('text/csv', bad, 3));
-        const buffered = yield* Effect.flip(Results.Csv.parse(bad));
-        expect([streamed.line, streamed.column]).toEqual([buffered.line, buffered.column]);
-      }
+      yield* Effect.forEach(
+        ['x\r\na\r\nb\r\n"c\r\n', 'x\r\na\r\n"b"c\r\nd\r\n'],
+        Effect.fnUntraced(function* (bad) {
+          const streamed = yield* Effect.flip(collect('text/csv', bad, 3));
+          const buffered = yield* Effect.flip(Results.Csv.parse(bad));
+          expect([streamed.line, streamed.column]).toEqual([buffered.line, buffered.column]);
+        }),
+        { concurrency: 1, discard: true },
+      );
     }),
   );
 
@@ -155,10 +167,14 @@ describe('ResultsStream', () => {
         ['text/tab-separated-values', '?x\n<unterminated\n'],
         ['text/tab-separated-values', ''],
       ];
-      for (const [mediaType, text] of cases) {
-        const error = yield* Effect.flip(collect(mediaType, text, 4));
-        expect(error._tag, `${mediaType}: ${text}`).toBe('ResultsParseError');
-      }
+      yield* Effect.forEach(
+        cases,
+        Effect.fnUntraced(function* ([mediaType, text]) {
+          const error = yield* Effect.flip(collect(mediaType, text, 4));
+          expect(error._tag, `${mediaType}: ${text}`).toBe('ResultsParseError');
+        }),
+        { concurrency: 1, discard: true },
+      );
       expect(Option.isNone(ResultsStream.parse('text/html', Stream.empty))).toBe(true);
     }),
   );

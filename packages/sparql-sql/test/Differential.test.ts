@@ -313,45 +313,53 @@ describe('Differential: SQL store vs in-memory store', () => {
         let rootInSql = 0;
         let sqlUsed = 0;
         let nonEmpty = 0;
-        for (let d = 0; d < DATASETS; d++) {
-          const r = prng(SEED + d);
-          const risky = d % 3 === 2;
-          const quads = makeData(r, risky);
-          const memory = yield* Store.makeMemory(Dataset.fromIterable(quads));
-          let events: Array<SqlStore.QueryEvent> = [];
-          yield* Effect.gen(function* () {
-            const store = yield* SqlStore.SqlStore;
-            yield* store.insert(quads);
-            const sqlEngine = Engine.make(store);
-            const memEngine = Engine.make(memory);
-            const gen = new QueryGen(r, risky);
-            for (let q = 0; q < QUERIES_PER_DATASET; q++) {
-              const query = gen.query();
-              events = [];
-              const expected = yield* Effect.exit(evaluate(memEngine, query));
-              const actual = yield* Effect.exit(evaluate(sqlEngine, query));
-              // Both fail, or both succeed with the same rows.
-              assert(
-                Exit.isSuccess(actual) || Exit.isFailure(expected),
-                Exit.isFailure(actual)
-                  ? `SQL evaluation failed for ${query}: ${String(actual.cause)}`
-                  : '',
+        yield* Effect.forEach(
+          Array.from({ length: DATASETS }, (_, i) => i),
+          Effect.fnUntraced(function* (d) {
+            const r = prng(SEED + d);
+            const risky = d % 3 === 2;
+            const quads = makeData(r, risky);
+            const memory = yield* Store.makeMemory(Dataset.fromIterable(quads));
+            let events: Array<SqlStore.QueryEvent> = [];
+            yield* Effect.gen(function* () {
+              const store = yield* SqlStore.SqlStore;
+              yield* store.insert(quads);
+              const sqlEngine = Engine.make(store);
+              const memEngine = Engine.make(memory);
+              const gen = new QueryGen(r, risky);
+              yield* Effect.forEach(
+                Array.from({ length: QUERIES_PER_DATASET }, (_, i) => i),
+                Effect.fnUntraced(function* () {
+                  const query = gen.query();
+                  events = [];
+                  const expected = yield* Effect.exit(evaluate(memEngine, query));
+                  const actual = yield* Effect.exit(evaluate(sqlEngine, query));
+                  // Both fail, or both succeed with the same rows.
+                  assert(
+                    Exit.isSuccess(actual) || Exit.isFailure(expected),
+                    Exit.isFailure(actual)
+                      ? `SQL evaluation failed for ${query}: ${String(actual.cause)}`
+                      : '',
+                  );
+                  const outcome = (exit: typeof expected) =>
+                    Exit.isFailure(exit) ? { query, failed: true } : { query, rows: exit.value };
+                  expect(outcome(actual)).toEqual(outcome(expected));
+                  if (Exit.isFailure(expected)) return;
+                  compared++;
+                  if (expected.value.length > 0 && expected.value[0] !== 'false') nonEmpty++;
+                  if (events[0]?._tag === 'Executed') rootInSql++;
+                  if (events.some((e) => e._tag === 'Executed')) sqlUsed++;
+                }),
+                { concurrency: 1, discard: true },
               );
-              const outcome = (exit: typeof expected) =>
-                Exit.isFailure(exit) ? { query, failed: true } : { query, rows: exit.value };
-              expect(outcome(actual)).toEqual(outcome(expected));
-              if (Exit.isFailure(expected)) continue;
-              compared++;
-              if (expected.value.length > 0 && expected.value[0] !== 'false') nonEmpty++;
-              if (events[0]?._tag === 'Executed') rootInSql++;
-              if (events.some((e) => e._tag === 'Executed')) sqlUsed++;
-            }
-          }).pipe(
-            Effect.provide(
-              SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) }),
-            ),
-          );
-        }
+            }).pipe(
+              Effect.provide(
+                SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) }),
+              ),
+            );
+          }),
+          { concurrency: 1, discard: true },
+        );
         yield* Effect.logInfo(
           `Compared ${compared} queries (${nonEmpty} with solutions): ${sqlUsed} used SQL, ${rootInSql} entirely in SQL`,
         );

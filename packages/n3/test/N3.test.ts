@@ -223,10 +223,14 @@ describe('Mapping', () => {
 
   it.effect('rejects constructs that are not RDF', () =>
     Effect.gen(function* () {
-      for (const text of ['{ ?x :p :o } => {:a :b :c} .', '"lit" :p :o .', ':s [] :o .']) {
-        const error = yield* Effect.flip(Mapping.toDataset(parse(text)));
-        expect(error._tag).toBe('N3UnrepresentableError');
-      }
+      yield* Effect.forEach(
+        ['{ ?x :p :o } => {:a :b :c} .', '"lit" :p :o .', ':s [] :o .'],
+        Effect.fnUntraced(function* (text) {
+          const error = yield* Effect.flip(Mapping.toDataset(parse(text)));
+          expect(error._tag).toBe('N3UnrepresentableError');
+        }),
+        { concurrency: 1, discard: true },
+      );
       expect(Mapping.isRdfCompatible(parse(':a :b :c .').formula)).toBe(true);
       const named = Dataset.make(Term.quad(ex('a'), ex('b'), ex('c'), ex('g')));
       const error = yield* Effect.flip(Mapping.fromDataset(named));

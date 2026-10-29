@@ -609,62 +609,69 @@ const makeEngine = (
         return out;
       }
       case 'Not': {
-        const out: Array<ValidationReport.ValidationResult> = [];
-        for (const v of valueNodes) if (yield* conforms(c.shape, v)) out.push(result(v));
-        return out;
+        const conforming = yield* Effect.filter(valueNodes, (v) => conforms(c.shape, v));
+        return conforming.map((v) => result(v));
       }
       case 'And':
       case 'Or':
       case 'Xone': {
-        const out: Array<ValidationReport.ValidationResult> = [];
-        for (const v of valueNodes) {
-          let conforming = 0;
-          const details: Array<ValidationReport.ValidationResult> = [];
-          for (const s of c.shapes) {
-            const rs = yield* nestedResults(s, v);
-            if (rs.length === 0) conforming++;
-            else details.push(...rs);
-          }
-          const failed =
-            c._tag === 'And'
-              ? conforming < c.shapes.length
-              : c._tag === 'Or'
-                ? conforming === 0
-                : conforming !== 1;
-          if (failed) out.push(result(v, { details }));
-        }
-        return out;
+        const shapes = c.shapes;
+        const tag = c._tag;
+        const perNode = yield* Effect.forEach(
+          valueNodes,
+          (v) =>
+            Effect.map(
+              Effect.forEach(shapes, (s) => nestedResults(s, v), { concurrency: 1 }),
+              (nested) => {
+                const conforming = nested.filter((rs) => rs.length === 0).length;
+                const failed =
+                  tag === 'And'
+                    ? conforming < shapes.length
+                    : tag === 'Or'
+                      ? conforming === 0
+                      : conforming !== 1;
+                return failed ? [result(v, { details: nested.flat() })] : [];
+              },
+            ),
+          { concurrency: 1 },
+        );
+        return perNode.flat();
       }
       case 'Node': {
-        const out: Array<ValidationReport.ValidationResult> = [];
-        for (const v of valueNodes) {
-          const rs = yield* nestedResults(c.shape, v);
-          if (rs.length > 0) out.push(result(v, { details: rs }));
-        }
-        return out;
+        const shape = c.shape;
+        const perNode = yield* Effect.forEach(
+          valueNodes,
+          (v) =>
+            Effect.map(nestedResults(shape, v), (rs) =>
+              rs.length > 0 ? [result(v, { details: rs })] : [],
+            ),
+          { concurrency: 1 },
+        );
+        return perNode.flat();
       }
       case 'Property': {
         const property = shapeById(c.shape);
-        const out: Array<ValidationReport.ValidationResult> = [];
-        for (const v of valueNodes) out.push(...(yield* validateShape(property, v)));
-        return out;
+        const perNode = yield* Effect.forEach(valueNodes, (v) => validateShape(property, v), {
+          concurrency: 1,
+        });
+        return perNode.flat();
       }
       case 'QualifiedMinCount':
       case 'QualifiedMaxCount': {
-        let count = 0;
-        for (const v of valueNodes) {
-          if (!(yield* conforms(c.shape, v))) continue;
-          let inSibling = false;
-          if (c.disjoint) {
-            for (const s of c.siblings) {
-              if (yield* conforms(s, v)) {
-                inSibling = true;
-                break;
-              }
-            }
-          }
-          if (!inSibling) count++;
-        }
+        const { shape, disjoint, siblings } = c;
+        // A value node counts when it conforms to the qualified shape and, with
+        // `sh:qualifiedValueShapesDisjoint`, to none of the sibling shapes.
+        const counted = yield* Effect.filter(valueNodes, (v) =>
+          Effect.flatMap(conforms(shape, v), (ok) =>
+            !ok || !disjoint
+              ? Effect.succeed(ok)
+              : Effect.map(
+                  Effect.findFirst(siblings, (s) => conforms(s, v)),
+                  Option.isNone,
+                ),
+          ),
+        );
+        const count = counted.length;
         const failed = c._tag === 'QualifiedMinCount' ? count < c.count : count > c.count;
         return failed ? [result(undefined)] : [];
       }
@@ -748,36 +755,40 @@ const makeEngine = (
     const add = (t: Term.GroundTerm) => {
       if (!out.has(t.key)) out.set(t.key, t);
     };
-    for (const target of shape.targets) {
-      switch (target._tag) {
-        case 'TargetNode':
-          add(target.node);
-          break;
-        case 'TargetClass':
-          instancesOf(target.class).forEach(add);
-          break;
-        case 'TargetSubjectsOf':
-          for (const q of Dataset.match(data, { predicate: target.predicate })) add(q.subject);
-          break;
-        case 'TargetObjectsOf':
-          for (const q of Dataset.match(data, { predicate: target.predicate })) add(q.object);
-          break;
-        case 'SparqlTarget': {
-          if (Option.isNone(evaluator)) {
-            yield* unsupported(shape, 'sh:target');
+    yield* Effect.forEach(
+      shape.targets,
+      Effect.fnUntraced(function* (target) {
+        switch (target._tag) {
+          case 'TargetNode':
+            add(target.node);
+            break;
+          case 'TargetClass':
+            instancesOf(target.class).forEach(add);
+            break;
+          case 'TargetSubjectsOf':
+            for (const q of Dataset.match(data, { predicate: target.predicate })) add(q.subject);
+            break;
+          case 'TargetObjectsOf':
+            for (const q of Dataset.match(data, { predicate: target.predicate })) add(q.object);
+            break;
+          case 'SparqlTarget': {
+            if (Option.isNone(evaluator)) {
+              yield* unsupported(shape, 'sh:target');
+              break;
+            }
+            const nodes = yield* evaluator.value.selectTargets({
+              dataGraph: data,
+              shapesGraph: shapes,
+              shape,
+              target: target.node,
+            });
+            nodes.forEach(add);
             break;
           }
-          const nodes = yield* evaluator.value.selectTargets({
-            dataGraph: data,
-            shapesGraph: shapes,
-            shape,
-            target: target.node,
-          });
-          nodes.forEach(add);
-          break;
         }
-      }
-    }
+      }),
+      { concurrency: 1, discard: true },
+    );
     return Array.from(out.values());
   });
 
@@ -792,6 +803,19 @@ const resolveShapes = (
 // -----------------------------------------------------------------------------
 // API
 // -----------------------------------------------------------------------------
+
+/** Parses the shapes graph (if needed) and builds the engine over the data graph. */
+const prepare = Effect.fnUntraced(function* (
+  dataGraph: Dataset.Dataset,
+  shapesGraph: Dataset.Dataset | Shapes.ShapesGraph,
+  options: ValidateOptions,
+) {
+  const shapes = yield* resolveShapes(shapesGraph);
+  const data =
+    options.includeShapesGraph === true ? Dataset.union(dataGraph, shapes.dataset) : dataGraph;
+  const evaluator = yield* Effect.serviceOption(Sparql.SparqlConstraintEvaluator);
+  return { shapes, engine: makeEngine(data, shapes, options, evaluator) };
+});
 
 /**
  * Validates a data graph against a shapes graph (either an RDF dataset, which
@@ -809,19 +833,23 @@ export const validate: (
   options?: ValidateOptions,
 ) => Effect.Effect<ValidationReport.ValidationReport, ValidationError> = Effect.fnUntraced(
   function* (dataGraph, shapesGraph, options = {}) {
-    const shapes = yield* resolveShapes(shapesGraph);
-    const data =
-      options.includeShapesGraph === true ? Dataset.union(dataGraph, shapes.dataset) : dataGraph;
-    const evaluator = yield* Effect.serviceOption(Sparql.SparqlConstraintEvaluator);
-    const engine = makeEngine(data, shapes, options, evaluator);
-    const results: Array<ValidationReport.ValidationResult> = [];
-    for (const shape of shapes.shapes) {
-      if (shape.deactivated || shape.targets.length === 0) continue;
-      for (const focus of yield* engine.focusNodes(shape)) {
-        results.push(...(yield* engine.validateShape(shape, focus)));
-      }
-    }
-    return ValidationReport.make(results);
+    const { shapes, engine } = yield* prepare(dataGraph, shapesGraph, options);
+    const perShape = yield* Effect.forEach(
+      shapes.shapes,
+      (shape) =>
+        shape.deactivated || shape.targets.length === 0
+          ? Effect.succeed<ReadonlyArray<ValidationReport.ValidationResult>>([])
+          : Effect.flatMap(engine.focusNodes(shape), (foci) =>
+              Effect.map(
+                Effect.forEach(foci, (focus) => engine.validateShape(shape, focus), {
+                  concurrency: 1,
+                }),
+                (rs) => rs.flat(),
+              ),
+            ),
+      { concurrency: 1 },
+    );
+    return ValidationReport.make(perShape.flat());
   },
 );
 
@@ -840,11 +868,7 @@ export const validateNode: (
   options?: ValidateOptions,
 ) => Effect.Effect<ValidationReport.ValidationReport, ValidationError> = Effect.fnUntraced(
   function* (dataGraph, shapesGraph, shapeId, focusNode, options = {}) {
-    const shapes = yield* resolveShapes(shapesGraph);
-    const data =
-      options.includeShapesGraph === true ? Dataset.union(dataGraph, shapes.dataset) : dataGraph;
-    const evaluator = yield* Effect.serviceOption(Sparql.SparqlConstraintEvaluator);
-    const engine = makeEngine(data, shapes, options, evaluator);
+    const { shapes, engine } = yield* prepare(dataGraph, shapesGraph, options);
     const shape = Option.getOrUndefined(Shapes.get(shapes, shapeId));
     if (shape === undefined) return ValidationReport.make([]);
     return ValidationReport.make(yield* engine.validateShape(shape, focusNode));

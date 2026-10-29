@@ -164,7 +164,10 @@ const DEFAULT_DATASET: Store.DatasetSpec = { defaultGraph: 'default', namedGraph
 export const migrations = (dialect: Dialect.Dialect, tables: Dialect.Tables) => ({
   '1_create_rdf_store': Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    for (const statement of dialect.schema(tables)) yield* sql.unsafe(statement);
+    yield* Effect.forEach(dialect.schema(tables), (statement) => sql.unsafe(statement), {
+      concurrency: 1,
+      discard: true,
+    });
   }),
 });
 
@@ -252,80 +255,85 @@ export const make = (
 
     // --- term dictionary ------------------------------------------------------
 
-    const lookupRows = (rows: ReadonlyArray<Enc.TermRow>) =>
-      Effect.gen(function* () {
-        const found = new Map<string, number>();
-        const values = Array.from(new Set(rows.map((r) => r.value)));
-        for (const chunk of chunks(values, 500)) {
-          const list = chunk
-            .map((_, i) => dialect.valueKey(dialect.castText(ph(i + 1))))
-            .join(', ');
-          const result = yield* run(
-            `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE ${dialect.valueKey('value')} IN (${list})`,
-            chunk,
-          );
-          for (const r of result) {
-            found.set(
-              Enc.rowKey({
-                kind: num(r[1]),
-                value: str(r[2]),
-                datatype: str(r[3]),
-                lang: str(r[4]),
-                dir: str(r[5]),
-              }),
-              num(r[0]),
-            );
-          }
-        }
-        return found;
+    /** The dictionary key of a `id, kind, value, datatype, lang, dir` result row. */
+    const rowKeyOf = (r: ReadonlyArray<unknown>) =>
+      Enc.rowKey({
+        kind: num(r[1]),
+        value: str(r[2]),
+        datatype: str(r[3]),
+        lang: str(r[4]),
+        dir: str(r[5]),
       });
+
+    const lookupRows = (rows: ReadonlyArray<Enc.TermRow>) => {
+      const found = new Map<string, number>();
+      const values = Array.from(new Set(rows.map((r) => r.value)));
+      return Effect.as(
+        Effect.forEach(
+          chunks(values, 500),
+          (chunk) => {
+            const list = chunk
+              .map((_, i) => dialect.valueKey(dialect.castText(ph(i + 1))))
+              .join(', ');
+            return Effect.map(
+              run(
+                `SELECT id, kind, value, datatype, lang, dir FROM ${T} WHERE ${dialect.valueKey('value')} IN (${list})`,
+                chunk,
+              ),
+              (result) => {
+                for (const r of result) {
+                  found.set(rowKeyOf(r), num(r[0]));
+                }
+              },
+            );
+          },
+          { concurrency: 1, discard: true },
+        ),
+        found,
+      );
+    };
 
     /** Inserts dictionary rows; returns the ids of the rows that were new. */
     const insertRows = (rows: ReadonlyArray<Enc.TermRow>) =>
       Effect.gen(function* () {
         const inserted = new Map<string, number>();
-        for (const chunk of chunks(rows, 500)) {
-          const params: Array<unknown> = [];
-          const tuples = chunk.map((r) => {
-            const base = params.length;
-            params.push(
-              r.kind,
-              r.value,
-              r.datatype,
-              r.lang,
-              r.dir,
-              r.sub,
-              r.pre,
-              r.obj,
-              r.cls,
-              r.num,
+        yield* Effect.forEach(
+          chunks(rows, 500),
+          Effect.fnUntraced(function* (chunk) {
+            const params: Array<unknown> = [];
+            const tuples = chunk.map((r) => {
+              const base = params.length;
+              params.push(
+                r.kind,
+                r.value,
+                r.datatype,
+                r.lang,
+                r.dir,
+                r.sub,
+                r.pre,
+                r.obj,
+                r.cls,
+                r.num,
+              );
+              return `(${Array.from({ length: 10 }, (_, i) => {
+                const p = ph(base + i + 1);
+                return i >= 1 && i <= 4
+                  ? dialect.castText(p)
+                  : i === 9
+                    ? dialect.castDouble(p)
+                    : dialect.castId(p);
+              }).join(', ')})`;
+            });
+            const result = yield* run(
+              `INSERT INTO ${T} (kind, value, datatype, lang, dir, sub, pre, obj, cls, num) VALUES ${tuples.join(', ')} ON CONFLICT DO NOTHING RETURNING id, kind, value, datatype, lang, dir`,
+              params,
             );
-            return `(${Array.from({ length: 10 }, (_, i) => {
-              const p = ph(base + i + 1);
-              return i >= 1 && i <= 4
-                ? dialect.castText(p)
-                : i === 9
-                  ? dialect.castDouble(p)
-                  : dialect.castId(p);
-            }).join(', ')})`;
-          });
-          const result = yield* run(
-            `INSERT INTO ${T} (kind, value, datatype, lang, dir, sub, pre, obj, cls, num) VALUES ${tuples.join(', ')} ON CONFLICT DO NOTHING RETURNING id, kind, value, datatype, lang, dir`,
-            params,
-          );
-          for (const r of result) {
-            inserted.set(
-              Enc.rowKey({
-                kind: num(r[1]),
-                value: str(r[2]),
-                datatype: str(r[3]),
-                lang: str(r[4]),
-                dir: str(r[5]),
-              }),
-              num(r[0]),
-            );
-          }
-        }
+            for (const r of result) {
+              inserted.set(rowKeyOf(r), num(r[0]));
+            }
+          }),
+          { concurrency: 1, discard: true },
+        );
         const classes = Array.from(new Set(rows.map((r) => r.cls)));
         if (classes.length > 0) {
           yield* exec(
@@ -333,6 +341,43 @@ export const make = (
           );
         }
         return inserted;
+      });
+
+    /**
+     * The dictionary rows of one depth level of terms; a triple term whose
+     * components have no id yet is left out.
+     */
+    const encodeLevel = (
+      level: ReadonlyMap<string, Term.GroundTerm>,
+      ids: ReadonlyMap<string, number>,
+    ) => {
+      const rows: Array<{ readonly term: Term.GroundTerm; readonly row: Enc.TermRow }> = [];
+      for (const t of level.values()) {
+        if (t._tag === 'Triple') {
+          const s = ids.get(t.subject.key);
+          const p = ids.get(t.predicate.key);
+          const o = ids.get(t.object.key);
+          if (s === undefined || p === undefined || o === undefined) continue;
+          rows.push({ term: t, row: Enc.encode(t, [s, p, o]) });
+        } else rows.push({ term: t, row: Enc.encode(t) });
+      }
+      return rows;
+    };
+
+    /**
+     * The ids of dictionary rows by key. With `create`, rows are inserted first
+     * (new rows come back with their ids) and the rest looked up.
+     */
+    const findIds = (rows: ReadonlyArray<Enc.TermRow>, create: boolean) =>
+      Effect.gen(function* () {
+        if (!create) return yield* lookupRows(rows);
+        const found = yield* insertRows(rows);
+        const existing = rows.filter((r) => !found.has(Enc.rowKey(r)));
+        if (existing.length > 0) {
+          const more = yield* lookupRows(existing);
+          for (const [k, id] of more) found.set(k, id);
+        }
+        return found;
       });
 
     /**
@@ -362,37 +407,27 @@ export const make = (
           }
         };
         for (const t of terms) add(t);
-        for (const level of levels) {
-          const rows: Array<{ readonly term: Term.GroundTerm; readonly row: Enc.TermRow }> = [];
-          for (const t of level.values()) {
-            if (t._tag === 'Triple') {
-              const s = result.get(t.subject.key);
-              const p = result.get(t.predicate.key);
-              const o = result.get(t.object.key);
-              if (s === undefined || p === undefined || o === undefined) continue;
-              rows.push({ term: t, row: Enc.encode(t, [s, p, o]) });
-            } else rows.push({ term: t, row: Enc.encode(t) });
-          }
-          if (rows.length === 0) continue;
-          let found: Map<string, number>;
-          if (create) {
-            // Insert first (new terms are returned), then look up the rest.
-            found = yield* insertRows(rows.map((r) => r.row));
-            const existing = rows.filter((r) => !found.has(Enc.rowKey(r.row)));
-            if (existing.length > 0) {
-              for (const [k, id] of yield* lookupRows(existing.map((r) => r.row))) found.set(k, id);
+        yield* Effect.forEach(
+          levels,
+          Effect.fnUntraced(function* (level) {
+            const rows = encodeLevel(level, result);
+            if (rows.length === 0) return;
+            const found = yield* findIds(
+              rows.map((r) => r.row),
+              create,
+            );
+            for (const { term, row } of rows) {
+              const id = found.get(Enc.rowKey(row));
+              if (id === undefined) continue;
+              result.set(term.key, id);
+              if (cacheable) {
+                if (idCache.size >= CACHE_LIMIT) idCache.clear();
+                idCache.set(term.key, id);
+              }
             }
-          } else found = yield* lookupRows(rows.map((r) => r.row));
-          for (const { term, row } of rows) {
-            const id = found.get(Enc.rowKey(row));
-            if (id === undefined) continue;
-            result.set(term.key, id);
-            if (cacheable) {
-              if (idCache.size >= CACHE_LIMIT) idCache.clear();
-              idCache.set(term.key, id);
-            }
-          }
-        }
+          }),
+          { concurrency: 1, discard: true },
+        );
         return result;
       });
 
@@ -435,31 +470,37 @@ export const make = (
         },
       );
 
-    /** Fetches the components of the triple terms of a decode state. */
-    const complete = (state: DecodeState) =>
-      Effect.gen(function* () {
-        for (;;) {
-          const missing = new Set<number>();
-          for (const comps of state.triples.values()) {
-            for (const c of comps) if (!state.known.has(c) && !state.triples.has(c)) missing.add(c);
-          }
-          for (const c of missing) {
-            const cached = termCache.get(c);
-            if (cached !== undefined) {
-              state.known.set(c, cached);
-              missing.delete(c);
-            }
-          }
-          if (missing.size === 0) return;
-          for (const chunk of chunks(Array.from(missing), 500)) {
-            yield* fetchTerms(state, chunk);
-            for (const c of chunk) {
-              if (!state.known.has(c) && !state.triples.has(c)) {
-                return yield* new Store.StoreError({ message: `Unknown term id ${c}` });
-              }
-            }
+    const isResolved = (state: DecodeState, c: number) =>
+      state.known.has(c) || state.triples.has(c);
+
+    /** Fetches the components of the triple terms of a decode state, until none is missing. */
+    const complete = (
+      state: DecodeState,
+    ): Effect.Effect<void, Store.StoreError | SqlError.SqlError> =>
+      Effect.suspend(() => {
+        const missing = new Set<number>();
+        for (const comps of state.triples.values()) {
+          for (const c of comps) if (!isResolved(state, c)) missing.add(c);
+        }
+        for (const c of missing) {
+          const cached = termCache.get(c);
+          if (cached !== undefined) {
+            state.known.set(c, cached);
+            missing.delete(c);
           }
         }
+        if (missing.size === 0) return Effect.void;
+        return Effect.forEach(
+          chunks(Array.from(missing), 500),
+          (chunk) =>
+            Effect.flatMap(fetchTerms(state, chunk), () => {
+              const unknown = chunk.find((c) => !isResolved(state, c));
+              return unknown === undefined
+                ? Effect.void
+                : Effect.fail(new Store.StoreError({ message: `Unknown term id ${unknown}` }));
+            }),
+          { concurrency: 1, discard: true },
+        ).pipe(Effect.flatMap(() => complete(state)));
       });
 
     const remember = (state: DecodeState) =>
@@ -625,21 +666,37 @@ export const make = (
       return { text, params };
     };
 
+    /** Runs one statement per `batchSize` quad-id rows, `statement` building it from the tuples. */
+    const execBatches = (
+      rows: ReadonlyArray<readonly [number, number, number, number]>,
+      statement: (tuplesText: string) => string,
+    ) =>
+      Effect.forEach(
+        chunks(rows, batchSize),
+        (chunk) => {
+          const { text, params } = tuples(chunk);
+          return exec(statement(text), params);
+        },
+        { concurrency: 1, discard: true },
+      );
+
     const insert = (quads: Iterable<Term.Quad>) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
             const list = Array.from(quads);
-            for (const batch of chunks(list, batchSize * 4)) {
-              const rows = yield* quadIds(batch, true);
-              for (const chunk of chunks(rows, batchSize)) {
-                const { text, params } = tuples(chunk);
-                yield* exec(
-                  `INSERT INTO ${Qt} (s, p, o, g) VALUES ${text} ON CONFLICT DO NOTHING`,
-                  params,
-                );
-              }
-            }
+            yield* Effect.forEach(
+              chunks(list, batchSize * 4),
+              (batch) =>
+                Effect.flatMap(quadIds(batch, true), (rows) =>
+                  execBatches(
+                    rows,
+                    (text) =>
+                      `INSERT INTO ${Qt} (s, p, o, g) VALUES ${text} ON CONFLICT DO NOTHING`,
+                  ),
+                ),
+              { concurrency: 1, discard: true },
+            );
           }),
         )
         .pipe(Effect.mapError(storeError('insert failed')));
@@ -649,10 +706,10 @@ export const make = (
         .withTransaction(
           Effect.gen(function* () {
             const rows = yield* quadIds(quads, false);
-            for (const chunk of chunks(rows, batchSize)) {
-              const { text, params } = tuples(chunk);
-              yield* exec(`DELETE FROM ${Qt} WHERE (s, p, o, g) IN (VALUES ${text})`, params);
-            }
+            yield* execBatches(
+              rows,
+              (text) => `DELETE FROM ${Qt} WHERE (s, p, o, g) IN (VALUES ${text})`,
+            );
           }),
         )
         .pipe(Effect.mapError(storeError('delete failed')));
@@ -660,7 +717,10 @@ export const make = (
     const decodeIds = (ids: ReadonlyArray<number>) =>
       Effect.gen(function* () {
         const state = newState();
-        for (const chunk of chunks(ids, 500)) yield* fetchTerms(state, chunk);
+        yield* Effect.forEach(chunks(ids, 500), (chunk) => fetchTerms(state, chunk), {
+          concurrency: 1,
+          discard: true,
+        });
         yield* complete(state);
         yield* remember(state);
         return ids.map((id) => termOf(state, id));

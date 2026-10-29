@@ -43,22 +43,26 @@ const endpoints = (servers: Readonly<Record<string, Dataset.Dataset>>) =>
   Effect.gen(function* () {
     const apps: Record<string, Parameters<typeof Testing.fromApps>[0][string]> = {};
     const client = Testing.fromApps(apps);
-    for (const [endpoint, data] of Object.entries(servers)) {
-      const url = new URL(endpoint);
-      const context = yield* Layer.build(
-        Layer.mergeAll(
-          Federation.layerEngine().pipe(
-            Layer.provideMerge(Store.layerMemory(data)),
-            Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+    yield* Effect.forEach(
+      Object.entries(servers),
+      Effect.fnUntraced(function* ([endpoint, data]) {
+        const url = new URL(endpoint);
+        const context = yield* Layer.build(
+          Layer.mergeAll(
+            Federation.layerEngine().pipe(
+              Layer.provideMerge(Store.layerMemory(data)),
+              Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+            ),
+            Formats.layer,
           ),
-          Formats.layer,
-        ),
-      );
-      apps[url.origin] = Testing.provideServices(
-        SparqlServer.handler({ path: url.pathname as `/${string}` }),
-        context,
-      );
-    }
+        );
+        apps[url.origin] = Testing.provideServices(
+          SparqlServer.handler({ path: url.pathname as `/${string}` }),
+          context,
+        );
+      }),
+      { concurrency: 1, discard: true },
+    );
     return client;
   });
 
@@ -228,7 +232,7 @@ const loadTests = (): Array<ServiceTest> => {
 const serviceTests = loadTests();
 
 describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', () => {
-  for (const t of serviceTests) {
+  serviceTests.forEach((t) => {
     it.effect(t.name, () =>
       Effect.gen(function* () {
         const engine = yield* Engine.SparqlEngine;
@@ -277,5 +281,5 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
         ),
       ),
     );
-  }
+  });
 });

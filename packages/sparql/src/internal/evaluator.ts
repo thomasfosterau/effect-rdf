@@ -248,16 +248,24 @@ const closure = (
     const expanded = new Set<string>();
     while (frontier.length > 0) {
       const next: Array<Term.GroundTerm> = [];
-      for (const n of frontier) {
-        if (expanded.has(n.key)) continue;
+      const unexpanded = frontier.filter((n) => {
+        if (expanded.has(n.key)) return false;
         expanded.add(n.key);
-        for (const m of yield* pathFrom(env, path, n, forward)) {
-          if (!visited.has(m.key)) {
-            visited.set(m.key, m);
-            next.push(m);
-          }
-        }
-      }
+        return true;
+      });
+      yield* Effect.forEach(
+        unexpanded,
+        (n) =>
+          Effect.map(pathFrom(env, path, n, forward), (reached) => {
+            for (const m of reached) {
+              if (!visited.has(m.key)) {
+                visited.set(m.key, m);
+                next.push(m);
+              }
+            }
+          }),
+        { concurrency: 1, discard: true },
+      );
       frontier = next;
     }
     return Array.from(visited.values());
@@ -361,25 +369,30 @@ const evalPath = (op: Algebra.Path, env: Env, initial: Bindings): S =>
       // zero-length case must not produce terms that are not in the graph),
       // so an endpoint bound by an outer solution must be a graph node.
       if (nullable(op.path)) {
-        for (const [term, value] of [
+        const endpoints = [
           [op.subject, s],
           [op.object, o],
-        ] as const) {
-          if (value !== undefined && term._tag !== 'NamedNode' && term._tag !== 'Literal') {
-            if (!(yield* isGraphNode(env, value))) return out;
-          }
-        }
+        ] as const;
+        const outsideGraph = yield* Effect.findFirst(endpoints, ([term, value]) =>
+          value !== undefined && term._tag !== 'NamedNode' && term._tag !== 'Literal'
+            ? Effect.map(isGraphNode(env, value), (isNode) => !isNode)
+            : Effect.succeed(false),
+        );
+        if (Option.isSome(outsideGraph)) return out;
       }
       const emit = (x: Term.GroundTerm, y: Term.GroundTerm) => {
         const map = new Map(initial.map);
         if (unify(op.subject, x, map) && unify(op.object, y, map)) out.push(new B.Bindings(map));
       };
       if (s !== undefined) {
-        for (const y of yield* pathFrom(env, op.path, s, true)) emit(s, y);
+        const ys = yield* pathFrom(env, op.path, s, true);
+        for (const y of ys) emit(s, y);
       } else if (o !== undefined) {
-        for (const x of yield* pathFrom(env, op.path, o, false)) emit(x, o);
+        const xs = yield* pathFrom(env, op.path, o, false);
+        for (const x of xs) emit(x, o);
       } else {
-        for (const [x, y] of yield* pathAll(env, op.path)) emit(x, y);
+        const pairs = yield* pathAll(env, op.path);
+        for (const [x, y] of pairs) emit(x, y);
       }
       return out;
     }),
