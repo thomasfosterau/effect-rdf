@@ -297,7 +297,7 @@ describe('Results formats', () => {
     ],
   };
 
-  for (const codec of [Results.Json, Results.Xml, Results.Tsv]) {
+  [Results.Json, Results.Xml, Results.Tsv].forEach((codec) => {
     it.effect(`round-trips ${codec.format.name}`, () =>
       Effect.gen(function* () {
         const text = codec.serializeString(set);
@@ -310,7 +310,7 @@ describe('Results formats', () => {
         expect(bool).toEqual({ _tag: 'Boolean', value: true });
       }),
     );
-  }
+  });
 
   it.effect('writes and reads CSV', () =>
     Effect.gen(function* () {

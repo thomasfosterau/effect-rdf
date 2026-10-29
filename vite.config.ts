@@ -100,15 +100,14 @@ export default defineConfig({
       // the issue lists them. A new site is a defect, not headroom. Once a
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
-      'effect/imperative-loops': 'warn', // 899
-      'effect/avoid-direct-tag-checks': 'warn', // 721
-      'effect/avoid-non-null-assertion': 'warn', // 640
+      'effect/imperative-loops': 'warn', // 836
+      'effect/avoid-direct-tag-checks': 'warn', // 719
+      'effect/avoid-non-null-assertion': 'warn', // 639
       'effect/avoid-native-object-helpers': 'warn', // 544
       'effect/require-safety-comment-for-type-assertion': 'warn', // 296
       'effect/no-length-comparison': 'warn', // 261
       'effect/prefer-arr-match': 'warn', // 261
       'effect/prefer-match-over-switch': 'warn', // 178
-      'effect/yield-in-for-loop': 'warn', // 113
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`

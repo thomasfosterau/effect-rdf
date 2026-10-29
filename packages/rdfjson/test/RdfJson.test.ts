@@ -173,7 +173,7 @@ describe('RdfJson.parse', () => {
     ],
   ];
 
-  for (const [name, json, message] of invalid) {
+  invalid.forEach(([name, json, message]) => {
     it.effect(`rejects ${name}`, () =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(RdfJson.parse(toJson(json)));
@@ -181,7 +181,7 @@ describe('RdfJson.parse', () => {
         expect(error.message).toMatch(message);
       }),
     );
-  }
+  });
 
   it.effect('rejects the extensions in strict mode', () =>
     Effect.gen(function* () {
@@ -272,11 +272,15 @@ describe('RdfJson.serialize', () => {
 
   it.effect('requires the extensions for RDF 1.2 data', () =>
     Effect.gen(function* () {
-      for (const q of extended) {
-        const error = yield* Effect.flip(RdfJson.serialize([q]));
-        expect(error).toBeInstanceOf(Serialization.RdfSerializeError);
-        expect(error.message).toContain('extensions');
-      }
+      yield* Effect.forEach(
+        extended,
+        Effect.fnUntraced(function* (q) {
+          const error = yield* Effect.flip(RdfJson.serialize([q]));
+          expect(error).toBeInstanceOf(Serialization.RdfSerializeError);
+          expect(error.message).toContain('extensions');
+        }),
+        { concurrency: 1, discard: true },
+      );
       const json = yield* RdfJson.serialize(extended, { extensions: true });
       expect(documentFromJson(json)['http://example.org/s']?.['http://example.org/p']).toEqual([
         { type: 'literal', value: 'مرحبا', lang: 'ar', direction: 'rtl' },

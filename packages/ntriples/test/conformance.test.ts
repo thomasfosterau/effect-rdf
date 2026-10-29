@@ -96,12 +96,16 @@ const positive = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
     const input = fs.readFileSync(entry.action, 'utf8');
     const quads = yield* codec.parseQuads(input, { blankNodePrefix: '' });
     // Streaming with arbitrary chunk boundaries yields the same statements.
-    for (const size of [1, 3, 17]) {
-      const streamed = yield* Stream.runCollect(
-        codec.parseStream(chunked(input, size), { blankNodePrefix: '' }),
-      );
-      expect(streamed.map((q) => q.key)).toEqual(quads.map((q) => q.key));
-    }
+    yield* Effect.forEach(
+      [1, 3, 17],
+      Effect.fnUntraced(function* (size) {
+        const streamed = yield* Stream.runCollect(
+          codec.parseStream(chunked(input, size), { blankNodePrefix: '' }),
+        );
+        expect(streamed.map((q) => q.key)).toEqual(quads.map((q) => q.key));
+      }),
+      { concurrency: 1, discard: true },
+    );
     // The canonical serialisation round-trips.
     const text = yield* codec.serialize(quads);
     const reparsed = yield* codec.parse(text);

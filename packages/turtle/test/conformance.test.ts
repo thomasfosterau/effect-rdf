@@ -63,13 +63,13 @@ const suitesUnderTest = [
 ] as const;
 
 describe.skipIf(!exists)('Turtle / TriG conformance', () => {
-  for (const suite of suitesUnderTest) {
+  suitesUnderTest.forEach((suite) => {
     const entries = loadEntries(suite.manifest);
     describe(`suite ${suite.manifest}`, () => {
       it('has entries', () => {
         expect(entries.length).toBeGreaterThan(200);
       });
-      for (const entry of entries) {
+      entries.forEach((entry) => {
         it.effect(`${entry.name} (${entry.kind})`, () =>
           Effect.gen(function* () {
             const action = yield* Effect.fromOption(entry.action);
@@ -79,12 +79,16 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
               return yield* expectRejected(suite, input, options);
             }
             const { quads, prefixes } = yield* suite.syntax.parseQuads(input, options);
-            for (const size of [1, 5, 64]) {
-              const streamed = yield* Stream.runCollect(
-                suite.syntax.parseStream(chunked(input, size), options),
-              );
-              expect(streamed.map((q: Term.Quad) => q.key)).toEqual(quads.map((q) => q.key));
-            }
+            yield* Effect.forEach(
+              [1, 5, 64],
+              Effect.fnUntraced(function* (size) {
+                const streamed = yield* Stream.runCollect(
+                  suite.syntax.parseStream(chunked(input, size), options),
+                );
+                expect(streamed.map((q: Term.Quad) => q.key)).toEqual(quads.map((q) => q.key));
+              }),
+              { concurrency: 1, discard: true },
+            );
             const dataset = Dataset.fromIterable(quads);
             // The serializers round-trip: pretty (with prefixes and base, or with
             // auto-detected prefixes) and streaming output parse back to the same graph.
@@ -98,19 +102,23 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
                 suite.syntax.serializeStream(Stream.fromIterable(quads), { prefixes }),
               ),
             ];
-            for (const text of variants) {
-              const reparsed = yield* suite.syntax.parse(text, { baseIri: action });
-              expect(
-                Isomorphism.isomorphic(reparsed.dataset, dataset),
-                `serialised:\n${text}\nexpected:\n${Dataset.toNQuads(dataset)}\nactual:\n${Dataset.toNQuads(reparsed.dataset)}`,
-              ).toBe(true);
-            }
+            yield* Effect.forEach(
+              variants,
+              Effect.fnUntraced(function* (text) {
+                const reparsed = yield* suite.syntax.parse(text, { baseIri: action });
+                expect(
+                  Isomorphism.isomorphic(reparsed.dataset, dataset),
+                  `serialised:\n${text}\nexpected:\n${Dataset.toNQuads(dataset)}\nactual:\n${Dataset.toNQuads(reparsed.dataset)}`,
+                ).toBe(true);
+              }),
+              { concurrency: 1, discard: true },
+            );
             if (entry.kind.endsWith('Eval')) {
               yield* expectEvaluatesTo(suite, dataset, yield* Effect.fromOption(entry.result));
             }
           }),
         );
-      }
+      });
     });
-  }
+  });
 });

@@ -145,10 +145,14 @@ describe('Shapes', () => {
         `ex:S sh:targetNode ex:a ; sh:nodeKind ex:Whatever .`,
         `ex:S sh:targetNode ex:a ; sh:node "literal" .`,
       ];
-      for (const src of bad) {
-        const error = yield* Effect.flip(Shapes.parse(ttl(src)));
-        expect(error._tag).toBe('ShapesGraphError');
-      }
+      yield* Effect.forEach(
+        bad,
+        Effect.fnUntraced(function* (src) {
+          const error = yield* Effect.flip(Shapes.parse(ttl(src)));
+          expect(error._tag).toBe('ShapesGraphError');
+        }),
+        { concurrency: 1, discard: true },
+      );
     }),
   );
 

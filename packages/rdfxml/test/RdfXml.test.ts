@@ -375,10 +375,14 @@ describe('RdfXml.serialize', () => {
         [Term.quad(Term.triple(ex('a'), ex('b'), ex('c')), ex('p'), ex('b'))],
         [Term.quad(ex('a'), ex('p'), Term.literal('bad \u0001 char'))],
       ];
-      for (const quads of cases) {
-        const error = yield* Effect.flip(RdfXml.serialize(quads));
-        expect(error).toBeInstanceOf(Serialization.RdfSerializeError);
-      }
+      yield* Effect.forEach(
+        cases,
+        Effect.fnUntraced(function* (quads) {
+          const error = yield* Effect.flip(RdfXml.serialize(quads));
+          expect(error).toBeInstanceOf(Serialization.RdfSerializeError);
+        }),
+        { concurrency: 1, discard: true },
+      );
     }),
   );
 

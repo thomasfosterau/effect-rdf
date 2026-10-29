@@ -111,7 +111,7 @@ describe('SQL execution', () => {
     ['ASK', 'ASK { ?p ex:age ?a FILTER(?a = 25) }', ['num']],
   ];
 
-  for (const [name, query, patterns] of cases) {
+  cases.forEach(([name, query, patterns]) => {
     it.effect(`runs ${name} as one SQL statement`, () =>
       Effect.gen(function* () {
         const { events } = yield* run(query);
@@ -122,7 +122,7 @@ describe('SQL execution', () => {
         expect(events.length).toBe(1);
       }),
     );
-  }
+  });
 
   it.effect('computes the right answers in SQL', () =>
     Effect.gen(function* () {
