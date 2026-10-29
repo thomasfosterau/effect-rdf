@@ -33,6 +33,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -141,12 +142,12 @@ const unsupported = (reason: string): never => {
 // -----------------------------------------------------------------------------
 
 const collectTerm = (t: Ast.TermPattern | Term.Term, out: Map<string, Term.GroundTerm>): void => {
-  switch (t._tag) {
-    case 'NamedNode':
-    case 'Literal':
+  return Match.value(t).pipe(
+    Match.tag('NamedNode', 'Literal', (t) => {
       out.set(t.key, t);
       return;
-    case 'Triple':
+    }),
+    Match.tag('Triple', (t) => {
       if (Term.isGround(t)) {
         // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
         out.set(t.key, t as Term.Triple);
@@ -156,72 +157,68 @@ const collectTerm = (t: Ast.TermPattern | Term.Term, out: Map<string, Term.Groun
         collectTerm(t.object, out);
       }
       return;
-    default:
-      return;
-  }
+    }),
+    Match.orElse(() => undefined),
+  );
 };
 
 const collectExpression = (e: Algebra.Expression, out: Map<string, Term.GroundTerm>): void => {
-  switch (e._tag) {
-    case 'Operation':
-    case 'FunctionCall':
-      e.args.forEach((a) => collectExpression(a, out));
-      return;
-    case 'Exists':
-      collectOperation(e.input, out);
-      return;
-    default:
-      collectTerm(e, out);
-  }
+  Match.value(e).pipe(
+    Match.tag('Operation', 'FunctionCall', (call) =>
+      call.args.forEach((a) => collectExpression(a, out)),
+    ),
+    Match.tag('Exists', (x) => collectOperation(x.input, out)),
+    Match.orElse((t) => collectTerm(t, out)),
+  );
 };
 
 const collectOperation = (op: Algebra.Operation, out: Map<string, Term.GroundTerm>): void => {
-  switch (op._tag) {
-    case 'Bgp':
+  return Match.value(op).pipe(
+    Match.tag('Bgp', (op) => {
       for (const p of op.patterns) {
         collectTerm(p.subject, out);
         collectTerm(p.predicate, out);
         collectTerm(p.object, out);
       }
       return;
-    case 'Path':
-      return;
-    case 'Join':
-    case 'Union':
-    case 'Minus':
+    }),
+    Match.tag('Path', () => undefined),
+    Match.tag('Join', 'Union', 'Minus', (op) => {
       collectOperation(op.left, out);
       collectOperation(op.right, out);
       return;
-    case 'LeftJoin':
+    }),
+    Match.tag('LeftJoin', (op) => {
       collectOperation(op.left, out);
       collectOperation(op.right, out);
       if (op.expression !== undefined) collectExpression(op.expression, out);
       return;
-    case 'Filter':
+    }),
+    Match.tag('Filter', (op) => {
       collectExpression(op.expression, out);
       collectOperation(op.input, out);
       return;
-    case 'Extend':
+    }),
+    Match.tag('Extend', (op) => {
       collectExpression(op.expression, out);
       collectOperation(op.input, out);
       return;
-    case 'Graph':
+    }),
+    Match.tag('Graph', (op) => {
       collectTerm(op.name, out);
       collectOperation(op.input, out);
       return;
-    case 'Values':
+    }),
+    Match.tag('Values', (op) => {
       for (const b of op.bindings) for (const [, t] of b) collectTerm(t, out);
       return;
-    case 'Group':
-    case 'OrderBy':
-    case 'Project':
-    case 'Distinct':
-    case 'Reduced':
-    case 'Slice':
-    case 'Service':
+    }),
+    Match.tag('Group', 'OrderBy', 'Project', 'Distinct', 'Reduced', 'Slice', 'Service', (op) => {
       collectOperation(op.input, out);
       return;
-  }
+    }),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -580,64 +577,56 @@ class Compiler {
   // --- operators --------------------------------------------------------------
 
   op(op: Algebra.Operation, g: GraphCtx, unit: Block): Block {
-    switch (op._tag) {
-      case 'Bgp':
-        return Arr.isReadonlyArrayEmpty(op.patterns) ? unit : this.bgp(op.patterns, g);
-      case 'Join':
-        return this.join(this.op(op.left, g, unit), this.op(op.right, g, unit));
-      case 'LeftJoin':
-        return this.leftJoin(op, g, unit);
-      case 'Filter': {
+    return Match.value(op).pipe(
+      Match.tag('Bgp', (op) =>
+        Arr.isReadonlyArrayEmpty(op.patterns) ? unit : this.bgp(op.patterns, g),
+      ),
+      Match.tag('Join', (op) => this.join(this.op(op.left, g, unit), this.op(op.right, g, unit))),
+      Match.tag('LeftJoin', (op) => this.leftJoin(op, g, unit)),
+      Match.tag('Filter', (op) => {
         const input = this.op(op.input, g, unit);
         const cond = this.ebv(this.operand(op.expression, { cols: input.cols, graph: g }));
         if (cond === 'TRUE') return input;
         return { ...input, where: [...input.where, cond] };
-      }
-      case 'Union':
-        return this.union(this.op(op.left, g, unit), this.op(op.right, g, unit));
-      case 'Graph':
-        return this.graph(op, g, unit);
-      case 'Extend': {
+      }),
+      Match.tag('Union', (op) => this.union(this.op(op.left, g, unit), this.op(op.right, g, unit))),
+      Match.tag('Graph', (op) => this.graph(op, g, unit)),
+      Match.tag('Extend', (op) => {
         const input = this.op(op.input, g, unit);
         if (input.cols.has(op.variable.value)) return unsupported('BIND to a bound variable');
         const col = this.termValued(this.operand(op.expression, { cols: input.cols, graph: g }));
         const cols = new Map(input.cols);
         cols.set(op.variable.value, col);
         return { ...input, cols };
-      }
-      case 'Minus':
-        return this.minus(this.op(op.left, g, unit), this.op(op.right, g, unit));
-      case 'Group':
-        return this.group(op, g, unit);
-      case 'Project': {
+      }),
+      Match.tag('Minus', (op) => this.minus(this.op(op.left, g, unit), this.op(op.right, g, unit))),
+      Match.tag('Group', (op) => this.group(op, g, unit)),
+      Match.tag('Project', (op) => {
         const input = this.op(op.input, g, unit);
         const keep = new Set(op.variables.map((v) => v.value));
         const cols = new Map<string, Col>();
         for (const [n, c] of input.cols) if (keep.has(n) || isHidden(n)) cols.set(n, c);
         return { ...input, cols };
-      }
-      case 'Distinct':
-        return this.wrap(this.op(op.input, g, unit), { distinct: true });
-      case 'Reduced':
-        return this.op(op.input, g, unit);
-      case 'Slice': {
+      }),
+      Match.tag('Distinct', (op) => this.wrap(this.op(op.input, g, unit), { distinct: true })),
+      Match.tag('Reduced', (op) => this.op(op.input, g, unit)),
+      Match.tag('Slice', (op) => {
         if (g.kind === 'var') return unsupported('Slice inside GRAPH ?var');
         const input = this.op(op.input, g, unit);
         return this.wrapSql(
           `${this.render(input)}${this.dialect.limitOffset(op.limit, op.offset)}`,
           input.cols,
         );
-      }
-      case 'Values':
+      }),
+      Match.tag('Values', (op) => {
         // Like the engine, inline data does not see the context solution.
         return this.values(op);
-      case 'OrderBy':
-        return unsupported('ORDER BY is evaluated by the engine');
-      case 'Path':
-        return unsupported('Property paths are evaluated by the engine');
-      case 'Service':
-        return unsupported('SERVICE is evaluated by the engine');
-    }
+      }),
+      Match.tag('OrderBy', () => unsupported('ORDER BY is evaluated by the engine')),
+      Match.tag('Path', () => unsupported('Property paths are evaluated by the engine')),
+      Match.tag('Service', () => unsupported('SERVICE is evaluated by the engine')),
+      Match.exhaustive,
+    );
   }
 
   // --- BGP --------------------------------------------------------------------
@@ -652,17 +641,17 @@ class Compiler {
       else where.push(`${c.sql} = ${sql}`);
     };
     const position = (t: Ast.TermPattern, sql: string, constants: Array<string>): void => {
-      switch (t._tag) {
-        case 'Variable':
+      return Match.value(t).pipe(
+        Match.tag('Variable', (t) => {
           bind(t.value, sql);
           return;
-        case 'BlankNode':
-          return unsupported('Blank node in a pattern');
-        case 'NamedNode':
-        case 'Literal':
+        }),
+        Match.tag('BlankNode', () => unsupported('Blank node in a pattern')),
+        Match.tag('NamedNode', 'Literal', (t) => {
           constants.push(`${sql} = ${this.idOf(t)}`);
           return;
-        case 'Triple': {
+        }),
+        Match.tag('Triple', (t) => {
           if (Term.isGround(t)) {
             // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
             constants.push(`${sql} = ${this.idOf(t as Term.Triple)}`);
@@ -675,8 +664,9 @@ class Compiler {
           position(t.predicate, `${ta}.pre`, where);
           position(t.object, `${ta}.obj`, where);
           return;
-        }
-      }
+        }),
+        Match.exhaustive,
+      );
     };
     const { defaultGraph } = this.context.dataset;
     for (const p of patterns) {
@@ -711,22 +701,23 @@ class Compiler {
         continue;
       }
       items.push({ source: this.Q, alias: a });
-      switch (g.kind) {
-        case 'default':
+      Match.value(g).pipe(
+        Match.when({ kind: 'default' }, () => {
           if (defaultGraph === 'default') where.push(`${a}.g = 0`);
           else if (Array.isArray(defaultGraph) && defaultGraph.length === 1) {
             // SAFETY: `Array.isArray` holds, so the default graph is a list of graph terms.
             where.push(`${a}.g = ${this.idOf((defaultGraph as ReadonlyArray<Term.Graph>)[0]!)}`);
           } else where.push('1 = 0');
-          break;
-        case 'const':
+        }),
+        Match.when({ kind: 'const' }, (g) => {
           where.push(`${a}.g = ${g.id}`);
-          break;
-        case 'var':
+        }),
+        Match.when({ kind: 'var' }, (g) => {
           bind(g.hidden, `${a}.g`);
           where.push(this.namedGraphCond(`${a}.g`));
-          break;
-      }
+        }),
+        Match.exhaustive,
+      );
       position(p.subject, `${a}.s`, where);
       position(p.predicate, `${a}.p`, where);
       position(p.object, `${a}.o`, where);
@@ -1082,36 +1073,33 @@ class Compiler {
       id: S(this.idOf(term)),
       term,
     };
-    switch (term._tag) {
-      case 'NamedNode':
-      case 'BlankNode':
-        return {
-          ...base,
-          kind: S(term._tag === 'NamedNode' ? Enc.Kind.NamedNode : Enc.Kind.BlankNode),
-          value: S(term.value),
-          datatype: S(''),
-          lang: S(''),
-          dir: S(''),
-        };
-      case 'Literal':
-        return {
-          ...base,
-          kind: S(Enc.Kind.Literal),
-          value: S(term.value),
-          datatype: S(term.datatype.value),
-          lang: S(term.language),
-          dir: S(term.direction ?? ''),
-        };
-      case 'Triple':
-        return {
-          ...base,
-          kind: S(Enc.Kind.Triple),
-          value: S(null),
-          datatype: S(''),
-          lang: S(''),
-          dir: S(''),
-        };
-    }
+    return Match.value(term).pipe(
+      Match.tag('NamedNode', 'BlankNode', (term) => ({
+        ...base,
+        kind: S(term._tag === 'NamedNode' ? Enc.Kind.NamedNode : Enc.Kind.BlankNode),
+        value: S(term.value),
+        datatype: S(''),
+        lang: S(''),
+        dir: S(''),
+      })),
+      Match.tag('Literal', (term) => ({
+        ...base,
+        kind: S(Enc.Kind.Literal),
+        value: S(term.value),
+        datatype: S(term.datatype.value),
+        lang: S(term.language),
+        dir: S(term.direction ?? ''),
+      })),
+      Match.tag('Triple', () => ({
+        ...base,
+        kind: S(Enc.Kind.Triple),
+        value: S(null),
+        datatype: S(''),
+        lang: S(''),
+        dir: S(''),
+      })),
+      Match.exhaustive,
+    );
   }
 
   intOperand(sql: string, nullable: boolean): Operand {
@@ -1191,262 +1179,246 @@ class Compiler {
 
   /** A term-valued expression as a column (for `BIND`). */
   termValued(o: Operand): Col {
-    switch (o.tag) {
-      case 'term':
-        return {
-          sql: this.f(o.id!),
-          nullable: !isStatic(o.isNull) || o.isNull.s !== false,
-          type: 'id',
-        };
-      case 'const':
-        return { sql: String(this.idOf(o.term!)), nullable: false, type: 'id' };
-      case 'int':
-        return {
-          sql: this.f(o.num),
-          nullable: !isStatic(o.isNull) || o.isNull.s !== false,
-          type: 'int',
-        };
-      case 'bool':
-        return {
-          sql: `(CASE WHEN ${o.bool!} THEN ${this.idOf(TRUE)} WHEN NOT ${o.bool!} THEN ${this.idOf(FALSE)} END)`,
-          nullable: true,
-          type: 'id',
-        };
-      case 'null':
-        return { sql: this.dialect.nullId, nullable: true, type: 'id' };
-      default:
-        return unsupported('Expression value is not a stored term');
-    }
+    return Match.value(o).pipe(
+      Match.withReturnType<Col>(),
+      Match.when({ tag: 'term' }, (o) => ({
+        sql: this.f(o.id!),
+        nullable: !isStatic(o.isNull) || o.isNull.s !== false,
+        type: 'id',
+      })),
+      Match.when({ tag: 'const' }, (o) => ({
+        sql: String(this.idOf(o.term!)),
+        nullable: false,
+        type: 'id',
+      })),
+      Match.when({ tag: 'int' }, (o) => ({
+        sql: this.f(o.num),
+        nullable: !isStatic(o.isNull) || o.isNull.s !== false,
+        type: 'int',
+      })),
+      Match.when({ tag: 'bool' }, (o) => ({
+        sql: `(CASE WHEN ${o.bool!} THEN ${this.idOf(TRUE)} WHEN NOT ${o.bool!} THEN ${this.idOf(FALSE)} END)`,
+        nullable: true,
+        type: 'id',
+      })),
+      Match.when({ tag: 'null' }, () => ({ sql: this.dialect.nullId, nullable: true, type: 'id' })),
+      Match.orElse(() => unsupported('Expression value is not a stored term')),
+    );
   }
 
   /** Compiles an expression to an operand. */
   operand(e: Algebra.Expression, env: Env): Operand {
-    switch (e._tag) {
-      case 'Variable': {
+    return Match.value(e).pipe(
+      Match.tag('Variable', (e) => {
         const c = env.cols.get(e.value);
         if (c === undefined) return this.NULL;
         return c.type === 'int'
           ? this.intOperand(c.sql, c.nullable)
           : this.termOperand(c.sql, c.nullable);
-      }
-      case 'NamedNode':
-      case 'Literal':
-        return this.constOperand(e);
-      case 'BlankNode':
-        return unsupported('Blank node in an expression');
-      case 'Triple':
+      }),
+      Match.tag('NamedNode', 'Literal', (e) => this.constOperand(e)),
+      Match.tag('BlankNode', () => unsupported('Blank node in an expression')),
+      Match.tag('Triple', (e) => {
         if (!Term.isGround(e)) return unsupported('Triple term pattern in an expression');
         // SAFETY: `Term.isGround` holds, so the triple term has no variables.
         return this.constOperand(e as Term.Triple);
-      case 'FunctionCall':
-        return unsupported(`Function <${e.function.value}>`);
-      case 'Exists':
-        return this.boolOperand(this.exists(e, env));
-      case 'Operation':
-        return this.operation(e, env);
-    }
+      }),
+      Match.tag('FunctionCall', (e) => unsupported(`Function <${e.function.value}>`)),
+      Match.tag('Exists', (e) => this.boolOperand(this.exists(e, env))),
+      Match.tag('Operation', (e) => this.operation(e, env)),
+      Match.exhaustive,
+    );
   }
 
   operation(e: Algebra.OperationExpression, env: Env): Operand {
     const args = e.args;
     const arg = (i: number) => this.operand(args[i]!, env);
     const bool = (sql: string) => this.boolOperand(sql);
-    switch (e.operator) {
-      case '&&':
-        return bool(`(${this.ebv(arg(0))} AND ${this.ebv(arg(1))})`);
-      case '||':
-        return bool(`(${this.ebv(arg(0))} OR ${this.ebv(arg(1))})`);
-      case '!':
-        return bool(`(NOT ${this.ebv(arg(0))})`);
-      case '=':
-        return bool(this.equals(arg(0), arg(1)));
-      case '!=':
-        return bool(`(NOT ${this.equals(arg(0), arg(1))})`);
-      case '<':
-      case '>':
-      case '<=':
-      case '>=':
-        return bool(this.compare(arg(0), arg(1), e.operator));
-      case 'IN':
-      case 'NOT IN': {
-        const value = arg(0);
-        const tests = args.slice(1).map((_, i) => this.equals(value, arg(i + 1)));
-        const any = Arr.isReadonlyArrayEmpty(tests) ? 'FALSE' : `(${tests.join(' OR ')})`;
-        return bool(e.operator === 'IN' ? any : `(NOT ${any})`);
-      }
-      case 'BOUND': {
-        const v = args[0]!;
-        if (v._tag !== 'Variable') return unsupported('BOUND of a non-variable');
-        const c = env.cols.get(v.value);
-        return bool(c === undefined ? 'FALSE' : c.nullable ? `(${c.sql} IS NOT NULL)` : 'TRUE');
-      }
-      case 'SAMETERM': {
-        const a = arg(0);
-        const b = arg(1);
-        if (a.tag === 'null' || b.tag === 'null') return bool('NULL');
-        if (a.id === undefined || b.id === undefined)
-          return unsupported('sameTerm of computed values');
-        return bool(`(${this.f(a.id)} = ${this.f(b.id)})`);
-      }
-      case 'ISIRI':
-      case 'ISURI':
-        return bool(this.kindTest(arg(0), Enc.Kind.NamedNode));
-      case 'ISBLANK':
-        return bool(this.kindTest(arg(0), Enc.Kind.BlankNode));
-      case 'ISLITERAL':
-        return bool(this.kindTest(arg(0), Enc.Kind.Literal));
-      case 'ISTRIPLE':
-        return bool(this.kindTest(arg(0), Enc.Kind.Triple));
-      case 'ISNUMERIC': {
-        const a = arg(0);
-        return bool(this.guard(a, condSql(this.clsIn(a, [1, 2, 3, 8, 11]))));
-      }
-      case 'HASLANG': {
-        const a = arg(0);
-        return bool(this.guard(a, condSql(this.clsIn(a, [Enc.Cls.LangString]))));
-      }
-      case 'HASLANGDIR': {
-        const a = arg(0);
-        return bool(
-          this.guard(a, condSql(and(this.clsIn(a, [Enc.Cls.LangString]), this.ne(a.dir, S(''))))),
-        );
-      }
-      case 'STR': {
-        const a = arg(0);
-        if (a.tag === 'const') {
-          const t = a.term!;
-          if (t._tag === 'NamedNode' || t._tag === 'Literal')
-            return this.constOperand(Term.literal(t.value));
-          return this.NULL;
-        }
-        if (a.tag === 'str' || a.tag === 'null') return a;
-        return this.strOperand(
-          caseOf(
-            [
-              [this.isNullC(a), 'NULL'],
+    return Match.value(e)
+      .pipe(
+        Match.when({ operator: '&&' }, () => bool(`(${this.ebv(arg(0))} AND ${this.ebv(arg(1))})`)),
+        Match.when({ operator: '||' }, () => bool(`(${this.ebv(arg(0))} OR ${this.ebv(arg(1))})`)),
+        Match.when({ operator: '!' }, () => bool(`(NOT ${this.ebv(arg(0))})`)),
+        Match.when({ operator: '=' }, () => bool(this.equals(arg(0), arg(1)))),
+        Match.when({ operator: '!=' }, () => bool(`(NOT ${this.equals(arg(0), arg(1))})`)),
+        Match.when({ operator: Match.is('<', '>', '<=', '>=') }, (e) =>
+          bool(this.compare(arg(0), arg(1), e.operator)),
+        ),
+        Match.when({ operator: Match.is('IN', 'NOT IN') }, (e) => {
+          const value = arg(0);
+          const tests = args.slice(1).map((_, i) => this.equals(value, arg(i + 1)));
+          const any = Arr.isReadonlyArrayEmpty(tests) ? 'FALSE' : `(${tests.join(' OR ')})`;
+          return bool(e.operator === 'IN' ? any : `(NOT ${any})`);
+        }),
+        Match.when({ operator: 'BOUND' }, () => {
+          const v = args[0]!;
+          if (v._tag !== 'Variable') return unsupported('BOUND of a non-variable');
+          const c = env.cols.get(v.value);
+          return bool(c === undefined ? 'FALSE' : c.nullable ? `(${c.sql} IS NOT NULL)` : 'TRUE');
+        }),
+        Match.when({ operator: 'SAMETERM' }, () => {
+          const a = arg(0);
+          const b = arg(1);
+          if (a.tag === 'null' || b.tag === 'null') return bool('NULL');
+          if (a.id === undefined || b.id === undefined)
+            return unsupported('sameTerm of computed values');
+          return bool(`(${this.f(a.id)} = ${this.f(b.id)})`);
+        }),
+        Match.when({ operator: Match.is('ISIRI', 'ISURI') }, () =>
+          bool(this.kindTest(arg(0), Enc.Kind.NamedNode)),
+        ),
+        Match.when({ operator: 'ISBLANK' }, () => bool(this.kindTest(arg(0), Enc.Kind.BlankNode))),
+        Match.when({ operator: 'ISLITERAL' }, () => bool(this.kindTest(arg(0), Enc.Kind.Literal))),
+        Match.when({ operator: 'ISTRIPLE' }, () => bool(this.kindTest(arg(0), Enc.Kind.Triple))),
+        Match.when({ operator: 'ISNUMERIC' }, () => {
+          const a = arg(0);
+          return bool(this.guard(a, condSql(this.clsIn(a, [1, 2, 3, 8, 11]))));
+        }),
+        Match.when({ operator: 'HASLANG' }, () => {
+          const a = arg(0);
+          return bool(this.guard(a, condSql(this.clsIn(a, [Enc.Cls.LangString]))));
+        }),
+        Match.when({ operator: 'HASLANGDIR' }, () => {
+          const a = arg(0);
+          return bool(
+            this.guard(a, condSql(and(this.clsIn(a, [Enc.Cls.LangString]), this.ne(a.dir, S(''))))),
+          );
+        }),
+        Match.when({ operator: 'STR' }, () => {
+          const a = arg(0);
+          if (a.tag === 'const') {
+            const t = a.term!;
+            if (t._tag === 'NamedNode' || t._tag === 'Literal')
+              return this.constOperand(Term.literal(t.value));
+            return this.NULL;
+          }
+          if (a.tag === 'str' || a.tag === 'null') return a;
+          return this.strOperand(
+            caseOf(
               [
-                or(this.eqC(a.kind, Enc.Kind.NamedNode), this.eqC(a.kind, Enc.Kind.Literal)),
-                this.f(a.value),
+                [this.isNullC(a), 'NULL'],
+                [
+                  or(this.eqC(a.kind, Enc.Kind.NamedNode), this.eqC(a.kind, Enc.Kind.Literal)),
+                  this.f(a.value),
+                ],
               ],
-            ],
-            'NULL',
-          ),
-        );
-      }
-      case 'LANG': {
-        const a = arg(0);
-        if (a.tag === 'const') {
-          const t = a.term!;
-          return t._tag === 'Literal' ? this.constOperand(Term.literal(t.language)) : this.NULL;
-        }
-        if (a.tag === 'null') return a;
-        return this.strOperand(
-          caseOf(
-            [
-              [this.isNullC(a), 'NULL'],
-              [this.eqC(a.kind, Enc.Kind.Literal), this.f(a.lang)],
-            ],
-            'NULL',
-          ),
-        );
-      }
-      case 'DATATYPE': {
-        const a = arg(0);
-        if (a.tag === 'const') {
-          const t = a.term!;
-          return t._tag === 'Literal' ? this.constOperand(t.datatype) : this.NULL;
-        }
-        if (a.tag === 'null') return a;
-        return this.iriOperand(
-          caseOf(
-            [
-              [this.isNullC(a), 'NULL'],
-              [this.eqC(a.kind, Enc.Kind.Literal), this.f(a.datatype)],
-            ],
-            'NULL',
-          ),
-        );
-      }
-      case 'STRLEN': {
-        const a = arg(0);
-        if (a.tag === 'null') return a;
-        return this.intOperand(
-          caseOf(
-            [
+              'NULL',
+            ),
+          );
+        }),
+        Match.when({ operator: 'LANG' }, () => {
+          const a = arg(0);
+          if (a.tag === 'const') {
+            const t = a.term!;
+            return t._tag === 'Literal' ? this.constOperand(Term.literal(t.language)) : this.NULL;
+          }
+          if (a.tag === 'null') return a;
+          return this.strOperand(
+            caseOf(
               [
-                this.clsIn(a, [Enc.Cls.String, Enc.Cls.LangString]),
-                this.dialect.length(this.f(a.value)),
+                [this.isNullC(a), 'NULL'],
+                [this.eqC(a.kind, Enc.Kind.Literal), this.f(a.lang)],
               ],
-            ],
-            'NULL',
-          ),
-          true,
-        );
-      }
-      case 'STRSTARTS':
-      case 'STRENDS':
-      case 'CONTAINS': {
-        const a = arg(0);
-        const b = arg(1);
-        const fn =
-          e.operator === 'STRSTARTS'
-            ? this.dialect.startsWith
-            : e.operator === 'STRENDS'
-              ? this.dialect.endsWith
-              : this.dialect.contains;
-        const strings = [Enc.Cls.String, Enc.Cls.LangString];
-        const ok = and(
-          this.clsIn(a, strings),
-          this.clsIn(b, strings),
-          or(
-            this.clsIn(b, [Enc.Cls.String]),
-            and(this.eqFF(a.lang, b.lang), this.eqFF(a.dir, b.dir)),
-          ),
-        );
-        return bool(caseOf([[ok, fn(this.f(a.value), this.f(b.value))]], 'NULL'));
-      }
-      case 'LANGMATCHES': {
-        const a = arg(0);
-        const b = arg(1);
-        if (b.tag !== 'const') return unsupported('LANGMATCHES with a non-constant range');
-        const range = b.term!;
-        if (range._tag !== 'Literal' || Enc.classify(range).cls !== Enc.Cls.String)
-          return bool('NULL');
-        // eslint-disable-next-line no-control-regex
-        if (!/^[\x00-\x7f]*$/.test(range.value)) return unsupported('Non-ASCII language range');
-        const r = range.value.toLowerCase();
-        const tag = `lower(${this.f(a.value)})`;
-        const test =
-          r === '*'
-            ? `(${this.f(a.value)} <> '')`
-            : `(${tag} = ${this.lit(r)} OR ${this.dialect.startsWith(tag, this.lit(`${r}-`))})`;
-        return bool(caseOf([[this.clsIn(a, [Enc.Cls.String]), test]], 'NULL'));
-      }
-      case 'IF': {
-        const c = this.ebv(arg(0));
-        const a = arg(1);
-        const b = arg(2);
-        const ca = this.termValued(a);
-        const cb = this.termValued(b);
-        if (ca.type !== cb.type) return unsupported('IF of integer and term values');
-        const sql = `(CASE WHEN ${c} THEN ${ca.sql} WHEN NOT ${c} THEN ${cb.sql} END)`;
-        return ca.type === 'int' ? this.intOperand(sql, true) : this.termOperand(sql, true);
-      }
-      case 'COALESCE': {
-        const parts = args.map((_, i) => arg(i)).filter((o) => o.tag !== 'null');
-        if (Arr.isReadonlyArrayEmpty(parts)) return this.NULL;
-        const cols = parts.map((o) => this.termValued(o));
-        const type = cols[0]!.type;
-        if (cols.some((c) => c.type !== type))
-          return unsupported('COALESCE of integer and term values');
-        const sql =
-          cols.length === 1 ? cols[0]!.sql : `COALESCE(${cols.map((c) => c.sql).join(', ')})`;
-        const nullable = cols.every((c) => c.nullable);
-        return type === 'int' ? this.intOperand(sql, nullable) : this.termOperand(sql, nullable);
-      }
-      default:
-        return unsupported(`Operator ${e.operator}`);
-    }
+              'NULL',
+            ),
+          );
+        }),
+      )
+      .pipe(
+        Match.when({ operator: 'DATATYPE' }, () => {
+          const a = arg(0);
+          if (a.tag === 'const') {
+            const t = a.term!;
+            return t._tag === 'Literal' ? this.constOperand(t.datatype) : this.NULL;
+          }
+          if (a.tag === 'null') return a;
+          return this.iriOperand(
+            caseOf(
+              [
+                [this.isNullC(a), 'NULL'],
+                [this.eqC(a.kind, Enc.Kind.Literal), this.f(a.datatype)],
+              ],
+              'NULL',
+            ),
+          );
+        }),
+        Match.when({ operator: 'STRLEN' }, () => {
+          const a = arg(0);
+          if (a.tag === 'null') return a;
+          return this.intOperand(
+            caseOf(
+              [
+                [
+                  this.clsIn(a, [Enc.Cls.String, Enc.Cls.LangString]),
+                  this.dialect.length(this.f(a.value)),
+                ],
+              ],
+              'NULL',
+            ),
+            true,
+          );
+        }),
+        Match.when({ operator: Match.is('STRSTARTS', 'STRENDS', 'CONTAINS') }, (e) => {
+          const a = arg(0);
+          const b = arg(1);
+          const fn =
+            e.operator === 'STRSTARTS'
+              ? this.dialect.startsWith
+              : e.operator === 'STRENDS'
+                ? this.dialect.endsWith
+                : this.dialect.contains;
+          const strings = [Enc.Cls.String, Enc.Cls.LangString];
+          const ok = and(
+            this.clsIn(a, strings),
+            this.clsIn(b, strings),
+            or(
+              this.clsIn(b, [Enc.Cls.String]),
+              and(this.eqFF(a.lang, b.lang), this.eqFF(a.dir, b.dir)),
+            ),
+          );
+          return bool(caseOf([[ok, fn(this.f(a.value), this.f(b.value))]], 'NULL'));
+        }),
+        Match.when({ operator: 'LANGMATCHES' }, () => {
+          const a = arg(0);
+          const b = arg(1);
+          if (b.tag !== 'const') return unsupported('LANGMATCHES with a non-constant range');
+          const range = b.term!;
+          if (range._tag !== 'Literal' || Enc.classify(range).cls !== Enc.Cls.String)
+            return bool('NULL');
+          // eslint-disable-next-line no-control-regex
+          if (!/^[\x00-\x7f]*$/.test(range.value)) return unsupported('Non-ASCII language range');
+          const r = range.value.toLowerCase();
+          const tag = `lower(${this.f(a.value)})`;
+          const test =
+            r === '*'
+              ? `(${this.f(a.value)} <> '')`
+              : `(${tag} = ${this.lit(r)} OR ${this.dialect.startsWith(tag, this.lit(`${r}-`))})`;
+          return bool(caseOf([[this.clsIn(a, [Enc.Cls.String]), test]], 'NULL'));
+        }),
+        Match.when({ operator: 'IF' }, () => {
+          const c = this.ebv(arg(0));
+          const a = arg(1);
+          const b = arg(2);
+          const ca = this.termValued(a);
+          const cb = this.termValued(b);
+          if (ca.type !== cb.type) return unsupported('IF of integer and term values');
+          const sql = `(CASE WHEN ${c} THEN ${ca.sql} WHEN NOT ${c} THEN ${cb.sql} END)`;
+          return ca.type === 'int' ? this.intOperand(sql, true) : this.termOperand(sql, true);
+        }),
+        Match.when({ operator: 'COALESCE' }, () => {
+          const parts = args.map((_, i) => arg(i)).filter((o) => o.tag !== 'null');
+          if (Arr.isReadonlyArrayEmpty(parts)) return this.NULL;
+          const cols = parts.map((o) => this.termValued(o));
+          const type = cols[0]!.type;
+          if (cols.some((c) => c.type !== type))
+            return unsupported('COALESCE of integer and term values');
+          const sql =
+            cols.length === 1 ? cols[0]!.sql : `COALESCE(${cols.map((c) => c.sql).join(', ')})`;
+          const nullable = cols.every((c) => c.nullable);
+          return type === 'int' ? this.intOperand(sql, nullable) : this.termOperand(sql, nullable);
+        }),
+        Match.orElse((e) => unsupported(`Operator ${e.operator}`)),
+      );
   }
 
   // --- conditions -------------------------------------------------------------
@@ -1609,21 +1581,16 @@ class Compiler {
 
   /** The effective boolean value (SQL boolean, `NULL` = error). */
   ebv(o: Operand): string {
-    switch (o.tag) {
-      case 'bool':
-        return o.bool!;
-      case 'null':
-      case 'iri':
-        return 'NULL';
-      case 'const': {
+    return Match.value(o).pipe(
+      Match.when({ tag: 'bool' }, (o) => o.bool!),
+      Match.when({ tag: Match.is('null', 'iri') }, () => 'NULL'),
+      Match.when({ tag: 'const' }, (o) => {
         const r = Expression.effectiveBooleanValue(o.term!);
         return Result.isSuccess(r) ? (r.success ? 'TRUE' : 'FALSE') : 'NULL';
-      }
-      case 'int':
-        return `(${this.f(o.num)} <> 0)`;
-      case 'str':
-        return `(${this.f(o.value)} <> '')`;
-      case 'term': {
+      }),
+      Match.when({ tag: 'int' }, (o) => `(${this.f(o.num)} <> 0)`),
+      Match.when({ tag: 'str' }, (o) => `(${this.f(o.value)} <> '')`),
+      Match.when({ tag: 'term' }, (o) => {
         const num = `${this.f(o.num)} <> 0`;
         const value = this.f(o.value);
         return caseOf(
@@ -1636,8 +1603,9 @@ class Compiler {
           ],
           'NULL',
         );
-      }
-    }
+      }),
+      Match.exhaustive,
+    );
   }
 
   /** `EXISTS` / `NOT EXISTS` as a correlated subquery. */

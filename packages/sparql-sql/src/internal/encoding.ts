@@ -3,6 +3,7 @@
  *
  * @internal
  */
+import * as Match from 'effect/Match';
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
@@ -96,13 +97,10 @@ export interface Classification {
 
 /** The comparison class and numeric value of a term. */
 export const classify = (term: Term.GroundTerm): Classification => {
-  switch (term._tag) {
-    case 'NamedNode':
-    case 'BlankNode':
-      return { cls: Cls.Resource, num: null };
-    case 'Triple':
-      return { cls: Cls.Triple, num: null };
-    case 'Literal': {
+  return Match.value(term).pipe(
+    Match.tag('NamedNode', 'BlankNode', () => ({ cls: Cls.Resource, num: null })),
+    Match.tag('Triple', () => ({ cls: Cls.Triple, num: null })),
+    Match.tag('Literal', (term) => {
       if (term.language !== '') return { cls: Cls.LangString, num: null };
       const dt = term.datatype.value;
       if (dt === Term.XSD_STRING) return { cls: Cls.String, num: null };
@@ -111,23 +109,24 @@ export const classify = (term: Term.GroundTerm): Classification => {
       if (Xsd.isNumericDatatype(dt)) {
         if (!valid) return { cls: Cls.IllFormedNumeric, num: null };
         const v = Xsd.toValue(term);
-        switch (v._tag) {
-          case 'Integer':
-            return v.value <= MAX_SAFE && v.value >= -MAX_SAFE
+        return Match.value(v).pipe(
+          Match.tag('Integer', (v) =>
+            v.value <= MAX_SAFE && v.value >= -MAX_SAFE
               ? { cls: Cls.SafeNumber, num: Number(v.value) }
-              : { cls: Cls.UnsafeNumber, num: Number(v.value) };
-          case 'Decimal':
-            return decimalDigits(v.value) <= 15
+              : { cls: Cls.UnsafeNumber, num: Number(v.value) },
+          ),
+          Match.tag('Decimal', (v) =>
+            decimalDigits(v.value) <= 15
               ? { cls: Cls.SafeNumber, num: Number(BigDecimal.format(v.value)) }
-              : { cls: Cls.UnsafeNumber, num: BigDecimal.toNumberUnsafe(v.value) };
-          case 'Float':
-          case 'Double':
-            return Number.isFinite(v.value)
+              : { cls: Cls.UnsafeNumber, num: BigDecimal.toNumberUnsafe(v.value) },
+          ),
+          Match.tag('Float', 'Double', (v) =>
+            Number.isFinite(v.value)
               ? { cls: v._tag === 'Float' ? Cls.Float : Cls.Double, num: v.value }
-              : { cls: Cls.SpecialFloat, num: null };
-          default:
-            return { cls: Cls.IllFormedNumeric, num: null };
-        }
+              : { cls: Cls.SpecialFloat, num: null },
+          ),
+          Match.orElse(() => ({ cls: Cls.IllFormedNumeric, num: null })),
+        );
       }
       if (!valid) return { cls: Cls.IllFormed, num: null };
       if (dt === `${XSD}boolean`) {
@@ -135,8 +134,9 @@ export const classify = (term: Term.GroundTerm): Classification => {
       }
       if (TEMPORAL.has(dt)) return { cls: Cls.Temporal, num: null };
       return { cls: Cls.OtherKnown, num: null };
-    }
-  }
+    }),
+    Match.exhaustive,
+  );
 };
 
 /** A row of the term dictionary (without the id). */
@@ -164,47 +164,44 @@ export const encode = (
   componentIds?: readonly [number, number, number],
 ): TermRow => {
   const { cls, num } = classify(term);
-  switch (term._tag) {
-    case 'NamedNode':
-      return {
-        kind: Kind.NamedNode,
-        value: term.value,
-        datatype: '',
-        lang: '',
-        dir: '',
-        sub: null,
-        pre: null,
-        obj: null,
-        cls,
-        num,
-      };
-    case 'BlankNode':
-      return {
-        kind: Kind.BlankNode,
-        value: term.value,
-        datatype: '',
-        lang: '',
-        dir: '',
-        sub: null,
-        pre: null,
-        obj: null,
-        cls,
-        num,
-      };
-    case 'Literal':
-      return {
-        kind: Kind.Literal,
-        value: term.value,
-        datatype: term.datatype.value,
-        lang: term.language,
-        dir: term.direction ?? '',
-        sub: null,
-        pre: null,
-        obj: null,
-        cls,
-        num,
-      };
-    case 'Triple': {
+  return Match.value(term).pipe(
+    Match.tag('NamedNode', (term) => ({
+      kind: Kind.NamedNode,
+      value: term.value,
+      datatype: '',
+      lang: '',
+      dir: '',
+      sub: null,
+      pre: null,
+      obj: null,
+      cls,
+      num,
+    })),
+    Match.tag('BlankNode', (term) => ({
+      kind: Kind.BlankNode,
+      value: term.value,
+      datatype: '',
+      lang: '',
+      dir: '',
+      sub: null,
+      pre: null,
+      obj: null,
+      cls,
+      num,
+    })),
+    Match.tag('Literal', (term) => ({
+      kind: Kind.Literal,
+      value: term.value,
+      datatype: term.datatype.value,
+      lang: term.language,
+      dir: term.direction ?? '',
+      sub: null,
+      pre: null,
+      obj: null,
+      cls,
+      num,
+    })),
+    Match.tag('Triple', () => {
       if (componentIds === undefined) {
         throw new Store.StoreError({ message: 'Triple terms need component ids' });
       }
@@ -220,8 +217,9 @@ export const encode = (
         cls,
         num,
       };
-    }
-  }
+    }),
+    Match.exhaustive,
+  );
 };
 
 /** The unique key of a dictionary row. */
@@ -255,21 +253,23 @@ export const decode = (
   lang: string,
   dir: string,
 ): Term.GroundTerm | readonly [number, number, number] => {
-  switch (kind) {
-    case Kind.NamedNode:
-      return Term.namedNode(value);
-    case Kind.BlankNode:
-      return Term.blankNode(value);
-    case Kind.Literal:
-      return new Term.Literal(
-        value,
-        datatype(dt),
-        lang,
-        dir === 'ltr' || dir === 'rtl' ? dir : undefined,
-      );
-    default: {
+  return Match.value(kind).pipe(
+    Match.withReturnType<Term.GroundTerm | readonly [number, number, number]>(),
+    Match.when(Kind.NamedNode, () => Term.namedNode(value)),
+    Match.when(Kind.BlankNode, () => Term.blankNode(value)),
+    Match.when(
+      Kind.Literal,
+      () =>
+        new Term.Literal(
+          value,
+          datatype(dt),
+          lang,
+          dir === 'ltr' || dir === 'rtl' ? dir : undefined,
+        ),
+    ),
+    Match.orElse(() => {
       const [s, p, o] = value.split(' ').map(Number);
       return [s!, p!, o!];
-    }
-  }
+    }),
+  );
 };

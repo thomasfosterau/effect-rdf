@@ -4,6 +4,7 @@
  *
  * @internal
  */
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 
@@ -44,20 +45,19 @@ export const compile = (
   let source = pattern;
   let jsFlags = '';
   for (const f of flags) {
-    switch (f) {
-      case 's':
-      case 'm':
-      case 'i':
-        if (!jsFlags.includes(f)) jsFlags += f;
-        break;
-      case 'x':
+    const error = Match.value(f).pipe(
+      Match.when(Match.is('s', 'm', 'i'), (flag) => {
+        if (!jsFlags.includes(flag)) jsFlags += flag;
+        return undefined;
+      }),
+      Match.when('x', () => {
         source = stripWhitespace(source);
-        break;
-      case 'q':
-        break;
-      default:
-        return { error: `unsupported regular expression flag '${f}'` };
-    }
+        return undefined;
+      }),
+      Match.when('q', () => undefined),
+      Match.orElse((flag) => `unsupported regular expression flag '${flag}'`),
+    );
+    if (error !== undefined) return { error };
   }
   if (flags.includes('q')) source = escapeAll(pattern);
   // Unicode mode first (XPath character classes need it), then the legacy

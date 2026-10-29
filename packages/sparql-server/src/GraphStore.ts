@@ -10,6 +10,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -214,96 +215,106 @@ export const handle = (
     }
     yield* Effect.annotateCurrentSpan({ 'sparql.graph': describeTarget(t) });
 
-    switch (method) {
-      case 'GET':
-      case 'HEAD': {
-        if (t._tag === 'Store') {
-          return yield* Errors.badRequest(
-            "Identify a graph with '?default', '?graph=<iri>' or a URL below the graph store",
+    return yield* Match.value(method).pipe(
+      Match.when(Match.is('GET', 'HEAD'), () =>
+        Effect.gen(function* () {
+          if (t._tag === 'Store') {
+            return yield* Errors.badRequest(
+              "Identify a graph with '?default', '?graph=<iri>' or a URL below the graph store",
+            );
+          }
+          if (!(yield* exists(store, t))) {
+            return yield* Errors.notFound(`No such graph: ${describeTarget(t)}`);
+          }
+          const accept = request.headers['accept'];
+          const serializer = Formats.negotiateSerializer(formats, accept);
+          if (serializer === undefined) {
+            return yield* Errors.notAcceptable(accept ?? '', Formats.serializerMediaTypes(formats));
+          }
+          const headers = { 'content-type': charsetUtf8(serializer.format.mediaType) };
+          if (method === 'HEAD') return HttpServerResponse.empty({ status: 200, headers });
+          const quads = Stream.map(
+            store.match({ graph: graphOf(t) }),
+            (q) => new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph),
           );
-        }
-        if (!(yield* exists(store, t))) {
-          return yield* Errors.notFound(`No such graph: ${describeTarget(t)}`);
-        }
-        const accept = request.headers['accept'];
-        const serializer = Formats.negotiateSerializer(formats, accept);
-        if (serializer === undefined) {
-          return yield* Errors.notAcceptable(accept ?? '', Formats.serializerMediaTypes(formats));
-        }
-        const headers = { 'content-type': charsetUtf8(serializer.format.mediaType) };
-        if (method === 'HEAD') return HttpServerResponse.empty({ status: 200, headers });
-        const quads = Stream.map(
-          store.match({ graph: graphOf(t) }),
-          (q) => new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph),
-        );
-        const body = serializer.serializeStream(quads, {
-          prefixes: PrefixMap.make(options.prefixes),
-        });
-        return HttpServerResponse.stream(Stream.encodeText(body), {
-          status: 200,
-          headers,
-          contentType: charsetUtf8(serializer.format.mediaType),
-        });
-      }
-      case 'PUT': {
-        if (t._tag === 'Store') return yield* Errors.methodNotAllowed(method, allowed);
-        const base = t._tag === 'Named' ? t.graph.value : url.href;
-        const quads = yield* readQuads(request, formats, base);
-        const existed = t._tag === 'Named' ? yield* exists(store, t) : true;
-        yield* store
-          .transaction(
-            Effect.gen(function* () {
-              if (t._tag === 'Named') {
-                yield* store.dropGraph(t.graph);
-                yield* store.createGraph(t.graph);
-              } else {
-                yield* store.clear(Term.defaultGraph);
-              }
-              yield* store.insert(intoGraph(quads, graphOf(t)));
-            }),
-          )
-          .pipe(Effect.mapError(storeError));
-        return HttpServerResponse.empty({ status: existed ? 204 : 201 });
-      }
-      case 'POST': {
-        if (t._tag === 'Store') {
-          const id = globalThis.crypto.randomUUID();
-          const rootUrl = new URL(root, url);
-          const graph = Term.namedNode(`${rootUrl.href.replace(/\/$/, '')}/${id}`);
-          const quads = yield* readQuads(request, formats, graph.value);
+          const body = serializer.serializeStream(quads, {
+            prefixes: PrefixMap.make(options.prefixes),
+          });
+          return HttpServerResponse.stream(Stream.encodeText(body), {
+            status: 200,
+            headers,
+            contentType: charsetUtf8(serializer.format.mediaType),
+          });
+        }),
+      ),
+      Match.when('PUT', () =>
+        Effect.gen(function* () {
+          if (t._tag === 'Store') return yield* Errors.methodNotAllowed(method, allowed);
+          const base = t._tag === 'Named' ? t.graph.value : url.href;
+          const quads = yield* readQuads(request, formats, base);
+          const existed = t._tag === 'Named' ? yield* exists(store, t) : true;
           yield* store
             .transaction(
-              Effect.andThen(store.createGraph(graph), store.insert(intoGraph(quads, graph))),
+              Effect.gen(function* () {
+                if (t._tag === 'Named') {
+                  yield* store.dropGraph(t.graph);
+                  yield* store.createGraph(t.graph);
+                } else {
+                  yield* store.clear(Term.defaultGraph);
+                }
+                yield* store.insert(intoGraph(quads, graphOf(t)));
+              }),
             )
             .pipe(Effect.mapError(storeError));
-          return HttpServerResponse.empty({ status: 201, headers: { location: graph.value } });
-        }
-        const base = t._tag === 'Named' ? t.graph.value : url.href;
-        const quads = yield* readQuads(request, formats, base);
-        const existed = yield* exists(store, t);
-        yield* store
-          .transaction(
-            Effect.gen(function* () {
-              if (t._tag === 'Named' && !existed) yield* store.createGraph(t.graph);
-              yield* store.insert(intoGraph(quads, graphOf(t)));
-            }),
-          )
-          .pipe(Effect.mapError(storeError));
-        return HttpServerResponse.empty({ status: existed ? 204 : 201 });
-      }
-      case 'DELETE': {
-        if (t._tag === 'Store') return yield* Errors.methodNotAllowed(method, allowed);
-        if (t._tag === 'Default') {
-          yield* Effect.mapError(store.clear(Term.defaultGraph), storeError);
+          return HttpServerResponse.empty({ status: existed ? 204 : 201 });
+        }),
+      ),
+      Match.when('POST', () =>
+        Effect.gen(function* () {
+          if (t._tag === 'Store') {
+            const id = globalThis.crypto.randomUUID();
+            const rootUrl = new URL(root, url);
+            const graph = Term.namedNode(`${rootUrl.href.replace(/\/$/, '')}/${id}`);
+            const quads = yield* readQuads(request, formats, graph.value);
+            yield* store
+              .transaction(
+                Effect.andThen(store.createGraph(graph), store.insert(intoGraph(quads, graph))),
+              )
+              .pipe(Effect.mapError(storeError));
+            return HttpServerResponse.empty({ status: 201, headers: { location: graph.value } });
+          }
+          const base = t._tag === 'Named' ? t.graph.value : url.href;
+          const quads = yield* readQuads(request, formats, base);
+          const existed = yield* exists(store, t);
+          yield* store
+            .transaction(
+              Effect.gen(function* () {
+                if (t._tag === 'Named' && !existed) yield* store.createGraph(t.graph);
+                yield* store.insert(intoGraph(quads, graphOf(t)));
+              }),
+            )
+            .pipe(Effect.mapError(storeError));
+          return HttpServerResponse.empty({ status: existed ? 204 : 201 });
+        }),
+      ),
+      Match.when('DELETE', () =>
+        Effect.gen(function* () {
+          if (t._tag === 'Store') return yield* Errors.methodNotAllowed(method, allowed);
+          if (t._tag === 'Default') {
+            yield* Effect.mapError(store.clear(Term.defaultGraph), storeError);
+            return HttpServerResponse.empty({ status: 204 });
+          }
+          if (!(yield* exists(store, t))) {
+            return yield* Errors.notFound(`No such graph: ${describeTarget(t)}`);
+          }
+          yield* Effect.mapError(store.dropGraph(t.graph), storeError);
           return HttpServerResponse.empty({ status: 204 });
-        }
-        if (!(yield* exists(store, t))) {
-          return yield* Errors.notFound(`No such graph: ${describeTarget(t)}`);
-        }
-        yield* Effect.mapError(store.dropGraph(t.graph), storeError);
-        return HttpServerResponse.empty({ status: 204 });
-      }
-      default:
-        return yield* Errors.methodNotAllowed(method, allowed);
-    }
+        }),
+      ),
+      Match.orElse(() =>
+        Effect.gen(function* () {
+          return yield* Errors.methodNotAllowed(method, allowed);
+        }),
+      ),
+    );
   }).pipe(Effect.withSpan('SparqlServer.graphStore'));

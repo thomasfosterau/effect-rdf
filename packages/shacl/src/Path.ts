@@ -5,6 +5,7 @@
  * @since 0.1.0
  */
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
@@ -171,20 +172,21 @@ export const zeroOrOne = (path: Path): ZeroOrOnePath => ({ _tag: 'ZeroOrOnePath'
  */
 export const equals = (a: Path, b: Path): boolean => {
   if (a._tag !== b._tag) return false;
-  switch (a._tag) {
-    case 'PredicatePath':
+  return Match.value(a).pipe(
+    Match.tag('PredicatePath', (a) => {
       // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       return a.predicate.value === (b as PredicatePath).predicate.value;
-    case 'SequencePath':
-    case 'AlternativePath': {
+    }),
+    Match.tag('SequencePath', 'AlternativePath', (a) => {
       // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       const bs = (b as SequencePath | AlternativePath).paths;
       return a.paths.length === bs.length && a.paths.every((p, i) => equals(p, bs[i]!));
-    }
-    default:
+    }),
+    Match.orElse((a) => {
       // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       return equals(a.path, (b as InversePath).path);
-  }
+    }),
+  );
 };
 
 /**
@@ -196,22 +198,16 @@ export const equals = (a: Path, b: Path): boolean => {
 export const toSparql = (self: Path): string => {
   const wrap = (p: Path) =>
     p._tag === 'SequencePath' || p._tag === 'AlternativePath' ? `(${toSparql(p)})` : toSparql(p);
-  switch (self._tag) {
-    case 'PredicatePath':
-      return self.predicate.key;
-    case 'SequencePath':
-      return self.paths.map(wrap).join('/');
-    case 'AlternativePath':
-      return self.paths.map(wrap).join('|');
-    case 'InversePath':
-      return `^${wrap(self.path)}`;
-    case 'ZeroOrMorePath':
-      return `${wrap(self.path)}*`;
-    case 'OneOrMorePath':
-      return `${wrap(self.path)}+`;
-    case 'ZeroOrOnePath':
-      return `${wrap(self.path)}?`;
-  }
+  return Match.value(self).pipe(
+    Match.tag('PredicatePath', (self) => self.predicate.key),
+    Match.tag('SequencePath', (self) => self.paths.map(wrap).join('/')),
+    Match.tag('AlternativePath', (self) => self.paths.map(wrap).join('|')),
+    Match.tag('InversePath', (self) => `^${wrap(self.path)}`),
+    Match.tag('ZeroOrMorePath', (self) => `${wrap(self.path)}*`),
+    Match.tag('OneOrMorePath', (self) => `${wrap(self.path)}+`),
+    Match.tag('ZeroOrOnePath', (self) => `${wrap(self.path)}?`),
+    Match.exhaustive,
+  );
 };
 
 // -----------------------------------------------------------------------------
@@ -227,8 +223,8 @@ const step = (
   inverse: boolean,
 ): Map<string, Node> => {
   const out = new Map<string, Node>();
-  switch (path._tag) {
-    case 'PredicatePath': {
+  return Match.value(path).pipe(
+    Match.tag('PredicatePath', (path) => {
       for (const node of nodes.values()) {
         if (inverse) {
           // SAFETY: path values are nodes, which can be objects.
@@ -246,27 +242,25 @@ const step = (
         }
       }
       return out;
-    }
-    case 'SequencePath': {
+    }),
+    Match.tag('SequencePath', (path) => {
       const parts = inverse ? [...path.paths].reverse() : path.paths;
       let current: ReadonlyMap<string, Node> = nodes;
       for (const p of parts) current = step(data, current, p, inverse);
       // SAFETY: `step` returns a fresh map for every path kind.
       return current as Map<string, Node>;
-    }
-    case 'AlternativePath': {
+    }),
+    Match.tag('AlternativePath', (path) => {
       for (const p of path.paths) for (const [k, v] of step(data, nodes, p, inverse)) out.set(k, v);
       return out;
-    }
-    case 'InversePath':
-      return step(data, nodes, path.path, !inverse);
-    case 'ZeroOrOnePath': {
+    }),
+    Match.tag('InversePath', (path) => step(data, nodes, path.path, !inverse)),
+    Match.tag('ZeroOrOnePath', (path) => {
       for (const [k, v] of nodes) out.set(k, v);
       for (const [k, v] of step(data, nodes, path.path, inverse)) out.set(k, v);
       return out;
-    }
-    case 'ZeroOrMorePath':
-    case 'OneOrMorePath': {
+    }),
+    Match.tag('ZeroOrMorePath', 'OneOrMorePath', (path) => {
       if (path._tag === 'ZeroOrMorePath') for (const [k, v] of nodes) out.set(k, v);
       // Breadth-first closure, starting from each node's one-step successors.
       let frontier = step(data, nodes, path.path, inverse);
@@ -280,8 +274,9 @@ const step = (
         frontier = next.size > 0 ? step(data, next, path.path, inverse) : next;
       }
       return out;
-    }
-  }
+    }),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -414,25 +409,20 @@ export const toRdf = (self: Path, graph: Term.Graph = Term.defaultGraph): PathRd
     return b;
   };
   const go = (p: Path): Term.NamedNode | Term.BlankNode => {
-    switch (p._tag) {
-      case 'PredicatePath':
-        return p.predicate;
-      case 'SequencePath':
-        return list(p.paths);
-      case 'AlternativePath': {
+    return Match.value(p).pipe(
+      Match.tag('PredicatePath', (p) => p.predicate),
+      Match.tag('SequencePath', (p) => list(p.paths)),
+      Match.tag('AlternativePath', (p) => {
         const b = Term.blankNode();
         quads.push(Term.quad(b, sh.alternativePath, list(p.paths), graph));
         return b;
-      }
-      case 'InversePath':
-        return unary(sh.inversePath, p.path);
-      case 'ZeroOrMorePath':
-        return unary(sh.zeroOrMorePath, p.path);
-      case 'OneOrMorePath':
-        return unary(sh.oneOrMorePath, p.path);
-      case 'ZeroOrOnePath':
-        return unary(sh.zeroOrOnePath, p.path);
-    }
+      }),
+      Match.tag('InversePath', (p) => unary(sh.inversePath, p.path)),
+      Match.tag('ZeroOrMorePath', (p) => unary(sh.zeroOrMorePath, p.path)),
+      Match.tag('OneOrMorePath', (p) => unary(sh.oneOrMorePath, p.path)),
+      Match.tag('ZeroOrOnePath', (p) => unary(sh.zeroOrOnePath, p.path)),
+      Match.exhaustive,
+    );
   };
   const node = go(self);
   return { node, quads };

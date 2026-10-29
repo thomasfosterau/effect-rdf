@@ -25,6 +25,7 @@
  * @since 0.1.0
  */
 import { Dataset, Term, Vocab, Xsd } from '@thomasfosterau/effect-rdf';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
@@ -202,69 +203,58 @@ const codePointLength = (s: string): number => {
 
 const defaultMessage = (c: Shapes.Constraint, value: Term.Term | undefined): string => {
   const v = value === undefined ? 'Value' : `Value ${show(value)}`;
-  switch (c._tag) {
-    case 'Class':
-      return `${v} is not an instance of ${show(c.class)}`;
-    case 'Datatype':
-      return `${v} does not have datatype ${show(c.datatype)}`;
-    case 'NodeKind':
-      return `${v} does not have node kind sh:${c.nodeKind}`;
-    case 'MinCount':
-      return `Less than ${c.minCount} values`;
-    case 'MaxCount':
-      return `More than ${c.maxCount} values`;
-    case 'MinExclusive':
-      return `${v} is not greater than ${show(c.value)}`;
-    case 'MinInclusive':
-      return `${v} is not greater than or equal to ${show(c.value)}`;
-    case 'MaxExclusive':
-      return `${v} is not less than ${show(c.value)}`;
-    case 'MaxInclusive':
-      return `${v} is not less than or equal to ${show(c.value)}`;
-    case 'MinLength':
-      return `${v} is shorter than ${c.minLength} characters`;
-    case 'MaxLength':
-      return `${v} is longer than ${c.maxLength} characters`;
-    case 'Pattern':
-      return `${v} does not match pattern ${quote(c.pattern)}`;
-    case 'LanguageIn':
-      return `${v} does not have a language tag in [${c.languages.join(', ')}]`;
-    case 'UniqueLang':
-      return 'Language tag used by more than one value';
-    case 'Equals':
-      return `${v} is not equal to the values of ${show(c.predicate)}`;
-    case 'Disjoint':
-      return `${v} is also a value of ${show(c.predicate)}`;
-    case 'LessThan':
-      return `${v} is not less than the values of ${show(c.predicate)}`;
-    case 'LessThanOrEquals':
-      return `${v} is not less than or equal to the values of ${show(c.predicate)}`;
-    case 'Not':
-      return `${v} conforms to the negated shape ${show(c.shape)}`;
-    case 'And':
-      return `${v} does not conform to all of the shapes`;
-    case 'Or':
-      return `${v} does not conform to any of the shapes`;
-    case 'Xone':
-      return `${v} does not conform to exactly one of the shapes`;
-    case 'Node':
-      return `${v} does not conform to shape ${show(c.shape)}`;
-    case 'Property':
-      return `${v} does not conform to property shape ${show(c.shape)}`;
-    case 'QualifiedMinCount':
-      return `Less than ${c.count} values conform to shape ${show(c.shape)}`;
-    case 'QualifiedMaxCount':
-      return `More than ${c.count} values conform to shape ${show(c.shape)}`;
-    case 'Closed':
-      return `Predicate is not allowed by the closed shape (value ${value === undefined ? '' : show(value)})`;
-    case 'HasValue':
-      return `Missing expected value ${show(c.value)}`;
-    case 'In':
-      return `${v} is not one of the allowed values`;
-    case 'Sparql':
-    case 'Component':
-      return `${v} violates a SPARQL-based constraint`;
-  }
+  return Match.value(c)
+    .pipe(
+      Match.tag('Class', (c) => `${v} is not an instance of ${show(c.class)}`),
+      Match.tag('Datatype', (c) => `${v} does not have datatype ${show(c.datatype)}`),
+      Match.tag('NodeKind', (c) => `${v} does not have node kind sh:${c.nodeKind}`),
+      Match.tag('MinCount', (c) => `Less than ${c.minCount} values`),
+      Match.tag('MaxCount', (c) => `More than ${c.maxCount} values`),
+      Match.tag('MinExclusive', (c) => `${v} is not greater than ${show(c.value)}`),
+      Match.tag('MinInclusive', (c) => `${v} is not greater than or equal to ${show(c.value)}`),
+      Match.tag('MaxExclusive', (c) => `${v} is not less than ${show(c.value)}`),
+      Match.tag('MaxInclusive', (c) => `${v} is not less than or equal to ${show(c.value)}`),
+      Match.tag('MinLength', (c) => `${v} is shorter than ${c.minLength} characters`),
+      Match.tag('MaxLength', (c) => `${v} is longer than ${c.maxLength} characters`),
+      Match.tag('Pattern', (c) => `${v} does not match pattern ${quote(c.pattern)}`),
+      Match.tag(
+        'LanguageIn',
+        (c) => `${v} does not have a language tag in [${c.languages.join(', ')}]`,
+      ),
+      Match.tag('UniqueLang', () => 'Language tag used by more than one value'),
+      Match.tag('Equals', (c) => `${v} is not equal to the values of ${show(c.predicate)}`),
+      Match.tag('Disjoint', (c) => `${v} is also a value of ${show(c.predicate)}`),
+      Match.tag('LessThan', (c) => `${v} is not less than the values of ${show(c.predicate)}`),
+      Match.tag(
+        'LessThanOrEquals',
+        (c) => `${v} is not less than or equal to the values of ${show(c.predicate)}`,
+      ),
+    )
+    .pipe(
+      Match.tag('Not', (c) => `${v} conforms to the negated shape ${show(c.shape)}`),
+      Match.tag('And', () => `${v} does not conform to all of the shapes`),
+      Match.tag('Or', () => `${v} does not conform to any of the shapes`),
+      Match.tag('Xone', () => `${v} does not conform to exactly one of the shapes`),
+      Match.tag('Node', (c) => `${v} does not conform to shape ${show(c.shape)}`),
+      Match.tag('Property', (c) => `${v} does not conform to property shape ${show(c.shape)}`),
+      Match.tag(
+        'QualifiedMinCount',
+        (c) => `Less than ${c.count} values conform to shape ${show(c.shape)}`,
+      ),
+      Match.tag(
+        'QualifiedMaxCount',
+        (c) => `More than ${c.count} values conform to shape ${show(c.shape)}`,
+      ),
+      Match.tag(
+        'Closed',
+        () =>
+          `Predicate is not allowed by the closed shape (value ${value === undefined ? '' : show(value)})`,
+      ),
+      Match.tag('HasValue', (c) => `Missing expected value ${show(c.value)}`),
+      Match.tag('In', () => `${v} is not one of the allowed values`),
+      Match.tag('Sparql', 'Component', () => `${v} violates a SPARQL-based constraint`),
+      Match.exhaustive,
+    );
 };
 
 const integer = (n: number) => Term.literal(String(n), xsd.integer);
@@ -274,84 +264,60 @@ const listText = (terms: ReadonlyArray<Term.Term>) =>
 
 /** The parameter values of a core constraint by parameter name (for message templates). */
 const coreParameters = (c: Shapes.Constraint): ReadonlyArray<readonly [string, Term.Term]> => {
-  switch (c._tag) {
-    case 'Class':
-      return [['class', c.class]];
-    case 'Datatype':
-      return [['datatype', c.datatype]];
-    case 'NodeKind':
-      return [['nodeKind', Term.namedNode(SH + c.nodeKind)]];
-    case 'MinCount':
-      return [['minCount', integer(c.minCount)]];
-    case 'MaxCount':
-      return [['maxCount', integer(c.maxCount)]];
-    case 'MinExclusive':
-      return [['minExclusive', c.value]];
-    case 'MinInclusive':
-      return [['minInclusive', c.value]];
-    case 'MaxExclusive':
-      return [['maxExclusive', c.value]];
-    case 'MaxInclusive':
-      return [['maxInclusive', c.value]];
-    case 'MinLength':
-      return [['minLength', integer(c.minLength)]];
-    case 'MaxLength':
-      return [['maxLength', integer(c.maxLength)]];
-    case 'Pattern':
-      return [
+  return Match.value(c)
+    .pipe(
+      Match.withReturnType<ReadonlyArray<readonly [string, Term.Term]>>(),
+      Match.tag('Class', (c) => [['class', c.class]]),
+      Match.tag('Datatype', (c) => [['datatype', c.datatype]]),
+      Match.tag('NodeKind', (c) => [['nodeKind', Term.namedNode(SH + c.nodeKind)]]),
+      Match.tag('MinCount', (c) => [['minCount', integer(c.minCount)]]),
+      Match.tag('MaxCount', (c) => [['maxCount', integer(c.maxCount)]]),
+      Match.tag('MinExclusive', (c) => [['minExclusive', c.value]]),
+      Match.tag('MinInclusive', (c) => [['minInclusive', c.value]]),
+      Match.tag('MaxExclusive', (c) => [['maxExclusive', c.value]]),
+      Match.tag('MaxInclusive', (c) => [['maxInclusive', c.value]]),
+      Match.tag('MinLength', (c) => [['minLength', integer(c.minLength)]]),
+      Match.tag('MaxLength', (c) => [['maxLength', integer(c.maxLength)]]),
+      Match.tag('Pattern', (c) => [
         ['pattern', Term.literal(c.pattern)],
         ['flags', Term.literal(c.flags)],
-      ];
-    case 'LanguageIn':
-      return [['languageIn', Term.literal(c.languages.join(', '))]];
-    case 'UniqueLang':
-      return [['uniqueLang', boolean(true)]];
-    case 'Equals':
-      return [['equals', c.predicate]];
-    case 'Disjoint':
-      return [['disjoint', c.predicate]];
-    case 'LessThan':
-      return [['lessThan', c.predicate]];
-    case 'LessThanOrEquals':
-      return [['lessThanOrEquals', c.predicate]];
-    case 'Not':
-      return [['not', c.shape]];
-    case 'And':
-      return [['and', listText(c.shapes)]];
-    case 'Or':
-      return [['or', listText(c.shapes)]];
-    case 'Xone':
-      return [['xone', listText(c.shapes)]];
-    case 'Node':
-      return [['node', c.shape]];
-    case 'Property':
-      return [['property', c.shape]];
-    case 'QualifiedMinCount':
-      return [
+      ]),
+      Match.tag('LanguageIn', (c) => [['languageIn', Term.literal(c.languages.join(', '))]]),
+      Match.tag('UniqueLang', () => [['uniqueLang', boolean(true)]]),
+      Match.tag('Equals', (c) => [['equals', c.predicate]]),
+      Match.tag('Disjoint', (c) => [['disjoint', c.predicate]]),
+      Match.tag('LessThan', (c) => [['lessThan', c.predicate]]),
+      Match.tag('LessThanOrEquals', (c) => [['lessThanOrEquals', c.predicate]]),
+    )
+    .pipe(
+      Match.tag('Not', (c) => [['not', c.shape]]),
+      Match.tag('And', (c) => [['and', listText(c.shapes)]]),
+      Match.tag('Or', (c) => [['or', listText(c.shapes)]]),
+      Match.tag('Xone', (c) => [['xone', listText(c.shapes)]]),
+      Match.tag('Node', (c) => [['node', c.shape]]),
+      Match.tag('Property', (c) => [['property', c.shape]]),
+      Match.tag('QualifiedMinCount', (c) => [
         ['qualifiedValueShape', c.shape],
         ['qualifiedMinCount', integer(c.count)],
         ['qualifiedValueShapesDisjoint', boolean(c.disjoint)],
-      ];
-    case 'QualifiedMaxCount':
-      return [
+      ]),
+      Match.tag('QualifiedMaxCount', (c) => [
         ['qualifiedValueShape', c.shape],
         ['qualifiedMaxCount', integer(c.count)],
         ['qualifiedValueShapesDisjoint', boolean(c.disjoint)],
-      ];
-    case 'Closed':
-      return [
+      ]),
+      Match.tag('Closed', (c) => [
         ['closed', boolean(true)],
         ['ignoredProperties', listText(c.ignoredProperties)],
-      ];
-    case 'HasValue':
-      return [['hasValue', c.value]];
-    case 'In':
-      return [['in', listText(c.values)]];
-    case 'Sparql':
-      return [];
-    case 'Component':
-      return c.parameters.map((p) => [Message.localName(p.path), p.value] as const);
-  }
+      ]),
+      Match.tag('HasValue', (c) => [['hasValue', c.value]]),
+      Match.tag('In', (c) => [['in', listText(c.values)]]),
+      Match.tag('Sparql', () => []),
+      Match.tag('Component', (c) =>
+        c.parameters.map((p) => [Message.localName(p.path), p.value] as const),
+      ),
+      Match.exhaustive,
+    );
 };
 
 /** The `path` variable of message templates: the predicate, or the path in SPARQL syntax. */
@@ -507,16 +473,14 @@ const makeEngine = (
         value: Option.fromNullishOr(value),
         messages: Arr.isReadonlyArrayNonEmpty(shape.messages)
           ? substituteMessages(shape.messages, (name) => {
-              switch (name) {
-                case 'this':
-                  return focus;
-                case 'value':
-                  return value;
-                case 'path':
-                  return Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined;
-                default:
-                  return parameters.get(name);
-              }
+              return Match.value(name).pipe(
+                Match.when('this', () => focus),
+                Match.when('value', () => value),
+                Match.when('path', () =>
+                  Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined,
+                ),
+                Match.orElse(() => parameters.get(name)),
+              );
             })
           : [Term.literal(defaultMessage(c, value))],
         details: withDetails ? (extra.details ?? []) : [],
@@ -526,226 +490,273 @@ const makeEngine = (
       valueNodes.filter(failed).map((v) => result(v));
     const nestedResults = (id: Term.Term, v: Term.GroundTerm) => validateShape(shapeById(id), v);
 
-    switch (c._tag) {
-      case 'Class':
-        return each((v) => !isInstanceOf(v, c.class));
-      case 'Datatype':
-        return each((v) => !hasDatatype(v, c.datatype));
-      case 'NodeKind':
-        return each((v) => !matchesNodeKind(v, c.nodeKind));
-      case 'MinCount':
-        return valueNodes.length < c.minCount ? [result(undefined)] : [];
-      case 'MaxCount':
-        return valueNodes.length > c.maxCount ? [result(undefined)] : [];
-      case 'MinExclusive':
-        return each((v) => compareTerms(v, c.value) !== 1);
-      case 'MinInclusive':
-        return each((v) => {
-          const r = compareTerms(v, c.value);
-          return r !== 1 && r !== 0;
-        });
-      case 'MaxExclusive':
-        return each((v) => compareTerms(v, c.value) !== -1);
-      case 'MaxInclusive':
-        return each((v) => {
-          const r = compareTerms(v, c.value);
-          return r !== -1 && r !== 0;
-        });
-      case 'MinLength':
-        return each((v) => {
-          const s = stringValue(v);
-          return s === undefined || codePointLength(s) < c.minLength;
-        });
-      case 'MaxLength':
-        return each((v) => {
-          const s = stringValue(v);
-          return s === undefined || codePointLength(s) > c.maxLength;
-        });
-      case 'Pattern':
-        return each((v) => {
-          const s = stringValue(v);
-          return s === undefined || !c.regex.test(s);
-        });
-      case 'LanguageIn':
-        return each(
-          (v) =>
-            v._tag !== 'Literal' || !c.languages.some((range) => langMatches(v.language, range)),
-        );
-      case 'UniqueLang': {
-        const counts = new Map<string, number>();
-        for (const v of valueNodes) {
-          if (v._tag === 'Literal' && v.language !== '') {
-            const lang = v.language.toLowerCase();
-            counts.set(lang, (counts.get(lang) ?? 0) + 1);
-          }
-        }
-        return Array.from(counts.values())
-          .filter((n) => n > 1)
-          .map(() => result(undefined));
-      }
-      case 'Equals': {
-        const others = objectsOf(focus, c.predicate);
-        const otherKeys = new Set(others.map((o) => o.key));
-        const valueKeys = new Set(valueNodes.map((v) => v.key));
-        return [
-          ...valueNodes.filter((v) => !otherKeys.has(v.key)).map((v) => result(v)),
-          ...others.filter((o) => !valueKeys.has(o.key)).map((o) => result(o)),
-        ];
-      }
-      case 'Disjoint': {
-        const otherKeys = new Set(objectsOf(focus, c.predicate).map((o) => o.key));
-        return each((v) => otherKeys.has(v.key));
-      }
-      case 'LessThan':
-      case 'LessThanOrEquals': {
-        const others = objectsOf(focus, c.predicate);
-        const ok = (r: -1 | 0 | 1 | undefined) =>
-          r === -1 || (c._tag === 'LessThanOrEquals' && r === 0);
-        const out: Array<ValidationReport.ValidationResult> = [];
-        for (const v of valueNodes) {
-          for (const o of others) {
-            if (!ok(compareTerms(v, o))) out.push(result(v));
-          }
-        }
-        return out;
-      }
-      case 'Not': {
-        const conforming = yield* Effect.filter(valueNodes, (v) => conforms(c.shape, v));
-        return conforming.map((v) => result(v));
-      }
-      case 'And':
-      case 'Or':
-      case 'Xone': {
-        const shapes = c.shapes;
-        const tag = c._tag;
-        const perNode = yield* Effect.forEach(
-          valueNodes,
-          (v) =>
-            Effect.map(
-              Effect.forEach(shapes, (s) => nestedResults(s, v), { concurrency: 1 }),
-              (nested) => {
-                const conforming = nested.filter((rs) => Arr.isReadonlyArrayEmpty(rs)).length;
-                const failed =
-                  tag === 'And'
-                    ? conforming < shapes.length
-                    : tag === 'Or'
-                      ? conforming === 0
-                      : conforming !== 1;
-                return failed ? [result(v, { details: nested.flat() })] : [];
-              },
-            ),
-          { concurrency: 1 },
-        );
-        return perNode.flat();
-      }
-      case 'Node': {
-        const shape = c.shape;
-        const perNode = yield* Effect.forEach(
-          valueNodes,
-          (v) =>
-            Effect.map(nestedResults(shape, v), (rs) =>
-              Arr.isReadonlyArrayNonEmpty(rs) ? [result(v, { details: rs })] : [],
-            ),
-          { concurrency: 1 },
-        );
-        return perNode.flat();
-      }
-      case 'Property': {
-        const property = shapeById(c.shape);
-        const perNode = yield* Effect.forEach(valueNodes, (v) => validateShape(property, v), {
-          concurrency: 1,
-        });
-        return perNode.flat();
-      }
-      case 'QualifiedMinCount':
-      case 'QualifiedMaxCount': {
-        const { shape, disjoint, siblings } = c;
-        // A value node counts when it conforms to the qualified shape and, with
-        // `sh:qualifiedValueShapesDisjoint`, to none of the sibling shapes.
-        const counted = yield* Effect.filter(valueNodes, (v) =>
-          Effect.flatMap(conforms(shape, v), (ok) =>
-            !ok || !disjoint
-              ? Effect.succeed(ok)
-              : Effect.map(
-                  Effect.findFirst(siblings, (s) => conforms(s, v)),
-                  Option.isNone,
-                ),
+    return yield* Match.value(c)
+      .pipe(
+        Match.tag('Class', (c) => Effect.sync(() => each((v) => !isInstanceOf(v, c.class)))),
+        Match.tag('Datatype', (c) => Effect.sync(() => each((v) => !hasDatatype(v, c.datatype)))),
+        Match.tag('NodeKind', (c) =>
+          Effect.sync(() => each((v) => !matchesNodeKind(v, c.nodeKind))),
+        ),
+        Match.tag('MinCount', (c) =>
+          Effect.sync(() => (valueNodes.length < c.minCount ? [result(undefined)] : [])),
+        ),
+        Match.tag('MaxCount', (c) =>
+          Effect.sync(() => (valueNodes.length > c.maxCount ? [result(undefined)] : [])),
+        ),
+        Match.tag('MinExclusive', (c) =>
+          Effect.sync(() => each((v) => compareTerms(v, c.value) !== 1)),
+        ),
+        Match.tag('MinInclusive', (c) =>
+          Effect.sync(() =>
+            each((v) => {
+              const r = compareTerms(v, c.value);
+              return r !== 1 && r !== 0;
+            }),
           ),
-        );
-        const count = counted.length;
-        const failed = c._tag === 'QualifiedMinCount' ? count < c.count : count > c.count;
-        return failed ? [result(undefined)] : [];
-      }
-      case 'Closed': {
-        const allowed = new Set(c.allowedProperties.map((p) => p.key));
-        const out: Array<ValidationReport.ValidationResult> = [];
-        for (const v of valueNodes) {
-          if (v._tag === 'Literal') continue;
-          for (const q of Dataset.match(data, { subject: v })) {
-            if (!allowed.has(q.predicate.key))
-              out.push(result(q.object, { path: Path.predicate(q.predicate) }));
-          }
-        }
-        return out;
-      }
-      case 'HasValue':
-        return valueNodes.some((v) => v.key === c.value.key) ? [] : [result(undefined)];
-      case 'In': {
-        const allowed = new Set(c.values.map((v) => v.key));
-        return each((v) => !allowed.has(v.key));
-      }
-      case 'Sparql':
-      case 'Component': {
-        if (Option.isNone(evaluator)) {
-          return yield* unsupported(
-            shape,
-            c._tag === 'Sparql' ? 'sh:sparql' : `constraint component ${c.component.key}`,
-          );
-        }
-        const violations = yield* evaluator.value.evaluateConstraint({
-          dataGraph: data,
-          shapesGraph: shapes,
-          shape,
-          constraint: c,
-          focusNode: focus,
-          valueNodes,
-        });
-        return violations.map((violation) => {
-          const focusNode = violation.focusNode ?? focus;
-          const resultPath = violation.path !== undefined ? Option.some(violation.path) : shapePath;
-          const lookup = (name: string): Term.Term | undefined => {
-            const bound = violation.bindings?.get(name) ?? parameters.get(name);
-            if (bound !== undefined) return bound;
-            switch (name) {
-              case 'this':
-                return focusNode;
-              case 'value':
-                return violation.value;
-              case 'path':
-                return Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined;
-              default:
-                return undefined;
+        ),
+        Match.tag('MaxExclusive', (c) =>
+          Effect.sync(() => each((v) => compareTerms(v, c.value) !== -1)),
+        ),
+        Match.tag('MaxInclusive', (c) =>
+          Effect.sync(() =>
+            each((v) => {
+              const r = compareTerms(v, c.value);
+              return r !== -1 && r !== 0;
+            }),
+          ),
+        ),
+        Match.tag('MinLength', (c) =>
+          Effect.sync(() =>
+            each((v) => {
+              const s = stringValue(v);
+              return s === undefined || codePointLength(s) < c.minLength;
+            }),
+          ),
+        ),
+        Match.tag('MaxLength', (c) =>
+          Effect.sync(() =>
+            each((v) => {
+              const s = stringValue(v);
+              return s === undefined || codePointLength(s) > c.maxLength;
+            }),
+          ),
+        ),
+        Match.tag('Pattern', (c) =>
+          Effect.sync(() =>
+            each((v) => {
+              const s = stringValue(v);
+              return s === undefined || !c.regex.test(s);
+            }),
+          ),
+        ),
+        Match.tag('LanguageIn', (c) =>
+          Effect.sync(() =>
+            each(
+              (v) =>
+                v._tag !== 'Literal' ||
+                !c.languages.some((range) => langMatches(v.language, range)),
+            ),
+          ),
+        ),
+        Match.tag('UniqueLang', () =>
+          Effect.sync(() => {
+            const counts = new Map<string, number>();
+            for (const v of valueNodes) {
+              if (v._tag === 'Literal' && v.language !== '') {
+                const lang = v.language.toLowerCase();
+                counts.set(lang, (counts.get(lang) ?? 0) + 1);
+              }
             }
-          };
-          const templates =
-            violation.messages !== undefined && Arr.isReadonlyArrayNonEmpty(violation.messages)
-              ? violation.messages
-              : shape.messages;
-          return ValidationReport.makeResult({
-            focusNode,
-            sourceShape: shape.id,
-            sourceConstraintComponent: component,
-            sourceConstraint: c._tag === 'Sparql' ? Option.some(c.node) : Option.none(),
-            severity: violation.severity ?? shape.severity,
-            resultPath,
-            value: Option.fromNullishOr(violation.value),
-            messages: Arr.isReadonlyArrayNonEmpty(templates)
-              ? substituteMessages(templates, lookup)
-              : [Term.literal(defaultMessage(c, violation.value))],
-          });
-        });
-      }
-    }
+            return Array.from(counts.values())
+              .filter((n) => n > 1)
+              .map(() => result(undefined));
+          }),
+        ),
+        Match.tag('Equals', (c) =>
+          Effect.sync(() => {
+            const others = objectsOf(focus, c.predicate);
+            const otherKeys = new Set(others.map((o) => o.key));
+            const valueKeys = new Set(valueNodes.map((v) => v.key));
+            return [
+              ...valueNodes.filter((v) => !otherKeys.has(v.key)).map((v) => result(v)),
+              ...others.filter((o) => !valueKeys.has(o.key)).map((o) => result(o)),
+            ];
+          }),
+        ),
+        Match.tag('Disjoint', (c) =>
+          Effect.sync(() => {
+            const otherKeys = new Set(objectsOf(focus, c.predicate).map((o) => o.key));
+            return each((v) => otherKeys.has(v.key));
+          }),
+        ),
+        Match.tag('LessThan', 'LessThanOrEquals', (c) =>
+          Effect.sync(() => {
+            const others = objectsOf(focus, c.predicate);
+            const ok = (r: -1 | 0 | 1 | undefined) =>
+              r === -1 || (c._tag === 'LessThanOrEquals' && r === 0);
+            const out: Array<ValidationReport.ValidationResult> = [];
+            for (const v of valueNodes) {
+              for (const o of others) {
+                if (!ok(compareTerms(v, o))) out.push(result(v));
+              }
+            }
+            return out;
+          }),
+        ),
+        Match.tag('Not', (c) =>
+          Effect.gen(function* () {
+            const conforming = yield* Effect.filter(valueNodes, (v) => conforms(c.shape, v));
+            return conforming.map((v) => result(v));
+          }),
+        ),
+      )
+      .pipe(
+        Match.tag('And', 'Or', 'Xone', (c) =>
+          Effect.gen(function* () {
+            const shapes = c.shapes;
+            const tag = c._tag;
+            const perNode = yield* Effect.forEach(
+              valueNodes,
+              (v) =>
+                Effect.map(
+                  Effect.forEach(shapes, (s) => nestedResults(s, v), { concurrency: 1 }),
+                  (nested) => {
+                    const conforming = nested.filter((rs) => Arr.isReadonlyArrayEmpty(rs)).length;
+                    const failed =
+                      tag === 'And'
+                        ? conforming < shapes.length
+                        : tag === 'Or'
+                          ? conforming === 0
+                          : conforming !== 1;
+                    return failed ? [result(v, { details: nested.flat() })] : [];
+                  },
+                ),
+              { concurrency: 1 },
+            );
+            return perNode.flat();
+          }),
+        ),
+        Match.tag('Node', (c) =>
+          Effect.gen(function* () {
+            const shape = c.shape;
+            const perNode = yield* Effect.forEach(
+              valueNodes,
+              (v) =>
+                Effect.map(nestedResults(shape, v), (rs) =>
+                  Arr.isReadonlyArrayNonEmpty(rs) ? [result(v, { details: rs })] : [],
+                ),
+              { concurrency: 1 },
+            );
+            return perNode.flat();
+          }),
+        ),
+        Match.tag('Property', (c) =>
+          Effect.gen(function* () {
+            const property = shapeById(c.shape);
+            const perNode = yield* Effect.forEach(valueNodes, (v) => validateShape(property, v), {
+              concurrency: 1,
+            });
+            return perNode.flat();
+          }),
+        ),
+        Match.tag('QualifiedMinCount', 'QualifiedMaxCount', (c) =>
+          Effect.gen(function* () {
+            const { shape, disjoint, siblings } = c;
+            // A value node counts when it conforms to the qualified shape and, with
+            // `sh:qualifiedValueShapesDisjoint`, to none of the sibling shapes.
+            const counted = yield* Effect.filter(valueNodes, (v) =>
+              Effect.flatMap(conforms(shape, v), (ok) =>
+                !ok || !disjoint
+                  ? Effect.succeed(ok)
+                  : Effect.map(
+                      Effect.findFirst(siblings, (s) => conforms(s, v)),
+                      Option.isNone,
+                    ),
+              ),
+            );
+            const count = counted.length;
+            const failed = c._tag === 'QualifiedMinCount' ? count < c.count : count > c.count;
+            return failed ? [result(undefined)] : [];
+          }),
+        ),
+        Match.tag('Closed', (c) =>
+          Effect.sync(() => {
+            const allowed = new Set(c.allowedProperties.map((p) => p.key));
+            const out: Array<ValidationReport.ValidationResult> = [];
+            for (const v of valueNodes) {
+              if (v._tag === 'Literal') continue;
+              for (const q of Dataset.match(data, { subject: v })) {
+                if (!allowed.has(q.predicate.key))
+                  out.push(result(q.object, { path: Path.predicate(q.predicate) }));
+              }
+            }
+            return out;
+          }),
+        ),
+        Match.tag('HasValue', (c) =>
+          Effect.sync(() =>
+            valueNodes.some((v) => v.key === c.value.key) ? [] : [result(undefined)],
+          ),
+        ),
+        Match.tag('In', (c) =>
+          Effect.sync(() => {
+            const allowed = new Set(c.values.map((v) => v.key));
+            return each((v) => !allowed.has(v.key));
+          }),
+        ),
+        Match.tag('Sparql', 'Component', (c) =>
+          Effect.gen(function* () {
+            if (Option.isNone(evaluator)) {
+              return yield* unsupported(
+                shape,
+                c._tag === 'Sparql' ? 'sh:sparql' : `constraint component ${c.component.key}`,
+              );
+            }
+            const violations = yield* evaluator.value.evaluateConstraint({
+              dataGraph: data,
+              shapesGraph: shapes,
+              shape,
+              constraint: c,
+              focusNode: focus,
+              valueNodes,
+            });
+            return violations.map((violation) => {
+              const focusNode = violation.focusNode ?? focus;
+              const resultPath =
+                violation.path !== undefined ? Option.some(violation.path) : shapePath;
+              const lookup = (name: string): Term.Term | undefined => {
+                const bound = violation.bindings?.get(name) ?? parameters.get(name);
+                if (bound !== undefined) return bound;
+                return Match.value(name).pipe(
+                  Match.when('this', () => focusNode),
+                  Match.when('value', () => violation.value),
+                  Match.when('path', () =>
+                    Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined,
+                  ),
+                  Match.orElse(() => undefined),
+                );
+              };
+              const templates =
+                violation.messages !== undefined && Arr.isReadonlyArrayNonEmpty(violation.messages)
+                  ? violation.messages
+                  : shape.messages;
+              return ValidationReport.makeResult({
+                focusNode,
+                sourceShape: shape.id,
+                sourceConstraintComponent: component,
+                sourceConstraint: c._tag === 'Sparql' ? Option.some(c.node) : Option.none(),
+                severity: violation.severity ?? shape.severity,
+                resultPath,
+                value: Option.fromNullishOr(violation.value),
+                messages: Arr.isReadonlyArrayNonEmpty(templates)
+                  ? substituteMessages(templates, lookup)
+                  : [Term.literal(defaultMessage(c, violation.value))],
+              });
+            });
+          }),
+        ),
+        Match.exhaustive,
+      );
   });
 
   const focusNodes = Effect.fnUntraced(function* (
@@ -758,34 +769,31 @@ const makeEngine = (
     yield* Effect.forEach(
       shape.targets,
       Effect.fnUntraced(function* (target) {
-        switch (target._tag) {
-          case 'TargetNode':
-            add(target.node);
-            break;
-          case 'TargetClass':
-            instancesOf(target.class).forEach(add);
-            break;
-          case 'TargetSubjectsOf':
-            for (const q of Dataset.match(data, { predicate: target.predicate })) add(q.subject);
-            break;
-          case 'TargetObjectsOf':
-            for (const q of Dataset.match(data, { predicate: target.predicate })) add(q.object);
-            break;
-          case 'SparqlTarget': {
-            if (Option.isNone(evaluator)) {
-              yield* unsupported(shape, 'sh:target');
-              break;
-            }
-            const nodes = yield* evaluator.value.selectTargets({
-              dataGraph: data,
-              shapesGraph: shapes,
-              shape,
-              target: target.node,
-            });
-            nodes.forEach(add);
-            break;
-          }
-        }
+        yield* Match.value(target).pipe(
+          Match.tag('TargetNode', (t) => Effect.sync(() => add(t.node))),
+          Match.tag('TargetClass', (t) => Effect.sync(() => instancesOf(t.class).forEach(add))),
+          Match.tag('TargetSubjectsOf', (t) =>
+            Effect.sync(() => {
+              for (const q of Dataset.match(data, { predicate: t.predicate })) add(q.subject);
+            }),
+          ),
+          Match.tag('TargetObjectsOf', (t) =>
+            Effect.sync(() => {
+              for (const q of Dataset.match(data, { predicate: t.predicate })) add(q.object);
+            }),
+          ),
+          Match.tag('SparqlTarget', (t) =>
+            Option.match(evaluator, {
+              onNone: () => unsupported(shape, 'sh:target'),
+              onSome: (ev) =>
+                Effect.map(
+                  ev.selectTargets({ dataGraph: data, shapesGraph: shapes, shape, target: t.node }),
+                  (nodes) => nodes.forEach(add),
+                ),
+            }),
+          ),
+          Match.exhaustive,
+        );
       }),
       { concurrency: 1, discard: true },
     );

@@ -15,6 +15,7 @@
  * @since 0.1.0
  */
 import { createServer } from 'node:http';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -60,18 +61,14 @@ const formatParseError = (e: Parser.SparqlParseError): string =>
   `Syntax error at line ${e.line}, column ${e.column}: ${e.message}`;
 
 const fromEngineError = (e: Engine.SparqlError | QueryTimeout): Errors.ProtocolError => {
-  switch (e._tag) {
-    case 'SparqlParseError':
-      return Errors.badRequest(formatParseError(e));
-    case 'UpdateError':
-      return Errors.badRequest(e.message);
-    case 'EvaluationError':
-      return Errors.internal(e.message);
-    case 'StoreError':
-      return Errors.internal(e.message);
-    case 'QueryTimeout':
-      return Errors.timeout('The request exceeded the time limit');
-  }
+  return Match.value(e).pipe(
+    Match.tag('SparqlParseError', (e) => Errors.badRequest(formatParseError(e))),
+    Match.tag('UpdateError', (e) => Errors.badRequest(e.message)),
+    Match.tag('EvaluationError', (e) => Errors.internal(e.message)),
+    Match.tag('StoreError', (e) => Errors.internal(e.message)),
+    Match.tag('QueryTimeout', () => Errors.timeout('The request exceeded the time limit')),
+    Match.exhaustive,
+  );
 };
 
 const withTimeout = <A, E>(
@@ -261,17 +258,27 @@ const endpoint = (options: Options.Resolved, kind: Protocol.EndpointKind) =>
     base.search = '';
     const baseIri = options.baseIri ?? base.href;
     const operation = yield* Protocol.decode(request, kind, baseIri);
-    switch (operation._tag) {
-      case 'Query':
-        return yield* runQuery(options, operation, baseIri);
-      case 'Update':
-        return yield* runUpdate(options, operation, baseIri);
-      case 'ServiceDescription':
-        if (!options.serviceDescription) {
-          return yield* Errors.badRequest("Missing 'query' parameter");
-        }
-        return yield* serviceDescription(options, url);
-    }
+    return yield* Match.value(operation).pipe(
+      Match.tag('Query', (operation) =>
+        Effect.gen(function* () {
+          return yield* runQuery(options, operation, baseIri);
+        }),
+      ),
+      Match.tag('Update', (operation) =>
+        Effect.gen(function* () {
+          return yield* runUpdate(options, operation, baseIri);
+        }),
+      ),
+      Match.tag('ServiceDescription', () =>
+        Effect.gen(function* () {
+          if (!options.serviceDescription) {
+            return yield* Errors.badRequest("Missing 'query' parameter");
+          }
+          return yield* serviceDescription(options, url);
+        }),
+      ),
+      Match.exhaustive,
+    );
   });
 
 // -----------------------------------------------------------------------------

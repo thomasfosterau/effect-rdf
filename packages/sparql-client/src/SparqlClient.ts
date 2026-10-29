@@ -11,6 +11,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Context from 'effect/Context';
 import * as Duration from 'effect/Duration';
 import * as Effect from 'effect/Effect';
@@ -340,13 +341,13 @@ const mediaTypeOf = (response: HttpClientResponse.HttpClientResponse): string =>
 const MAX_ERROR_BODY = 64 * 1024;
 
 const fromHttpClientError = (e: HttpClientError.HttpClientError): Errors.SparqlClientError => {
-  switch (e.reason._tag) {
-    case 'DecodeError':
-    case 'EmptyBodyError':
-      return new Errors.MalformedResponseError({ message: e.message, cause: e });
-    default:
-      return new Errors.TransportError({ message: e.message, cause: e });
-  }
+  return Match.value(e.reason._tag).pipe(
+    Match.when(
+      Match.is('DecodeError', 'EmptyBodyError'),
+      () => new Errors.MalformedResponseError({ message: e.message, cause: e }),
+    ),
+    Match.orElse(() => new Errors.TransportError({ message: e.message, cause: e })),
+  );
 };
 
 const bodyText = (
@@ -548,18 +549,18 @@ export const make = (
 
     const selectBindings: SparqlClientShape['selectBindings'] = (query, options) =>
       Stream.flatMap(results(query, options), (event) => {
-        switch (event._tag) {
-          case 'Solution':
-            return Stream.succeed(event.bindings);
-          case 'Variables':
-            return Stream.empty;
-          case 'Boolean':
-            return Stream.fail(
+        return Match.value(event).pipe(
+          Match.tag('Solution', (event) => Stream.succeed(event.bindings)),
+          Match.tag('Variables', () => Stream.empty),
+          Match.tag('Boolean', () =>
+            Stream.fail(
               new Errors.MalformedResponseError({
                 message: 'Expected solutions but received a boolean result',
               }),
-            );
-        }
+            ),
+          ),
+          Match.exhaustive,
+        );
       });
 
     // SAFETY: both overloads of `select` are one implementation over `QueryInput`;
