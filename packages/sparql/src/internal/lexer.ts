@@ -18,6 +18,7 @@ import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
 import * as Result from 'effect/Result';
+import * as Match from 'effect/Match';
 
 /** The kinds of SPARQL tokens. */
 export type TokenType =
@@ -389,35 +390,38 @@ export const resolve = (
   const resolveIri = (iri: string) => (base !== undefined ? Iri.resolve(iri, base) : iri);
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
-    switch (t.type) {
-      case 'IRI':
+    // How many of the following tokens a directive consumed.
+    const consumed = Match.value(t.type).pipe(
+      Match.when('IRI', () => {
         t.value = resolveIri(t.value);
-        break;
-      case 'PNAME': {
+        return 0;
+      }),
+      Match.when('PNAME', () => {
         const ns = prefixes[t.extra];
         if (ns === undefined) t.error = `Undefined prefix '${t.extra}:'`;
         else t.value = ns + t.value;
-        break;
-      }
-      case 'WORD': {
+        return 0;
+      }),
+      Match.when('WORD', () => {
         const next = tokens[i + 1];
         if (t.kind === 'BASE' && next?.type === 'IRI') {
           next.value = resolveIri(next.value);
           base = next.value;
-          i++;
-        } else if (t.kind === 'PREFIX' && next?.type === 'PNAME' && next.value === '') {
+          return 1;
+        }
+        if (t.kind === 'PREFIX' && next?.type === 'PNAME' && next.value === '') {
           const value = tokens[i + 2];
           if (value?.type === 'IRI') {
             value.value = resolveIri(value.value);
             prefixes[next.extra] = value.value;
-            i += 2;
+            return 2;
           }
         }
-        break;
-      }
-      default:
-        break;
-    }
+        return 0;
+      }),
+      Match.orElse(() => 0),
+    );
+    i += consumed;
   }
   return { base, prefixes };
 };

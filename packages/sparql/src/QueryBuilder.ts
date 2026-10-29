@@ -24,6 +24,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -800,14 +801,12 @@ const empty = Ast.group([]);
 
 const projectionItem = (item: SelectItem): Term.Variable | Ast.Projection => {
   if (Predicate.isString(item)) return Term.variable(item);
-  switch (item._tag) {
-    case 'Variable':
-      return item;
-    case 'Maybe':
-      return Term.variable(item.name);
-    case 'Alias':
-      return Ast.projection(item.expression, Term.variable(item.name));
-  }
+  return Match.value(item).pipe(
+    Match.tag('Variable', (v): Term.Variable | Ast.Projection => v),
+    Match.tag('Maybe', (m) => Term.variable(m.name)),
+    Match.tag('Alias', (a) => Ast.projection(a.expression, Term.variable(a.name))),
+    Match.exhaustive,
+  );
 };
 
 /**

@@ -17,6 +17,7 @@ import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 
 // -----------------------------------------------------------------------------
 // Expressions
@@ -485,54 +486,43 @@ export const variables = (op: Operation): ReadonlySet<string> => {
 };
 
 const collectVariables = (op: Operation, out: Set<string>): void => {
-  switch (op._tag) {
-    case 'Bgp':
-      for (const p of op.patterns) {
+  Match.value(op).pipe(
+    Match.tag('Bgp', (o) => {
+      for (const p of o.patterns) {
         termVariables(p.subject, out);
         termVariables(p.predicate, out);
         termVariables(p.object, out);
       }
-      return;
-    case 'Path':
-      termVariables(op.subject, out);
-      termVariables(op.object, out);
-      return;
-    case 'Join':
-    case 'LeftJoin':
-    case 'Union':
-      collectVariables(op.left, out);
-      collectVariables(op.right, out);
-      return;
-    case 'Minus':
-      collectVariables(op.left, out);
-      return;
-    case 'Filter':
-    case 'OrderBy':
-    case 'Distinct':
-    case 'Reduced':
-    case 'Slice':
-      collectVariables(op.input, out);
-      return;
-    case 'Graph':
-    case 'Service':
-      termVariables(op.name, out);
-      collectVariables(op.input, out);
-      return;
-    case 'Extend':
-      collectVariables(op.input, out);
-      out.add(op.variable.value);
-      return;
-    case 'Group':
-      for (const k of op.keys) out.add(k.variable.value);
-      for (const a of op.aggregates) out.add(a.variable.value);
-      return;
-    case 'Project':
-      for (const v of op.variables) out.add(v.value);
-      return;
-    case 'Values':
-      for (const v of op.variables) out.add(v.value);
-      return;
-  }
+    }),
+    Match.tag('Path', (o) => {
+      termVariables(o.subject, out);
+      termVariables(o.object, out);
+    }),
+    Match.tag('Join', 'LeftJoin', 'Union', (o) => {
+      collectVariables(o.left, out);
+      collectVariables(o.right, out);
+    }),
+    Match.tag('Minus', (o) => collectVariables(o.left, out)),
+    Match.tag('Filter', 'OrderBy', 'Distinct', 'Reduced', 'Slice', (o) =>
+      collectVariables(o.input, out),
+    ),
+    Match.tag('Graph', 'Service', (o) => {
+      termVariables(o.name, out);
+      collectVariables(o.input, out);
+    }),
+    Match.tag('Extend', (o) => {
+      collectVariables(o.input, out);
+      out.add(o.variable.value);
+    }),
+    Match.tag('Group', (o) => {
+      for (const k of o.keys) out.add(k.variable.value);
+      for (const a of o.aggregates) out.add(a.variable.value);
+    }),
+    Match.tag('Project', 'Values', (o) => {
+      for (const v of o.variables) out.add(v.value);
+    }),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -543,47 +533,40 @@ const collectVariables = (op: Operation, out: Set<string>): void => {
  * @category utils
  */
 export const certainVariables = (op: Operation): ReadonlySet<string> => {
-  switch (op._tag) {
-    case 'Bgp':
-    case 'Path':
-      return variables(op);
-    case 'Join': {
-      const out = new Set(certainVariables(op.left));
-      for (const v of certainVariables(op.right)) out.add(v);
+  return Match.value(op).pipe(
+    Match.tag('Bgp', 'Path', (o): ReadonlySet<string> => variables(o)),
+    Match.tag('Join', (o) => {
+      const out = new Set(certainVariables(o.left));
+      for (const v of certainVariables(o.right)) out.add(v);
       return out;
-    }
-    case 'LeftJoin':
-    case 'Minus':
-      return certainVariables(op.left);
-    case 'Union': {
-      const right = certainVariables(op.right);
-      return new Set(Array.from(certainVariables(op.left)).filter((v) => right.has(v)));
-    }
-    case 'Filter':
-    case 'OrderBy':
-    case 'Distinct':
-    case 'Reduced':
-    case 'Slice':
-    case 'Extend':
-      return certainVariables(op.input);
-    case 'Graph':
-    case 'Service': {
-      const out = new Set(certainVariables(op.input));
-      if (op.name._tag === 'Variable') out.add(op.name.value);
+    }),
+    Match.tag('LeftJoin', 'Minus', (o) => certainVariables(o.left)),
+    Match.tag('Union', (o) => {
+      const right = certainVariables(o.right);
+      return new Set(Array.from(certainVariables(o.left)).filter((v) => right.has(v)));
+    }),
+    Match.tag('Filter', 'OrderBy', 'Distinct', 'Reduced', 'Slice', 'Extend', (o) =>
+      certainVariables(o.input),
+    ),
+    Match.tag('Graph', 'Service', (o) => {
+      const out = new Set(certainVariables(o.input));
+      if (o.name._tag === 'Variable') out.add(o.name.value);
       return out;
-    }
-    case 'Group':
-      return new Set();
-    case 'Project': {
-      const inner = certainVariables(op.input);
-      return new Set(op.variables.map((v) => v.value).filter((v) => inner.has(v)));
-    }
-    case 'Values': {
-      return new Set(
-        op.variables.map((v) => v.value).filter((v) => op.bindings.every((b) => b.map.has(v))),
-      );
-    }
-  }
+    }),
+    Match.tag('Group', () => new Set<string>()),
+    Match.tag('Project', (o) => {
+      const inner = certainVariables(o.input);
+      return new Set(o.variables.map((v) => v.value).filter((v) => inner.has(v)));
+    }),
+    Match.tag(
+      'Values',
+      (o) =>
+        new Set(
+          o.variables.map((v) => v.value).filter((v) => o.bindings.every((b) => b.map.has(v))),
+        ),
+    ),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -595,18 +578,11 @@ export const certainVariables = (op: Operation): ReadonlySet<string> => {
 export const expressionVariables = (expression: Expression): ReadonlySet<string> => {
   const out = new Set<string>();
   const go = (e: Expression): void => {
-    switch (e._tag) {
-      case 'Variable':
-      case 'Triple':
-        termVariables(e, out);
-        return;
-      case 'Operation':
-      case 'FunctionCall':
-        e.args.forEach(go);
-        return;
-      default:
-        return;
-    }
+    Match.value(e).pipe(
+      Match.tag('Variable', 'Triple', (t) => termVariables(t, out)),
+      Match.tag('Operation', 'FunctionCall', (call) => call.args.forEach(go)),
+      Match.orElse(() => undefined),
+    );
   };
   go(expression);
   return out;
@@ -619,15 +595,11 @@ export const expressionVariables = (expression: Expression): ReadonlySet<string>
  * @category utils
  */
 export const containsExists = (expression: Expression): boolean => {
-  switch (expression._tag) {
-    case 'Exists':
-      return true;
-    case 'Operation':
-    case 'FunctionCall':
-      return expression.args.some(containsExists);
-    default:
-      return false;
-  }
+  return Match.value(expression).pipe(
+    Match.tag('Exists', () => true),
+    Match.tag('Operation', 'FunctionCall', (call) => call.args.some(containsExists)),
+    Match.orElse(() => false),
+  );
 };
 
 /**
@@ -649,31 +621,27 @@ export const transform = (op: Operation, f: (op: Operation) => Operation): Opera
  * @category utils
  */
 export const mapChildren = (op: Operation, f: (op: Operation) => Operation): Operation => {
-  switch (op._tag) {
-    case 'Bgp':
-    case 'Path':
-    case 'Values':
-      return op;
-    case 'Join':
-    case 'Union':
-    case 'Minus':
-      return { ...op, left: f(op.left), right: f(op.right) };
-    case 'LeftJoin':
-      return { ...op, left: f(op.left), right: f(op.right) };
-    case 'Filter':
-    case 'Graph':
-    case 'Extend':
-    case 'Group':
-    case 'OrderBy':
-    case 'Project':
-    case 'Distinct':
-    case 'Reduced':
-    case 'Slice':
-    case 'Service':
-      // SAFETY: every case listed here has an `input`, and replacing it keeps the operation's own
-      // tag.
-      return { ...op, input: f(op.input) } as Operation;
-  }
+  return Match.value(op).pipe(
+    Match.tag('Bgp', 'Path', 'Values', (o): Operation => o),
+    Match.tag('Join', 'Union', 'Minus', (o) => ({ ...o, left: f(o.left), right: f(o.right) })),
+    Match.tag('LeftJoin', (o) => ({ ...o, left: f(o.left), right: f(o.right) })),
+    Match.tag(
+      'Filter',
+      'Graph',
+      'Extend',
+      'Group',
+      'OrderBy',
+      'Project',
+      'Distinct',
+      'Reduced',
+      'Slice',
+      'Service',
+      // SAFETY: every operator listed here has an `input`, and replacing it keeps the
+      // operator's own tag.
+      (o) => ({ ...o, input: f(o.input) }) as Operation,
+    ),
+    Match.exhaustive,
+  );
 };
 
 const termText = (t: Term.Term | Ast.TermPattern): string =>
@@ -682,24 +650,21 @@ const termText = (t: Term.Term | Ast.TermPattern): string =>
     : t.toString();
 
 const pathText = (p: Ast.Path): string => {
-  switch (p._tag) {
-    case 'PathLink':
-      return termText(p.iri);
-    case 'PathInverse':
-      return `(inv ${pathText(p.path)})`;
-    case 'PathSequence':
-      return `(seq ${p.paths.map(pathText).join(' ')})`;
-    case 'PathAlternative':
-      return `(alt ${p.paths.map(pathText).join(' ')})`;
-    case 'PathZeroOrMore':
-      return `(path* ${pathText(p.path)})`;
-    case 'PathOneOrMore':
-      return `(path+ ${pathText(p.path)})`;
-    case 'PathZeroOrOne':
-      return `(path? ${pathText(p.path)})`;
-    case 'PathNegated':
-      return `(notoneof ${[...p.iris.map(termText), ...p.inverse.map((i) => `^${termText(i)}`)].join(' ')})`;
-  }
+  return Match.value(p).pipe(
+    Match.tag('PathLink', (l) => termText(l.iri)),
+    Match.tag('PathInverse', (i) => `(inv ${pathText(i.path)})`),
+    Match.tag('PathSequence', (s) => `(seq ${s.paths.map(pathText).join(' ')})`),
+    Match.tag('PathAlternative', (a) => `(alt ${a.paths.map(pathText).join(' ')})`),
+    Match.tag('PathZeroOrMore', (z) => `(path* ${pathText(z.path)})`),
+    Match.tag('PathOneOrMore', (o) => `(path+ ${pathText(o.path)})`),
+    Match.tag('PathZeroOrOne', (z) => `(path? ${pathText(z.path)})`),
+    Match.tag(
+      'PathNegated',
+      (n) =>
+        `(notoneof ${[...n.iris.map(termText), ...n.inverse.map((i) => `^${termText(i)}`)].join(' ')})`,
+    ),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -709,16 +674,18 @@ const pathText = (p: Ast.Path): string => {
  * @category formatting
  */
 export const formatExpression = (e: Expression): string => {
-  switch (e._tag) {
-    case 'Operation':
-      return `(${e.operator.toLowerCase()} ${e.args.map(formatExpression).join(' ')})`;
-    case 'FunctionCall':
-      return `(${termText(e.function)} ${e.args.map(formatExpression).join(' ')})`;
-    case 'Exists':
-      return `(${e.negated ? 'notexists' : 'exists'} ${format(e.input)})`;
-    default:
-      return termText(e);
-  }
+  return Match.value(e).pipe(
+    Match.tag(
+      'Operation',
+      (o) => `(${o.operator.toLowerCase()} ${o.args.map(formatExpression).join(' ')})`,
+    ),
+    Match.tag(
+      'FunctionCall',
+      (c) => `(${termText(c.function)} ${c.args.map(formatExpression).join(' ')})`,
+    ),
+    Match.tag('Exists', (x) => `(${x.negated ? 'notexists' : 'exists'} ${format(x.input)})`),
+    Match.orElse((t) => termText(t)),
+  );
 };
 
 /**
@@ -731,47 +698,63 @@ export const formatExpression = (e: Expression): string => {
 export const format = (op: Operation, indent = ''): string => {
   const next = `${indent}  `;
   const sub = (o: Operation) => `\n${next}${format(o, next)}`;
-  switch (op._tag) {
-    case 'Bgp':
-      return `(bgp${op.patterns.map((p) => ` (triple ${termText(p.subject)} ${termText(p.predicate)} ${termText(p.object)})`).join('')})`;
-    case 'Path':
-      return `(path ${termText(op.subject)} ${pathText(op.path)} ${termText(op.object)})`;
-    case 'Join':
-      return `(join${sub(op.left)}${sub(op.right)})`;
-    case 'LeftJoin':
-      return `(leftjoin${sub(op.left)}${sub(op.right)}${op.expression !== undefined ? `\n${next}${formatExpression(op.expression)}` : ''})`;
-    case 'Filter':
-      return `(filter ${formatExpression(op.expression)}${sub(op.input)})`;
-    case 'Union':
-      return `(union${sub(op.left)}${sub(op.right)})`;
-    case 'Graph':
-      return `(graph ${termText(op.name)}${sub(op.input)})`;
-    case 'Extend':
-      return `(extend ((${termText(op.variable)} ${formatExpression(op.expression)}))${sub(op.input)})`;
-    case 'Minus':
-      return `(minus${sub(op.left)}${sub(op.right)})`;
-    case 'Group':
-      return `(group (${op.keys.map((k) => `(${termText(k.variable)} ${formatExpression(k.expression)})`).join(' ')}) (${op.aggregates
-        .map(
-          (a) =>
-            `(${termText(a.variable)} (${a.aggregate.name.toLowerCase()}${a.aggregate.distinct ? ' distinct' : ''} ${a.aggregate.expression === '*' ? '*' : formatExpression(a.aggregate.expression)}))`,
-        )
-        .join(' ')})${sub(op.input)})`;
-    case 'OrderBy':
-      return `(order (${op.conditions.map((c) => (c.descending ? `(desc ${formatExpression(c.expression)})` : formatExpression(c.expression))).join(' ')})${sub(op.input)})`;
-    case 'Project':
-      return `(project (${op.variables.map(termText).join(' ')})${sub(op.input)})`;
-    case 'Distinct':
-      return `(distinct${sub(op.input)})`;
-    case 'Reduced':
-      return `(reduced${sub(op.input)})`;
-    case 'Slice':
-      return `(slice ${op.offset} ${op.limit ?? '_'}${sub(op.input)})`;
-    case 'Values':
-      return `(table (vars ${op.variables.map(termText).join(' ')}) ${op.bindings.length} rows)`;
-    case 'Service':
-      return `(service ${op.silent ? 'silent ' : ''}${termText(op.name)}${sub(op.input)})`;
-  }
+  return Match.value(op).pipe(
+    Match.tag(
+      'Bgp',
+      (o) =>
+        `(bgp${o.patterns.map((p) => ` (triple ${termText(p.subject)} ${termText(p.predicate)} ${termText(p.object)})`).join('')})`,
+    ),
+    Match.tag(
+      'Path',
+      (o) => `(path ${termText(o.subject)} ${pathText(o.path)} ${termText(o.object)})`,
+    ),
+    Match.tag('Join', (o) => `(join${sub(o.left)}${sub(o.right)})`),
+    Match.tag(
+      'LeftJoin',
+      (o) =>
+        `(leftjoin${sub(o.left)}${sub(o.right)}${o.expression !== undefined ? `\n${next}${formatExpression(o.expression)}` : ''})`,
+    ),
+    Match.tag('Filter', (o) => `(filter ${formatExpression(o.expression)}${sub(o.input)})`),
+    Match.tag('Union', (o) => `(union${sub(o.left)}${sub(o.right)})`),
+    Match.tag('Graph', (o) => `(graph ${termText(o.name)}${sub(o.input)})`),
+    Match.tag(
+      'Extend',
+      (o) =>
+        `(extend ((${termText(o.variable)} ${formatExpression(o.expression)}))${sub(o.input)})`,
+    ),
+    Match.tag('Minus', (o) => `(minus${sub(o.left)}${sub(o.right)})`),
+    Match.tag(
+      'Group',
+      (o) =>
+        `(group (${o.keys.map((k) => `(${termText(k.variable)} ${formatExpression(k.expression)})`).join(' ')}) (${o.aggregates
+          .map(
+            (a) =>
+              `(${termText(a.variable)} (${a.aggregate.name.toLowerCase()}${a.aggregate.distinct ? ' distinct' : ''} ${a.aggregate.expression === '*' ? '*' : formatExpression(a.aggregate.expression)}))`,
+          )
+          .join(' ')})${sub(o.input)})`,
+    ),
+    Match.tag(
+      'OrderBy',
+      (o) =>
+        `(order (${o.conditions.map((c) => (c.descending ? `(desc ${formatExpression(c.expression)})` : formatExpression(c.expression))).join(' ')})${sub(o.input)})`,
+    ),
+    Match.tag(
+      'Project',
+      (o) => `(project (${o.variables.map(termText).join(' ')})${sub(o.input)})`,
+    ),
+    Match.tag('Distinct', (o) => `(distinct${sub(o.input)})`),
+    Match.tag('Reduced', (o) => `(reduced${sub(o.input)})`),
+    Match.tag('Slice', (o) => `(slice ${o.offset} ${o.limit ?? '_'}${sub(o.input)})`),
+    Match.tag(
+      'Values',
+      (o) => `(table (vars ${o.variables.map(termText).join(' ')}) ${o.bindings.length} rows)`,
+    ),
+    Match.tag(
+      'Service',
+      (o) => `(service ${o.silent ? 'silent ' : ''}${termText(o.name)}${sub(o.input)})`,
+    ),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -797,16 +780,18 @@ export const mapExpressionPatterns = (
   expression: Expression,
   f: (op: Operation) => Operation,
 ): Expression => {
-  switch (expression._tag) {
-    case 'Exists':
-      return { ...expression, input: f(expression.input) };
-    case 'Operation':
-      return { ...expression, args: expression.args.map((a) => mapExpressionPatterns(a, f)) };
-    case 'FunctionCall':
-      return { ...expression, args: expression.args.map((a) => mapExpressionPatterns(a, f)) };
-    default:
-      return expression;
-  }
+  return Match.value(expression).pipe(
+    Match.tag('Exists', (x): Expression => ({ ...x, input: f(x.input) })),
+    Match.tag('Operation', (o) => ({
+      ...o,
+      args: o.args.map((a) => mapExpressionPatterns(a, f)),
+    })),
+    Match.tag('FunctionCall', (c) => ({
+      ...c,
+      args: c.args.map((a) => mapExpressionPatterns(a, f)),
+    })),
+    Match.orElse((e) => e),
+  );
 };
 
 /**
@@ -863,62 +848,60 @@ export const prebind = (op: Operation, bindings: Bindings): Operation => {
   };
   const expr = (e: Expression): Expression => mapExpressionPatterns(e, go);
   const go = (o: Operation): Operation => {
-    switch (o._tag) {
-      case 'Bgp':
-        return Arr.isReadonlyArrayEmpty(o.patterns)
+    return Match.value(o).pipe(
+      Match.tag('Bgp', (b): Operation =>
+        Arr.isReadonlyArrayEmpty(b.patterns)
           ? table
           : join(
               table,
               bgp(
-                o.patterns.map((p): Ast.TriplePattern => ({
+                b.patterns.map((p): Ast.TriplePattern => ({
                   _tag: 'TriplePattern',
                   subject: term(p.subject),
                   predicate: predicate(p.predicate),
                   object: term(p.object),
                 })),
               ),
-            );
-      case 'Path':
-        return join(table, { ...o, subject: term(o.subject), object: term(o.object) });
-      case 'Graph': {
-        const input = go(o.input);
-        const value = o.name._tag === 'Variable' ? bindings.map.get(o.name.value) : undefined;
-        if (value === undefined) return { ...o, input };
+            ),
+      ),
+      Match.tag('Path', (p) =>
+        join(table, { ...p, subject: term(p.subject), object: term(p.object) }),
+      ),
+      Match.tag('Graph', (g) => {
+        const input = go(g.input);
+        const value = g.name._tag === 'Variable' ? bindings.map.get(g.name.value) : undefined;
+        if (value === undefined) return { ...g, input };
         return join(
           table,
-          value._tag === 'NamedNode' ? { ...o, name: value, input } : { ...o, input },
+          value._tag === 'NamedNode' ? { ...g, name: value, input } : { ...g, input },
         );
-      }
-      case 'Filter':
-        return { ...o, expression: expr(o.expression), input: go(o.input) };
-      case 'LeftJoin':
-        return o.expression === undefined
-          ? { ...o, left: go(o.left), right: go(o.right) }
-          : { ...o, left: go(o.left), right: go(o.right), expression: expr(o.expression) };
-      case 'Extend':
-        return { ...o, expression: expr(o.expression), input: go(o.input) };
-      case 'OrderBy':
-        return {
-          ...o,
-          input: go(o.input),
-          conditions: o.conditions.map((c) => ({ ...c, expression: expr(c.expression) })),
-        };
-      case 'Group':
-        return {
-          ...o,
-          input: go(o.input),
-          keys: o.keys.map((k) => ({ ...k, expression: expr(k.expression) })),
-          aggregates: o.aggregates.map((a) => ({
-            ...a,
-            aggregate:
-              a.aggregate.expression === '*'
-                ? a.aggregate
-                : { ...a.aggregate, expression: expr(a.aggregate.expression) },
-          })),
-        };
-      default:
-        return mapChildren(o, go);
-    }
+      }),
+      Match.tag('Filter', (x) => ({ ...x, expression: expr(x.expression), input: go(x.input) })),
+      Match.tag('LeftJoin', (l) =>
+        l.expression === undefined
+          ? { ...l, left: go(l.left), right: go(l.right) }
+          : { ...l, left: go(l.left), right: go(l.right), expression: expr(l.expression) },
+      ),
+      Match.tag('Extend', (x) => ({ ...x, expression: expr(x.expression), input: go(x.input) })),
+      Match.tag('OrderBy', (x) => ({
+        ...x,
+        input: go(x.input),
+        conditions: x.conditions.map((c) => ({ ...c, expression: expr(c.expression) })),
+      })),
+      Match.tag('Group', (x) => ({
+        ...x,
+        input: go(x.input),
+        keys: x.keys.map((k) => ({ ...k, expression: expr(k.expression) })),
+        aggregates: x.aggregates.map((a) => ({
+          ...a,
+          aggregate:
+            a.aggregate.expression === '*'
+              ? a.aggregate
+              : { ...a.aggregate, expression: expr(a.aggregate.expression) },
+        })),
+      })),
+      Match.orElse((x) => mapChildren(x, go)),
+    );
   };
   return go(op);
 };

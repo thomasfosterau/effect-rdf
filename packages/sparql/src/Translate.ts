@@ -11,6 +11,7 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Cause from 'effect/Cause';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
@@ -27,18 +28,17 @@ class Translator {
   // --- terms ----------------------------------------------------------------
 
   termPattern(t: Ast.TermPattern): Ast.TermPattern {
-    switch (t._tag) {
-      case 'BlankNode':
-        return Algebra.internalVariable(`b:${t.value}`);
-      case 'Triple':
-        return Term.triple<any, any, any>(
-          this.termPattern(t.subject),
-          this.termPattern(t.predicate),
-          this.termPattern(t.object),
-        );
-      default:
-        return t;
-    }
+    return Match.value(t).pipe(
+      Match.tag('BlankNode', (b): Ast.TermPattern => Algebra.internalVariable(`b:${b.value}`)),
+      Match.tag('Triple', (x) =>
+        Term.triple<any, any, any>(
+          this.termPattern(x.subject),
+          this.termPattern(x.predicate),
+          this.termPattern(x.object),
+        ),
+      ),
+      Match.orElse((x) => x),
+    );
   }
 
   // --- graph patterns -------------------------------------------------------
@@ -60,24 +60,17 @@ class Translator {
     }
     let result: Algebra.Operation = Algebra.unit;
     for (const e of elements) {
-      switch (e._tag) {
-        case 'Optional': {
-          const a = this.group(e.pattern);
-          result =
-            a._tag === 'Filter'
-              ? Algebra.leftJoin(result, a.input, a.expression)
-              : Algebra.leftJoin(result, a);
-          break;
-        }
-        case 'Minus':
-          result = Algebra.minus(result, this.group(e.pattern));
-          break;
-        case 'Bind':
-          result = Algebra.extend(result, e.variable, this.expression(e.expression));
-          break;
-        default:
-          result = Algebra.join(result, this.pattern(e));
-      }
+      result = Match.value(e).pipe(
+        Match.tag('Optional', (o): Algebra.Operation => {
+          const a = this.group(o.pattern);
+          return a._tag === 'Filter'
+            ? Algebra.leftJoin(result, a.input, a.expression)
+            : Algebra.leftJoin(result, a);
+        }),
+        Match.tag('Minus', (m) => Algebra.minus(result, this.group(m.pattern))),
+        Match.tag('Bind', (b) => Algebra.extend(result, b.variable, this.expression(b.expression))),
+        Match.orElse((p) => Algebra.join(result, this.pattern(p))),
+      );
     }
     if (Arr.isReadonlyArrayNonEmpty(filters)) {
       const conjunction = filters
@@ -89,37 +82,35 @@ class Translator {
   }
 
   pattern(p: Ast.Pattern): Algebra.Operation {
-    switch (p._tag) {
-      case 'Bgp':
-        return this.triples(p.triples);
-      case 'Group':
-        return this.group(p);
-      case 'Union':
-        return p.patterns.map((g) => this.group(g)).reduce((a, b) => Algebra.union(a, b));
-      case 'Graph':
-        return { _tag: 'Graph', name: p.name, input: this.group(p.pattern) };
-      case 'Service':
-        return {
-          _tag: 'Service',
-          name: p.name,
-          silent: p.silent,
-          input: this.group(p.pattern),
-          pattern: p.pattern,
-          prefixes: {},
-        };
-      case 'Values':
-        return values(p);
-      case 'SubSelect':
-        return this.query(p.query).input;
-      case 'Optional':
-        return Algebra.leftJoin(Algebra.unit, this.group(p.pattern));
-      case 'Minus':
-        return Algebra.minus(Algebra.unit, this.group(p.pattern));
-      case 'Filter':
-        return Algebra.filter(this.expression(p.expression), Algebra.unit);
-      case 'Bind':
-        return Algebra.extend(Algebra.unit, p.variable, this.expression(p.expression));
-    }
+    return Match.value(p).pipe(
+      Match.tag('Bgp', (b): Algebra.Operation => this.triples(b.triples)),
+      Match.tag('Group', (g) => this.group(g)),
+      Match.tag('Union', (u) =>
+        u.patterns.map((g) => this.group(g)).reduce((a, b) => Algebra.union(a, b)),
+      ),
+      Match.tag('Graph', (g): Algebra.Operation => ({
+        _tag: 'Graph',
+        name: g.name,
+        input: this.group(g.pattern),
+      })),
+      Match.tag('Service', (s): Algebra.Operation => ({
+        _tag: 'Service',
+        name: s.name,
+        silent: s.silent,
+        input: this.group(s.pattern),
+        pattern: s.pattern,
+        prefixes: {},
+      })),
+      Match.tag('Values', (v) => values(v)),
+      Match.tag('SubSelect', (s) => this.query(s.query).input),
+      Match.tag('Optional', (o) => Algebra.leftJoin(Algebra.unit, this.group(o.pattern))),
+      Match.tag('Minus', (m) => Algebra.minus(Algebra.unit, this.group(m.pattern))),
+      Match.tag('Filter', (f) => Algebra.filter(this.expression(f.expression), Algebra.unit)),
+      Match.tag('Bind', (b) =>
+        Algebra.extend(Algebra.unit, b.variable, this.expression(b.expression)),
+      ),
+      Match.exhaustive,
+    );
   }
 
   triples(triples: ReadonlyArray<Ast.TriplePattern | Ast.PathPattern>): Algebra.Operation {
@@ -130,28 +121,28 @@ class Translator {
       current = [];
     };
     const emitPath = (s: Ast.TermPattern, path: Ast.Path, o: Ast.TermPattern): void => {
-      switch (path._tag) {
-        case 'PathLink':
-          current.push(Ast.triplePattern(s, path.iri, o));
-          return;
-        case 'PathInverse':
-          if (path.path._tag === 'PathLink') {
-            current.push(Ast.triplePattern(o, path.path.iri, s));
-            return;
-          }
-          break;
-        case 'PathSequence': {
+      const emitted = Match.value(path).pipe(
+        Match.tag('PathLink', (link) => {
+          current.push(Ast.triplePattern(s, link.iri, o));
+          return true;
+        }),
+        Match.tag('PathInverse', (inv) => {
+          if (inv.path._tag !== 'PathLink') return false;
+          current.push(Ast.triplePattern(o, inv.path.iri, s));
+          return true;
+        }),
+        Match.tag('PathSequence', (seq) => {
           let from = s;
-          path.paths.forEach((step, i) => {
-            const to = i === path.paths.length - 1 ? o : this.fresh('p');
+          seq.paths.forEach((step, i) => {
+            const to = i === seq.paths.length - 1 ? o : this.fresh('p');
             emitPath(from, step, to);
             from = to;
           });
-          return;
-        }
-        default:
-          break;
-      }
+          return true;
+        }),
+        Match.orElse(() => false),
+      );
+      if (emitted) return;
       flush();
       parts.push({ _tag: 'Path', subject: s, path, object: o });
     };
@@ -172,35 +163,40 @@ class Translator {
     e: Ast.Expression,
     aggregates?: (a: Ast.AggregateExpression) => Term.Variable,
   ): Algebra.Expression {
-    switch (e._tag) {
-      case 'Variable':
-      case 'NamedNode':
-      case 'Literal':
-      case 'BlankNode':
-      case 'Triple':
-        return e;
-      case 'Operation':
-        return {
-          _tag: 'Operation',
-          operator: e.operator,
-          args: e.args.map((a) => this.expression(a, aggregates)),
-        };
-      case 'FunctionCall':
-        return {
-          _tag: 'FunctionCall',
-          function: e.function,
-          args: e.args.map((a) => this.expression(a, aggregates)),
-        };
-      case 'Exists':
-        // Not simplified: the empty BGPs at the start of each group are the
-        // "ContextSolution" through which the current solution flows into
-        // the pattern (SPARQL 1.2 §18.6).
-        return { _tag: 'Exists', negated: e.negated, input: this.group(e.pattern) };
-      case 'Aggregate':
+    return Match.value(e).pipe(
+      Match.tag(
+        'Variable',
+        'NamedNode',
+        'Literal',
+        'BlankNode',
+        'Triple',
+        (t): Algebra.Expression => t,
+      ),
+      Match.tag('Operation', (o): Algebra.Expression => ({
+        _tag: 'Operation',
+        operator: o.operator,
+        args: o.args.map((a) => this.expression(a, aggregates)),
+      })),
+      Match.tag('FunctionCall', (c): Algebra.Expression => ({
+        _tag: 'FunctionCall',
+        function: c.function,
+        args: c.args.map((a) => this.expression(a, aggregates)),
+      })),
+      // Not simplified: the empty BGPs at the start of each group are the
+      // "ContextSolution" through which the current solution flows into
+      // the pattern (SPARQL 1.2 §18.6).
+      Match.tag('Exists', (x): Algebra.Expression => ({
+        _tag: 'Exists',
+        negated: x.negated,
+        input: this.group(x.pattern),
+      })),
+      Match.tag('Aggregate', (a) => {
         if (aggregates === undefined)
           throw new Cause.IllegalArgumentError('Aggregate outside of an aggregation context');
-        return aggregates(e);
-    }
+        return aggregates(a);
+      }),
+      Match.exhaustive,
+    );
   }
 
   // --- queries --------------------------------------------------------------
@@ -245,20 +241,22 @@ class Translator {
       };
       // Variables outside aggregates that are not group keys are sampled.
       const sampleVariables = (e: Ast.Expression, aliases: ReadonlySet<string>): Ast.Expression => {
-        switch (e._tag) {
-          case 'Variable':
-            return keyNames.has(e.value) || aliases.has(e.value) ? e : Ast.aggregate('SAMPLE', e);
-          case 'Operation':
-            return Ast.operation(e.operator, ...e.args.map((a) => sampleVariables(a, aliases)));
-          case 'FunctionCall':
-            return Ast.functionCall(
-              e.function,
-              e.args.map((a) => sampleVariables(a, aliases)),
-              e.distinct,
-            );
-          default:
-            return e;
-        }
+        return Match.value(e).pipe(
+          Match.tag('Variable', (v): Ast.Expression =>
+            keyNames.has(v.value) || aliases.has(v.value) ? v : Ast.aggregate('SAMPLE', v),
+          ),
+          Match.tag('Operation', (o) =>
+            Ast.operation(o.operator, ...o.args.map((a) => sampleVariables(a, aliases))),
+          ),
+          Match.tag('FunctionCall', (c) =>
+            Ast.functionCall(
+              c.function,
+              c.args.map((a) => sampleVariables(a, aliases)),
+              c.distinct,
+            ),
+          ),
+          Match.orElse((x) => x),
+        );
       };
       translateLevel = (e, aliases) =>
         this.expression(sampleVariables(e, aliases), aggregateVariable);
@@ -305,21 +303,24 @@ class Translator {
         : input;
     const dataset = q.dataset !== undefined ? { dataset: q.dataset } : {};
 
-    switch (q._tag) {
-      case 'Select': {
-        const variables = Ast.projectedVariables(q).map((v) => Term.variable(v));
+    return Match.value(q).pipe(
+      Match.tag('Select', (s): Algebra.Query => {
+        const variables = Ast.projectedVariables(s).map((v) => Term.variable(v));
         op = Algebra.project(op, variables);
-        if (q.distinct) op = { _tag: 'Distinct', input: op };
-        else if (q.reduced) op = { _tag: 'Reduced', input: op };
+        if (s.distinct) op = { _tag: 'Distinct', input: op };
+        else if (s.reduced) op = { _tag: 'Reduced', input: op };
         return { _tag: 'Select', input: slice(op), variables, ...dataset };
-      }
-      case 'Ask':
-        return { _tag: 'Ask', input: slice(op), ...dataset };
-      case 'Construct':
-        return { _tag: 'Construct', input: slice(op), template: q.template, ...dataset };
-      case 'Describe': {
+      }),
+      Match.tag('Ask', (): Algebra.Query => ({ _tag: 'Ask', input: slice(op), ...dataset })),
+      Match.tag('Construct', (c): Algebra.Query => ({
+        _tag: 'Construct',
+        input: slice(op),
+        template: c.template,
+        ...dataset,
+      })),
+      Match.tag('Describe', (d): Algebra.Query => {
         const terms =
-          q.terms === '*' ? Ast.inScopeVariables(q.where).map((v) => Term.variable(v)) : q.terms;
+          d.terms === '*' ? Ast.inScopeVariables(d.where).map((v) => Term.variable(v)) : d.terms;
         const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
         return {
           _tag: 'Describe',
@@ -327,8 +328,9 @@ class Translator {
           terms,
           ...dataset,
         };
-      }
-    }
+      }),
+      Match.exhaustive,
+    );
   }
 }
 

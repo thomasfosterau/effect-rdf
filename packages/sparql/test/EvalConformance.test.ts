@@ -5,6 +5,7 @@ import { assert, describe, expect, it } from '@effect/vitest';
 import * as Arr from 'effect/Array';
 import * as Str from 'effect/String';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
@@ -150,38 +151,42 @@ const runQueryTest = (t: TestCase, optimize = true) =>
     const engine = Engine.make(store, { baseIri, optimize });
     const result = yield* engine.query(query);
     const expected = readExpected(t.result!);
-    switch (result._tag) {
-      case 'Ask':
-        expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({
-          _tag: 'Boolean',
-          value: result.value,
-        });
-        return;
-      case 'Graph': {
-        const quads = yield* Stream.runCollect(result.quads);
-        const actual = Dataset.fromIterable(quads);
-        // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
-        expectIsomorphic(actual, expected as Dataset.Dataset);
-        return;
-      }
-      case 'Select': {
-        const set = yield* Results.collect(result);
-        let actual = set.bindings;
-        // SAFETY: a SELECT test's expected result was loaded as a result set.
-        let exp = (expected as Results.ResultSet).bindings;
-        if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
-          // Round-trip our results through CSV, as CSV is lossy.
-          const csv = Results.Csv.serializeString(set);
-          // SAFETY: the CSV serialization of a result set parses back to a result set.
-          actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
-        }
-        if (t.result!.endsWith('.tsv') || t.result!.endsWith('.csv')) {
-          exp = exp.map((b) => b);
-        }
-        expectSameSolutions(actual, exp, orderVariables(query), t.laxCardinality);
-        return;
-      }
-    }
+    yield* Match.value(result).pipe(
+      Match.tag('Ask', (ask) =>
+        Effect.sync(() => {
+          expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({
+            _tag: 'Boolean',
+            value: ask.value,
+          });
+        }),
+      ),
+      Match.tag('Graph', (graph) =>
+        Effect.map(Stream.runCollect(graph.quads), (quads) => {
+          const actual = Dataset.fromIterable(quads);
+          // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
+          expectIsomorphic(actual, expected as Dataset.Dataset);
+        }),
+      ),
+      Match.tag('Select', (select) =>
+        Effect.gen(function* () {
+          const set = yield* Results.collect(select);
+          let actual = set.bindings;
+          // SAFETY: a SELECT test's expected result was loaded as a result set.
+          let exp = (expected as Results.ResultSet).bindings;
+          if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+            // Round-trip our results through CSV, as CSV is lossy.
+            const csv = Results.Csv.serializeString(set);
+            // SAFETY: the CSV serialization of a result set parses back to a result set.
+            actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
+          }
+          if (t.result!.endsWith('.tsv') || t.result!.endsWith('.csv')) {
+            exp = exp.map((b) => b);
+          }
+          expectSameSolutions(actual, exp, orderVariables(query), t.laxCardinality);
+        }),
+      ),
+      Match.exhaustive,
+    );
   });
 
 const updateEngine = (t: TestCase) =>

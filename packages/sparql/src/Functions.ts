@@ -10,6 +10,7 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
@@ -115,14 +116,15 @@ const roundNum = (
   fn: (x: number) => number,
 ): Term.Literal => {
   const n = numArg(t);
-  switch (n.kind) {
-    case 0:
-      return V.numLiteral(n);
-    case 1:
-      return V.numLiteral({ kind: 1, v: BigDecimal.round(n.v, { scale: 0, mode }) });
-    default:
-      return V.numLiteral({ kind: n.kind, v: fn(n.v) });
-  }
+  return Match.value(n).pipe(
+    Match.when({ kind: 0 }, (i) => V.numLiteral(i)),
+    Match.when({ kind: 1 }, (d) =>
+      V.numLiteral({ kind: 1, v: BigDecimal.round(d.v, { scale: 0, mode }) }),
+    ),
+    Match.when({ kind: 2 }, (f) => V.numLiteral({ kind: 2, v: fn(f.v) })),
+    Match.when({ kind: 3 }, (f) => V.numLiteral({ kind: 3, v: fn(f.v) })),
+    Match.exhaustive,
+  );
 };
 
 const xpathRound = (x: number): number => {
@@ -141,21 +143,18 @@ export const compileRegex = (pattern: string, flags: string, global = false): Re
   let source = pattern;
   let jsFlags = global ? 'g' : '';
   for (const f of flags) {
-    switch (f) {
-      case 'i':
-      case 's':
-      case 'm':
-        if (!jsFlags.includes(f)) jsFlags += f;
-        break;
-      case 'x':
+    Match.value(f).pipe(
+      Match.when(Match.is('i', 's', 'm'), (flag) => {
+        if (!jsFlags.includes(flag)) jsFlags += flag;
+      }),
+      Match.when('x', () => {
         source = source.replace(/[\t\n\r ]/g, '');
-        break;
-      case 'q':
+      }),
+      Match.when('q', () => {
         source = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        break;
-      default:
-        return V.fail(`Invalid regex flag '${f}'`);
-    }
+      }),
+      Match.orElse((flag) => V.fail(`Invalid regex flag '${flag}'`)),
+    );
   }
   // Unicode mode first; patterns it rejects may still compile without it.
   const compiled = Result.try(() => new RegExp(source, `${jsFlags}u`)).pipe(
@@ -271,14 +270,10 @@ const hashFn =
  */
 export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   STR: ([a]) => {
-    switch (a!._tag) {
-      case 'NamedNode':
-        return V.simple(a.value);
-      case 'Literal':
-        return V.simple(a.value);
-      default:
-        return V.fail('STR of a blank node or triple term');
-    }
+    return Match.value(a!).pipe(
+      Match.tag('NamedNode', 'Literal', (t) => V.simple(t.value)),
+      Match.orElse(() => V.fail('STR of a blank node or triple term')),
+    );
   },
   LANG: ([a]) => V.simple(literalArg(a!).language),
   LANGDIR: ([a]) => V.simple(literalArg(a!).direction ?? ''),
@@ -300,14 +295,13 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   RAND: (_, ctx) => V.numLiteral({ kind: 3, v: ctx.random() }),
   ABS: ([a]) => {
     const n = numArg(a!);
-    switch (n.kind) {
-      case 0:
-        return V.numLiteral({ kind: 0, v: n.v < 0n ? -n.v : n.v });
-      case 1:
-        return V.numLiteral({ kind: 1, v: BigDecimal.abs(n.v) });
-      default:
-        return V.numLiteral({ kind: n.kind, v: Math.abs(n.v) });
-    }
+    return Match.value(n).pipe(
+      Match.when({ kind: 0 }, (i) => V.numLiteral({ kind: 0, v: i.v < 0n ? -i.v : i.v })),
+      Match.when({ kind: 1 }, (d) => V.numLiteral({ kind: 1, v: BigDecimal.abs(d.v) })),
+      Match.when({ kind: 2 }, (f) => V.numLiteral({ kind: 2, v: Math.abs(f.v) })),
+      Match.when({ kind: 3 }, (f) => V.numLiteral({ kind: 3, v: Math.abs(f.v) })),
+      Match.exhaustive,
+    );
   },
   CEIL: ([a]) => roundNum(a!, 'ceil', Math.ceil),
   FLOOR: ([a]) => roundNum(a!, 'floor', Math.floor),
