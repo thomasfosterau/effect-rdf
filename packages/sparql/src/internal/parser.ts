@@ -19,6 +19,7 @@ import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Ast from '../Ast.ts';
 import { resolve, type Tok, tokenize } from './lexer.ts';
@@ -577,31 +578,28 @@ const build = (subject: Ast.TermPattern, pl: PropertyList, out: Triples = []): T
   return out;
 };
 
+/** Whether a token can start a triples block (`undefined`: it cannot). */
+const startsTriplesToken = Match.fn((t: Tok, _next?: Tok) => t.type).pipe(
+  Match.when(
+    Match.is('VAR', 'IRI', 'PNAME', 'BNODE', 'STRING', 'INTEGER', 'DECIMAL', 'DOUBLE'),
+    () => true as const,
+  ),
+  Match.when('WORD', (_type, t) => (t.kind === 'TRUE' || t.kind === 'FALSE' ? true : undefined)),
+  Match.when('PUNCT', (_type, t, next) =>
+    t.value === '(' ||
+    t.value === '[' ||
+    t.value === '<<' ||
+    t.value === '<<(' ||
+    ((t.value === '+' || t.value === '-') && isNumber(next))
+      ? true
+      : undefined,
+  ),
+  Match.orElse(() => undefined),
+);
+
 const startsTriples: P<unknown> = Parser.peek(
   take('triples', (t, next) => {
-    switch (t.type) {
-      case 'VAR':
-      case 'IRI':
-      case 'PNAME':
-      case 'BNODE':
-      case 'STRING':
-      case 'INTEGER':
-      case 'DECIMAL':
-      case 'DOUBLE':
-        return true;
-      case 'WORD':
-        return t.kind === 'TRUE' || t.kind === 'FALSE' ? true : undefined;
-      case 'PUNCT':
-        return t.value === '(' ||
-          t.value === '[' ||
-          t.value === '<<' ||
-          t.value === '<<(' ||
-          ((t.value === '+' || t.value === '-') && isNumber(next))
-          ? true
-          : undefined;
-      default:
-        return undefined;
-    }
+    return startsTriplesToken(t, next);
   }),
 );
 
@@ -1764,22 +1762,18 @@ const validateGrouping = (query: Ast.Query, offset: number): void => {
     else if (g.expression._tag === 'Variable') allowed.add(g.expression.value);
   }
   const checkExpr = (e: Ast.Expression): void => {
-    switch (e._tag) {
-      case 'Variable':
-        if (!allowed.has(e.value)) fail(`Variable ?${e.value} is not grouped`, offset);
-        return;
-      case 'Operation':
-      case 'FunctionCall':
-        e.args.forEach(checkExpr);
-        return;
-      case 'Triple':
-        for (const v of Ast.expressionVariables(e)) {
+    Match.value(e).pipe(
+      Match.tag('Variable', (v) => {
+        if (!allowed.has(v.value)) fail(`Variable ?${v.value} is not grouped`, offset);
+      }),
+      Match.tag('Operation', 'FunctionCall', (call) => call.args.forEach(checkExpr)),
+      Match.tag('Triple', (x) => {
+        for (const v of Ast.expressionVariables(x)) {
           if (!allowed.has(v)) fail(`Variable ?${v} is not grouped`, offset);
         }
-        return;
-      default:
-        return;
-    }
+      }),
+      Match.orElse(() => undefined),
+    );
   };
   // SAFETY: `SELECT *` failed just above (`fail` throws), so the projection is a list of variables
   // and `(expr AS ?v)` items.

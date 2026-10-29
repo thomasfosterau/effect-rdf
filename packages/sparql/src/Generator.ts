@@ -10,6 +10,7 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -74,20 +75,18 @@ class Printer {
   }
 
   term(t: Term.Term | Ast.TermPattern): string {
-    switch (t._tag) {
-      case 'NamedNode':
-        return this.iri(t);
-      case 'BlankNode':
-        return `_:${t.value}`;
-      case 'Literal':
-        return this.literal(t);
-      case 'Variable':
-        return `?${t.value}`;
-      case 'DefaultGraph':
-        return 'DEFAULT';
-      case 'Triple':
-        return `<<( ${this.term(t.subject)} ${this.verb(t.predicate)} ${this.term(t.object)} )>>`;
-    }
+    return Match.value(t).pipe(
+      Match.tag('NamedNode', (n) => this.iri(n)),
+      Match.tag('BlankNode', (b) => `_:${b.value}`),
+      Match.tag('Literal', (l) => this.literal(l)),
+      Match.tag('Variable', (v) => `?${v.value}`),
+      Match.tag('DefaultGraph', () => 'DEFAULT'),
+      Match.tag(
+        'Triple',
+        (x) => `<<( ${this.term(x.subject)} ${this.verb(x.predicate)} ${this.term(x.object)} )>>`,
+      ),
+      Match.exhaustive,
+    );
   }
 
   verb(t: Term.Term): string {
@@ -95,86 +94,67 @@ class Printer {
   }
 
   path(p: Ast.Path): string {
-    switch (p._tag) {
-      case 'PathLink':
-        return this.verb(p.iri);
-      case 'PathInverse':
-        return `^(${this.path(p.path)})`;
-      case 'PathSequence':
-        return `(${p.paths.map((x) => this.path(x)).join(' / ')})`;
-      case 'PathAlternative':
-        return `(${p.paths.map((x) => this.path(x)).join(' | ')})`;
-      case 'PathZeroOrMore':
-        return `(${this.path(p.path)})*`;
-      case 'PathOneOrMore':
-        return `(${this.path(p.path)})+`;
-      case 'PathZeroOrOne':
-        return `(${this.path(p.path)})?`;
-      case 'PathNegated': {
+    return Match.value(p).pipe(
+      Match.tag('PathLink', (l) => this.verb(l.iri)),
+      Match.tag('PathInverse', (i) => `^(${this.path(i.path)})`),
+      Match.tag('PathSequence', (s) => `(${s.paths.map((x) => this.path(x)).join(' / ')})`),
+      Match.tag('PathAlternative', (a) => `(${a.paths.map((x) => this.path(x)).join(' | ')})`),
+      Match.tag('PathZeroOrMore', (z) => `(${this.path(z.path)})*`),
+      Match.tag('PathOneOrMore', (o) => `(${this.path(o.path)})+`),
+      Match.tag('PathZeroOrOne', (z) => `(${this.path(z.path)})?`),
+      Match.tag('PathNegated', (n) => {
         const items = [
-          ...p.iris.map((i) => this.verb(i)),
-          ...p.inverse.map((i) => `^${this.verb(i)}`),
+          ...n.iris.map((i) => this.verb(i)),
+          ...n.inverse.map((i) => `^${this.verb(i)}`),
         ];
         return `!(${items.join(' | ')})`;
-      }
-    }
+      }),
+      Match.exhaustive,
+    );
   }
 
   // --- expressions ----------------------------------------------------------
 
   expression(e: Ast.Expression): string {
-    switch (e._tag) {
-      case 'Variable':
-      case 'NamedNode':
-      case 'Literal':
-      case 'BlankNode':
-      case 'Triple':
-        return this.term(e);
-      case 'FunctionCall':
-        return `${this.iri(e.function)}(${e.distinct ? 'DISTINCT ' : ''}${e.args.map((a) => this.expression(a)).join(', ')})`;
-      case 'Aggregate': {
-        const arg = e.expression === '*' ? '*' : this.expression(e.expression);
+    return Match.value(e).pipe(
+      Match.tag('Variable', 'NamedNode', 'Literal', 'BlankNode', 'Triple', (t) => this.term(t)),
+      Match.tag(
+        'FunctionCall',
+        (c) =>
+          `${this.iri(c.function)}(${c.distinct ? 'DISTINCT ' : ''}${c.args.map((a) => this.expression(a)).join(', ')})`,
+      ),
+      Match.tag('Aggregate', (a) => {
+        const arg = a.expression === '*' ? '*' : this.expression(a.expression);
         const sep =
-          e.separator !== undefined ? `; SEPARATOR = "${Term.escapeString(e.separator)}"` : '';
-        return `${e.name}(${e.distinct ? 'DISTINCT ' : ''}${arg}${sep})`;
-      }
-      case 'Exists':
-        return `${e.negated ? 'NOT EXISTS' : 'EXISTS'} ${this.group(e.pattern, 1)}`;
-      case 'Operation':
-        return this.operation(e);
-    }
+          a.separator !== undefined ? `; SEPARATOR = "${Term.escapeString(a.separator)}"` : '';
+        return `${a.name}(${a.distinct ? 'DISTINCT ' : ''}${arg}${sep})`;
+      }),
+      Match.tag(
+        'Exists',
+        (x) => `${x.negated ? 'NOT EXISTS' : 'EXISTS'} ${this.group(x.pattern, 1)}`,
+      ),
+      Match.tag('Operation', (o) => this.operation(o)),
+      Match.exhaustive,
+    );
   }
 
   operation(e: Ast.OperationExpression): string {
     const args = e.args.map((a) => this.expression(a));
-    switch (e.operator) {
-      case '||':
-      case '&&':
-      case '=':
-      case '!=':
-      case '<':
-      case '>':
-      case '<=':
-      case '>=':
-      case '+':
-      case '-':
-      case '*':
-      case '/':
-        return `(${args.join(` ${e.operator} `)})`;
-      case '!':
-        return `!(${args[0]})`;
-      case 'UPLUS':
-        return `+(${args[0]})`;
-      case 'UMINUS':
-        return `-(${args[0]})`;
-      case 'IN':
-      case 'NOT IN':
-        return `(${args[0]} ${e.operator} (${args.slice(1).join(', ')}))`;
-      case 'SAMETERM':
-        return `sameTerm(${args.join(', ')})`;
-      default:
-        return `${e.operator}(${args.join(', ')})`;
-    }
+    return Match.value(e.operator).pipe(
+      Match.when(
+        Match.is('||', '&&', '=', '!=', '<', '>', '<=', '>=', '+', '-', '*', '/'),
+        (operator) => `(${args.join(` ${operator} `)})`,
+      ),
+      Match.when('!', () => `!(${args[0]})`),
+      Match.when('UPLUS', () => `+(${args[0]})`),
+      Match.when('UMINUS', () => `-(${args[0]})`),
+      Match.when(
+        Match.is('IN', 'NOT IN'),
+        (operator) => `(${args[0]} ${operator} (${args.slice(1).join(', ')}))`,
+      ),
+      Match.when('SAMETERM', () => `sameTerm(${args.join(', ')})`),
+      Match.orElse((operator) => `${operator}(${args.join(', ')})`),
+    );
   }
 
   // --- patterns -------------------------------------------------------------
@@ -199,32 +179,26 @@ class Printer {
   }
 
   pattern(p: Ast.Pattern, level: number): Array<string> {
-    switch (p._tag) {
-      case 'Bgp':
-        return p.triples.map((t) => this.triple(t));
-      case 'Group':
-        return [this.group(p, level)];
-      case 'Optional':
-        return [`OPTIONAL ${this.group(p.pattern, level)}`];
-      case 'Minus':
-        return [`MINUS ${this.group(p.pattern, level)}`];
-      case 'Union':
-        return [p.patterns.map((x) => this.group(x, level)).join(' UNION ')];
-      case 'Graph':
-        return [`GRAPH ${this.term(p.name)} ${this.group(p.pattern, level)}`];
-      case 'Service':
-        return [
-          `SERVICE ${p.silent ? 'SILENT ' : ''}${this.term(p.name)} ${this.group(p.pattern, level)}`,
-        ];
-      case 'Filter':
-        return [`FILTER(${this.expression(p.expression)})`];
-      case 'Bind':
-        return [`BIND(${this.expression(p.expression)} AS ${this.term(p.variable)})`];
-      case 'Values':
-        return [this.values(p)];
-      case 'SubSelect':
-        return [`{\n${this.pad(level + 1)}${this.select(p.query, level + 1)}\n${this.pad(level)}}`];
-    }
+    return Match.value(p).pipe(
+      Match.tag('Bgp', (b): Array<string> => b.triples.map((t) => this.triple(t))),
+      Match.tag('Group', (g) => [this.group(g, level)]),
+      Match.tag('Optional', (o) => [`OPTIONAL ${this.group(o.pattern, level)}`]),
+      Match.tag('Minus', (m) => [`MINUS ${this.group(m.pattern, level)}`]),
+      Match.tag('Union', (u) => [u.patterns.map((x) => this.group(x, level)).join(' UNION ')]),
+      Match.tag('Graph', (g) => [`GRAPH ${this.term(g.name)} ${this.group(g.pattern, level)}`]),
+      Match.tag('Service', (s) => [
+        `SERVICE ${s.silent ? 'SILENT ' : ''}${this.term(s.name)} ${this.group(s.pattern, level)}`,
+      ]),
+      Match.tag('Filter', (f) => [`FILTER(${this.expression(f.expression)})`]),
+      Match.tag('Bind', (b) => [
+        `BIND(${this.expression(b.expression)} AS ${this.term(b.variable)})`,
+      ]),
+      Match.tag('Values', (v) => [this.values(v)]),
+      Match.tag('SubSelect', (s) => [
+        `{\n${this.pad(level + 1)}${this.select(s.query, level + 1)}\n${this.pad(level)}}`,
+      ]),
+      Match.exhaustive,
+    );
   }
 
   values(v: Ast.ValuesPattern): string {
@@ -289,20 +263,23 @@ class Printer {
 
   query(q: Ast.Query): string {
     const values = q.values !== undefined ? `\n${this.values(q.values)}` : '';
-    switch (q._tag) {
-      case 'Select':
-        return this.select(q, 0);
-      case 'Ask':
-        return `ASK\n${this.dataset(q.dataset, 'FROM')}WHERE ${this.group(q.where, 0)}${this.modifiers(q)}${values}`;
-      case 'Construct': {
-        const template = q.template.map((t) => `${this.unit}${this.triple(t)}`).join('\n');
-        return `CONSTRUCT {\n${template}${template === '' ? '' : '\n'}}\n${this.dataset(q.dataset, 'FROM')}WHERE ${this.group(q.where, 0)}${this.modifiers(q)}${values}`;
-      }
-      case 'Describe': {
-        const terms = q.terms === '*' ? '*' : q.terms.map((t) => this.term(t)).join(' ');
-        return `DESCRIBE ${terms}\n${this.dataset(q.dataset, 'FROM')}WHERE ${this.group(q.where, 0)}${this.modifiers(q)}${values}`;
-      }
-    }
+    return Match.value(q).pipe(
+      Match.tag('Select', (s) => this.select(s, 0)),
+      Match.tag(
+        'Ask',
+        (a) =>
+          `ASK\n${this.dataset(a.dataset, 'FROM')}WHERE ${this.group(a.where, 0)}${this.modifiers(a)}${values}`,
+      ),
+      Match.tag('Construct', (c) => {
+        const template = c.template.map((t) => `${this.unit}${this.triple(t)}`).join('\n');
+        return `CONSTRUCT {\n${template}${template === '' ? '' : '\n'}}\n${this.dataset(c.dataset, 'FROM')}WHERE ${this.group(c.where, 0)}${this.modifiers(c)}${values}`;
+      }),
+      Match.tag('Describe', (d) => {
+        const terms = d.terms === '*' ? '*' : d.terms.map((t) => this.term(t)).join(' ');
+        return `DESCRIBE ${terms}\n${this.dataset(d.dataset, 'FROM')}WHERE ${this.group(d.where, 0)}${this.modifiers(d)}${values}`;
+      }),
+      Match.exhaustive,
+    );
   }
 
   // --- updates --------------------------------------------------------------
@@ -336,34 +313,39 @@ class Printer {
   }
 
   operationText(op: Ast.UpdateOperation): string {
-    switch (op._tag) {
-      case 'InsertData':
-        return `INSERT DATA ${this.quads(op.quads)}`;
-      case 'DeleteData':
-        return `DELETE DATA ${this.quads(op.quads)}`;
-      case 'DeleteWhere':
-        return `DELETE WHERE ${this.quads(op.patterns)}`;
-      case 'Modify': {
-        let out = op.with !== undefined ? `WITH ${this.iri(op.with)}\n` : '';
-        if (Arr.isReadonlyArrayNonEmpty(op.delete) || Arr.isReadonlyArrayEmpty(op.insert)) {
-          out += `DELETE ${this.quads(op.delete)}\n`;
+    return Match.value(op).pipe(
+      Match.tag('InsertData', (o) => `INSERT DATA ${this.quads(o.quads)}`),
+      Match.tag('DeleteData', (o) => `DELETE DATA ${this.quads(o.quads)}`),
+      Match.tag('DeleteWhere', (o) => `DELETE WHERE ${this.quads(o.patterns)}`),
+      Match.tag('Modify', (o) => {
+        let out = o.with !== undefined ? `WITH ${this.iri(o.with)}\n` : '';
+        if (Arr.isReadonlyArrayNonEmpty(o.delete) || Arr.isReadonlyArrayEmpty(o.insert)) {
+          out += `DELETE ${this.quads(o.delete)}\n`;
         }
-        if (Arr.isReadonlyArrayNonEmpty(op.insert)) out += `INSERT ${this.quads(op.insert)}\n`;
-        out += this.dataset(op.using, 'USING');
-        return `${out}WHERE ${this.group(op.where, 0)}`;
-      }
-      case 'Load':
-        return `LOAD ${op.silent ? 'SILENT ' : ''}${this.iri(op.source)}${op.destination !== undefined ? ` INTO GRAPH ${this.iri(op.destination)}` : ''}`;
-      case 'Clear':
-      case 'Drop':
-        return `${op._tag.toUpperCase()} ${op.silent ? 'SILENT ' : ''}${this.graphTarget(op.target)}`;
-      case 'Create':
-        return `CREATE ${op.silent ? 'SILENT ' : ''}GRAPH ${this.iri(op.graph)}`;
-      case 'Add':
-      case 'Move':
-      case 'Copy':
-        return `${op._tag.toUpperCase()} ${op.silent ? 'SILENT ' : ''}${this.graphOrDefault(op.source)} TO ${this.graphOrDefault(op.destination)}`;
-    }
+        if (Arr.isReadonlyArrayNonEmpty(o.insert)) out += `INSERT ${this.quads(o.insert)}\n`;
+        out += this.dataset(o.using, 'USING');
+        return `${out}WHERE ${this.group(o.where, 0)}`;
+      }),
+      Match.tag(
+        'Load',
+        (o) =>
+          `LOAD ${o.silent ? 'SILENT ' : ''}${this.iri(o.source)}${o.destination !== undefined ? ` INTO GRAPH ${this.iri(o.destination)}` : ''}`,
+      ),
+      Match.tag(
+        'Clear',
+        'Drop',
+        (o) => `${o._tag.toUpperCase()} ${o.silent ? 'SILENT ' : ''}${this.graphTarget(o.target)}`,
+      ),
+      Match.tag('Create', (o) => `CREATE ${o.silent ? 'SILENT ' : ''}GRAPH ${this.iri(o.graph)}`),
+      Match.tag(
+        'Add',
+        'Move',
+        'Copy',
+        (o) =>
+          `${o._tag.toUpperCase()} ${o.silent ? 'SILENT ' : ''}${this.graphOrDefault(o.source)} TO ${this.graphOrDefault(o.destination)}`,
+      ),
+      Match.exhaustive,
+    );
   }
 }
 

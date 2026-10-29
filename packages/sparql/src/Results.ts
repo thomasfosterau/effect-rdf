@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
@@ -306,30 +307,29 @@ export type JsonResultsSchema = typeof JsonResultsSchema.Type;
  * @category json
  */
 export const termToJson = (t: Term.GroundTerm): JsonTerm => {
-  switch (t._tag) {
-    case 'NamedNode':
-      return { type: 'uri', value: t.value };
-    case 'BlankNode':
-      return { type: 'bnode', value: t.value };
-    case 'Literal':
-      if (t.language !== '') {
-        return t.direction !== undefined
-          ? { type: 'literal', value: t.value, 'xml:lang': t.language, 'its:dir': t.direction }
-          : { type: 'literal', value: t.value, 'xml:lang': t.language };
+  return Match.value(t).pipe(
+    Match.tag('NamedNode', (n): JsonTerm => ({ type: 'uri', value: n.value })),
+    Match.tag('BlankNode', (b): JsonTerm => ({ type: 'bnode', value: b.value })),
+    Match.tag('Literal', (l): JsonTerm => {
+      if (l.language !== '') {
+        return l.direction !== undefined
+          ? { type: 'literal', value: l.value, 'xml:lang': l.language, 'its:dir': l.direction }
+          : { type: 'literal', value: l.value, 'xml:lang': l.language };
       }
-      return t.datatype.value === Term.XSD_STRING
-        ? { type: 'literal', value: t.value }
-        : { type: 'literal', value: t.value, datatype: t.datatype.value };
-    case 'Triple':
-      return {
-        type: 'triple',
-        value: {
-          subject: termToJson(t.subject),
-          predicate: termToJson(t.predicate),
-          object: termToJson(t.object),
-        },
-      };
-  }
+      return l.datatype.value === Term.XSD_STRING
+        ? { type: 'literal', value: l.value }
+        : { type: 'literal', value: l.value, datatype: l.datatype.value };
+    }),
+    Match.tag('Triple', (x): JsonTerm => ({
+      type: 'triple',
+      value: {
+        subject: termToJson(x.subject),
+        predicate: termToJson(x.predicate),
+        object: termToJson(x.object),
+      },
+    })),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -339,33 +339,32 @@ export const termToJson = (t: Term.GroundTerm): JsonTerm => {
  * @category json
  */
 export const termFromJson = (j: JsonTerm): Term.GroundTerm => {
-  switch (j.type) {
-    case 'uri':
-      return Term.namedNode(j.value);
-    case 'bnode':
-      return Term.blankNode(j.value);
-    case 'literal':
-    case 'typed-literal': {
-      const lang = j['xml:lang'];
+  return Match.value(j).pipe(
+    Match.when({ type: 'uri' }, (u): Term.GroundTerm => Term.namedNode(u.value)),
+    Match.when({ type: 'bnode' }, (b) => Term.blankNode(b.value)),
+    Match.when({ type: Match.is('literal', 'typed-literal') }, (l) => {
+      const lang = l['xml:lang'];
       if (lang !== undefined && lang !== '') {
-        const dir = j['its:dir'];
+        const dir = l['its:dir'];
         return dir === 'ltr' || dir === 'rtl'
-          ? Term.literal(j.value, { language: lang, direction: dir })
-          : Term.literal(j.value, lang);
+          ? Term.literal(l.value, { language: lang, direction: dir })
+          : Term.literal(l.value, lang);
       }
-      return j.datatype !== undefined
-        ? Term.literal(j.value, Term.namedNode(j.datatype))
-        : Term.literal(j.value);
-    }
-    case 'triple':
+      return l.datatype !== undefined
+        ? Term.literal(l.value, Term.namedNode(l.datatype))
+        : Term.literal(l.value);
+    }),
+    Match.when({ type: 'triple' }, (x) =>
       // SAFETY: the JSON results grammar puts a subject, an IRI predicate and an object in a triple
       // term's three fields.
-      return Term.triple(
-        termFromJson(j.value.subject) as Term.Subject,
-        termFromJson(j.value.predicate) as Term.Predicate,
-        termFromJson(j.value.object) as Term.Object,
-      );
-  }
+      Term.triple(
+        termFromJson(x.value.subject) as Term.Subject,
+        termFromJson(x.value.predicate) as Term.Predicate,
+        termFromJson(x.value.object) as Term.Object,
+      ),
+    ),
+    Match.exhaustive,
+  );
 };
 
 const decodeJsonResults = Schema.decodeUnknownResult(JsonResultsSchema);
@@ -446,24 +445,26 @@ const SRX = 'http://www.w3.org/2005/sparql-results#';
 const ITS = 'http://www.w3.org/2005/11/its';
 
 const xmlTerm = (t: Term.GroundTerm): string => {
-  switch (t._tag) {
-    case 'NamedNode':
-      return `<uri>${XmlParser.escapeText(t.value)}</uri>`;
-    case 'BlankNode':
-      return `<bnode>${XmlParser.escapeText(t.value)}</bnode>`;
-    case 'Literal': {
+  return Match.value(t).pipe(
+    Match.tag('NamedNode', (n) => `<uri>${XmlParser.escapeText(n.value)}</uri>`),
+    Match.tag('BlankNode', (b) => `<bnode>${XmlParser.escapeText(b.value)}</bnode>`),
+    Match.tag('Literal', (l) => {
       let attrs = '';
-      if (t.language !== '') {
-        attrs += ` xml:lang="${XmlParser.escapeAttribute(t.language)}"`;
-        if (t.direction !== undefined) attrs += ` its:dir="${t.direction}"`;
-      } else if (t.datatype.value !== Term.XSD_STRING) {
-        attrs += ` datatype="${XmlParser.escapeAttribute(t.datatype.value)}"`;
+      if (l.language !== '') {
+        attrs += ` xml:lang="${XmlParser.escapeAttribute(l.language)}"`;
+        if (l.direction !== undefined) attrs += ` its:dir="${l.direction}"`;
+      } else if (l.datatype.value !== Term.XSD_STRING) {
+        attrs += ` datatype="${XmlParser.escapeAttribute(l.datatype.value)}"`;
       }
-      return `<literal${attrs}>${XmlParser.escapeText(t.value)}</literal>`;
-    }
-    case 'Triple':
-      return `<triple><subject>${xmlTerm(t.subject)}</subject><predicate>${xmlTerm(t.predicate)}</predicate><object>${xmlTerm(t.object)}</object></triple>`;
-  }
+      return `<literal${attrs}>${XmlParser.escapeText(l.value)}</literal>`;
+    }),
+    Match.tag(
+      'Triple',
+      (x) =>
+        `<triple><subject>${xmlTerm(x.subject)}</subject><predicate>${xmlTerm(x.predicate)}</predicate><object>${xmlTerm(x.object)}</object></triple>`,
+    ),
+    Match.exhaustive,
+  );
 };
 
 const serializeXml = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
@@ -503,12 +504,10 @@ const attribute = (e: XmlParser.Element, local: string, ns?: string): string | u
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 
 const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
-  switch (e.localName) {
-    case 'uri':
-      return Term.namedNode(textOf(e));
-    case 'bnode':
-      return Term.blankNode(textOf(e));
-    case 'literal': {
+  return Match.value(e.localName).pipe(
+    Match.when('uri', (): Term.GroundTerm => Term.namedNode(textOf(e))),
+    Match.when('bnode', () => Term.blankNode(textOf(e))),
+    Match.when('literal', () => {
       const lang = attribute(e, 'lang', XML_NS);
       const dir = attribute(e, 'dir', ITS) ?? attribute(e, 'dir');
       const datatype = attribute(e, 'datatype');
@@ -520,8 +519,8 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
       return datatype !== undefined
         ? Term.literal(textOf(e), Term.namedNode(datatype))
         : Term.literal(textOf(e));
-    }
-    case 'triple': {
+    }),
+    Match.when('triple', () => {
       const part = (name: string) => {
         const p = elements(e).find((c) => c.localName === name);
         const inner = p === undefined ? undefined : elements(p)[0];
@@ -537,13 +536,14 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
         part('predicate') as Term.Predicate,
         part('object') as Term.Object,
       );
-    }
-    default:
+    }),
+    Match.orElse((name) => {
       throw new ResultsParseError({
         format: 'xml',
-        message: `Unexpected element <${e.localName}>`,
+        message: `Unexpected element <${name}>`,
       });
-  }
+    }),
+  );
 };
 
 const parseXml = (input: string): Effect.Effect<ParsedResult, ResultsParseError> =>
@@ -727,15 +727,15 @@ export const Tsv: ResultsCodec = {
 const csvField = (s: string): string => (/[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 
 const csvTerm = (t: Term.GroundTerm): string => {
-  switch (t._tag) {
-    case 'NamedNode':
-    case 'Literal':
-      return t.value;
-    case 'BlankNode':
-      return `_:${t.value}`;
-    case 'Triple':
-      return `<<( ${termToTsv(t.subject)} ${termToTsv(t.predicate)} ${termToTsv(t.object)} )>>`;
-  }
+  return Match.value(t).pipe(
+    Match.tag('NamedNode', 'Literal', (x) => x.value),
+    Match.tag('BlankNode', (b) => `_:${b.value}`),
+    Match.tag(
+      'Triple',
+      (x) => `<<( ${termToTsv(x.subject)} ${termToTsv(x.predicate)} ${termToTsv(x.object)} )>>`,
+    ),
+    Match.exhaustive,
+  );
 };
 
 const serializeCsv = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {

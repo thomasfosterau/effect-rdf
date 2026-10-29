@@ -6,6 +6,7 @@
 import * as Arr from 'effect/Array';
 import * as Cause from 'effect/Cause';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Result from 'effect/Result';
@@ -50,49 +51,45 @@ type S = Stream.Stream<Bindings, Err>;
 type PatternTerm = Ast.TermPattern | Term.Term;
 
 /** Substitutes bound variables; returns a ground term or undefined (still variable). */
-const ground = (t: PatternTerm, b: Bindings): Term.GroundTerm | undefined => {
-  switch (t._tag) {
-    case 'Variable':
-      return b.map.get(t.value);
-    case 'Triple': {
-      const s = ground(t.subject, b);
-      const p = ground(t.predicate, b);
-      const o = ground(t.object, b);
-      if (s === undefined || p === undefined || o === undefined) return undefined;
-      // SAFETY: unchanged components keep the triple pattern ground; otherwise substitution keeps
-      // each position's kind.
-      return t.subject === s && t.predicate === p && t.object === o
-        ? (t as Term.Triple)
-        : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
-    }
-    case 'DefaultGraph':
-      return undefined;
-    default:
-      return t;
-  }
-};
+const ground: (t: PatternTerm, b: Bindings) => Term.GroundTerm | undefined = Match.fn(
+  (t: PatternTerm, _b: Bindings) => t,
+).pipe(
+  Match.tag('Variable', (v, _t, b) => b.map.get(v.value)),
+  Match.tag('Triple', (t, _t, b) => {
+    const s = ground(t.subject, b);
+    const p = ground(t.predicate, b);
+    const o = ground(t.object, b);
+    if (s === undefined || p === undefined || o === undefined) return undefined;
+    // SAFETY: unchanged components keep the triple pattern ground; otherwise substitution keeps
+    // each position's kind.
+    return t.subject === s && t.predicate === p && t.object === o
+      ? (t as Term.Triple)
+      : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
+  }),
+  Match.tag('DefaultGraph', () => undefined),
+  Match.orElse((t) => t),
+);
 
 /** Unifies a pattern term with a value, extending `map`; false on mismatch. */
-const unify = (t: PatternTerm, value: Term.Term, map: Map<string, Term.GroundTerm>): boolean => {
-  switch (t._tag) {
-    case 'Variable': {
-      const bound = map.get(t.value);
+const unify: (t: PatternTerm, value: Term.Term, map: Map<string, Term.GroundTerm>) => boolean =
+  Match.fn((t: PatternTerm, _value: Term.Term, _map: Map<string, Term.GroundTerm>) => t).pipe(
+    Match.tag('Variable', (v, _t, value, map) => {
+      const bound = map.get(v.value);
       if (bound !== undefined) return bound.key === value.key;
       // SAFETY: only ground terms are bound in solutions.
-      map.set(t.value, value as Term.GroundTerm);
+      map.set(v.value, value as Term.GroundTerm);
       return true;
-    }
-    case 'Triple':
-      return (
+    }),
+    Match.tag(
+      'Triple',
+      (t, _t, value, map) =>
         value._tag === 'Triple' &&
         unify(t.subject, value.subject, map) &&
         unify(t.predicate, value.predicate, map) &&
-        unify(t.object, value.object, map)
-      );
-    default:
-      return t.key === value.key;
-  }
-};
+        unify(t.object, value.object, map),
+    ),
+    Match.orElse((t, _t, value) => t.key === value.key),
+  );
 
 const dedupeTriples = (quads: Stream.Stream<Term.Quad, Store.StoreError>) =>
   Stream.suspend(() => {
@@ -179,41 +176,41 @@ const pathFrom = (
   start: Term.GroundTerm,
   forward: boolean,
 ): E<ReadonlyArray<Term.GroundTerm>> => {
-  switch (path._tag) {
-    case 'PathLink':
-      return Effect.map(
+  return Match.value(path).pipe(
+    Match.tag('PathLink', (link) =>
+      Effect.map(
         collect(
           env,
           forward
-            ? { subject: start, predicate: path.iri }
-            : { predicate: path.iri, object: start },
+            ? { subject: start, predicate: link.iri }
+            : { predicate: link.iri, object: start },
         ),
         (qs) => qs.map((q) => (forward ? q.object : q.subject)),
-      );
-    case 'PathInverse':
-      return pathFrom(env, path.path, start, !forward);
-    case 'PathSequence': {
-      const steps = forward ? path.paths : [...path.paths].reverse();
+      ),
+    ),
+    Match.tag('PathInverse', (inv) => pathFrom(env, inv.path, start, !forward)),
+    Match.tag('PathSequence', (seq) => {
+      const steps = forward ? seq.paths : [...seq.paths].reverse();
       return Effect.reduce(
         steps,
         (): ReadonlyArray<Term.GroundTerm> => [start],
         (frontier, step) => forEachFlat(frontier, (n) => pathFrom(env, step, n, forward)),
       );
-    }
-    case 'PathAlternative':
-      return forEachFlat(path.paths, (p) => pathFrom(env, p, start, forward));
-    case 'PathZeroOrOne':
-      return Effect.map(pathFrom(env, path.path, start, forward), (ns) =>
-        distinctTerms([start, ...ns]),
-      );
-    case 'PathZeroOrMore':
-    case 'PathOneOrMore':
-      return closure(env, path.path, start, forward, path._tag === 'PathZeroOrMore');
-    case 'PathNegated': {
+    }),
+    Match.tag('PathAlternative', (alt) =>
+      forEachFlat(alt.paths, (p) => pathFrom(env, p, start, forward)),
+    ),
+    Match.tag('PathZeroOrOne', (opt) =>
+      Effect.map(pathFrom(env, opt.path, start, forward), (ns) => distinctTerms([start, ...ns])),
+    ),
+    Match.tag('PathZeroOrMore', 'PathOneOrMore', (rep) =>
+      closure(env, rep.path, start, forward, rep._tag === 'PathZeroOrMore'),
+    ),
+    Match.tag('PathNegated', (neg) => {
       const parts: Array<E<ReadonlyArray<Term.GroundTerm>>> = [];
       const excluded = (list: ReadonlyArray<Term.NamedNode>) => new Set(list.map((i) => i.value));
-      if (Arr.isReadonlyArrayNonEmpty(path.iris) || Arr.isReadonlyArrayEmpty(path.inverse)) {
-        const ex = excluded(path.iris);
+      if (Arr.isReadonlyArrayNonEmpty(neg.iris) || Arr.isReadonlyArrayEmpty(neg.inverse)) {
+        const ex = excluded(neg.iris);
         parts.push(
           Effect.map(collect(env, forward ? { subject: start } : { object: start }), (qs) =>
             qs
@@ -222,8 +219,8 @@ const pathFrom = (
           ),
         );
       }
-      if (Arr.isReadonlyArrayNonEmpty(path.inverse)) {
-        const ex = excluded(path.inverse);
+      if (Arr.isReadonlyArrayNonEmpty(neg.inverse)) {
+        const ex = excluded(neg.inverse);
         parts.push(
           Effect.map(collect(env, forward ? { object: start } : { subject: start }), (qs) =>
             qs
@@ -233,8 +230,9 @@ const pathFrom = (
         );
       }
       return Effect.map(Effect.all(parts, { concurrency: 1 }), (lists) => lists.flat());
-    }
-  }
+    }),
+    Match.exhaustive,
+  );
 };
 
 const closure = (
@@ -282,15 +280,17 @@ const pathAll = (
   env: Env,
   path: Ast.Path,
 ): E<ReadonlyArray<readonly [Term.GroundTerm, Term.GroundTerm]>> => {
-  switch (path._tag) {
-    case 'PathLink':
-      return Effect.map(collect(env, { predicate: path.iri }), (qs) =>
+  return Match.value(path).pipe(
+    Match.tag('PathLink', (link): E<ReadonlyArray<readonly [Term.GroundTerm, Term.GroundTerm]>> =>
+      Effect.map(collect(env, { predicate: link.iri }), (qs) =>
         qs.map((q) => [q.subject, q.object] as const),
-      );
-    case 'PathInverse':
-      return Effect.map(pathAll(env, path.path), (ps) => ps.map(([a, b]) => [b, a] as const));
-    case 'PathSequence': {
-      const [first, ...rest] = path.paths;
+      ),
+    ),
+    Match.tag('PathInverse', (inv) =>
+      Effect.map(pathAll(env, inv.path), (ps) => ps.map(([a, b]) => [b, a] as const)),
+    ),
+    Match.tag('PathSequence', (seq) => {
+      const [first, ...rest] = seq.paths;
       return Effect.flatMap(pathAll(env, first!), (pairs) =>
         forEachFlat(pairs, ([x, m]) =>
           Effect.map(
@@ -301,21 +301,20 @@ const pathAll = (
           ),
         ),
       );
-    }
-    case 'PathAlternative':
-      return forEachFlat(path.paths, (p) => pathAll(env, p));
-    case 'PathNegated': {
+    }),
+    Match.tag('PathAlternative', (alt) => forEachFlat(alt.paths, (p) => pathAll(env, p))),
+    Match.tag('PathNegated', (neg) => {
       const out: Array<E<ReadonlyArray<readonly [Term.GroundTerm, Term.GroundTerm]>>> = [];
-      if (Arr.isReadonlyArrayNonEmpty(path.iris) || Arr.isReadonlyArrayEmpty(path.inverse)) {
-        const ex = new Set(path.iris.map((i) => i.value));
+      if (Arr.isReadonlyArrayNonEmpty(neg.iris) || Arr.isReadonlyArrayEmpty(neg.inverse)) {
+        const ex = new Set(neg.iris.map((i) => i.value));
         out.push(
           Effect.map(collect(env, {}), (qs) =>
             qs.filter((q) => !ex.has(q.predicate.value)).map((q) => [q.subject, q.object] as const),
           ),
         );
       }
-      if (Arr.isReadonlyArrayNonEmpty(path.inverse)) {
-        const ex = new Set(path.inverse.map((i) => i.value));
+      if (Arr.isReadonlyArrayNonEmpty(neg.inverse)) {
+        const ex = new Set(neg.inverse.map((i) => i.value));
         out.push(
           Effect.map(collect(env, {}), (qs) =>
             qs.filter((q) => !ex.has(q.predicate.value)).map((q) => [q.object, q.subject] as const),
@@ -323,32 +322,25 @@ const pathAll = (
         );
       }
       return Effect.map(Effect.all(out, { concurrency: 1 }), (lists) => lists.flat());
-    }
-    default:
-      return Effect.flatMap(allNodes(env), (nodes) =>
+    }),
+    Match.orElse((p) =>
+      Effect.flatMap(allNodes(env), (nodes) =>
         forEachFlat(nodes, (n) =>
-          Effect.map(pathFrom(env, path, n, true), (ys) => ys.map((y) => [n, y] as const)),
+          Effect.map(pathFrom(env, p, n, true), (ys) => ys.map((y) => [n, y] as const)),
         ),
-      );
-  }
+      ),
+    ),
+  );
 };
 
 /** Whether a path can match with zero length. */
-const nullable = (path: Ast.Path): boolean => {
-  switch (path._tag) {
-    case 'PathZeroOrMore':
-    case 'PathZeroOrOne':
-      return true;
-    case 'PathInverse':
-      return nullable(path.path);
-    case 'PathSequence':
-      return path.paths.every(nullable);
-    case 'PathAlternative':
-      return path.paths.some(nullable);
-    default:
-      return false;
-  }
-};
+const nullable: (path: Ast.Path) => boolean = Match.type<Ast.Path>().pipe(
+  Match.tag('PathZeroOrMore', 'PathZeroOrOne', () => true),
+  Match.tag('PathInverse', (p) => nullable(p.path)),
+  Match.tag('PathSequence', (p) => p.paths.every(nullable)),
+  Match.tag('PathAlternative', (p) => p.paths.some(nullable)),
+  Match.orElse(() => false),
+);
 
 const isGraphNode = (env: Env, term: Term.GroundTerm): E<boolean> =>
   Effect.map(
@@ -405,19 +397,16 @@ const evalPath = (op: Algebra.Path, env: Env, initial: Bindings): S =>
 // Expressions with EXISTS
 // -----------------------------------------------------------------------------
 
-const collectExists = (e: Algebra.Expression, out: Array<Algebra.ExistsExpression>): void => {
-  switch (e._tag) {
-    case 'Exists':
-      out.push(e);
-      return;
-    case 'Operation':
-    case 'FunctionCall':
-      for (const a of e.args) collectExists(a, out);
-      return;
-    default:
-      return;
-  }
-};
+const collectExists: (e: Algebra.Expression, out: Array<Algebra.ExistsExpression>) => void =
+  Match.fn((e: Algebra.Expression, _out: Array<Algebra.ExistsExpression>) => e).pipe(
+    Match.tag('Exists', (x, _e, out) => {
+      out.push(x);
+    }),
+    Match.tag('Operation', 'FunctionCall', (call, _e, out) => {
+      for (const a of call.args) collectExists(a, out);
+    }),
+    Match.orElse(() => undefined),
+  );
 
 /**
  * Prepares an expression for evaluation: returns a function producing the
@@ -473,18 +462,15 @@ const bindable = (op: Algebra.Operation): boolean =>
   (op._tag === 'Join' && bindable(op.left) && bindable(op.right));
 
 const evalWith = (op: Algebra.Operation, env: Env, initial: Bindings): S => {
-  switch (op._tag) {
-    case 'Bgp':
-      return evalBgp(op.patterns, env, initial);
-    case 'Path':
-      return evalPath(op, env, initial);
-    case 'Join':
-      return Stream.flatMap(evalWith(op.left, env, initial), (b) => evalWith(op.right, env, b));
-    case 'Service':
-      return evalBoundService(op, env, initial);
-    default:
-      return Stream.die(new Cause.IllegalArgumentError('not bindable'));
-  }
+  return Match.value(op).pipe(
+    Match.tag('Bgp', (o): S => evalBgp(o.patterns, env, initial)),
+    Match.tag('Path', (o) => evalPath(o, env, initial)),
+    Match.tag('Join', (o) =>
+      Stream.flatMap(evalWith(o.left, env, initial), (b) => evalWith(o.right, env, b)),
+    ),
+    Match.tag('Service', (o) => evalBoundService(o, env, initial)),
+    Match.orElse(() => Stream.die(new Cause.IllegalArgumentError('not bindable'))),
+  );
 };
 
 const isUnit = (op: Algebra.Operation): boolean =>
@@ -667,42 +653,40 @@ const aggregateOf = (
   values: ReadonlyArray<Term.GroundTerm | undefined>,
   defined: ReadonlyArray<Term.GroundTerm>,
 ): Term.GroundTerm | undefined => {
-  switch (agg.name) {
-    case 'COUNT':
-      return new Term.Literal(String(defined.length), V.dt.integer);
-    case 'SUM': {
+  return Match.value(agg.name).pipe(
+    Match.when('COUNT', () => new Term.Literal(String(defined.length), V.dt.integer)),
+    Match.when('SUM', () => {
       if (defined.length !== values.length) return undefined;
       let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
       for (const v of defined) acc = V.arithmetic('+', acc, v);
       return acc;
-    }
-    case 'AVG': {
+    }),
+    Match.when('AVG', () => {
       if (defined.length !== values.length) return undefined;
       if (Arr.isReadonlyArrayEmpty(defined)) return new Term.Literal('0', V.dt.integer);
       let acc: Term.GroundTerm = new Term.Literal('0', V.dt.integer);
       for (const v of defined) acc = V.arithmetic('+', acc, v);
       return V.arithmetic('/', acc, new Term.Literal(String(defined.length), V.dt.integer));
-    }
-    case 'MIN':
-    case 'MAX': {
+    }),
+    Match.when(Match.is('MIN', 'MAX'), (name) => {
       if (Arr.isReadonlyArrayEmpty(defined)) return undefined;
       let best = defined[0]!;
       for (const v of defined.slice(1)) {
         const c = V.orderCompare(v, best);
-        if (agg.name === 'MIN' ? c < 0 : c > 0) best = v;
+        if (name === 'MIN' ? c < 0 : c > 0) best = v;
       }
       return best;
-    }
-    case 'SAMPLE':
-      return defined[0];
-    case 'GROUP_CONCAT': {
+    }),
+    Match.when('SAMPLE', () => defined[0]),
+    Match.when('GROUP_CONCAT', () => {
       if (defined.length !== values.length) return undefined;
       const lits = defined.map((v) => (v._tag === 'Literal' ? v : V.fail('Not a literal')));
       const sep = agg.separator ?? ' ';
       // GROUP_CONCAT always produces an xsd:string.
       return V.simple(lits.map((l) => l.value).join(sep));
-    }
-  }
+    }),
+    Match.exhaustive,
+  );
 };
 
 const evalGroup = (op: Algebra.Group, env: Env): S =>
@@ -838,56 +822,42 @@ export const evaluate = (op: Algebra.Operation, env: Env): S => {
 };
 
 const evaluateGeneric = (op: Algebra.Operation, env: Env): S => {
-  switch (op._tag) {
-    case 'Bgp':
-      return evalBgp(
-        op.patterns,
-        env,
-        Arr.isReadonlyArrayEmpty(op.patterns) ? env.context : B.empty,
-      );
-    case 'Path':
-      return evalPath(op, env, B.empty);
-    case 'Join':
-      return evalJoin(op, env);
-    case 'LeftJoin':
-      return evalLeftJoin(op, env);
-    case 'Filter':
-      return filterStream(evaluate(op.input, env), op.expression, env);
-    case 'Union':
-      return Stream.concat(evaluate(op.left, env), evaluate(op.right, env));
-    case 'Graph':
-      return evalGraph(op, env);
-    case 'Extend':
-      return evalExtend(op, env);
-    case 'Minus':
-      return evalMinus(op, env);
-    case 'Group':
-      return evalGroup(op, env);
-    case 'OrderBy':
-      return evalOrderBy(op, env);
-    case 'Project': {
-      const names = op.variables.map((v) => v.value);
-      return Stream.map(evaluate(op.input, env), (b) => B.project(b, names));
-    }
-    case 'Distinct':
-    case 'Reduced':
-      return Stream.suspend(() => {
+  return Match.value(op).pipe(
+    Match.tag('Bgp', (o): S =>
+      evalBgp(o.patterns, env, Arr.isReadonlyArrayEmpty(o.patterns) ? env.context : B.empty),
+    ),
+    Match.tag('Path', (o) => evalPath(o, env, B.empty)),
+    Match.tag('Join', (o) => evalJoin(o, env)),
+    Match.tag('LeftJoin', (o) => evalLeftJoin(o, env)),
+    Match.tag('Filter', (o) => filterStream(evaluate(o.input, env), o.expression, env)),
+    Match.tag('Union', (o) => Stream.concat(evaluate(o.left, env), evaluate(o.right, env))),
+    Match.tag('Graph', (o) => evalGraph(o, env)),
+    Match.tag('Extend', (o) => evalExtend(o, env)),
+    Match.tag('Minus', (o) => evalMinus(o, env)),
+    Match.tag('Group', (o) => evalGroup(o, env)),
+    Match.tag('OrderBy', (o) => evalOrderBy(o, env)),
+    Match.tag('Project', (o) => {
+      const names = o.variables.map((v) => v.value);
+      return Stream.map(evaluate(o.input, env), (b) => B.project(b, names));
+    }),
+    Match.tag('Distinct', 'Reduced', (o) =>
+      Stream.suspend(() => {
         const seen = new Set<string>();
-        return Stream.filter(evaluate(op.input, env), (b) => {
+        return Stream.filter(evaluate(o.input, env), (b) => {
           if (seen.has(b.key)) return false;
           seen.add(b.key);
           return true;
         });
-      });
-    case 'Slice': {
-      let s = evaluate(op.input, env);
-      if (op.offset > 0) s = Stream.drop(s, op.offset);
-      if (op.limit !== undefined) s = Stream.take(s, op.limit);
+      }),
+    ),
+    Match.tag('Slice', (o) => {
+      let s = evaluate(o.input, env);
+      if (o.offset > 0) s = Stream.drop(s, o.offset);
+      if (o.limit !== undefined) s = Stream.take(s, o.limit);
       return s;
-    }
-    case 'Values':
-      return Stream.fromIterable(op.bindings);
-    case 'Service':
-      return evalService(op, env);
-  }
+    }),
+    Match.tag('Values', (o) => Stream.fromIterable(o.bindings)),
+    Match.tag('Service', (o) => evalService(o, env)),
+    Match.exhaustive,
+  );
 };

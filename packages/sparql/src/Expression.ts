@@ -10,6 +10,7 @@
  * @since 0.1.0
  */
 import * as DateTime from 'effect/DateTime';
+import * as Match from 'effect/Match';
 import * as Random from 'effect/Random';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -70,62 +71,59 @@ export const makeContext = (options?: {
   };
 };
 
-const substitute = (t: Term.Term, solution: Bindings): Term.GroundTerm => {
-  switch (t._tag) {
-    case 'Variable':
-      return solution.map.get(t.value) ?? V.fail(`Unbound variable ?${t.value}`);
-    case 'Triple':
-      // SAFETY: substituting bound ground terms keeps each triple position's kind.
-      return Term.triple(
-        substitute(t.subject, solution) as Term.Subject,
-        substitute(t.predicate, solution) as Term.Predicate,
-        substitute(t.object, solution) as Term.Object,
-      );
-    case 'DefaultGraph':
-      return V.fail('Invalid term');
-    default:
-      return t;
-  }
-};
+const substitute: (t: Term.Term, solution: Bindings) => Term.GroundTerm = Match.fn(
+  (t: Term.Term, _solution: Bindings) => t,
+).pipe(
+  Match.tag(
+    'Variable',
+    (v, _t, solution): Term.GroundTerm =>
+      solution.map.get(v.value) ?? V.fail(`Unbound variable ?${v.value}`),
+  ),
+  Match.tag('Triple', (x, _t, solution) =>
+    // SAFETY: substituting bound ground terms keeps each triple position's kind.
+    Term.triple(
+      substitute(x.subject, solution) as Term.Subject,
+      substitute(x.predicate, solution) as Term.Predicate,
+      substitute(x.object, solution) as Term.Object,
+    ),
+  ),
+  Match.tag('DefaultGraph', () => V.fail('Invalid term')),
+  Match.orElse((x) => x),
+);
 
 /**
  * Evaluates an expression; throws `EvalFailure` on errors.
  *
  * @internal
  */
-export const evaluateUnsafe = (
+export const evaluateUnsafe: (
   e: Algebra.Expression,
   solution: Bindings,
   ctx: Context,
-): Term.GroundTerm => {
-  switch (e._tag) {
-    case 'Variable':
-    case 'Triple':
-      return substitute(e, solution);
-    case 'NamedNode':
-    case 'Literal':
-    case 'BlankNode':
-      return e;
-    case 'Exists': {
-      if (ctx.exists === undefined) return V.fail('EXISTS is not supported here');
-      const r = ctx.exists(e, solution);
-      return V.bool(e.negated ? !r : r);
+) => Term.GroundTerm = Match.fn(
+  (e: Algebra.Expression, _solution: Bindings, _ctx: Context) => e,
+).pipe(
+  Match.tag('Variable', 'Triple', (t, _e, solution): Term.GroundTerm => substitute(t, solution)),
+  Match.tag('NamedNode', 'Literal', 'BlankNode', (t) => t),
+  Match.tag('Exists', (x, _e, solution, ctx) => {
+    if (ctx.exists === undefined) return V.fail('EXISTS is not supported here');
+    const r = ctx.exists(x, solution);
+    return V.bool(x.negated ? !r : r);
+  }),
+  Match.tag('FunctionCall', (call, _e, solution, ctx) => {
+    const iri = call.function.value;
+    const args = call.args.map((a) => evaluateUnsafe(a, solution, ctx));
+    const f = ctx.functions.get(iri);
+    if (f !== undefined) return f(args, ctx);
+    if (Functions.isCast(iri)) {
+      if (args.length !== 1) return V.fail('Casts take one argument');
+      return Functions.cast(iri, args[0]!);
     }
-    case 'FunctionCall': {
-      const iri = e.function.value;
-      const args = e.args.map((a) => evaluateUnsafe(a, solution, ctx));
-      const f = ctx.functions.get(iri);
-      if (f !== undefined) return f(args, ctx);
-      if (Functions.isCast(iri)) {
-        if (args.length !== 1) return V.fail('Casts take one argument');
-        return Functions.cast(iri, args[0]!);
-      }
-      return V.fail(`Unknown function <${iri}>`);
-    }
-    case 'Operation':
-      return operation(e, solution, ctx);
-  }
-};
+    return V.fail(`Unknown function <${iri}>`);
+  }),
+  Match.tag('Operation', (o, _e, solution, ctx) => operation(o, solution, ctx)),
+  Match.exhaustive,
+);
 
 const ebvOf = (e: Algebra.Expression, solution: Bindings, ctx: Context): boolean =>
   V.ebv(evaluateUnsafe(e, solution, ctx));
@@ -139,98 +137,98 @@ const operation = (
   e: Algebra.OperationExpression,
   solution: Bindings,
   ctx: Context,
-): Term.GroundTerm => {
-  const args = e.args;
-  const arg = (i: number) => evaluateUnsafe(args[i]!, solution, ctx);
-  switch (e.operator) {
-    case '||': {
-      const a = attempt(() => ebvOf(args[0]!, solution, ctx));
-      if (a === true) return V.TRUE;
-      const b = ebvOf(args[1]!, solution, ctx);
-      if (b) return V.TRUE;
-      if (a instanceof V.EvalFailure) throw a;
-      return V.FALSE;
+): Term.GroundTerm => operatorOf(e.operator, e, solution, ctx);
+
+/** Evaluates argument `i` of an operation. */
+const argOf = (e: Algebra.OperationExpression, i: number, solution: Bindings, ctx: Context) =>
+  evaluateUnsafe(e.args[i]!, solution, ctx);
+
+const operatorOf: (
+  operator: Algebra.OperationExpression['operator'],
+  e: Algebra.OperationExpression,
+  solution: Bindings,
+  ctx: Context,
+) => Term.GroundTerm = Match.fn(
+  (
+    operator: Algebra.OperationExpression['operator'],
+    _e: Algebra.OperationExpression,
+    _solution: Bindings,
+    _ctx: Context,
+  ) => operator,
+).pipe(
+  Match.when('||', (_op, _o, e, solution, ctx): Term.GroundTerm => {
+    const a = attempt(() => ebvOf(e.args[0]!, solution, ctx));
+    if (a === true) return V.TRUE;
+    const b = ebvOf(e.args[1]!, solution, ctx);
+    if (b) return V.TRUE;
+    if (a instanceof V.EvalFailure) throw a;
+    return V.FALSE;
+  }),
+  Match.when('&&', (_op, _o, e, solution, ctx) => {
+    const a = attempt(() => ebvOf(e.args[0]!, solution, ctx));
+    if (a === false) return V.FALSE;
+    const b = ebvOf(e.args[1]!, solution, ctx);
+    if (!b) return V.FALSE;
+    if (a instanceof V.EvalFailure) throw a;
+    return V.TRUE;
+  }),
+  Match.when('!', (_op, _o, e, solution, ctx) => V.bool(!ebvOf(e.args[0]!, solution, ctx))),
+  Match.when('=', (_op, _o, e, solution, ctx) =>
+    V.bool(V.equals(argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx))),
+  ),
+  Match.when('!=', (_op, _o, e, solution, ctx) =>
+    V.bool(!V.equals(argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx))),
+  ),
+  Match.when(Match.is('<', '>', '<=', '>='), (op, _o, e, solution, ctx) => {
+    const a = argOf(e, 0, solution, ctx);
+    const b = argOf(e, 1, solution, ctx);
+    if (a._tag !== 'Literal' || b._tag !== 'Literal') return V.fail('Cannot order non-literals');
+    const c = V.compareLiterals(a, b);
+    if (Number.isNaN(c)) return V.FALSE;
+    return V.bool(op === '<' ? c < 0 : op === '>' ? c > 0 : op === '<=' ? c <= 0 : c >= 0);
+  }),
+  Match.when(Match.is('+', '-', '*', '/'), (op, _o, e, solution, ctx) =>
+    V.arithmetic(op, argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx)),
+  ),
+  Match.when('UPLUS', (_op, _o, e, solution, ctx) => {
+    const a = argOf(e, 0, solution, ctx);
+    return V.isNumeric(a) ? a : V.fail('Unary plus of a non-numeric');
+  }),
+  Match.when('UMINUS', (_op, _o, e, solution, ctx) => V.negate(argOf(e, 0, solution, ctx))),
+  Match.when(Match.is('IN', 'NOT IN'), (op, _o, e, solution, ctx) => {
+    const value = argOf(e, 0, solution, ctx);
+    let failure: V.EvalFailure | undefined;
+    for (let i = 1; i < e.args.length; i++) {
+      const r = attempt(() => V.equals(value, argOf(e, i, solution, ctx)));
+      if (r === true) return V.bool(op === 'IN');
+      if (r instanceof V.EvalFailure) failure = r;
     }
-    case '&&': {
-      const a = attempt(() => ebvOf(args[0]!, solution, ctx));
-      if (a === false) return V.FALSE;
-      const b = ebvOf(args[1]!, solution, ctx);
-      if (!b) return V.FALSE;
-      if (a instanceof V.EvalFailure) throw a;
-      return V.TRUE;
+    if (failure !== undefined) throw failure;
+    return V.bool(op !== 'IN');
+  }),
+  Match.when('BOUND', (_op, _o, e, solution) => {
+    const v = e.args[0]!;
+    return V.bool(v._tag === 'Variable' && solution.map.has(v.value));
+  }),
+  Match.when('IF', (_op, _o, e, solution, ctx) =>
+    ebvOf(e.args[0]!, solution, ctx) ? argOf(e, 1, solution, ctx) : argOf(e, 2, solution, ctx),
+  ),
+  Match.when('COALESCE', (_op, _o, e, solution, ctx) => {
+    for (let i = 0; i < e.args.length; i++) {
+      const r = attempt(() => argOf(e, i, solution, ctx));
+      if (!(r instanceof V.EvalFailure)) return r;
     }
-    case '!':
-      return V.bool(!ebvOf(args[0]!, solution, ctx));
-    case '=':
-      return V.bool(V.equals(arg(0), arg(1)));
-    case '!=':
-      return V.bool(!V.equals(arg(0), arg(1)));
-    case '<':
-    case '>':
-    case '<=':
-    case '>=': {
-      const a = arg(0);
-      const b = arg(1);
-      if (a._tag !== 'Literal' || b._tag !== 'Literal') return V.fail('Cannot order non-literals');
-      const c = V.compareLiterals(a, b);
-      if (Number.isNaN(c)) return V.FALSE;
-      switch (e.operator) {
-        case '<':
-          return V.bool(c < 0);
-        case '>':
-          return V.bool(c > 0);
-        case '<=':
-          return V.bool(c <= 0);
-        default:
-          return V.bool(c >= 0);
-      }
-    }
-    case '+':
-    case '-':
-    case '*':
-    case '/':
-      return V.arithmetic(e.operator, arg(0), arg(1));
-    case 'UPLUS': {
-      const a = arg(0);
-      return V.isNumeric(a) ? a : V.fail('Unary plus of a non-numeric');
-    }
-    case 'UMINUS':
-      return V.negate(arg(0));
-    case 'IN':
-    case 'NOT IN': {
-      const value = arg(0);
-      let failure: V.EvalFailure | undefined;
-      for (let i = 1; i < args.length; i++) {
-        const r = attempt(() => V.equals(value, arg(i)));
-        if (r === true) return V.bool(e.operator === 'IN');
-        if (r instanceof V.EvalFailure) failure = r;
-      }
-      if (failure !== undefined) throw failure;
-      return V.bool(e.operator !== 'IN');
-    }
-    case 'BOUND': {
-      const v = args[0]!;
-      return V.bool(v._tag === 'Variable' && solution.map.has(v.value));
-    }
-    case 'IF':
-      return ebvOf(args[0]!, solution, ctx) ? arg(1) : arg(2);
-    case 'COALESCE': {
-      for (let i = 0; i < args.length; i++) {
-        const r = attempt(() => arg(i));
-        if (!(r instanceof V.EvalFailure)) return r;
-      }
-      return V.fail('COALESCE: no argument could be evaluated');
-    }
-    default: {
-      const f = Functions.builtIns[e.operator];
-      if (f === undefined) return V.fail(`Unsupported operator ${e.operator}`);
-      const values = args.map((a) => evaluateUnsafe(a, solution, ctx));
-      // SAFETY: `BuiltInArgs` types the first three slots as present; each built-in checks its own
-      // arity before reading them.
-      return f(values as unknown as Functions.BuiltInArgs, ctx, solution);
-    }
-  }
-};
+    return V.fail('COALESCE: no argument could be evaluated');
+  }),
+  Match.orElse((op, _o, e, solution, ctx) => {
+    const f = Functions.builtIns[op];
+    if (f === undefined) return V.fail(`Unsupported operator ${op}`);
+    const values = e.args.map((a) => evaluateUnsafe(a, solution, ctx));
+    // SAFETY: `BuiltInArgs` types the first three slots as present; each built-in checks its own
+    // arity before reading them.
+    return f(values as unknown as Functions.BuiltInArgs, ctx, solution);
+  }),
+);
 
 /**
  * Evaluates an expression against a solution.

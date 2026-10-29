@@ -21,6 +21,7 @@
 import * as BigDecimal from 'effect/BigDecimal';
 import * as DateTime from 'effect/DateTime';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
@@ -77,17 +78,12 @@ const numericValue = (t: Term.GroundTerm): number | undefined => {
   if (t._tag !== 'Literal' || !Xsd.isNumericDatatype(t.datatype.value)) return undefined;
   if (!Xsd.isValidLexical(t.datatype.value, t.value)) return undefined;
   const v = Xsd.toValue(t);
-  switch (v._tag) {
-    case 'Integer':
-      return Number(v.value);
-    case 'Decimal':
-      return BigDecimal.toNumberUnsafe(v.value);
-    case 'Float':
-    case 'Double':
-      return v.value;
-    default:
-      return undefined;
-  }
+  return Match.value(v).pipe(
+    Match.tag('Integer', (i) => Number(i.value)),
+    Match.tag('Decimal', (d) => BigDecimal.toNumberUnsafe(d.value)),
+    Match.tag('Float', 'Double', (f) => f.value),
+    Match.orElse(() => undefined),
+  );
 };
 
 /**

@@ -15,6 +15,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
 import type * as Ast from './Ast.ts';
@@ -46,27 +47,24 @@ const subset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
 /** Pushes one filter condition as deep as possible; returns undefined if it cannot move. */
 const push = (e: Algebra.Expression, op: Algebra.Operation): Algebra.Operation | undefined => {
   const vars = Algebra.expressionVariables(e);
-  switch (op._tag) {
-    case 'Join': {
-      if (subset(vars, Algebra.certainVariables(op.left))) {
-        return { ...op, left: pushOrWrap(e, op.left) };
+  return Match.value(op).pipe(
+    Match.tag('Join', (j) => {
+      if (subset(vars, Algebra.certainVariables(j.left))) {
+        return { ...j, left: pushOrWrap(e, j.left) };
       }
-      if (subset(vars, Algebra.certainVariables(op.right))) {
-        return { ...op, right: pushOrWrap(e, op.right) };
-      }
-      return undefined;
-    }
-    case 'LeftJoin':
-    case 'Minus':
-      if (subset(vars, Algebra.certainVariables(op.left))) {
-        return { ...op, left: pushOrWrap(e, op.left) };
+      if (subset(vars, Algebra.certainVariables(j.right))) {
+        return { ...j, right: pushOrWrap(e, j.right) };
       }
       return undefined;
-    case 'Filter':
-      return { ...op, input: pushOrWrap(e, op.input) };
-    default:
-      return undefined;
-  }
+    }),
+    Match.tag('LeftJoin', 'Minus', (o) =>
+      subset(vars, Algebra.certainVariables(o.left))
+        ? { ...o, left: pushOrWrap(e, o.left) }
+        : undefined,
+    ),
+    Match.tag('Filter', (f) => ({ ...f, input: pushOrWrap(e, f.input) })),
+    Match.orElse(() => undefined),
+  );
 };
 
 const pushOrWrap = (e: Algebra.Expression, op: Algebra.Operation): Algebra.Operation =>
@@ -187,23 +185,23 @@ const orderBgps = (
   op: Algebra.Operation,
   ctx: OptimizerContext,
 ): Effect.Effect<Algebra.Operation, Store.StoreError> => {
-  switch (op._tag) {
-    case 'Bgp':
-      return Effect.map(orderBgp(op.patterns, ctx), (patterns) => Algebra.bgp(patterns));
-    case 'Path':
-    case 'Values':
-      return Effect.succeed(op);
-    case 'Graph':
-      return Effect.map(
-        orderBgps(op.input, {
+  return Match.value(op).pipe(
+    Match.tag('Bgp', (b): Effect.Effect<Algebra.Operation, Store.StoreError> =>
+      Effect.map(orderBgp(b.patterns, ctx), (patterns) => Algebra.bgp(patterns)),
+    ),
+    Match.tag('Path', 'Values', (o) => Effect.succeed(o)),
+    Match.tag('Graph', (g) =>
+      Effect.map(
+        orderBgps(g.input, {
           ...ctx,
-          graph: op.name._tag === 'NamedNode' ? { _tag: 'NamedGraph', graph: op.name } : ctx.graph,
+          graph: g.name._tag === 'NamedNode' ? { _tag: 'NamedGraph', graph: g.name } : ctx.graph,
         }),
-        (input) => ({ ...op, input }),
-      );
-    default: {
+        (input) => ({ ...g, input }),
+      ),
+    ),
+    Match.orElse((o) => {
       const children: Array<Algebra.Operation> = [];
-      Algebra.mapChildren(op, (c) => {
+      Algebra.mapChildren(o, (c) => {
         children.push(c);
         return c;
       });
@@ -211,11 +209,11 @@ const orderBgps = (
         Effect.forEach(children, (c) => orderBgps(c, ctx), { concurrency: 1 }),
         (optimized) => {
           let i = 0;
-          return Algebra.mapChildren(op, () => optimized[i++]!);
+          return Algebra.mapChildren(o, () => optimized[i++]!);
         },
       );
-    }
-  }
+    }),
+  );
 };
 
 /**

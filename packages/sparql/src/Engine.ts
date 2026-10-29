@@ -10,6 +10,7 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -172,26 +173,24 @@ const groundTemplateTerm = (
   b: B.Bindings,
   bnodes: Map<string, Term.BlankNode>,
 ): Term.Term | undefined => {
-  switch (t._tag) {
-    case 'Variable':
-      return b.map.get(t.value);
-    case 'BlankNode': {
-      let n = bnodes.get(t.value);
-      if (n === undefined) bnodes.set(t.value, (n = Term.blankNode()));
+  return Match.value(t).pipe(
+    Match.tag('Variable', (v) => b.map.get(v.value)),
+    Match.tag('BlankNode', (blank) => {
+      let n = bnodes.get(blank.value);
+      if (n === undefined) bnodes.set(blank.value, (n = Term.blankNode()));
       return n;
-    }
-    case 'Triple': {
-      const s = groundTemplateTerm(t.subject, b, bnodes);
-      const p = groundTemplateTerm(t.predicate, b, bnodes);
-      const o = groundTemplateTerm(t.object, b, bnodes);
+    }),
+    Match.tag('Triple', (x) => {
+      const s = groundTemplateTerm(x.subject, b, bnodes);
+      const p = groundTemplateTerm(x.predicate, b, bnodes);
+      const o = groundTemplateTerm(x.object, b, bnodes);
       if (s === undefined || p === undefined || o === undefined) return undefined;
       if (!isValidTriple(s, p, o)) return undefined;
       // SAFETY: `isValidTriple` checked the subject, predicate and object positions.
       return Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
-    }
-    default:
-      return t;
-  }
+    }),
+    Match.orElse((x) => x),
+  );
 };
 
 const isValidTriple = (s: Term.Term, p: Term.Term, o: Term.Term): boolean =>
@@ -298,15 +297,26 @@ export const make = (
       const ast = yield* parseQuery(q, request);
       const { algebra, env, input } = yield* run(ast, request);
       const solutions = Evaluator.evaluate(input, env);
-      switch (algebra._tag) {
-        case 'Select':
-          return { _tag: 'Select', variables: algebra.variables, bindings: solutions } as const;
-        case 'Ask': {
-          const head = yield* Stream.runHead(solutions);
-          return { _tag: 'Ask', value: Option.isSome(head) } as const;
-        }
-        case 'Construct': {
-          const template = algebra.template.map(
+      return yield* Match.value(algebra).pipe(
+        Match.tag('Select', (s) =>
+          Effect.succeed({
+            _tag: 'Select',
+            variables: s.variables,
+            bindings: solutions,
+          } as const),
+        ),
+        Match.tag('Ask', () =>
+          Effect.map(
+            Stream.runHead(solutions),
+            (head) =>
+              ({
+                _tag: 'Ask',
+                value: Option.isSome(head),
+              }) as const,
+          ),
+        ),
+        Match.tag('Construct', (c) => {
+          const template = c.template.map(
             (t) =>
               ({
                 _tag: 'QuadPattern',
@@ -316,18 +326,20 @@ export const make = (
                 graph: Term.defaultGraph,
               }) satisfies Ast.QuadPattern,
           );
-          return {
+          return Effect.succeed({
             _tag: 'Graph',
             quads: dedupeQuads(
               Stream.flatMap(solutions, (b) =>
                 Stream.fromIterable(instantiate(template, b, Term.defaultGraph)),
               ),
             ),
-          } as const;
-        }
-        case 'Describe':
-          return { _tag: 'Graph', quads: describe(algebra.terms, solutions, env) } as const;
-      }
+          } as const);
+        }),
+        Match.tag('Describe', (d) =>
+          Effect.succeed({ _tag: 'Graph', quads: describe(d.terms, solutions, env) } as const),
+        ),
+        Match.exhaustive,
+      );
     });
 
   const describe = (
@@ -408,27 +420,29 @@ export const make = (
 
   const clearTarget = (target: Ast.GraphTarget, silent: boolean, drop: boolean) =>
     Effect.gen(function* () {
-      switch (target._tag) {
-        case 'Default':
-          return yield* store.clear(Term.defaultGraph);
-        case 'NamedNode': {
-          if (!(yield* store.hasGraph(target))) {
-            if (silent) return;
-            return yield* fail(`Graph <${target.value}> does not exist`);
-          }
-          return yield* drop ? store.dropGraph(target) : store.clear(target);
-        }
-        case 'Named':
-        case 'All': {
-          const graphs = yield* Stream.runCollect(store.graphs);
-          yield* Effect.forEach(graphs, (g) => (drop ? store.dropGraph(g) : store.clear(g)), {
-            concurrency: 1,
-            discard: true,
-          });
-          if (target._tag === 'All') yield* store.clear(Term.defaultGraph);
-          return;
-        }
-      }
+      return yield* Match.value(target).pipe(
+        Match.tag('Default', (): Effect.Effect<void, SparqlError> =>
+          store.clear(Term.defaultGraph),
+        ),
+        Match.tag('NamedNode', (graph) =>
+          Effect.flatMap(store.hasGraph(graph), (exists): Effect.Effect<void, SparqlError> => {
+            if (!exists)
+              return silent ? Effect.void : fail(`Graph <${graph.value}> does not exist`);
+            return drop ? store.dropGraph(graph) : store.clear(graph);
+          }),
+        ),
+        Match.tag('Named', 'All', (which) =>
+          Effect.gen(function* () {
+            const graphs = yield* Stream.runCollect(store.graphs);
+            yield* Effect.forEach(graphs, (g) => (drop ? store.dropGraph(g) : store.clear(g)), {
+              concurrency: 1,
+              discard: true,
+            });
+            if (which._tag === 'All') yield* store.clear(Term.defaultGraph);
+          }),
+        ),
+        Match.exhaustive,
+      );
     });
 
   const transfer = (op: Ast.TransferOperation) =>
@@ -518,57 +532,52 @@ export const make = (
     baseIri: string | undefined,
     request: RequestOptions | undefined,
   ): Effect.Effect<void, SparqlError> => {
-    switch (op._tag) {
-      case 'InsertData':
-        return store.insert(freshBlankNodes(op.quads));
-      case 'DeleteData':
-        return store.delete(op.quads);
-      case 'DeleteWhere':
-        return modify(
+    return Match.value(op).pipe(
+      Match.tag('InsertData', (o): Effect.Effect<void, SparqlError> =>
+        store.insert(freshBlankNodes(o.quads)),
+      ),
+      Match.tag('DeleteData', (o) => store.delete(o.quads)),
+      Match.tag('DeleteWhere', (o) =>
+        modify(
           {
             _tag: 'Modify',
-            delete: op.patterns,
+            delete: o.patterns,
             insert: [],
             where: { _tag: 'Group', patterns: [] },
           },
-          quadPatternsToAlgebra(op.patterns),
+          quadPatternsToAlgebra(o.patterns),
           baseIri,
           request,
-        );
-      case 'Modify':
-        return modify(op, Translate.translatePattern(op.where), baseIri, request);
-      case 'Load': {
+        ),
+      ),
+      Match.tag('Modify', (o) => modify(o, Translate.translatePattern(o.where), baseIri, request)),
+      Match.tag('Load', (o) => {
         const loader = options.load;
         if (loader === undefined) {
-          return op.silent ? Effect.void : fail('LOAD is not supported (no loader configured)');
+          return o.silent ? Effect.void : fail('LOAD is not supported (no loader configured)');
         }
-        const destination: Term.Graph = op.destination ?? Term.defaultGraph;
-        const load = Effect.flatMap(loader(op.source), (quads) =>
+        const destination: Term.Graph = o.destination ?? Term.defaultGraph;
+        const load = Effect.flatMap(loader(o.source), (quads) =>
           store.insert(
             Array.from(quads, (q) => new Term.Quad(q.subject, q.predicate, q.object, destination)),
           ),
         );
-        return op.silent ? Effect.ignore(load) : load;
-      }
-      case 'Clear':
-        return clearTarget(op.target, op.silent, false);
-      case 'Drop':
-        return clearTarget(op.target, op.silent, true);
-      case 'Create':
-        return Effect.flatMap(
-          store.hasGraph(op.graph),
-          (exists): Effect.Effect<void, SparqlError> =>
-            exists
-              ? op.silent
-                ? Effect.void
-                : fail(`Graph <${op.graph.value}> already exists`)
-              : store.createGraph(op.graph),
-        );
-      case 'Add':
-      case 'Move':
-      case 'Copy':
-        return transfer(op);
-    }
+        return o.silent ? Effect.ignore(load) : load;
+      }),
+      Match.tag('Clear', (o) => clearTarget(o.target, o.silent, false)),
+      Match.tag('Drop', (o) => clearTarget(o.target, o.silent, true)),
+      Match.tag('Create', (o) =>
+        Effect.flatMap(store.hasGraph(o.graph), (exists): Effect.Effect<void, SparqlError> =>
+          exists
+            ? o.silent
+              ? Effect.void
+              : fail(`Graph <${o.graph.value}> already exists`)
+            : store.createGraph(o.graph),
+        ),
+      ),
+      Match.tag('Add', 'Move', 'Copy', (o) => transfer(o)),
+      Match.exhaustive,
+    );
   };
 
   const update: SparqlEngineShape['update'] = (u, request) =>

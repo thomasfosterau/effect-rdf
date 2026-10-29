@@ -16,6 +16,7 @@
  */
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Predicate from 'effect/Predicate';
+import * as Match from 'effect/Match';
 
 // -----------------------------------------------------------------------------
 // Terms
@@ -1253,41 +1254,34 @@ export const inScopeVariables = (pattern: Pattern): ReadonlyArray<string> => {
 };
 
 const collectInScope = (pattern: Pattern, out: Set<string>): void => {
-  switch (pattern._tag) {
-    case 'Bgp':
-      for (const t of pattern.triples) {
+  Match.value(pattern).pipe(
+    Match.tag('Bgp', (b) => {
+      for (const t of b.triples) {
         addTermVariables(t.subject, out);
         if (t._tag === 'TriplePattern') addTermVariables(t.predicate, out);
         addTermVariables(t.object, out);
       }
-      return;
-    case 'Group':
-      for (const p of pattern.patterns) collectInScope(p, out);
-      return;
-    case 'Optional':
-    case 'Minus':
-      if (pattern._tag === 'Optional') collectInScope(pattern.pattern, out);
-      return;
-    case 'Union':
-      for (const p of pattern.patterns) collectInScope(p, out);
-      return;
-    case 'Graph':
-    case 'Service':
-      addTermVariables(pattern.name, out);
-      collectInScope(pattern.pattern, out);
-      return;
-    case 'Filter':
-      return;
-    case 'Bind':
-      out.add(pattern.variable.value);
-      return;
-    case 'Values':
-      for (const v of pattern.variables) out.add(v.value);
-      return;
-    case 'SubSelect':
-      for (const v of projectedVariables(pattern.query)) out.add(v);
-      return;
-  }
+    }),
+    Match.tag('Group', 'Union', (g) => {
+      for (const p of g.patterns) collectInScope(p, out);
+    }),
+    Match.tag('Optional', (o) => collectInScope(o.pattern, out)),
+    Match.tag('Minus', 'Filter', () => undefined),
+    Match.tag('Graph', 'Service', (g) => {
+      addTermVariables(g.name, out);
+      collectInScope(g.pattern, out);
+    }),
+    Match.tag('Bind', (b) => {
+      out.add(b.variable.value);
+    }),
+    Match.tag('Values', (v) => {
+      for (const x of v.variables) out.add(x.value);
+    }),
+    Match.tag('SubSelect', (s) => {
+      for (const v of projectedVariables(s.query)) out.add(v);
+    }),
+    Match.exhaustive,
+  );
 };
 
 /**
@@ -1320,24 +1314,17 @@ export const expressionVariables = (
 ): ReadonlyArray<string> => {
   const out = new Set<string>();
   const go = (e: Expression): void => {
-    switch (e._tag) {
-      case 'Variable':
-      case 'Triple':
-        addTermVariables(e, out);
-        return;
-      case 'Operation':
-      case 'FunctionCall':
-        e.args.forEach(go);
-        return;
-      case 'Aggregate':
-        if (e.expression !== '*') go(e.expression);
-        return;
-      case 'Exists':
-        if (deep) collectInScope(e.pattern, out);
-        return;
-      default:
-        return;
-    }
+    Match.value(e).pipe(
+      Match.tag('Variable', 'Triple', (t) => addTermVariables(t, out)),
+      Match.tag('Operation', 'FunctionCall', (call) => call.args.forEach(go)),
+      Match.tag('Aggregate', (a) => {
+        if (a.expression !== '*') go(a.expression);
+      }),
+      Match.tag('Exists', (x) => {
+        if (deep) collectInScope(x.pattern, out);
+      }),
+      Match.orElse(() => undefined),
+    );
   };
   go(expression);
   return Array.from(out);
@@ -1351,13 +1338,9 @@ export const expressionVariables = (
  * @category utils
  */
 export const containsAggregate = (expression: Expression): boolean => {
-  switch (expression._tag) {
-    case 'Aggregate':
-      return true;
-    case 'Operation':
-    case 'FunctionCall':
-      return expression.args.some(containsAggregate);
-    default:
-      return false;
-  }
+  return Match.value(expression).pipe(
+    Match.tag('Aggregate', () => true),
+    Match.tag('Operation', 'FunctionCall', (call) => call.args.some(containsAggregate)),
+    Match.orElse(() => false),
+  );
 };
