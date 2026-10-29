@@ -804,6 +804,19 @@ const resolveShapes = (
 // API
 // -----------------------------------------------------------------------------
 
+/** Parses the shapes graph (if needed) and builds the engine over the data graph. */
+const prepare = Effect.fnUntraced(function* (
+  dataGraph: Dataset.Dataset,
+  shapesGraph: Dataset.Dataset | Shapes.ShapesGraph,
+  options: ValidateOptions,
+) {
+  const shapes = yield* resolveShapes(shapesGraph);
+  const data =
+    options.includeShapesGraph === true ? Dataset.union(dataGraph, shapes.dataset) : dataGraph;
+  const evaluator = yield* Effect.serviceOption(Sparql.SparqlConstraintEvaluator);
+  return { shapes, engine: makeEngine(data, shapes, options, evaluator) };
+});
+
 /**
  * Validates a data graph against a shapes graph (either an RDF dataset, which
  * is parsed first, or a pre-parsed `Shapes.ShapesGraph`).
@@ -820,11 +833,7 @@ export const validate: (
   options?: ValidateOptions,
 ) => Effect.Effect<ValidationReport.ValidationReport, ValidationError> = Effect.fnUntraced(
   function* (dataGraph, shapesGraph, options = {}) {
-    const shapes = yield* resolveShapes(shapesGraph);
-    const data =
-      options.includeShapesGraph === true ? Dataset.union(dataGraph, shapes.dataset) : dataGraph;
-    const evaluator = yield* Effect.serviceOption(Sparql.SparqlConstraintEvaluator);
-    const engine = makeEngine(data, shapes, options, evaluator);
+    const { shapes, engine } = yield* prepare(dataGraph, shapesGraph, options);
     const perShape = yield* Effect.forEach(
       shapes.shapes,
       (shape) =>
@@ -859,11 +868,7 @@ export const validateNode: (
   options?: ValidateOptions,
 ) => Effect.Effect<ValidationReport.ValidationReport, ValidationError> = Effect.fnUntraced(
   function* (dataGraph, shapesGraph, shapeId, focusNode, options = {}) {
-    const shapes = yield* resolveShapes(shapesGraph);
-    const data =
-      options.includeShapesGraph === true ? Dataset.union(dataGraph, shapes.dataset) : dataGraph;
-    const evaluator = yield* Effect.serviceOption(Sparql.SparqlConstraintEvaluator);
-    const engine = makeEngine(data, shapes, options, evaluator);
+    const { shapes, engine } = yield* prepare(dataGraph, shapesGraph, options);
     const shape = Option.getOrUndefined(Shapes.get(shapes, shapeId));
     if (shape === undefined) return ValidationReport.make([]);
     return ValidationReport.make(yield* engine.validateShape(shape, focusNode));
