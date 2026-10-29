@@ -418,7 +418,10 @@ export const make = (
         case 'Named':
         case 'All': {
           const graphs = yield* Stream.runCollect(store.graphs);
-          for (const g of graphs) yield* drop ? store.dropGraph(g) : store.clear(g);
+          yield* Effect.forEach(graphs, (g) => (drop ? store.dropGraph(g) : store.clear(g)), {
+            concurrency: 1,
+            discard: true,
+          });
           if (target._tag === 'All') yield* store.clear(Term.defaultGraph);
           return;
         }

@@ -141,33 +141,34 @@ const readQuads = (
       const parts = yield* Stream.runCollect(request.multipartStream).pipe(
         Effect.mapError((e) => Errors.badRequest(`Invalid multipart body: ${e.message}`)),
       );
-      const quads: Array<Term.Quad> = [];
-      for (const part of parts) {
-        if (part._tag === 'Field') {
-          if (part.value.trim() === '') continue;
-          quads.push(
-            ...(yield* parseDocument(
+      const perPart = yield* Effect.forEach(
+        parts,
+        Effect.fnUntraced(function* (part) {
+          if (part._tag === 'Field') {
+            if (part.value.trim() === '') return [];
+            return yield* parseDocument(
               formats,
               partContentType(formats, part.contentType, part.key),
               part.value,
               baseIri,
-            )),
-          );
-        } else if (part._tag === 'File') {
-          const bytes = yield* part.contentEffect.pipe(
-            Effect.mapError((e) => Errors.badRequest(`Invalid multipart body: ${e.message}`)),
-          );
-          quads.push(
-            ...(yield* parseDocument(
+            );
+          }
+          if (part._tag === 'File') {
+            const bytes = yield* part.contentEffect.pipe(
+              Effect.mapError((e) => Errors.badRequest(`Invalid multipart body: ${e.message}`)),
+            );
+            return yield* parseDocument(
               formats,
               partContentType(formats, part.contentType, part.name),
               new TextDecoder().decode(bytes),
               baseIri,
-            )),
-          );
-        }
-      }
-      return quads;
+            );
+          }
+          return [];
+        }),
+        { concurrency: 1 },
+      );
+      return perPart.flat();
     }
     const text = yield* Effect.mapError(request.text, (e) =>
       Errors.badRequest(`Could not read the request body: ${e.message}`),

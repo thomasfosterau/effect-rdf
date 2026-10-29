@@ -173,37 +173,39 @@ export const load = (
 ): Effect.Effect<Dataset.Dataset, CliError | Serialization.RdfParseError, Serialization.Formats> =>
   Effect.gen(function* () {
     const formats = yield* Serialization.Formats;
-    const quads: Array<Term.Quad> = [];
-    for (const file of files) {
-      const ext = path.extname(file);
-      const parser = Serialization.parserForExtension(formats, ext);
-      if (Option.isNone(parser)) {
-        return yield* new CliError({ message: `Unknown RDF file extension: ${file}` });
-      }
-      const text = yield* Effect.tryPromise({
-        try: () => fs.readFile(file, 'utf8'),
-        catch: (e) =>
-          new CliError({
-            message: `Cannot read ${file}: ${
-              Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
-                ? e.message
-                : String(e)
-            }`,
-          }),
-      });
-      const url = pathToFileURL(path.resolve(file)).href;
-      const graph = graphPerFile ? Term.namedNode(url) : undefined;
-      const result = yield* parser.value.parse(text, { baseIri: url });
-      for (const q of result.dataset) {
-        quads.push(
+    const perFile = yield* Effect.forEach(
+      files,
+      Effect.fnUntraced(function* (file) {
+        const ext = path.extname(file);
+        const parser = Serialization.parserForExtension(formats, ext);
+        if (Option.isNone(parser)) {
+          return yield* new CliError({ message: `Unknown RDF file extension: ${file}` });
+        }
+        const text = yield* Effect.tryPromise({
+          try: () => fs.readFile(file, 'utf8'),
+          catch: (e) =>
+            new CliError({
+              message: `Cannot read ${file}: ${
+                Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+                  ? e.message
+                  : String(e)
+              }`,
+            }),
+        });
+        const url = pathToFileURL(path.resolve(file)).href;
+        const graph = graphPerFile ? Term.namedNode(url) : undefined;
+        const result = yield* parser.value.parse(text, { baseIri: url });
+        const quads = Array.from(result.dataset, (q) =>
           graph !== undefined && q.graph._tag === 'DefaultGraph'
             ? new Term.Quad(q.subject, q.predicate, q.object, graph)
             : q,
         );
-      }
-      yield* Effect.logInfo(`Loaded ${result.dataset.size} quads from ${file}`);
-    }
-    return Dataset.fromIterable(quads);
+        yield* Effect.logInfo(`Loaded ${result.dataset.size} quads from ${file}`);
+        return quads;
+      }),
+      { concurrency: 1 },
+    );
+    return Dataset.fromIterable(perFile.flat());
   });
 
 /**

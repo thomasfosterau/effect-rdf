@@ -329,23 +329,23 @@ export const make = (
         { concurrency: 1 },
       );
     }
-    const violations: Array<Sparql.Violation> = [];
-    for (const value of input.valueNodes) {
-      if (!(yield* ask(context, query, [...bound, ['value', value]]))) {
-        violations.push(
-          yield* toViolation(
-            new Map([
-              ['this', input.focusNode],
-              ['value', value],
-            ]),
-            input.shape,
-            messages,
-            parameters,
-          ),
-        );
-      }
-    }
-    return violations;
+    const failing = yield* Effect.filter(input.valueNodes, (value) =>
+      Effect.map(ask(context, query, [...bound, ['value', value]]), (ok) => !ok),
+    );
+    return yield* Effect.forEach(
+      failing,
+      (value) =>
+        toViolation(
+          new Map([
+            ['this', input.focusNode],
+            ['value', value],
+          ]),
+          input.shape,
+          messages,
+          parameters,
+        ),
+      { concurrency: 1 },
+    );
   });
 
   const evaluateConstraint: Sparql.SparqlConstraintEvaluator['Service']['evaluateConstraint'] = (
@@ -393,22 +393,28 @@ export const make = (
         );
       }
       const declared = yield* parametersOf(shapes, type);
-      const bound: Array<readonly [string, Term.GroundTerm]> = [];
-      for (const parameter of declared) {
-        const values = Dataset.objectsOf(shapes, target, parameter.path);
-        if (values.length > 1 || values.some((v) => v._tag === 'BlankNode')) {
-          return yield* Effect.fail(
-            evaluationError(
-              `target ${target.key} needs at most one non-blank value for ${parameter.path.key}`,
-            ),
-          );
-        }
-        if (values.length === 0) {
-          if (parameter.optional) continue;
-          return [];
-        }
-        bound.push([parameter.name, values[0]!]);
+      const supplied = declared.map((parameter) => ({
+        parameter,
+        values: Dataset.objectsOf(shapes, target, parameter.path),
+      }));
+      const invalid = ({ values }: (typeof supplied)[number]) =>
+        values.length > 1 || values.some((v) => v._tag === 'BlankNode');
+      // The first parameter that is ill-valued or required but missing decides,
+      // in declaration order.
+      const problem = supplied.find(
+        (s) => invalid(s) || (s.values.length === 0 && !s.parameter.optional),
+      );
+      if (problem !== undefined) {
+        if (!invalid(problem)) return [];
+        return yield* Effect.fail(
+          evaluationError(
+            `target ${target.key} needs at most one non-blank value for ${problem.parameter.path.key}`,
+          ),
+        );
       }
+      const bound = supplied.flatMap(({ parameter, values }) =>
+        values.slice(0, 1).map((value) => [parameter.name, value] as const),
+      );
       const query = yield* compile(context, shapes, type, {
         form: 'select',
         prebound: declared.map((d) => d.name),
