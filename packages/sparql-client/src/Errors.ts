@@ -15,6 +15,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 
@@ -146,13 +147,9 @@ export const isSparqlClientError = (u: unknown): u is SparqlClientError =>
  * @category guards
  */
 export const isTransient = (error: SparqlClientError): boolean => {
-  switch (error._tag) {
-    case 'TransportError':
-    case 'TimeoutError':
-      return true;
-    case 'HttpStatusError':
-      return [408, 429, 502, 503, 504].includes(error.status);
-    default:
-      return false;
-  }
+  return Match.value(error).pipe(
+    Match.tag('TransportError', 'TimeoutError', () => true),
+    Match.tag('HttpStatusError', (error) => [408, 429, 502, 503, 504].includes(error.status)),
+    Match.orElse(() => false),
+  );
 };

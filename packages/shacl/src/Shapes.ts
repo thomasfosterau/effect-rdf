@@ -17,6 +17,7 @@
  * @since 0.1.0
  */
 import { Dataset, Rdfs, Term, Vocab, Xsd } from '@thomasfosterau/effect-rdf';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -328,14 +329,11 @@ const componentNames: Record<Exclude<ConstraintTag, 'Sparql' | 'Component'>, str
  * @category accessors
  */
 export const componentOf = (constraint: Constraint): Term.NamedNode | Term.BlankNode => {
-  switch (constraint._tag) {
-    case 'Sparql':
-      return sh.SPARQLConstraintComponent;
-    case 'Component':
-      return constraint.component;
-    default:
-      return Term.namedNode(SH + componentNames[constraint._tag]);
-  }
+  return Match.value(constraint).pipe(
+    Match.tag('Sparql', () => sh.SPARQLConstraintComponent),
+    Match.tag('Component', (constraint) => constraint.component),
+    Match.orElse((constraint) => Term.namedNode(SH + componentNames[constraint._tag])),
+  );
 };
 
 // -----------------------------------------------------------------------------

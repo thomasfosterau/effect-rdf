@@ -101,10 +101,10 @@ export default defineConfig({
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
       'effect/imperative-loops': 'warn', // 834
-      'effect/avoid-direct-tag-checks': 'warn', // 666
+      'effect/avoid-direct-tag-checks': 'warn', // 631
       'effect/avoid-non-null-assertion': 'warn', // 639
       'effect/avoid-native-object-helpers': 'warn', // 539
-      'effect/prefer-match-over-switch': 'warn', // 109
+      'effect/prefer-match-over-switch': 'warn', // 56
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`

@@ -14,6 +14,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -138,20 +139,21 @@ export const json = (): Incremental => {
     const parsed = Json.parse(text);
     if (Result.isFailure(parsed)) return fail('json', `Invalid JSON: ${String(parsed.failure)}`);
     const value = parsed.success;
-    switch (kind) {
-      case 'head': {
+    return Match.value(kind).pipe(
+      Match.when('head', () => {
         const head = decodeHead(value);
         if (Result.isFailure(head)) return fail('json', `Invalid head: ${head.failure.message}`);
         sawHead = true;
         out.push(variablesEvent(head.success.vars ?? []));
         return;
-      }
-      case 'boolean':
+      }),
+      Match.when('boolean', () => {
         if (!Predicate.isBoolean(value)) return fail('json', '"boolean" must be true or false');
         sawBody = true;
         out.push({ _tag: 'Boolean', value });
         return;
-      case 'binding': {
+      }),
+      Match.when('binding', () => {
         const row = decodeRow(value);
         if (Result.isFailure(row)) return fail('json', `Invalid binding: ${row.failure.message}`);
         sawBody = true;
@@ -161,8 +163,9 @@ export const json = (): Incremental => {
         }
         out.push({ _tag: 'Solution', bindings: B.fromEntries(entries) });
         return;
-      }
-    }
+      }),
+      Match.exhaustive,
+    );
   };
 
   const push = (chunk: string): ReadonlyArray<ResultEvent> => {
@@ -191,6 +194,58 @@ export const json = (): Incremental => {
       primitive = false;
       if (capture !== undefined && stack.length === captureDepth) finish(i);
     };
+    // Built once per chunk: a `Match.value` per character would allocate the
+    // pipeline and its handlers on every byte of the response.
+    const scanChar = Match.fn((c: number, _i: number) => c).pipe(
+      Match.when(Match.is(32, 9, 10, 13), (_n, _c, i) => {
+        endPrimitive(i);
+      }),
+      Match.when(Match.is(123 /* { */, 91 /* [ */), (c, _c, i) => {
+        endPrimitive(i);
+        valueStart(i);
+        stack.push({
+          type: c === 123 ? 'object' : 'array',
+          key: undefined,
+          expectKey: c === 123,
+        });
+      }),
+      Match.when(Match.is(125 /* } */, 93 /* ] */), (c, _c, i) => {
+        endPrimitive(i);
+        const frame = stack.pop();
+        if (frame === undefined || frame.type !== (c === 125 ? 'object' : 'array')) {
+          fail('json', 'Unbalanced brackets');
+        }
+        if (capture !== undefined && stack.length === captureDepth) finish(i + 1);
+        if (Arr.isReadonlyArrayEmpty(stack)) done = true;
+      }),
+      Match.when(58 /* : */, (_n, _c, i) => {
+        endPrimitive(i);
+      }),
+      Match.when(44 /* , */, (_n, _c, i) => {
+        endPrimitive(i);
+        const top = stack[stack.length - 1];
+        if (top !== undefined && top.type === 'object') top.expectKey = true;
+      }),
+      Match.when(34 /* " */, (_n, _c, i) => {
+        endPrimitive(i);
+        const top = stack[stack.length - 1];
+        inString = true;
+        if (top !== undefined && top.type === 'object' && top.expectKey) {
+          stringIsKey = true;
+          keyRaw = '';
+        } else {
+          stringIsKey = false;
+          valueStart(i);
+        }
+      }),
+      Match.orElse((_n, _c, i) => {
+        if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
+        if (!primitive) {
+          primitive = true;
+          valueStart(i);
+        }
+      }),
+    );
     for (let i = 0; i < chunk.length; i++) {
       const c = chunk.charCodeAt(i);
       if (inString) {
@@ -220,63 +275,7 @@ export const json = (): Incremental => {
         if (c !== 32 && c !== 9 && c !== 10 && c !== 13) fail('json', 'Trailing data');
         continue;
       }
-      switch (c) {
-        case 32:
-        case 9:
-        case 10:
-        case 13:
-          endPrimitive(i);
-          break;
-        case 123 /* { */:
-        case 91 /* [ */:
-          endPrimitive(i);
-          valueStart(i);
-          stack.push({
-            type: c === 123 ? 'object' : 'array',
-            key: undefined,
-            expectKey: c === 123,
-          });
-          break;
-        case 125 /* } */:
-        case 93 /* ] */: {
-          endPrimitive(i);
-          const frame = stack.pop();
-          if (frame === undefined || frame.type !== (c === 125 ? 'object' : 'array')) {
-            fail('json', 'Unbalanced brackets');
-          }
-          if (capture !== undefined && stack.length === captureDepth) finish(i + 1);
-          if (Arr.isReadonlyArrayEmpty(stack)) done = true;
-          break;
-        }
-        case 58 /* : */:
-          endPrimitive(i);
-          break;
-        case 44 /* , */: {
-          endPrimitive(i);
-          const top = stack[stack.length - 1];
-          if (top !== undefined && top.type === 'object') top.expectKey = true;
-          break;
-        }
-        case 34 /* " */: {
-          endPrimitive(i);
-          const top = stack[stack.length - 1];
-          inString = true;
-          if (top !== undefined && top.type === 'object' && top.expectKey) {
-            stringIsKey = true;
-            keyRaw = '';
-          } else {
-            stringIsKey = false;
-            valueStart(i);
-          }
-          break;
-        }
-        default:
-          if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
-          if (!primitive) {
-            primitive = true;
-            valueStart(i);
-          }
-      }
+      scanChar(c, i);
     }
     if (capture !== undefined) {
       captureBuf += chunk.slice(captureStart);
@@ -382,8 +381,8 @@ export const xml = (): Incremental => {
   let head = '';
   const parse = (doc: string) => runSyncParse(Results.Xml.parse(doc));
   const step = (out: Array<ResultEvent>): boolean => {
-    switch (phase) {
-      case 'root': {
+    return Match.value(phase).pipe(
+      Match.when('root', () => {
         const m = ROOT.exec(buffer);
         if (m === null) return false;
         if (m[1] !== undefined || m[0].endsWith('/>')) {
@@ -394,8 +393,8 @@ export const xml = (): Incremental => {
         buffer = buffer.slice(m.index + m[0].length);
         phase = 'head';
         return true;
-      }
-      case 'head': {
+      }),
+      Match.when('head', () => {
         const m = HEAD_END.exec(buffer);
         if (m === null) return false;
         head = buffer.slice(0, m.index + m[0].length);
@@ -404,8 +403,8 @@ export const xml = (): Incremental => {
         out.push(variablesEvent(parsed._tag === 'ResultSet' ? parsed.variables : []));
         phase = 'body';
         return true;
-      }
-      case 'body': {
+      }),
+      Match.when('body', () => {
         const results = RESULTS_START.exec(buffer);
         const boolean = buffer.indexOf('<boolean');
         if (boolean >= 0 && (results === null || boolean < results.index)) {
@@ -421,8 +420,8 @@ export const xml = (): Incremental => {
         buffer = buffer.slice(results.index + results[0].length);
         phase = results[1] === '/' ? 'done' : 'results';
         return true;
-      }
-      case 'results': {
+      }),
+      Match.when('results', () => {
         let last = -1;
         RESULT_END.lastIndex = 0;
         for (let m = RESULT_END.exec(buffer); m !== null; m = RESULT_END.exec(buffer)) {
@@ -435,10 +434,9 @@ export const xml = (): Incremental => {
         }
         buffer = buffer.slice(last);
         return false;
-      }
-      default:
-        return false;
-    }
+      }),
+      Match.orElse(() => false),
+    );
   };
   let whole = '';
   return {
@@ -657,20 +655,28 @@ export const parserFor = (
 ): Option.Option<{ readonly make: () => Incremental; readonly format: string }> => {
   const codec = Results.codecFor(mediaType);
   if (Option.isNone(codec)) return Option.none();
-  switch (codec.value) {
-    case Results.Json:
-      return Option.some({ make: json, format: 'json' });
-    case Results.Xml:
-      return Option.some({ make: xml, format: 'xml' });
-    case Results.Tsv:
-      return Option.some({ make: tsv, format: 'tsv' });
-    case Results.Csv:
-      return Option.some({ make: csv, format: 'csv' });
-    default: {
+  return Match.value(codec).pipe(
+    Match.when(
+      ({ value }) => value === Results.Json,
+      () => Option.some({ make: json, format: 'json' }),
+    ),
+    Match.when(
+      ({ value }) => value === Results.Xml,
+      () => Option.some({ make: xml, format: 'xml' }),
+    ),
+    Match.when(
+      ({ value }) => value === Results.Tsv,
+      () => Option.some({ make: tsv, format: 'tsv' }),
+    ),
+    Match.when(
+      ({ value }) => value === Results.Csv,
+      () => Option.some({ make: csv, format: 'csv' }),
+    ),
+    Match.orElse((codec) => {
       const c = codec.value;
       return Option.some({ make: () => buffered(c), format: c.format.extensions[0] ?? 'csv' });
-    }
-  }
+    }),
+  );
 };
 
 /**

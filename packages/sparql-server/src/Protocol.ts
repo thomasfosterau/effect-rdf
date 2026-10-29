@@ -16,6 +16,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
@@ -273,55 +274,64 @@ export const decode = (
         `Unsupported charset '${contentType.parameters['charset']}' (only UTF-8 is accepted)`,
       );
     }
-    switch (contentType.mediaType) {
-      case FORM: {
-        const body = yield* readBody(request);
-        return yield* fromParams(
-          merge(urlParams, new URLSearchParams(body)),
-          kind,
-          method,
-          baseIri,
-        );
-      }
-      case SPARQL_QUERY: {
-        if (!kind.query) {
-          return yield* Errors.unsupportedMediaType('This endpoint does not accept queries');
-        }
-        if (urlParams.has('query') || urlParams.has('update')) {
-          return yield* Errors.badRequest(
-            `A ${SPARQL_QUERY} request cannot also have a 'query' or 'update' parameter`,
+    return yield* Match.value(contentType).pipe(
+      Match.when({ mediaType: FORM }, () =>
+        Effect.gen(function* () {
+          const body = yield* readBody(request);
+          return yield* fromParams(
+            merge(urlParams, new URLSearchParams(body)),
+            kind,
+            method,
+            baseIri,
           );
-        }
-        const query = yield* readBody(request);
-        const dataset = yield* datasetFromParams(
-          urlParams,
-          'default-graph-uri',
-          'named-graph-uri',
-          baseIri,
-        );
-        return { _tag: 'Query', query, dataset } as const;
-      }
-      case SPARQL_UPDATE: {
-        if (!kind.update) {
-          return yield* Errors.unsupportedMediaType('This endpoint does not accept updates');
-        }
-        if (urlParams.has('query') || urlParams.has('update')) {
-          return yield* Errors.badRequest(
-            `A ${SPARQL_UPDATE} request cannot also have a 'query' or 'update' parameter`,
+        }),
+      ),
+      Match.when({ mediaType: SPARQL_QUERY }, () =>
+        Effect.gen(function* () {
+          if (!kind.query) {
+            return yield* Errors.unsupportedMediaType('This endpoint does not accept queries');
+          }
+          if (urlParams.has('query') || urlParams.has('update')) {
+            return yield* Errors.badRequest(
+              `A ${SPARQL_QUERY} request cannot also have a 'query' or 'update' parameter`,
+            );
+          }
+          const query = yield* readBody(request);
+          const dataset = yield* datasetFromParams(
+            urlParams,
+            'default-graph-uri',
+            'named-graph-uri',
+            baseIri,
           );
-        }
-        const update = yield* readBody(request);
-        const using = yield* datasetFromParams(
-          urlParams,
-          'using-graph-uri',
-          'using-named-graph-uri',
-          baseIri,
-        );
-        return { _tag: 'Update', update, using } as const;
-      }
-      default:
-        return yield* Errors.unsupportedMediaType(
-          `Unsupported Content-Type '${contentType.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
-        );
-    }
+          return { _tag: 'Query', query, dataset } as const;
+        }),
+      ),
+      Match.when({ mediaType: SPARQL_UPDATE }, () =>
+        Effect.gen(function* () {
+          if (!kind.update) {
+            return yield* Errors.unsupportedMediaType('This endpoint does not accept updates');
+          }
+          if (urlParams.has('query') || urlParams.has('update')) {
+            return yield* Errors.badRequest(
+              `A ${SPARQL_UPDATE} request cannot also have a 'query' or 'update' parameter`,
+            );
+          }
+          const update = yield* readBody(request);
+          const using = yield* datasetFromParams(
+            urlParams,
+            'using-graph-uri',
+            'using-named-graph-uri',
+            baseIri,
+          );
+          return { _tag: 'Update', update, using } as const;
+        }),
+      ),
+      Match.orElse((contentType) =>
+        Effect.gen(function* () {
+          return yield* Errors.unsupportedMediaType(
+            `Unsupported Content-Type '${contentType.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
+          );
+        }),
+      ),
+    );
   });

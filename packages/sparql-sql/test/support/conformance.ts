@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assert, describe, expect, it } from '@effect/vitest';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Str from 'effect/String';
 import * as Effect from 'effect/Effect';
@@ -151,50 +152,57 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
     const engine = Engine.make(store, { baseIri });
     const result = yield* engine.query(query);
     const expected = readExpected(t.result!);
-    switch (result._tag) {
-      case 'Ask':
-        expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({
-          _tag: 'Boolean',
-          value: result.value,
-        });
-        return;
-      case 'Graph': {
-        const quads = yield* Stream.runCollect(result.quads);
-        const actual = Dataset.fromIterable(quads);
-        // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
-        return expectIsomorphic(actual, expected as Dataset.Dataset);
-      }
-      case 'Select': {
-        const set = yield* Results.collect(result);
-        let actual = set.bindings;
-        // SAFETY: a SELECT test's expected result was loaded as a result set.
-        const exp = (expected as Results.ResultSet).bindings;
-        if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
-          const csv = Results.Csv.serializeString(set);
-          // SAFETY: the CSV serialization of a result set parses back to a result set.
-          actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
-        }
-        const ok = sameResults(actual, exp, { lax: t.laxCardinality });
-        // On a mismatch, show the sorted rows; equal rows that still differ
-        // differ only in blank node structure.
-        const sorted = (rows: ReadonlyArray<Bindings>) =>
-          ok
-            ? []
-            : Arr.sort(
-                rows.map((b) => b.toString()),
-                Order.String,
-              );
-        expect(sorted(actual)).toEqual(sorted(exp));
-        assert(ok, 'Results differ only in blank node structure');
-        // Ordered queries also agree on the order of the solutions.
-        const vars = orderVariables(query);
-        const ordered = Arr.isReadonlyArrayNonEmpty(vars) && !t.laxCardinality;
-        const order = (rows: ReadonlyArray<Bindings>) =>
-          ordered ? rows.map((b) => orderKey(b, vars)) : [];
-        expect(order(actual)).toEqual(order(exp));
-        return;
-      }
-    }
+    return yield* Match.value(result).pipe(
+      Match.tag('Ask', (result) =>
+        Effect.sync(() => {
+          expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({
+            _tag: 'Boolean',
+            value: result.value,
+          });
+        }),
+      ),
+      Match.tag('Graph', (result) =>
+        Effect.gen(function* () {
+          const quads = yield* Stream.runCollect(result.quads);
+          const actual = Dataset.fromIterable(quads);
+          // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
+          return expectIsomorphic(actual, expected as Dataset.Dataset);
+        }),
+      ),
+      Match.tag('Select', (result) =>
+        Effect.gen(function* () {
+          const set = yield* Results.collect(result);
+          let actual = set.bindings;
+          // SAFETY: a SELECT test's expected result was loaded as a result set.
+          const exp = (expected as Results.ResultSet).bindings;
+          if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+            const csv = Results.Csv.serializeString(set);
+            // SAFETY: the CSV serialization of a result set parses back to a result set.
+            actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
+          }
+          const ok = sameResults(actual, exp, { lax: t.laxCardinality });
+          // On a mismatch, show the sorted rows; equal rows that still differ
+          // differ only in blank node structure.
+          const sorted = (rows: ReadonlyArray<Bindings>) =>
+            ok
+              ? []
+              : Arr.sort(
+                  rows.map((b) => b.toString()),
+                  Order.String,
+                );
+          expect(sorted(actual)).toEqual(sorted(exp));
+          assert(ok, 'Results differ only in blank node structure');
+          // Ordered queries also agree on the order of the solutions.
+          const vars = orderVariables(query);
+          const ordered = Arr.isReadonlyArrayNonEmpty(vars) && !t.laxCardinality;
+          const order = (rows: ReadonlyArray<Bindings>) =>
+            ordered ? rows.map((b) => orderKey(b, vars)) : [];
+          expect(order(actual)).toEqual(order(exp));
+          return;
+        }),
+      ),
+      Match.exhaustive,
+    );
   });
 
 const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>

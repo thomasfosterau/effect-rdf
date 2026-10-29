@@ -4,6 +4,7 @@
  * must give the same solutions (as multisets).
  */
 import { assert, describe, expect, it } from '@effect/vitest';
+import * as Match from 'effect/Match';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Stream from 'effect/Stream';
@@ -136,54 +137,58 @@ class QueryGen {
     const r = this.r;
     const v = () => r.pick(VARS);
     const choice = r.int(depth > 0 ? 24 : 18);
-    switch (choice) {
-      case 0:
-      case 1:
-        return `${this.operand()} = ${this.operand()}`;
-      case 2:
-        return `${this.operand()} != ${this.operand()}`;
-      case 3:
-      case 4:
-        return `${this.operand()} ${r.pick(['<', '>', '<=', '>='])} ${this.operand()}`;
-      case 5:
-        return `BOUND(${v()})`;
-      case 6:
-        return `${r.pick(['isIRI', 'isBlank', 'isLiteral', 'isNumeric', 'isTRIPLE', 'hasLANG'])}(${v()})`;
-      case 7:
-        return `sameTerm(${v()}, ${this.operand()})`;
-      case 8:
-        return `${r.pick(['STRSTARTS', 'STRENDS', 'CONTAINS'])}(${r.chance(0.5) ? `STR(${v()})` : v()}, ${r.pick(['"a"', '"b"', '""', '"a"@en'])})`;
-      case 9:
-        return `LANG(${v()}) = ${r.pick(['"en"', '""', '"fr"'])}`;
-      case 10:
-        return `LANGMATCHES(LANG(${v()}), ${r.pick(['"en"', '"*"', '"EN"'])})`;
-      case 11:
-        return `DATATYPE(${v()}) = <${XSD}${r.pick(['integer', 'string', 'boolean', 'decimal'])}>`;
-      case 12:
-        return `STRLEN(STR(${v()})) ${r.pick(['>', '=', '<'])} ${r.int(4)}`;
-      case 13:
-        return `${v()} ${r.pick(['IN', 'NOT IN'])} (${this.constant()}, ${this.operand()})`;
-      case 14:
-        return v();
-      case 15:
-        return `STR(${v()}) = ${r.pick(['"a"', '"1"', `"${EX}r1"`])}`;
-      case 16:
-        // Not translatable: evaluated by the engine.
-        return `REGEX(STR(${v()}), "^a")`;
-      case 17:
-        return `${v()} + 1 > 2`;
-      case 18:
-        return `!(${this.expr(depth - 1)})`;
-      case 19:
-      case 20:
-        return `(${this.expr(depth - 1)}) && (${this.expr(depth - 1)})`;
-      case 21:
-        return `(${this.expr(depth - 1)}) || (${this.expr(depth - 1)})`;
-      case 22:
-        return `${r.chance(0.5) ? 'EXISTS' : 'NOT EXISTS'} { ${this.triple()} }`;
-      default:
-        return `IF(${this.expr(depth - 1)}, ${this.operand()}, ${this.operand()}) = ${this.operand()}`;
-    }
+    return Match.value(choice)
+      .pipe(
+        Match.when(Match.is(0, 1), () => `${this.operand()} = ${this.operand()}`),
+        Match.when(2, () => `${this.operand()} != ${this.operand()}`),
+        Match.when(
+          Match.is(3, 4),
+          () => `${this.operand()} ${r.pick(['<', '>', '<=', '>='])} ${this.operand()}`,
+        ),
+        Match.when(5, () => `BOUND(${v()})`),
+        Match.when(
+          6,
+          () =>
+            `${r.pick(['isIRI', 'isBlank', 'isLiteral', 'isNumeric', 'isTRIPLE', 'hasLANG'])}(${v()})`,
+        ),
+        Match.when(7, () => `sameTerm(${v()}, ${this.operand()})`),
+        Match.when(
+          8,
+          () =>
+            `${r.pick(['STRSTARTS', 'STRENDS', 'CONTAINS'])}(${r.chance(0.5) ? `STR(${v()})` : v()}, ${r.pick(['"a"', '"b"', '""', '"a"@en'])})`,
+        ),
+        Match.when(9, () => `LANG(${v()}) = ${r.pick(['"en"', '""', '"fr"'])}`),
+        Match.when(10, () => `LANGMATCHES(LANG(${v()}), ${r.pick(['"en"', '"*"', '"EN"'])})`),
+        Match.when(
+          11,
+          () => `DATATYPE(${v()}) = <${XSD}${r.pick(['integer', 'string', 'boolean', 'decimal'])}>`,
+        ),
+        Match.when(12, () => `STRLEN(STR(${v()})) ${r.pick(['>', '=', '<'])} ${r.int(4)}`),
+        Match.when(
+          13,
+          () => `${v()} ${r.pick(['IN', 'NOT IN'])} (${this.constant()}, ${this.operand()})`,
+        ),
+        Match.when(14, () => v()),
+        Match.when(15, () => `STR(${v()}) = ${r.pick(['"a"', '"1"', `"${EX}r1"`])}`),
+        Match.when(16, () => {
+          // Not translatable: evaluated by the engine.
+          return `REGEX(STR(${v()}), "^a")`;
+        }),
+        Match.when(17, () => `${v()} + 1 > 2`),
+        Match.when(18, () => `!(${this.expr(depth - 1)})`),
+        Match.when(
+          Match.is(19, 20),
+          () => `(${this.expr(depth - 1)}) && (${this.expr(depth - 1)})`,
+        ),
+      )
+      .pipe(
+        Match.when(21, () => `(${this.expr(depth - 1)}) || (${this.expr(depth - 1)})`),
+        Match.when(22, () => `${r.chance(0.5) ? 'EXISTS' : 'NOT EXISTS'} { ${this.triple()} }`),
+        Match.orElse(
+          () =>
+            `IF(${this.expr(depth - 1)}, ${this.operand()}, ${this.operand()}) = ${this.operand()}`,
+        ),
+      );
   }
 
   triple(): string {
@@ -204,59 +209,57 @@ class QueryGen {
     const n = r.int(depth > 0 ? 4 : 2);
     for (let i = 0; i < n; i++) {
       const choice = r.int(depth > 0 ? 12 : 3);
-      switch (choice) {
-        case 0:
-        case 1:
+      Match.value(choice).pipe(
+        Match.when(Match.is(0, 1), () => {
           parts.push(this.triple());
-          break;
-        case 2:
+        }),
+        Match.when(2, () => {
           parts.push(`FILTER(${this.expr(2)})`);
-          break;
-        case 3:
+        }),
+        Match.when(3, () => {
           parts.push(
             `OPTIONAL { ${this.group(depth - 1)}${r.chance(0.4) ? ` FILTER(${this.expr(1)})` : ''} }`,
           );
-          break;
-        case 4:
+        }),
+        Match.when(4, () => {
           parts.push(`{ ${this.group(depth - 1)} } UNION { ${this.group(depth - 1)} }`);
-          break;
-        case 5:
+        }),
+        Match.when(5, () => {
           parts.push(`MINUS { ${this.group(depth - 1)} }`);
-          break;
-        case 6: {
+        }),
+        Match.when(6, () => {
           const e = r.chance(0.5)
             ? this.operand()
             : r.chance(0.5)
               ? this.expr(1)
               : `COALESCE(${r.pick(VARS)}, ${this.operand()})`;
           parts.push(`BIND(${e} AS ?x${this.fresh++})`);
-          break;
-        }
-        case 7:
+        }),
+        Match.when(7, () => {
           parts.push(
             `VALUES ${r.pick(VARS)} { ${Array.from({ length: 1 + r.int(3) }, () => (r.chance(0.2) ? 'UNDEF' : this.constant())).join(' ')} }`,
           );
-          break;
-        case 8:
+        }),
+        Match.when(8, () => {
           parts.push(
             `GRAPH ${r.chance(0.5) ? '?g' : r.pick(graphs).toString()} { ${this.group(depth - 1)} }`,
           );
-          break;
-        case 9:
+        }),
+        Match.when(9, () => {
           parts.push(
             `{ SELECT DISTINCT ${r.pick(VARS)} ${r.pick(VARS)} WHERE { ${this.group(depth - 1)} } }`,
           );
-          break;
-        case 10: {
+        }),
+        Match.when(10, () => {
           const k = r.pick(VARS);
           parts.push(
             `{ SELECT ${k} (COUNT(${r.chance(0.5) ? '*' : `DISTINCT ${r.pick(VARS)}`}) AS ?n${this.fresh++}) WHERE { ${this.group(depth - 1)} } GROUP BY ${k} }`,
           );
-          break;
-        }
-        default:
+        }),
+        Match.orElse(() => {
           parts.push(`FILTER(${this.expr(2)})`);
-      }
+        }),
+      );
     }
     return parts.join(' ');
   }
@@ -264,16 +267,12 @@ class QueryGen {
   query(): string {
     const r = this.r;
     const where = this.group(2);
-    switch (r.int(5)) {
-      case 0:
-        return `ASK { ${where} }`;
-      case 1:
-        return `SELECT DISTINCT ${r.pick(VARS)} ${r.pick(VARS)} WHERE { ${where} }`;
-      case 2:
-        return `SELECT (COUNT(*) AS ?count) WHERE { ${where} }`;
-      default:
-        return `SELECT * WHERE { ${where} }`;
-    }
+    return Match.value(r.int(5)).pipe(
+      Match.when(0, () => `ASK { ${where} }`),
+      Match.when(1, () => `SELECT DISTINCT ${r.pick(VARS)} ${r.pick(VARS)} WHERE { ${where} }`),
+      Match.when(2, () => `SELECT (COUNT(*) AS ?count) WHERE { ${where} }`),
+      Match.orElse(() => `SELECT * WHERE { ${where} }`),
+    );
   }
 }
 
@@ -284,20 +283,26 @@ class QueryGen {
 const evaluate = (engine: Engine.SparqlEngineShape, query: string) =>
   Effect.gen(function* () {
     const result = yield* engine.query(query);
-    switch (result._tag) {
-      case 'Ask':
-        return [String(result.value)];
-      case 'Select':
-        return Arr.sort(
-          (yield* Stream.runCollect(result.bindings)).map((b) => b.key),
-          Order.String,
-        );
-      case 'Graph':
-        return Arr.sort(
-          (yield* Stream.runCollect(result.quads)).map((q) => q.key),
-          Order.String,
-        );
-    }
+    return yield* Match.value(result).pipe(
+      Match.tag('Ask', (result) => Effect.sync(() => [String(result.value)])),
+      Match.tag('Select', (result) =>
+        Effect.gen(function* () {
+          return Arr.sort(
+            (yield* Stream.runCollect(result.bindings)).map((b) => b.key),
+            Order.String,
+          );
+        }),
+      ),
+      Match.tag('Graph', (result) =>
+        Effect.gen(function* () {
+          return Arr.sort(
+            (yield* Stream.runCollect(result.quads)).map((q) => q.key),
+            Order.String,
+          );
+        }),
+      ),
+      Match.exhaustive,
+    );
   });
 
 const DATASETS = Number(process.env.DIFF_DATASETS ?? 12);

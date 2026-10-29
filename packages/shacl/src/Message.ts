@@ -25,6 +25,7 @@
  * @since 0.1.0
  */
 import { Term } from '@thomasfosterau/effect-rdf';
+import * as Match from 'effect/Match';
 import * as Predicate from 'effect/Predicate';
 
 const placeholder = /\{[?$]([\p{L}\p{N}_\p{M}]+)\}/gu;
@@ -38,15 +39,11 @@ const placeholder = /\{[?$]([\p{L}\p{N}_\p{M}]+)\}/gu;
  * @category formatting
  */
 export const display = (term: Term.Term): string => {
-  switch (term._tag) {
-    case 'Literal':
-    case 'NamedNode':
-      return term.value;
-    case 'BlankNode':
-      return `_:${term.value}`;
-    default:
-      return term.toString();
-  }
+  return Match.value(term).pipe(
+    Match.tag('Literal', 'NamedNode', (term) => term.value),
+    Match.tag('BlankNode', (term) => `_:${term.value}`),
+    Match.orElse((term) => term.toString()),
+  );
 };
 
 /**

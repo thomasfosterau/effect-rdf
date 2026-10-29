@@ -22,6 +22,7 @@
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
 import { Path, Sparql, Vocabulary } from '@thomasfosterau/effect-shacl';
 import { Ast, Parser } from '@thomasfosterau/effect-sparql';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Result from 'effect/Result';
@@ -124,44 +125,39 @@ const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
   const term = (t: Ast.TermPattern | Term.Term) => termVariables(t, variable);
 
   const expression = (e: Ast.Expression): void => {
-    switch (e._tag) {
-      case 'Variable':
-      case 'Triple':
+    return Match.value(e).pipe(
+      Match.tag('Variable', 'Triple', (e) => {
         term(e);
         return;
-      case 'Operation':
-      case 'FunctionCall':
+      }),
+      Match.tag('Operation', 'FunctionCall', (e) => {
         e.args.forEach(expression);
         return;
-      case 'Aggregate':
+      }),
+      Match.tag('Aggregate', (e) => {
         if (e.expression !== '*') expression(e.expression);
         return;
-      case 'Exists':
+      }),
+      Match.tag('Exists', (e) => {
         pattern(e.pattern);
         return;
-      default:
-        return;
-    }
+      }),
+      Match.orElse(() => undefined),
+    );
   };
 
   const pathTerms = (p: Ast.Path): void => {
-    switch (p._tag) {
-      case 'PathLink':
-      case 'PathNegated':
-        return;
-      case 'PathSequence':
-      case 'PathAlternative':
-        p.paths.forEach(pathTerms);
-        return;
-      default:
-        pathTerms(p.path);
-    }
+    Match.value(p).pipe(
+      Match.tag('PathLink', 'PathNegated', () => undefined),
+      Match.tag('PathSequence', 'PathAlternative', (list) => list.paths.forEach(pathTerms)),
+      Match.orElse((unary) => pathTerms(unary.path)),
+    );
   };
 
   const pattern = (p: Ast.Pattern): void => {
     report(visitor.pattern?.(p));
-    switch (p._tag) {
-      case 'Bgp':
+    return Match.value(p).pipe(
+      Match.tag('Bgp', (p) => {
         for (const t of p.triples) {
           term(t.subject);
           if (t._tag === 'TriplePattern') term(t.predicate);
@@ -169,35 +165,43 @@ const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
           term(t.object);
         }
         return;
-      case 'Group':
+      }),
+      Match.tag('Group', (p) => {
         p.patterns.forEach(pattern);
         return;
-      case 'Optional':
-      case 'Minus':
+      }),
+      Match.tag('Optional', 'Minus', (p) => {
         pattern(p.pattern);
         return;
-      case 'Union':
+      }),
+      Match.tag('Union', (p) => {
         p.patterns.forEach(pattern);
         return;
-      case 'Graph':
-      case 'Service':
+      }),
+      Match.tag('Graph', 'Service', (p) => {
         term(p.name);
         pattern(p.pattern);
         return;
-      case 'Filter':
+      }),
+      Match.tag('Filter', (p) => {
         expression(p.expression);
         return;
-      case 'Bind':
+      }),
+      Match.tag('Bind', (p) => {
         expression(p.expression);
         variable(p.variable.value);
         return;
-      case 'Values':
+      }),
+      Match.tag('Values', (p) => {
         p.variables.forEach((v) => variable(v.value));
         return;
-      case 'SubSelect':
+      }),
+      Match.tag('SubSelect', (p) => {
         query(p.query, true);
         return;
-    }
+      }),
+      Match.exhaustive,
+    );
   };
 
   const query = (q: Ast.Query, nested: boolean): void => {
@@ -249,18 +253,22 @@ export const checkPrebinding = (
       : undefined;
   const error = walk(query, {
     pattern: (p) => {
-      switch (p._tag) {
-        case 'Minus':
-          return 'MINUS is not allowed in SHACL-SPARQL queries with pre-bound variables';
-        case 'Service':
-          return 'SERVICE is not allowed in SHACL-SPARQL queries with pre-bound variables';
-        case 'Values':
-          return 'VALUES is not allowed in SHACL-SPARQL queries with pre-bound variables';
-        case 'Bind':
-          return rebinds(p.variable);
-        default:
-          return undefined;
-      }
+      return Match.value(p).pipe(
+        Match.tag(
+          'Minus',
+          () => 'MINUS is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        ),
+        Match.tag(
+          'Service',
+          () => 'SERVICE is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        ),
+        Match.tag(
+          'Values',
+          () => 'VALUES is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        ),
+        Match.tag('Bind', (p) => rebinds(p.variable)),
+        Match.orElse(() => undefined),
+      );
     },
     query: (q, nested) => {
       if (q.values !== undefined)
@@ -303,22 +311,16 @@ export const checkPrebinding = (
  * @category paths
  */
 export const toSparqlPath = (path: Path.Path): Ast.Path => {
-  switch (path._tag) {
-    case 'PredicatePath':
-      return Ast.link(path.predicate);
-    case 'SequencePath':
-      return Ast.sequence(...path.paths.map(toSparqlPath));
-    case 'AlternativePath':
-      return Ast.alternative(...path.paths.map(toSparqlPath));
-    case 'InversePath':
-      return Ast.inverse(toSparqlPath(path.path));
-    case 'ZeroOrMorePath':
-      return Ast.zeroOrMore(toSparqlPath(path.path));
-    case 'OneOrMorePath':
-      return Ast.oneOrMore(toSparqlPath(path.path));
-    case 'ZeroOrOnePath':
-      return Ast.zeroOrOne(toSparqlPath(path.path));
-  }
+  return Match.value(path).pipe(
+    Match.tag('PredicatePath', (path) => Ast.link(path.predicate)),
+    Match.tag('SequencePath', (path) => Ast.sequence(...path.paths.map(toSparqlPath))),
+    Match.tag('AlternativePath', (path) => Ast.alternative(...path.paths.map(toSparqlPath))),
+    Match.tag('InversePath', (path) => Ast.inverse(toSparqlPath(path.path))),
+    Match.tag('ZeroOrMorePath', (path) => Ast.zeroOrMore(toSparqlPath(path.path))),
+    Match.tag('OneOrMorePath', (path) => Ast.oneOrMore(toSparqlPath(path.path))),
+    Match.tag('ZeroOrOnePath', (path) => Ast.zeroOrOne(toSparqlPath(path.path))),
+    Match.exhaustive,
+  );
 };
 
 const PATH = 'PATH';
@@ -332,45 +334,35 @@ const mapExpression = (
   e: Ast.Expression,
   f: (t: Ast.TriplePattern | Ast.PathPattern) => Ast.TriplePattern | Ast.PathPattern,
 ): Ast.Expression => {
-  switch (e._tag) {
-    case 'Operation':
-      return { ...e, args: e.args.map((a) => mapExpression(a, f)) };
-    case 'FunctionCall':
-      return { ...e, args: e.args.map((a) => mapExpression(a, f)) };
-    case 'Aggregate':
-      return e.expression === '*' ? e : { ...e, expression: mapExpression(e.expression, f) };
-    case 'Exists':
-      return { ...e, pattern: mapGroup(e.pattern, f) };
-    default:
-      return e;
-  }
+  return Match.value(e).pipe(
+    Match.tag('Operation', (e) => ({ ...e, args: e.args.map((a) => mapExpression(a, f)) })),
+    Match.tag('FunctionCall', (e) => ({ ...e, args: e.args.map((a) => mapExpression(a, f)) })),
+    Match.tag('Aggregate', (e) =>
+      e.expression === '*' ? e : { ...e, expression: mapExpression(e.expression, f) },
+    ),
+    Match.tag('Exists', (e) => ({ ...e, pattern: mapGroup(e.pattern, f) })),
+    Match.orElse((e) => e),
+  );
 };
 
 const mapPattern = (
   p: Ast.Pattern,
   f: (t: Ast.TriplePattern | Ast.PathPattern) => Ast.TriplePattern | Ast.PathPattern,
 ): Ast.Pattern => {
-  switch (p._tag) {
-    case 'Bgp':
-      return { ...p, triples: p.triples.map(f) };
-    case 'Group':
-      return mapGroup(p, f);
-    case 'Optional':
-    case 'Minus':
-    case 'Graph':
-    case 'Service':
-      return { ...p, pattern: mapGroup(p.pattern, f) };
-    case 'Union':
-      return { ...p, patterns: p.patterns.map((g) => mapGroup(g, f)) };
-    case 'Filter':
-      return { ...p, expression: mapExpression(p.expression, f) };
-    case 'Bind':
-      return { ...p, expression: mapExpression(p.expression, f) };
-    case 'Values':
-      return p;
-    case 'SubSelect':
-      return { ...p, query: mapQuery(p.query, f) };
-  }
+  return Match.value(p).pipe(
+    Match.tag('Bgp', (p) => ({ ...p, triples: p.triples.map(f) })),
+    Match.tag('Group', (p) => mapGroup(p, f)),
+    Match.tag('Optional', 'Minus', 'Graph', 'Service', (p) => ({
+      ...p,
+      pattern: mapGroup(p.pattern, f),
+    })),
+    Match.tag('Union', (p) => ({ ...p, patterns: p.patterns.map((g) => mapGroup(g, f)) })),
+    Match.tag('Filter', (p) => ({ ...p, expression: mapExpression(p.expression, f) })),
+    Match.tag('Bind', (p) => ({ ...p, expression: mapExpression(p.expression, f) })),
+    Match.tag('Values', (p) => p),
+    Match.tag('SubSelect', (p) => ({ ...p, query: mapQuery(p.query, f) })),
+    Match.exhaustive,
+  );
 };
 
 const mapQuery = <Q extends Ast.Query>(

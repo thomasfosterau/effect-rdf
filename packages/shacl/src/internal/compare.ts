@@ -5,6 +5,7 @@
  * @internal
  */
 import { Term, Xsd } from '@thomasfosterau/effect-rdf';
+import * as Match from 'effect/Match';
 import * as BigDecimal from 'effect/BigDecimal';
 
 const XSD_STRING = 'http://www.w3.org/2001/XMLSchema#string';
@@ -14,19 +15,13 @@ type Num =
   | { readonly kind: 'decimal'; readonly value: BigDecimal.BigDecimal }
   | { readonly kind: 'float'; readonly value: number };
 
-const toNum = (v: Xsd.Value): Num | undefined => {
-  switch (v._tag) {
-    case 'Integer':
-      return { kind: 'integer', value: v.value };
-    case 'Decimal':
-      return { kind: 'decimal', value: v.value };
-    case 'Float':
-    case 'Double':
-      return { kind: 'float', value: v.value };
-    default:
-      return undefined;
-  }
-};
+// Built once: `toNum` runs for every numeric comparison.
+const toNum: (v: Xsd.Value) => Num | undefined = Match.type<Xsd.Value>().pipe(
+  Match.tag('Integer', (v): Num => ({ kind: 'integer', value: v.value })),
+  Match.tag('Decimal', (v): Num => ({ kind: 'decimal', value: v.value })),
+  Match.tag('Float', 'Double', (v): Num => ({ kind: 'float', value: v.value })),
+  Match.orElse(() => undefined),
+);
 
 const sign = (n: number): -1 | 0 | 1 => (n < 0 ? -1 : n > 0 ? 1 : 0);
 

@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from '@effect/vitest';
+import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Str from 'effect/String';
 import * as Order from 'effect/Order';
@@ -168,37 +169,43 @@ const runQueryTest = (t: TestCase, accept: string) =>
     const expected = readExpected(t.result!);
     yield* Effect.gen(function* () {
       const client = yield* SparqlClient.SparqlClient;
-      switch (query._tag) {
-        case 'Ask': {
-          const value = yield* client.ask(text);
-          expect(expected).toEqual({ _tag: 'Boolean', value });
-          return;
-        }
-        case 'Construct':
-        case 'Describe': {
-          const actual = yield* client.constructDataset(text);
-          // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
-          expectIsomorphic(actual, expected as Dataset.Dataset);
-          return;
-        }
-        case 'Select': {
-          const set = yield* client.selectAll(text);
-          let actual = set.bindings;
-          if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
-            const csv = Results.Csv.serializeString(set);
-            // SAFETY: the CSV serialization of a result set parses back to a result set.
-            actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
-          }
-          // SAFETY: a SELECT test's expected result was loaded as a result set.
-          expectSameSolutions(
-            actual,
-            (expected as Results.ResultSet).bindings,
-            orderVariables(query),
-            t.laxCardinality,
-          );
-          return;
-        }
-      }
+      return yield* Match.value(query).pipe(
+        Match.tag('Ask', () =>
+          Effect.gen(function* () {
+            const value = yield* client.ask(text);
+            expect(expected).toEqual({ _tag: 'Boolean', value });
+            return;
+          }),
+        ),
+        Match.tag('Construct', 'Describe', () =>
+          Effect.gen(function* () {
+            const actual = yield* client.constructDataset(text);
+            // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
+            expectIsomorphic(actual, expected as Dataset.Dataset);
+            return;
+          }),
+        ),
+        Match.tag('Select', (query) =>
+          Effect.gen(function* () {
+            const set = yield* client.selectAll(text);
+            let actual = set.bindings;
+            if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+              const csv = Results.Csv.serializeString(set);
+              // SAFETY: the CSV serialization of a result set parses back to a result set.
+              actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
+            }
+            // SAFETY: a SELECT test's expected result was loaded as a result set.
+            expectSameSolutions(
+              actual,
+              (expected as Results.ResultSet).bindings,
+              orderVariables(query),
+              t.laxCardinality,
+            );
+            return;
+          }),
+        ),
+        Match.exhaustive,
+      );
     }).pipe(Effect.provide(clientLayer(loadDataset(t, query), baseIri, accept)));
   });
 
