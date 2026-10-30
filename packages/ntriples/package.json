@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-ntriples",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic RDF 1.2 N-Triples and N-Quads parsers and serializers",
   "keywords": [
     "effect",

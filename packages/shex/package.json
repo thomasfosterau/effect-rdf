@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-shex",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic ShEx (Shape Expressions): ShExJ, ShExC, ShExR, ShapeMaps and validation",
   "keywords": [
     "effect",

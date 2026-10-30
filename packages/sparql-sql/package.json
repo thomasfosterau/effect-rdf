@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql-sql",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A SQL storage backend for @thomasfosterau/effect-sparql (SQLite, PostgreSQL) with SPARQL-to-SQL translation, built on effect/sql",
   "keywords": [
     "effect",

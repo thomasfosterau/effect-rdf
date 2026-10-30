@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-n3",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic Notation3 (N3): parser, serializer, RDF dataset mapping and a forward-chaining reasoner",
   "keywords": [
     "effect",
