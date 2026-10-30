@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Effect-idiomatic SPARQL 1.1 / 1.2: parser, algebra, query engine, results formats and a typed query builder",
   "keywords": [
     "effect",

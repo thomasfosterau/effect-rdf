@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-shacl-sparql",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "SHACL-SPARQL for @thomasfosterau/effect-shacl: SPARQL-based constraints, constraint components and targets evaluated with @thomasfosterau/effect-sparql",
   "keywords": [
     "effect",
