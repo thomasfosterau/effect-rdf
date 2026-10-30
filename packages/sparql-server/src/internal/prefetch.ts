@@ -42,5 +42,5 @@ export const prefetch = <A, E>(
     // the queue's `Done` end-of-stream type.
     return Stream.concat(Stream.succeed(first.value), Stream.fromQueue(queue)).pipe(
       Stream.ensuring(Fiber.interrupt(fiber)),
-    ) as Stream.Stream<A, E | QueryTimeout>;
+    );
   });

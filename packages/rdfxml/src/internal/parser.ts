@@ -60,7 +60,7 @@ export class Failure {
   }
 }
 
-type P<A> = Parser.Parser<A, never, never, string>;
+type P<A> = Parser.Parser<A>;
 
 interface AttributeDefault {
   readonly name: string;
@@ -205,7 +205,7 @@ const requireWs: P<unknown> = Parser.alt(
 );
 
 /** Fails unless white space was just read (`ws` may have read none). */
-const afterWs: P<void> = Parser.make<void, never, never, string>((state) => {
+const afterWs: P<void> = Parser.make<void>((state) => {
   const c = state.input.charCodeAt(state.pos - 1);
   if (c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) fail('Expected white space', state.pos);
   return undefined;
@@ -430,7 +430,7 @@ const defaultDecl: P<string | undefined> = Parser.alt(
   Parser.preceded(Parser.opt(Parser.seq(lit('#FIXED'), requireWs)), attributeValue),
 );
 
-const notation: P<void> = Parser.make<void, never, never, string>((state) =>
+const notation: P<void> = Parser.make<void>((state) =>
   x.attributeType === 'NOTATION' ? undefined : state.backtrack('Verify', ['NOTATION']),
 );
 
@@ -459,7 +459,7 @@ const attributeDef: P<unknown> = Parser.seq(
   Parser.tap(([, , , , v]) => {
     // SAFETY: the default declaration yields the default value string, or `undefined` for
     // `#REQUIRED` / `#IMPLIED`.
-    const value = v as string | undefined;
+    const value = v;
     let types = x.attributeTypes.get(x.attlistElement);
     if (types === undefined) x.attributeTypes.set(x.attlistElement, (types = new Map()));
     const defaults = x.attributeDefaults.get(x.attlistElement)!;
@@ -760,7 +760,7 @@ const startTag: P<unknown> = Parser.seq(
     Parser.preceded(
       Parser.seq(ws, Parser.not(Parser.alt(lit('>'), lit('/>')))),
       Parser.preceded(
-        Parser.make<void, never, never, string>((state) => {
+        Parser.make<void>((state) => {
           const c = state.input.charCodeAt(state.pos - 1);
           if (c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) {
             fail('Expected white space between attributes', state.pos);
@@ -918,7 +918,7 @@ const rootElement: P<unknown> = Parser.terminated(
       startTag,
       Parser.repeat(
         Parser.preceded(
-          Parser.make<void, never, never, string>((state) =>
+          Parser.make<void>((state) =>
             x.stack.length > x.base ? undefined : state.backtrack('Verify', ['content']),
           ),
           Parser.alt(

@@ -186,7 +186,7 @@ export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
   if (Predicate.isString(v)) return n._tag === 'NamedNode' && n.value === v;
   if (!('type' in v) || 'value' in v) {
     // SAFETY: a value without `type`, or with a `value`, is an object literal in ShExJ.
-    return n._tag === 'Literal' && literalEquals(n, v as ShExJ.ObjectLiteral);
+    return n._tag === 'Literal' && literalEquals(n, v);
   }
   switch (v.type) {
     case 'IriStem':

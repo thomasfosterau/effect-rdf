@@ -638,7 +638,7 @@ export const mapChildren = (op: Operation, f: (op: Operation) => Operation): Ope
       'Service',
       // SAFETY: every operator listed here has an `input`, and replacing it keeps the
       // operator's own tag.
-      (o) => ({ ...o, input: f(o.input) }) as Operation,
+      (o) => ({ ...o, input: f(o.input) }),
     ),
     Match.exhaustive,
   );

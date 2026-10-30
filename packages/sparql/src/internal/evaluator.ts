@@ -64,7 +64,7 @@ const ground: (t: PatternTerm, b: Bindings) => Term.GroundTerm | undefined = Mat
     // each position's kind.
     return t.subject === s && t.predicate === p && t.object === o
       ? (t as Term.Triple)
-      : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
+      : Term.triple(s as Term.Subject, p as Term.Predicate, o);
   }),
   Match.tag('DefaultGraph', () => undefined),
   Match.orElse((t) => t),

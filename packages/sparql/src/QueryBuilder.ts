@@ -118,7 +118,7 @@ export const variable = <const N extends string>(name: N): Term.Variable<N> => T
  * @category variables
  */
 export interface Variables {
-  readonly [name: string]: Term.Variable<string>;
+  readonly [name: string]: Term.Variable;
 }
 
 /**
@@ -154,7 +154,7 @@ export const vars = <const N extends ReadonlyArray<string>>(
  * @category projection
  */
 export interface AsAlias {
-  <const N extends string>(expression: ExpressionInput, name: N): Alias<N, false>;
+  <const N extends string>(expression: ExpressionInput, name: N): Alias<N>;
   <const N extends string>(
     expression: ExpressionInput,
     name: N,
@@ -226,7 +226,7 @@ type RequiredOf<I> = I extends string
   ? I
   : I extends Term.Variable<infer N>
     ? N
-    : I extends Alias<infer N, false>
+    : I extends Alias<infer N>
       ? N
       : never;
 

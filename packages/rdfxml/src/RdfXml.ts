@@ -208,7 +208,7 @@ class RdfXmlParser {
         this.fail(`Invalid its:dir value "${dir.value}"`, dir);
       }
       // SAFETY: the value was checked to be `ltr` or `rtl` above.
-      direction = dir.value as Context['direction'];
+      direction = dir.value;
     }
     return { base, language, direction, version };
   }
@@ -466,7 +466,7 @@ class RdfXmlParser {
           other.attribute,
         );
       }
-      finish(this.nodeElement(elements[0]!, ctx));
+      finish(this.nodeElement(elements[0], ctx));
       return;
     }
 

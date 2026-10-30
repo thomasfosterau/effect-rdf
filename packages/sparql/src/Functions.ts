@@ -258,7 +258,7 @@ export type BuiltIn = (
 const hashFn =
   (f: (s: string) => string): BuiltIn =>
   ([a]) =>
-    V.simple(f(simpleArg(a!).value));
+    V.simple(f(simpleArg(a).value));
 
 /**
  * The strict built-in functions, keyed by canonical name. Functional forms
@@ -270,31 +270,31 @@ const hashFn =
  */
 export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   STR: ([a]) => {
-    return Match.value(a!).pipe(
+    return Match.value(a).pipe(
       Match.tag('NamedNode', 'Literal', (t) => V.simple(t.value)),
       Match.orElse(() => V.fail('STR of a blank node or triple term')),
     );
   },
-  LANG: ([a]) => V.simple(literalArg(a!).language),
-  LANGDIR: ([a]) => V.simple(literalArg(a!).direction ?? ''),
+  LANG: ([a]) => V.simple(literalArg(a).language),
+  LANGDIR: ([a]) => V.simple(literalArg(a).direction ?? ''),
   LANGMATCHES: ([tag, range]) => {
-    const t = simpleArg(tag!).value.toLowerCase();
-    const r = simpleArg(range!).value.toLowerCase();
+    const t = simpleArg(tag).value.toLowerCase();
+    const r = simpleArg(range).value.toLowerCase();
     if (r === '*') return V.bool(t !== '');
     return V.bool(t === r || t.startsWith(`${r}-`));
   },
-  DATATYPE: ([a]) => literalArg(a!).datatype,
+  DATATYPE: ([a]) => literalArg(a).datatype,
   IRI: ([a], ctx) => {
-    if (a!._tag === 'NamedNode') return a;
-    const s = simpleArg(a!).value;
+    if (a._tag === 'NamedNode') return a;
+    const s = simpleArg(a).value;
     return Term.namedNode(ctx.baseIri !== undefined ? Iri.resolve(s, ctx.baseIri) : s);
   },
   URI: (args, ctx, sol) => builtIns.IRI!(args, ctx, sol),
   BNODE: (args, ctx, sol) =>
-    ctx.blankNode(Arr.isReadonlyArrayEmpty(args) ? undefined : simpleArg(args[0]!).value, sol),
+    ctx.blankNode(Arr.isReadonlyArrayEmpty(args) ? undefined : simpleArg(args[0]).value, sol),
   RAND: (_, ctx) => V.numLiteral({ kind: 3, v: ctx.random() }),
   ABS: ([a]) => {
-    const n = numArg(a!);
+    const n = numArg(a);
     return Match.value(n).pipe(
       Match.when({ kind: 0 }, (i) => V.numLiteral({ kind: 0, v: i.v < 0n ? -i.v : i.v })),
       Match.when({ kind: 1 }, (d) => V.numLiteral({ kind: 1, v: BigDecimal.abs(d.v) })),
@@ -303,9 +303,9 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
       Match.exhaustive,
     );
   },
-  CEIL: ([a]) => roundNum(a!, 'ceil', Math.ceil),
-  FLOOR: ([a]) => roundNum(a!, 'floor', Math.floor),
-  ROUND: ([a]) => roundNum(a!, 'half-ceil', xpathRound),
+  CEIL: ([a]) => roundNum(a, 'ceil', Math.ceil),
+  FLOOR: ([a]) => roundNum(a, 'floor', Math.floor),
+  ROUND: ([a]) => roundNum(a, 'half-ceil', xpathRound),
   CONCAT: (args) => {
     const lits = args.map(stringArg);
     const first = lits[0];
@@ -317,9 +317,9 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     return sameLang ? V.stringLike(value, first) : V.simple(value);
   },
   SUBSTR: ([s, start, len]) => {
-    const str = stringArg(s!);
+    const str = stringArg(s);
     const chars = codepoints(str.value);
-    const st = V.toNumber(numArg(start!));
+    const st = V.toNumber(numArg(start));
     const from = xpathRound(st);
     let to = Infinity;
     if (len !== undefined) to = from + xpathRound(V.toNumber(numArg(len)));
@@ -327,94 +327,94 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     const out = chars.filter((_, i) => i + 1 >= from && i + 1 < to).join('');
     return V.stringLike(out, str);
   },
-  STRLEN: ([a]) => intLiteral(codepoints(stringArg(a!).value).length),
+  STRLEN: ([a]) => intLiteral(codepoints(stringArg(a).value).length),
   REPLACE: ([s, pattern, replacement, flags]) => {
-    const str = stringArg(s!);
-    const re = compileRegex(simpleArg(pattern!).value, regexFlags(flags), true);
+    const str = stringArg(s);
+    const re = compileRegex(simpleArg(pattern).value, regexFlags(flags), true);
     if (re.test('')) {
       re.lastIndex = 0;
       return V.fail('REPLACE pattern matches the empty string');
     }
     re.lastIndex = 0;
-    const repl = simpleArg(replacement!).value.replace(/\\(\$|\\)|\$/g, (m, esc) =>
+    const repl = simpleArg(replacement).value.replace(/\\(\$|\\)|\$/g, (m, esc) =>
       esc === '$' ? '$$' : esc === '\\' ? '\\' : m,
     );
     return V.stringLike(str.value.replace(re, repl), str);
   },
   UCASE: ([a]) => {
-    const s = stringArg(a!);
+    const s = stringArg(a);
     return V.stringLike(s.value.toUpperCase(), s);
   },
   LCASE: ([a]) => {
-    const s = stringArg(a!);
+    const s = stringArg(a);
     return V.stringLike(s.value.toLowerCase(), s);
   },
-  ENCODE_FOR_URI: ([a]) => V.simple(encodeForUri(stringArg(a!).value)),
+  ENCODE_FOR_URI: ([a]) => V.simple(encodeForUri(stringArg(a).value)),
   CONTAINS: ([a, b]) => {
-    const x = stringArg(a!);
-    const y = stringArg(b!);
+    const x = stringArg(a);
+    const y = stringArg(b);
     if (!compatible(x, y)) return V.fail('Incompatible arguments');
     return V.bool(x.value.includes(y.value));
   },
   STRSTARTS: ([a, b]) => {
-    const x = stringArg(a!);
-    const y = stringArg(b!);
+    const x = stringArg(a);
+    const y = stringArg(b);
     if (!compatible(x, y)) return V.fail('Incompatible arguments');
     return V.bool(x.value.startsWith(y.value));
   },
   STRENDS: ([a, b]) => {
-    const x = stringArg(a!);
-    const y = stringArg(b!);
+    const x = stringArg(a);
+    const y = stringArg(b);
     if (!compatible(x, y)) return V.fail('Incompatible arguments');
     return V.bool(x.value.endsWith(y.value));
   },
   STRBEFORE: ([a, b]) => {
-    const x = stringArg(a!);
-    const y = stringArg(b!);
+    const x = stringArg(a);
+    const y = stringArg(b);
     if (!compatible(x, y)) return V.fail('Incompatible arguments');
     const i = x.value.indexOf(y.value);
     if (i === -1) return V.simple('');
     return V.stringLike(x.value.slice(0, i), x);
   },
   STRAFTER: ([a, b]) => {
-    const x = stringArg(a!);
-    const y = stringArg(b!);
+    const x = stringArg(a);
+    const y = stringArg(b);
     if (!compatible(x, y)) return V.fail('Incompatible arguments');
     const i = x.value.indexOf(y.value);
     if (i === -1) return V.simple('');
     return V.stringLike(x.value.slice(i + y.value.length), x);
   },
   YEAR: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     return p.year !== undefined ? intLiteral(BigInt(p.year)) : V.fail('No year');
   },
   MONTH: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     return p.month !== undefined ? intLiteral(Number(p.month)) : V.fail('No month');
   },
   DAY: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     return p.day !== undefined ? intLiteral(Number(p.day)) : V.fail('No day');
   },
   HOURS: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     return p.hours !== undefined ? intLiteral(Number(p.hours)) : V.fail('No hours');
   },
   MINUTES: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     return p.minutes !== undefined ? intLiteral(Number(p.minutes)) : V.fail('No minutes');
   },
   SECONDS: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     if (p.seconds === undefined) return V.fail('No seconds');
     return V.numLiteral({ kind: 1, v: BigDecimal.fromStringUnsafe(p.seconds) });
   },
   TIMEZONE: ([a]) => {
-    const p = parseDateParts(a!);
+    const p = parseDateParts(a);
     if (p.tz === undefined) return V.fail('No timezone');
     return new Term.Literal(timezoneDuration(p.tz), V.dt.dayTimeDuration);
   },
-  TZ: ([a]) => V.simple(parseDateParts(a!).tz ?? ''),
+  TZ: ([a]) => V.simple(parseDateParts(a).tz ?? ''),
   NOW: (_, ctx) => new Term.Literal(ctx.now.toISOString(), V.dt.dateTime),
   UUID: (_, ctx) => Term.namedNode(`urn:uuid:${uuid(ctx.random)}`),
   STRUUID: (_, ctx) => V.simple(uuid(ctx.random)),
@@ -424,51 +424,51 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   SHA384: hashFn(Hash.sha384),
   SHA512: hashFn(Hash.sha512),
   STRLANG: ([s, lang]) => {
-    const lex = simpleArg(s!).value;
-    const tag = simpleArg(lang!).value;
+    const lex = simpleArg(s).value;
+    const tag = simpleArg(lang).value;
     if (!LANG_TAG.test(tag)) return V.fail('Invalid language tag');
     return Term.literal(lex, tag);
   },
   STRLANGDIR: ([s, lang, dir]) => {
-    const lex = simpleArg(s!).value;
-    const tag = simpleArg(lang!).value;
-    const d = simpleArg(dir!).value;
+    const lex = simpleArg(s).value;
+    const tag = simpleArg(lang).value;
+    const d = simpleArg(dir).value;
     if (!LANG_TAG.test(tag)) return V.fail('Invalid language tag');
     if (d !== 'ltr' && d !== 'rtl') return V.fail('Invalid base direction');
     return Term.literal(lex, { language: tag, direction: d });
   },
   STRDT: ([s, datatype]) => {
-    const lex = simpleArg(s!).value;
-    if (datatype!._tag !== 'NamedNode') return V.fail('STRDT requires an IRI');
+    const lex = simpleArg(s).value;
+    if (datatype._tag !== 'NamedNode') return V.fail('STRDT requires an IRI');
     if (datatype.value === V.dt.langString.value || datatype.value === V.dt.dirLangString.value) {
       return V.fail('STRDT cannot create language-tagged strings');
     }
     return new Term.Literal(lex, datatype);
   },
-  SAMETERM: ([a, b]) => V.bool(a!.key === b!.key),
-  ISIRI: ([a]) => V.bool(a!._tag === 'NamedNode'),
-  ISURI: ([a]) => V.bool(a!._tag === 'NamedNode'),
-  ISBLANK: ([a]) => V.bool(a!._tag === 'BlankNode'),
-  ISLITERAL: ([a]) => V.bool(a!._tag === 'Literal'),
-  ISNUMERIC: ([a]) => V.bool(V.isNumeric(a!)),
-  HASLANG: ([a]) => V.bool(a!._tag === 'Literal' && a.language !== ''),
-  HASLANGDIR: ([a]) => V.bool(a!._tag === 'Literal' && a.direction !== undefined),
+  SAMETERM: ([a, b]) => V.bool(a.key === b.key),
+  ISIRI: ([a]) => V.bool(a._tag === 'NamedNode'),
+  ISURI: ([a]) => V.bool(a._tag === 'NamedNode'),
+  ISBLANK: ([a]) => V.bool(a._tag === 'BlankNode'),
+  ISLITERAL: ([a]) => V.bool(a._tag === 'Literal'),
+  ISNUMERIC: ([a]) => V.bool(V.isNumeric(a)),
+  HASLANG: ([a]) => V.bool(a._tag === 'Literal' && a.language !== ''),
+  HASLANGDIR: ([a]) => V.bool(a._tag === 'Literal' && a.direction !== undefined),
   REGEX: ([s, pattern, flags]) => {
-    const str = stringArg(s!);
-    const re = compileRegex(simpleArg(pattern!).value, regexFlags(flags));
+    const str = stringArg(s);
+    const re = compileRegex(simpleArg(pattern).value, regexFlags(flags));
     return V.bool(re.test(str.value));
   },
-  ISTRIPLE: ([a]) => V.bool(a!._tag === 'Triple'),
+  ISTRIPLE: ([a]) => V.bool(a._tag === 'Triple'),
   TRIPLE: ([s, p, o]) => {
-    if (s!._tag !== 'NamedNode' && s!._tag !== 'BlankNode') {
+    if (s._tag !== 'NamedNode' && s._tag !== 'BlankNode') {
       return V.fail('TRIPLE subject must be an IRI or blank node');
     }
-    if (p!._tag !== 'NamedNode') return V.fail('TRIPLE predicate must be an IRI');
-    return Term.triple(s!, p, o!);
+    if (p._tag !== 'NamedNode') return V.fail('TRIPLE predicate must be an IRI');
+    return Term.triple(s, p, o);
   },
-  SUBJECT: ([a]) => (a!._tag === 'Triple' ? a.subject : V.fail('Not a triple term')),
-  PREDICATE: ([a]) => (a!._tag === 'Triple' ? a.predicate : V.fail('Not a triple term')),
-  OBJECT: ([a]) => (a!._tag === 'Triple' ? a.object : V.fail('Not a triple term')),
+  SUBJECT: ([a]) => (a._tag === 'Triple' ? a.subject : V.fail('Not a triple term')),
+  PREDICATE: ([a]) => (a._tag === 'Triple' ? a.predicate : V.fail('Not a triple term')),
+  OBJECT: ([a]) => (a._tag === 'Triple' ? a.object : V.fail('Not a triple term')),
 };
 
 // -----------------------------------------------------------------------------

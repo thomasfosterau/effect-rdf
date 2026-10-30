@@ -208,7 +208,7 @@ const loaded = exists
 describe.skipIf(!exists)('N3 test suite', () => {
   for (const { manifest, entries } of loaded) {
     const active = entries.filter((e) => skip[e.id] === undefined);
-    describe(`${manifest}`, () => {
+    describe(manifest, () => {
       it.each(active.filter((e) => !e.rejected))('$type $id', (entry) => {
         expect(() => run(entry)).not.toThrow();
       });

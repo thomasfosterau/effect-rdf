@@ -257,7 +257,7 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
                   Term.namedNode(`urn:row:${i}`),
                   Term.namedNode(`urn:var:${k}`),
                   // SAFETY: the bound values in this test are object-position terms.
-                  v as Term.Object,
+                  v,
                 ),
               ),
             ),

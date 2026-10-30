@@ -53,7 +53,7 @@ Package-local invariants, terms and import boundaries live only in each package'
 
 - `pnpm install` — dependencies plus the Vite+ git hooks (pre-commit runs `vp staged`: format + lint on staged files) and the `prepare` step that patches the native `tsc` / `oxlint` with `@effect/tsgo`. No pre-push hook: run the gates yourself.
 - `./scripts/fetch-test-suites.sh` — shallow-clones the W3C / community conformance suites into `.test-suites` (git-ignored).
-- `vp check` — format + lint (Oxfmt + Oxlint). `vp run --concurrency-limit 2 check` — the type gate: every package's `src`, `test` and config under its `tsconfig.json`. They are different commands.
+- `vp check` — format + lint (Oxfmt + Oxlint, type-aware through oxlint-tsgolint with `typeCheck` on). `vp run --concurrency-limit 2 check` — the type gate: every package's `src`, `test` and config under its `tsconfig.json`. They are different commands.
 - `vp run --concurrency-limit 2 -r test:unit` — every package's unit and conformance tests (nothing needs a database or a credential: PostgreSQL runs as PGlite in-process).
 - `vp run -r build` — `vp pack` → every package's `dist/`.
 - `vp run check:dist` — the import guard: no built `dist/` imports `effect/unstable/*`. Run after the build.

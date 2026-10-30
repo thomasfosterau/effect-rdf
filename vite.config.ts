@@ -89,6 +89,20 @@ export default defineConfig({
       // that uses them. A new site is a defect, not headroom.
       'eslint/no-shadow': 'warn', // 301
       'unicorn/consistent-function-scoping': 'warn', // 63
+      // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
+      // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
+      // autofixable findings (unnecessary assertions, type arguments and
+      // template expressions) are fixed; these sit at `warn` with their count
+      // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
+      // narrowing casts the parsers and evaluators rely on; `consistent-return`
+      // on exhaustive `switch`es native `tsc` already proves total
+      // (`noImplicitReturns`); the rest need an API-level rethink each.
+      'typescript/no-unsafe-type-assertion': 'warn', // 222
+      'typescript/consistent-return': 'warn', // 21
+      'typescript/no-unnecessary-type-parameters': 'warn', // 2
+      'typescript/no-base-to-string': 'warn', // 3
+      'effecttsgo/any-unknown-in-error-context': 'warn', // 3
+      'effecttsgo/unsafe-effect-type-assertion': 'warn', // 1
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -118,8 +132,10 @@ export default defineConfig({
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
       'effect/imperative-loops': 'warn', // 833
-      'effect/avoid-direct-tag-checks': 'warn', // 631
-      'effect/avoid-non-null-assertion': 'warn', // 639
+      // 631 at adoption; dropping the unnecessary `a!` in `a!._tag` (sparql
+      // Functions.ts) made 15 existing checks visible to the rule.
+      'effect/avoid-direct-tag-checks': 'warn', // 646
+      'effect/avoid-non-null-assertion': 'warn', // 558
       'effect/avoid-native-object-helpers': 'warn', // 539
       'effect/prefer-match-over-switch': 'warn', // 56
       // ---- Effect preset: rules this workspace's conventions cut across ----
@@ -177,6 +193,9 @@ export default defineConfig({
           'effect/use-path-service': 'off',
           'effect/use-console-service': 'off',
           'effect/effect-run-in-body': 'off',
+          // Allowance (effect-rdf#42): tests compose their layers with
+          // chained `Effect.provide` calls. Count at adoption.
+          'effecttsgo/strict-effect-provide': 'warn', // 43
         },
       },
       // The one native `JSON.parse` per package: `Schema.fromJsonString`
@@ -251,6 +270,9 @@ export default defineConfig({
           'effect/use-filesystem-service': 'off',
           'effect/use-path-service': 'off',
           'effect/use-http-client-service': 'off',
+          // `Cli.ts` is the server's application entry point, where the
+          // rule says layers belong.
+          'effecttsgo/strict-effect-provide': 'off',
         },
       },
       // Synchronous public APIs over a pure, in-memory `Stream`:
@@ -276,10 +298,20 @@ export default defineConfig({
         files: ['packages/sparql/src/Expression.ts'],
         rules: { 'effect/avoid-any': 'off', 'effect/no-chained-type-assertions': 'off' },
       },
+      // `Builder.patch` re-asserts `QueryOf<K>` after a spread. tsgolint calls
+      // the assertion unnecessary, but native `tsc` (the type gate) rejects
+      // the code without it (TS2322 / TS2345): the two checkers disagree here.
+      {
+        files: ['packages/sparql/src/QueryBuilder.ts'],
+        rules: { 'typescript/no-unnecessary-type-assertion': 'off' },
+      },
       {
         files: ['**/*.test.ts'],
         plugins: ['vitest'],
         rules: {
+          // Conformance suites name a `describe` after a manifest path held
+          // in a variable; the rule cannot see that it is a string.
+          'vitest/valid-title': ['error', { ignoreTypeOfDescribeName: true }],
           'vitest/no-standalone-expect': [
             'warn',
             {
@@ -298,11 +330,17 @@ export default defineConfig({
         },
       },
     ],
-    // Type-aware linting is intentionally disabled: type checking is the
-    // `check` tasks' job (native tsc, Effect-patched).
+    // Type-aware linting through oxlint-tsgolint (bundled with Vite+, patched
+    // by `effect-tsgo patch --oxlint`), with `typeCheck` so the lint pass also
+    // reports type errors. The `check` tasks (native, Effect-patched `tsc`)
+    // stay the type gate of record; both read the same tsconfig.json files,
+    // so every linted TypeScript file must be in one (hence `bench` in the
+    // tsconfigs of the packages that have benchmarks): outside one, tsgolint
+    // falls back to default compiler options (no `@types/node`, no
+    // `noUncheckedIndexedAccess`) and reports false findings.
     options: {
-      typeAware: false,
-      typeCheck: false,
+      typeAware: true,
+      typeCheck: true,
     },
     jsPlugins: [
       {

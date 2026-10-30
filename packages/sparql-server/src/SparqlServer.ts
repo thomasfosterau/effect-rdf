@@ -498,7 +498,7 @@ export const layerServe = (
 ): Layer.Layer<never, never, HttpServer.HttpServer | Requirements> =>
   HttpRouter.serve(layerRoutes({ ...options, logging: false }), {
     disableLogger: options?.logging === false,
-  }) as Layer.Layer<never, never, HttpServer.HttpServer | Requirements>;
+  });
 
 /**
  * Options of the Node server.
@@ -529,7 +529,7 @@ export const layer = (
     Layer.provideMerge(
       NodeHttpServer.layer(createServer, host === undefined ? { port } : { port, host }),
     ),
-  ) as Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError, Requirements>;
+  );
 };
 
 /**

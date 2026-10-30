@@ -172,9 +172,7 @@ const literal = Parser.seq(
 ).pipe(
   Parser.map(([value, suffix]) =>
     // SAFETY: the suffix is a language tag string or a datatype named node.
-    suffix._tag === 'None'
-      ? Term.literal(value)
-      : Term.literal(value, suffix.value as string | Term.NamedNode),
+    suffix._tag === 'None' ? Term.literal(value) : Term.literal(value, suffix.value),
   ),
 );
 

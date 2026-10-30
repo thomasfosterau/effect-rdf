@@ -84,9 +84,9 @@ export const toStandardReification = (self: Dataset.Dataset): Dataset.Dataset =>
     // SAFETY: conversion maps a subject to a subject and an object to an object.
     extra.push(
       new Term.Quad(node, rdf.type, rdf.Statement, graph),
-      new Term.Quad(node, rdf.subject, convert(t.subject, graph) as Term.Subject, graph),
+      new Term.Quad(node, rdf.subject, convert(t.subject, graph), graph),
       new Term.Quad(node, rdf.predicate, t.predicate, graph),
-      new Term.Quad(node, rdf.object, convert(t.object, graph) as Term.Object, graph),
+      new Term.Quad(node, rdf.object, convert(t.object, graph), graph),
     );
     return node;
   };
@@ -94,12 +94,7 @@ export const toStandardReification = (self: Dataset.Dataset): Dataset.Dataset =>
   const converted = Dataset.map(
     self,
     (q) =>
-      new Term.Quad(
-        convert(q.subject, q.graph) as Term.Subject,
-        q.predicate,
-        convert(q.object, q.graph) as Term.Object,
-        q.graph,
-      ),
+      new Term.Quad(convert(q.subject, q.graph), q.predicate, convert(q.object, q.graph), q.graph),
   );
   return Dataset.addAll(converted, extra);
 };

@@ -84,7 +84,7 @@ const substitute: (t: Term.Term, solution: Bindings) => Term.GroundTerm = Match.
     Term.triple(
       substitute(x.subject, solution) as Term.Subject,
       substitute(x.predicate, solution) as Term.Predicate,
-      substitute(x.object, solution) as Term.Object,
+      substitute(x.object, solution),
     ),
   ),
   Match.tag('DefaultGraph', () => V.fail('Invalid term')),

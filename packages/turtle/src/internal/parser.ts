@@ -74,7 +74,7 @@ const C_BACKSLASH = 0x5c;
 const C_PERCENT = 0x25;
 const C_GT = 0x3e;
 
-type P<A> = Parser.Parser<A, never, never, string>;
+type P<A> = Parser.Parser<A>;
 
 // -----------------------------------------------------------------------------
 // The builder
@@ -259,13 +259,13 @@ const act = (f: (pos: number) => void): P<number> => Parser.tap(Parser.location,
 
 /** Throws `message` at the current offset. */
 const failHere = <A = never>(message: string): P<A> =>
-  Parser.make<A, never, never, string>((state) => {
+  Parser.make<A>((state) => {
     throw new Stop(message, state.pos);
   });
 
 /** Throws the error `diagnose` finds at the current offset. */
 const failWith = <A = never>(diagnose: (input: string, pos: number) => Stop): P<A> =>
-  Parser.make<A, never, never, string>((state) => {
+  Parser.make<A>((state) => {
     throw diagnose(state.input, state.pos);
   });
 
@@ -381,7 +381,7 @@ const iri: P<Term.NamedNode> = Parser.preceded(
 );
 
 /** Fails when a prefix name is followed by a dot (which `PN_PREFIX` cannot end with). */
-const noTrailingDot: P<void> = Parser.make<void, never, never, string>((state) => {
+const noTrailingDot: P<void> = Parser.make<void>((state) => {
   if (state.input.charCodeAt(state.pos) === C_DOT) {
     throw new Stop('A prefix name must not end with "."', state.pos - b.prefix.length);
   }
@@ -401,7 +401,7 @@ const prefixLabel: P<string> = Parser.alt(
 );
 
 /** Fails on the escapes that end a local name early: `%` or `\` (after any dots). */
-const localTail: P<void> = Parser.make<void, never, never, string>((state) => {
+const localTail: P<void> = Parser.make<void>((state) => {
   const input = state.input;
   let i = state.pos;
   while (input.charCodeAt(i) === C_DOT) i++;
@@ -431,7 +431,7 @@ const prefixedName: P<Term.NamedNode> = Parser.preceded(
         return new Term.NamedNode(ns + local);
       }),
     ),
-    Parser.make<Term.NamedNode, never, never, string>(() => {
+    Parser.make<Term.NamedNode>(() => {
       throw new Stop('Expected a prefixed name', b.nameStart);
     }),
   ),
@@ -534,7 +534,7 @@ const rdfLiteral: P<Term.Literal> = Parser.preceded(
       Parser.alt(lit('^^'), Parser.preceded(at('^'), failHere("Expected '^^'"))),
       Parser.preceded(skip, datatype),
     ).pipe(Parser.map(literal)),
-    Parser.make<Term.Literal, never, never, string>(() => literal(undefined)),
+    Parser.make<Term.Literal>(() => literal(undefined)),
   ),
 );
 
@@ -720,9 +720,7 @@ const objectDef: P<Term.Object> = Parser.alt(
 // Predicate-object lists
 // -----------------------------------------------------------------------------
 
-const freshNode: P<Term.BlankNode> = Parser.make<Term.BlankNode, never, never, string>(() =>
-  b.fresh(),
-);
+const freshNode: P<Term.BlankNode> = Parser.make<Term.BlankNode>(() => b.fresh());
 
 const emitObject: P<Term.Object> = Parser.tap(object, (o) => {
   const frame = b.frame();
@@ -916,7 +914,7 @@ const graphOrProperties: P<unknown> = Parser.preceded(
     Parser.tap(lit('{'), () => b.openGraph(b.pending)),
     Parser.seq(
       describing(
-        Parser.make<Term.Subject, never, never, string>(() => b.pending),
+        Parser.make<Term.Subject>(() => b.pending),
         predicateObjectList,
       ),
       endOfStatement,
@@ -974,7 +972,7 @@ const block: P<unknown> = Parser.alt(
 );
 
 /** Whether a TriG graph block is open (consuming nothing). */
-const inGraph: P<void> = Parser.make<void, never, never, string>((state) =>
+const inGraph: P<void> = Parser.make<void>((state) =>
   b.inGraph ? undefined : state.backtrack('Verify', ['a graph block']),
 );
 
@@ -993,7 +991,7 @@ const trigStatement: P<unknown> = Parser.alt(
 );
 
 /** Records the state at the start of a statement. */
-const beginStatement: P<void> = Parser.make<void, never, never, string>((state) => {
+const beginStatement: P<void> = Parser.make<void>((state) => {
   b.snapshot(state.pos);
   return undefined;
 });
@@ -1002,7 +1000,7 @@ const beginStatement: P<void> = Parser.make<void, never, never, string>((state) 
  * Ends a statement, unless the input may continue so close to its end that
  * the statement could still turn out differently.
  */
-const endStatement: P<void> = Parser.make<void, never, never, string>((state) => {
+const endStatement: P<void> = Parser.make<void>((state) => {
   if (!b.final) {
     const input = state.input;
     let i = state.pos;
@@ -1015,7 +1013,7 @@ const endStatement: P<void> = Parser.make<void, never, never, string>((state) =>
 });
 
 /** Starts a run: the compiled run, or the interpreted re-run after it fails. */
-const startRun: P<void> = Parser.make<void, never, never, string>((state) => {
+const startRun: P<void> = Parser.make<void>((state) => {
   b.input = state.input;
   b.restartRun();
   return undefined;
@@ -1046,7 +1044,7 @@ const trigStatements = statements(trigStatement);
 /** One statement, for the partial-mode check (setting the input first). */
 const single = (statement: P<unknown>): P<unknown> =>
   Parser.preceded(
-    Parser.make<void, never, never, string>((state) => {
+    Parser.make<void>((state) => {
       b.input = state.input;
       return undefined;
     }),

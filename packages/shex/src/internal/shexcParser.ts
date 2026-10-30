@@ -391,7 +391,7 @@ const facets = (strings: boolean, numerics: boolean): P<Mutable<ShExJ.Facets>> =
         if (flags !== undefined && flags !== '') out['flags'] = flags;
       }
       // SAFETY: every field was set with its facet's type.
-      return Result.succeed(out as Mutable<ShExJ.Facets>);
+      return Result.succeed(out);
     }),
     Parser.cut,
   );
@@ -466,7 +466,7 @@ const wildcardExclusions: P<ShExJ.ValueSetValue> = Parser.preceded(
       })),
     ),
   ),
-).pipe(Parser.expected("'-'")) as P<ShExJ.ValueSetValue>;
+).pipe(Parser.expected("'-'"));
 
 const valueSetValue: P<ShExJ.ValueSetValue> = select('a value set value', [
   [
