@@ -51,7 +51,7 @@ catalog:
   '@enfect/oxlint': ^0.9.0
   # Parser-combinator library behind the Turtle, N-Triples, N3, ShExC, SPARQL
   # and XML grammars; a peer of the packages that use it (see `catalogs.peers`).
-  '@thomasfosterau/effect-parse': 0.3.0
+  '@thomasfosterau/effect-parse': 0.4.0
   '@types/node': ^26.6.5
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
