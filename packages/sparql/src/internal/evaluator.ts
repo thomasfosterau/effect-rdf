@@ -190,7 +190,7 @@ const pathFrom = (
     ),
     Match.tag('PathInverse', (inv) => pathFrom(env, inv.path, start, !forward)),
     Match.tag('PathSequence', (seq) => {
-      const steps = forward ? seq.paths : [...seq.paths].reverse();
+      const steps = forward ? seq.paths : seq.paths.toReversed();
       return Effect.reduce(
         steps,
         (): ReadonlyArray<Term.GroundTerm> => [start],

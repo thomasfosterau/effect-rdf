@@ -18,6 +18,7 @@ import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as HashSet from 'effect/HashSet';
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
@@ -610,11 +611,11 @@ interface TriplesGrammar {
   readonly triplesTemplate: P<Triples>;
 }
 
-const path: P<Ast.Path> = Parser.suspend(() => path_);
+const path: P<Ast.Path> = Parser.suspend(() => pathDef);
 
 const triplesGrammar = (paths: boolean): TriplesGrammar => {
-  const graphNode: P<Node> = Parser.suspend(() => graphNode_);
-  const propertyList: P<PropertyList> = Parser.suspend(() => propertyList_);
+  const graphNode: P<Node> = Parser.suspend(() => graphNodeDef);
+  const propertyList: P<PropertyList> = Parser.suspend(() => propertyListDef);
 
   const varOrTerm = (allowNil: boolean): P<Ast.TermPattern> =>
     Parser.alt(
@@ -660,7 +661,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
     ),
   );
 
-  const reifiedTriple: P<Node> = Parser.suspend(() => reifiedTriple_);
+  const reifiedTriple: P<Node> = Parser.suspend(() => reifiedTripleDef);
 
   const reifiedTripleComponent: P<Node> = Parser.alt(
     reifiedTriple,
@@ -672,7 +673,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
     varOrTerm(false).pipe(Parser.map((t) => node(t))),
   );
 
-  const reifiedTriple_: P<Node> = Parser.preceded(
+  const reifiedTripleDef: P<Node> = Parser.preceded(
     tok('<<'),
     Parser.seq(
       reifiedTripleComponent,
@@ -722,7 +723,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
   );
 
   /** GraphNode / GraphNodePath */
-  const graphNode_: P<Node> = Parser.alt(
+  const graphNodeDef: P<Node> = Parser.alt(
     reifiedTriple,
     Parser.preceded(
       Parser.alt(
@@ -819,7 +820,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
     ),
   );
 
-  const propertyList_: P<PropertyList> = Parser.seq(
+  const propertyListDef: P<PropertyList> = Parser.seq(
     verbObjects,
     Parser.repeat(
       Parser.preceded(
@@ -940,7 +941,7 @@ const pathSequence: P<Ast.Path> = Parser.separated(pathEltOrInverse, tok('/'), {
   Parser.map((ps) => (ps.length === 1 ? ps[0] : Ast.sequence(...ps))),
 );
 
-const path_: P<Ast.Path> = Parser.separated(pathSequence, tok('|'), { min: 1 }).pipe(
+const pathDef: P<Ast.Path> = Parser.separated(pathSequence, tok('|'), { min: 1 }).pipe(
   Parser.map((ps) => (ps.length === 1 ? ps[0] : Ast.alternative(...ps))),
 );
 
@@ -948,8 +949,8 @@ const path_: P<Ast.Path> = Parser.separated(pathSequence, tok('|'), { min: 1 }).
 // Expressions
 // -----------------------------------------------------------------------------
 
-const expression: P<Ast.Expression> = Parser.suspend(() => expression_);
-const groupGraphPattern: P<Ast.GroupPattern> = Parser.suspend(() => groupGraphPattern_);
+const expression: P<Ast.Expression> = Parser.suspend(() => expressionDef);
+const groupGraphPattern: P<Ast.GroupPattern> = Parser.suspend(() => groupGraphPatternDef);
 
 const AGGREGATES = new Set(['COUNT', 'SUM', 'MIN', 'MAX', 'AVG', 'SAMPLE', 'GROUP_CONCAT']);
 
@@ -1172,7 +1173,7 @@ const relational: P<Ast.Expression> = Parser.seq(
 ).pipe(Parser.map(([left, rest]) => (rest._tag === 'Some' ? rest.value(left) : left)));
 
 const conditionalAnd = leftAssoc(relational, ['&&']);
-const expression_ = leftAssoc(conditionalAnd, ['||']);
+const expressionDef = leftAssoc(conditionalAnd, ['||']);
 
 const constraint: P<Ast.Expression> = Parser.alt(
   Parser.preceded(Parser.peek(tok('(')), brackettedExpression),
@@ -1201,7 +1202,15 @@ const templateTriples = triplesGrammar(false);
 
 const varOrIri: P<Ast.VarOrIri> = Parser.alt(variable, iriOrError);
 
-const GPNT = ['OPTIONAL', 'MINUS', 'GRAPH', 'SERVICE', 'FILTER', 'BIND', 'VALUES'];
+const GPNT: HashSet.HashSet<string> = HashSet.make(
+  'OPTIONAL',
+  'MINUS',
+  'GRAPH',
+  'SERVICE',
+  'FILTER',
+  'BIND',
+  'VALUES',
+);
 
 const graphPatternNotTriples: P<Ast.Pattern> = select<Ast.Pattern>([
   [
@@ -1245,7 +1254,7 @@ const graphPatternNotTriples: P<Ast.Pattern> = select<Ast.Pattern>([
 
 const startsGPNT: P<unknown> = Parser.peek(
   take('a graph pattern', (t) =>
-    t.kind === '{' || (t.type === 'WORD' && GPNT.includes(t.kind)) ? true : undefined,
+    t.kind === '{' || (t.type === 'WORD' && HashSet.has(GPNT, t.kind)) ? true : undefined,
   ),
 );
 
@@ -1271,7 +1280,7 @@ const gpntItem: P<GroupItem> = Parser.preceded(
 const isGPNTStart = (t: Tok | undefined): boolean =>
   t !== undefined &&
   t.type !== 'ERROR' &&
-  (t.kind === '{' || (t.type === 'WORD' && GPNT.includes(t.kind)));
+  (t.kind === '{' || (t.type === 'WORD' && HashSet.has(GPNT, t.kind)));
 
 /** A triples block; one not ended by `.` must be followed by a pattern or `}`. */
 const triplesItem: P<GroupItem> = Parser.preceded(
@@ -1322,9 +1331,9 @@ const assembleGroup = (
   return Result.succeed(Ast.group(patterns));
 };
 
-const subSelect: P<Ast.GroupPattern> = Parser.suspend(() => subSelect_);
+const subSelect: P<Ast.GroupPattern> = Parser.suspend(() => subSelectDef);
 
-const groupGraphPattern_: P<Ast.GroupPattern> = Parser.preceded(
+const groupGraphPatternDef: P<Ast.GroupPattern> = Parser.preceded(
   expect('{'),
   Parser.alt(
     Parser.preceded(Parser.peek(tok('SELECT')), subSelect),
@@ -1694,7 +1703,7 @@ const askQuery: P<Ast.AskQuery> = Parser.preceded(
   ),
 );
 
-const subSelect_: P<Ast.GroupPattern> = Parser.seq(
+const subSelectDef: P<Ast.GroupPattern> = Parser.seq(
   withFlags(false, undefined, Parser.seq(selectQuery(true), valuesClause)),
   Parser.preceded(
     expect('}'),

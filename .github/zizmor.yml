@@ -1,0 +1,7 @@
+# zizmor configuration (`uvx zizmor --offline .github`).
+rules:
+  dependabot-cooldown:
+    config:
+      # The owner's policy: pnpm's `minimumReleaseAge` is 8 hours, and 1 day is
+      # Dependabot's smallest cooldown unit (see .github/dependabot.yml).
+      days: 1

@@ -57,7 +57,8 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-sparql-server": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "effect": "catalog:peers"

@@ -52,3 +52,4 @@ coverage/
 .vite-hooks/_/
 vite.config.*.timestamp*
 *.tsbuildinfo
+.vitest/

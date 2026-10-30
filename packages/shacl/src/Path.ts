@@ -244,7 +244,7 @@ const step = (
       return out;
     }),
     Match.tag('SequencePath', (path) => {
-      const parts = inverse ? [...path.paths].reverse() : path.paths;
+      const parts = inverse ? path.paths.toReversed() : path.paths;
       let current: ReadonlyMap<string, Node> = nodes;
       for (const p of parts) current = step(data, current, p, inverse);
       // SAFETY: `step` returns a fresh map for every path kind.

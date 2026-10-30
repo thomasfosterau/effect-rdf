@@ -22,8 +22,21 @@
 # There are no RDF / conformance npm dependencies to group: the W3C suites are
 # git clones (scripts/fetch-test-suites.sh), and no `@effect/docgen` / `tsx`.
 #
-# `cooldown` mirrors pnpm-workspace.yaml's `minimumReleaseAge` (1 day), with
-# the same first-party exemption.
+# By hand, because Dependabot cannot do them (move them on the toolchain PR's
+# branch, then `pnpm install`):
+# - the npm-alias catalog entries: `vite` (`npm:@voidzero-dev/vite-plus-core@`,
+#   must equal `vite-plus`), `typescript` (`npm:@typescript/typescript6@`) and
+#   `@typescript/native` (`npm:typescript@`, must be in `@effect/tsgo`'s
+#   `components` table);
+# - an `@effect/tsgo` release that supports the new vite-plus's oxlint /
+#   tsgolint, when the toolchain PR fails `pnpm install`;
+# - the `overrides` literals in pnpm-workspace.yaml (`undici` security floor);
+# - `catalogs.peers` (the published peer ranges; raising a floor is breaking).
+#
+# `cooldown` is 1 day (Dependabot takes whole days only), longer than
+# pnpm-workspace.yaml's `minimumReleaseAge` of 480 minutes (8 hours), so a
+# Dependabot PR never proposes a version pnpm would still refuse to install.
+# Same first-party exemption.
 version: 2
 updates:
   - package-ecosystem: 'npm'
@@ -55,7 +68,7 @@ updates:
           - '@typescript/native'
           - 'typescript'
           - '@typescript/typescript6'
-          - '@mpsuesser/oxlint-plugin-effect'
+          - '@enfect/oxlint'
         update-types: ['major', 'minor', 'patch']
       effect:
         applies-to: version-updates
@@ -95,6 +108,8 @@ updates:
       - 'dependencies'
     commit-message:
       prefix: 'ci'
+    cooldown:
+      default-days: 1
     groups:
       github-actions:
         patterns:

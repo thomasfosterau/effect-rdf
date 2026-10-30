@@ -231,8 +231,8 @@ const pname: P<IriNode> = Parser.seq(Parser.location, TurtleGrammar.prefixedName
 /** `iri`: an IRI reference or a prefixed name. */
 const iri: P<IriNode> = Parser.alt(iriRef, pname).pipe(Parser.expected('an IRI'));
 
-const path: P<Path> = Parser.suspend(() => path_);
-const pol: P<ReadonlyArray<Pol>> = Parser.suspend(() => pol_);
+const path: P<Path> = Parser.suspend(() => pathDef);
+const pol: P<ReadonlyArray<Pol>> = Parser.suspend(() => polDef);
 const statementList = (inFormula: boolean): P<ReadonlyArray<Statement>> =>
   Parser.suspend(() => (inFormula ? formulaStatements : documentStatements));
 
@@ -379,7 +379,7 @@ const pathItem: P<Item> = Parser.preceded(
 );
 
 // SAFETY: the alternatives only match `!` or `^`.
-const path_: P<Path> = Parser.seq(
+const pathDef: P<Path> = Parser.seq(
   pathItem,
   Parser.repeat(
     Parser.seq(
@@ -439,7 +439,7 @@ const objectList: P<ReadonlyArray<Path>> = Parser.separated(path, sym(','), { mi
 
 const semicolons = Parser.repeat(sym(';'), { min: 1 });
 
-const pol_: P<ReadonlyArray<Pol>> = Parser.terminated(
+const polDef: P<ReadonlyArray<Pol>> = Parser.terminated(
   Parser.seq(
     Parser.seq(verb, Parser.cut(objectList)),
     Parser.repeat(
