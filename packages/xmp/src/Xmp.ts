@@ -12,6 +12,7 @@
  *
  * @since 0.1.0
  */
+import * as HashSet from 'effect/HashSet';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -154,7 +155,7 @@ const iris = (value: Metadata.Value): ReadonlyArray<string> => [
 const entryIris = (entries: Metadata.Entries): ReadonlyArray<string> =>
   Arr.flatMap(entries, ([iri, value]) => [iri, ...iris(value)]);
 
-const RESERVED: ReadonlyArray<string> = ['x', 'rdf', 'xml', 'xmlns'];
+const RESERVED: HashSet.HashSet<string> = HashSet.make('x', 'rdf', 'xml', 'xmlns');
 
 /** `[namespace, prefix]` pairs. */
 type Prefixes = ReadonlyArray<readonly [string, string]>;
@@ -169,7 +170,7 @@ const usable = (map: PrefixMap.PrefixMap): Prefixes =>
   Arr.map(
     Arr.filter(
       Arr.fromIterable(map.prefixes),
-      ([prefix]) => prefix !== '' && !RESERVED.includes(prefix.toLowerCase()),
+      ([prefix]) => prefix !== '' && !HashSet.has(RESERVED, prefix.toLowerCase()),
     ),
     ([prefix, ns]) => [ns, prefix] as const,
   );

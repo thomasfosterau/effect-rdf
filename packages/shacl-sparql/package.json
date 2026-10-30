@@ -53,7 +53,8 @@
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-jsonld": "workspace:*",
     "@thomasfosterau/effect-turtle": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "effect": "catalog:peers"

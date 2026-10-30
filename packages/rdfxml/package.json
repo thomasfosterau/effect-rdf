@@ -53,7 +53,8 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "@thomasfosterau/effect-parse": "catalog:peers",

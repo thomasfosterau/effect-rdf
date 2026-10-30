@@ -637,10 +637,10 @@ const shapeRef: P<string> = select('a shape reference', [
   [['@'], Parser.preceded(anyToken, Parser.cut(label))],
 ]);
 
-const shapeExpressionBody: P<AnyShapeExpr> = Parser.suspend(() => shapeExpressionBody_);
-const tripleExpression: P<ShExJ.TripleExprOrRef> = Parser.suspend(() => tripleExpression_);
-const extendsShapeOr: P<AnyShapeExpr> = Parser.suspend(() => extendsShapeOr_);
-const inlineShapeExpression: P<AnyShapeExpr> = Parser.suspend(() => inlineShapeExpression_);
+const shapeExpressionBody: P<AnyShapeExpr> = Parser.suspend(() => shapeExpressionBodyDef);
+const tripleExpression: P<ShExJ.TripleExprOrRef> = Parser.suspend(() => tripleExpressionDef);
+const extendsShapeOr: P<AnyShapeExpr> = Parser.suspend(() => extendsShapeOrDef);
+const inlineShapeExpression: P<AnyShapeExpr> = Parser.suspend(() => inlineShapeExpressionDef);
 
 const parenthesised: P<Atom> = Parser.delimited(
   anyToken,
@@ -812,7 +812,7 @@ const shapeOrRest: P<Rest> = select("'AND' or 'OR'", [
 /**
  * shapeExpression ::= NOT? shapeAtomNoRef shapeOr? | NOT shapeRef shapeOr? | shapeRef shapeOr
  */
-const shapeExpressionBody_: P<AnyShapeExpr> = select(
+const shapeExpressionBodyDef: P<AnyShapeExpr> = select(
   'a shape expression',
   [
     [
@@ -917,8 +917,8 @@ const junctions = (atom: P<Atom>) => {
   );
 };
 
-const inlineShapeExpression_: P<AnyShapeExpr> = junctions(inlineAtom(false));
-const extendsShapeOr_: P<AnyShapeExpr> = junctions(inlineAtom(true));
+const inlineShapeExpressionDef: P<AnyShapeExpr> = junctions(inlineAtom(false));
+const extendsShapeOrDef: P<AnyShapeExpr> = junctions(inlineAtom(true));
 
 // -----------------------------------------------------------------------------
 // Triple expressions
@@ -1037,7 +1037,7 @@ const groupTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.terminated(
   ),
 );
 
-const tripleExpression_: P<ShExJ.TripleExprOrRef> = Parser.seq(
+const tripleExpressionDef: P<ShExJ.TripleExprOrRef> = Parser.seq(
   groupTripleExpr,
   Parser.repeat(Parser.preceded(tok('|'), Parser.cut(groupTripleExpr))),
 ).pipe(

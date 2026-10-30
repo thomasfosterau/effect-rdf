@@ -24,6 +24,7 @@
 import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as HashSet from 'effect/HashSet';
 import * as Result from 'effect/Result';
 import type * as Xml from '../Xml.ts';
 import {
@@ -413,7 +414,15 @@ const skipParens: P<unknown> = Parser.preceded(
   ),
 );
 
-const TOKENIZED_TYPES = ['ID', 'IDREF', 'IDREFS', 'ENTITY', 'ENTITIES', 'NMTOKEN', 'NMTOKENS'];
+const TOKENIZED_TYPES: HashSet.HashSet<string> = HashSet.make(
+  'ID',
+  'IDREF',
+  'IDREFS',
+  'ENTITY',
+  'ENTITIES',
+  'NMTOKEN',
+  'NMTOKENS',
+);
 
 const defaultDecl: P<string | undefined> = Parser.alt(
   Parser.preceded(lit('#REQUIRED'), Parser.succeed<string | undefined>(undefined)),
@@ -437,7 +446,7 @@ const attributeDef: P<unknown> = Parser.seq(
       checked(name, (type, pos) => {
         x.attributeType = type;
         if (type === 'CDATA') x.tokenized = false;
-        else if (type !== 'NOTATION' && !TOKENIZED_TYPES.includes(type)) {
+        else if (type !== 'NOTATION' && !HashSet.has(TOKENIZED_TYPES, type)) {
           fail(`Unknown attribute type "${type}"`, pos);
         }
       }),

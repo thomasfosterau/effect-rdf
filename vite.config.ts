@@ -13,7 +13,7 @@
 
 import { defineConfig } from 'vite-plus';
 import { recommended } from '@effect/tsgo/oxlint-presets';
-import effect from '@mpsuesser/oxlint-plugin-effect';
+import effect from '@enfect/oxlint';
 
 const packages = [
   'effect-rdf',
@@ -59,8 +59,11 @@ export default defineConfig({
       '.test-suites/**',
     ],
     extends: [recommended, effect.configs.recommended],
+    plugins: ['eslint', 'typescript', 'unicorn', 'oxc', 'import', 'promise', 'jsdoc'],
     categories: {
       correctness: 'error',
+      suspicious: 'error',
+      perf: 'error',
     },
     rules: {
       'no-console': 'error',
@@ -72,6 +75,20 @@ export default defineConfig({
         },
       ],
       'eslint/prefer-const': 'warn',
+      // `_tag` is the discriminant of every Effect tagged union (`Data.TaggedEnum`,
+      // `Schema.TaggedClass`, the AST and term types).
+      'eslint/no-underscore-dangle': ['error', { allow: ['_tag'] }],
+      // Every export's doc comment carries `@since` and `@category` (AGENTS.md).
+      'jsdoc/check-tag-names': ['error', { definedTags: ['since', 'category'] }],
+      // ---- oxlint categories: allowances (effect-rdf#42) --------------
+      // `suspicious` arrived with the Vite+ 1.4 toolchain move. These two sit
+      // at `warn` with their count at adoption, too many sites in the
+      // parsers and evaluators to rewrite safely in that change: short
+      // grammar-local names (`c`, `p`, `op`, `e`) reused in nested
+      // combinators, and helpers defined beside the one test or grammar rule
+      // that uses them. A new site is a defect, not headroom.
+      'eslint/no-shadow': 'warn', // 301
+      'unicorn/consistent-function-scoping': 'warn', // 63
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -100,7 +117,7 @@ export default defineConfig({
       // the issue lists them. A new site is a defect, not headroom. Once a
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
-      'effect/imperative-loops': 'warn', // 834
+      'effect/imperative-loops': 'warn', // 833
       'effect/avoid-direct-tag-checks': 'warn', // 631
       'effect/avoid-non-null-assertion': 'warn', // 639
       'effect/avoid-native-object-helpers': 'warn', // 539

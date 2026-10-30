@@ -590,10 +590,10 @@ const verb: P<Term.NamedNode> = Parser.alt(
   failHere('Expected a predicate'),
 );
 
-const tripleTerm: P<Term.Triple> = Parser.suspend(() => tripleTerm_);
-const reifiedTriple: P<Term.NamedNode | Term.BlankNode> = Parser.suspend(() => reifiedTriple_);
-const object: P<Term.Object> = Parser.suspend(() => object_);
-const predicateObjectList: P<unknown> = Parser.suspend(() => predicateObjectList_);
+const tripleTerm: P<Term.Triple> = Parser.suspend(() => tripleTermDef);
+const reifiedTriple: P<Term.NamedNode | Term.BlankNode> = Parser.suspend(() => reifiedTripleDef);
+const object: P<Term.Object> = Parser.suspend(() => objectDef);
+const predicateObjectList: P<unknown> = Parser.suspend(() => predicateObjectListDef);
 
 /** The object of a reified triple or triple term. */
 const innerObject = (reified: boolean): P<Term.Object> => {
@@ -615,7 +615,7 @@ const innerObject = (reified: boolean): P<Term.Object> => {
   );
 };
 
-const tripleTerm_: P<Term.Triple> = Parser.seq(
+const tripleTermDef: P<Term.Triple> = Parser.seq(
   Parser.preceded(Parser.seq(lit('<<('), skip), iriOrBlankNode('the subject of a triple term')),
   Parser.preceded(skip, verb),
   Parser.preceded(skip, innerObject(false)),
@@ -638,7 +638,7 @@ const reifierId: P<Term.NamedNode | Term.BlankNode> = Parser.preceded(
   Parser.alt(Parser.preceded(at('['), anon), resource),
 );
 
-const reifiedTriple_: P<Term.NamedNode | Term.BlankNode> = Parser.seq(
+const reifiedTripleDef: P<Term.NamedNode | Term.BlankNode> = Parser.seq(
   Parser.preceded(
     Parser.seq(lit('<<'), skip),
     Parser.alt(
@@ -704,7 +704,7 @@ const collection: P<Term.NamedNode | Term.BlankNode> = Parser.preceded(
  */
 const rule = <A>(p: P<A>): P<A> => Parser.suspend(() => p);
 
-const object_: P<Term.Object> = Parser.alt(
+const objectDef: P<Term.Object> = Parser.alt(
   Parser.preceded(at('<<('), tripleTerm),
   Parser.preceded(at('<<'), reifiedTriple),
   Parser.preceded(at('<'), rule(iri)),
@@ -792,7 +792,7 @@ const startsVerb: P<unknown> = Parser.peek(
   ),
 );
 
-const predicateObjectList_: P<unknown> = Parser.seq(
+const predicateObjectListDef: P<unknown> = Parser.seq(
   setPredicate,
   skip,
   objectList,

@@ -247,9 +247,17 @@ describe.skipIf(!exists)('SPARQL evaluation conformance over HTTP (client ↔ se
   )(
     '%s',
     async (_, t) => {
-      for (const accept of FORMATS) {
-        expect(await Effect.runPromise(Effect.as(runQueryTest(t, accept), true))).toBe(true);
-      }
+      // One format at a time, as the loop this replaced did.
+      const passed = await Effect.runPromise(
+        Effect.as(
+          Effect.forEach(FORMATS, (accept) => runQueryTest(t, accept), {
+            concurrency: 1,
+            discard: true,
+          }),
+          true,
+        ),
+      );
+      expect(passed).toBe(true);
     },
     20_000,
   );

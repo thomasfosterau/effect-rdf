@@ -710,7 +710,9 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       let combos: Array<Array<{ path: Term.NamedNode; value: Term.GroundTerm }>> = [[]];
       for (const [path, values] of bindings) {
         if (Arr.isReadonlyArrayEmpty(values)) continue;
-        combos = combos.flatMap((combo) => values.map((value) => [...combo, { path, value }]));
+        combos = combos.flatMap((combo) =>
+          values.map((value) => Arr.append(combo, { path, value })),
+        );
       }
       for (const parameters of combos)
         push({ _tag: 'Component', component: decl.component, parameters });
