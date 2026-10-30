@@ -199,7 +199,7 @@ const walk = (t: Model.N3Term, b: Bindings): Model.N3Term => {
 
 // SAFETY: substituting into a term gives a term.
 const resolve = (t: Model.N3Term, b: Bindings): Model.N3Term =>
-  b.size === 0 ? t : (Model.substitute(t, b) as Model.N3Term);
+  b.size === 0 ? t : Model.substitute(t, b);
 
 const unify = (pattern: Model.N3Term, term: Model.N3Term, b: Bindings): Array<Bindings> => {
   const p = walk(pattern, b);
@@ -315,7 +315,7 @@ const solve = (
       // Collections are lists: answer rdf:first / rdf:rest structurally.
       const value =
         predicate.key === rdf.first.key
-          ? subject.items[0]!
+          ? subject.items[0]
           : subject.items.length === 1
             ? rdf.nil
             : new Model.Collection(subject.items.slice(1));

@@ -1525,7 +1525,7 @@ class Compiler {
     return caseOf(
       [
         [or(this.isNullC(a), this.isNullC(b)), 'NULL'],
-        [bothIds ? this.eqFF(a.id!, b.id!) : false, 'TRUE'],
+        [bothIds ? this.eqFF(a.id, b.id) : false, 'TRUE'],
         ...promoted.branches,
         [and(this.clsIn(a, [1, 2]), this.clsIn(b, [1, 2])), num],
         [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],

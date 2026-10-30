@@ -210,12 +210,12 @@ const closeGraph = (input: Dataset.Dataset, graph: Term.Graph, full: boolean): D
           if (full) {
             if (o.key === rdf.Property.key) {
               // SAFETY: a subject is also a valid object.
-              add(s, rdfs.subPropertyOf, s as Term.Object); // rdfs6
+              add(s, rdfs.subPropertyOf, s); // rdfs6
             }
             if (o.key === rdfs.Class.key) {
               add(s, rdfs.subClassOf, rdfs.Resource); // rdfs8
               // SAFETY: a subject is also a valid object.
-              add(s, rdfs.subClassOf, s as Term.Object); // rdfs10
+              add(s, rdfs.subClassOf, s); // rdfs10
             }
             if (o.key === rdfs.ContainerMembershipProperty.key)
               add(s, rdfs.subPropertyOf, rdfs.member); // rdfs12

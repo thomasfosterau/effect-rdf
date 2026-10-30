@@ -89,7 +89,7 @@ const runTest = (t: ProtocolTest) =>
         if (spec.response.expectedLocation !== undefined) {
           const location = response.headers['location'];
           assert.isDefined(location, label);
-          vars.set(spec.response.expectedLocation, location!);
+          vars.set(spec.response.expectedLocation, location);
         }
         for (const [name, value] of spec.response.headers) {
           if (name.toLowerCase() === 'content-type') {

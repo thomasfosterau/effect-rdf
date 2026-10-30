@@ -332,7 +332,7 @@ class Reader {
     if (max !== undefined) te.max = this.num(max, 'sx:max');
     this.meta(n, te);
     // SAFETY: a labelled triple expression is the expression with its `id`.
-    return labelled ? ({ id: this.label(n), ...te } as ShExJ.TripleExpr) : te;
+    return labelled ? { id: this.label(n), ...te } : te;
   }
 
   schema(): ShExJ.Schema {
@@ -482,7 +482,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
   const valueSetValue = (v: ShExJ.ValueSetValue): Term.Object => {
     if (Predicate.isString(v) || !('type' in v) || 'value' in v)
       // SAFETY: a value without `type`, or with a `value`, is an object value in ShExJ.
-      return objectValue(v as ShExJ.ObjectValue);
+      return objectValue(v);
     const b = Term.blankNode();
     add(b, rdfType, sx(v.type));
     switch (v.type) {

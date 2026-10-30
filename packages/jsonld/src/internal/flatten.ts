@@ -61,7 +61,7 @@ export const generateNodeMap = (
   // 4
   if (isValueObject(element)) {
     if (list === null) {
-      const values: Array<Json> = getOrInit(subjectNode!, activeProperty!, () => []);
+      const values: Array<Json> = getOrInit(subjectNode, activeProperty!, () => []);
       addUnique(values, element);
     } else {
       list['@list'].push(element);
@@ -81,7 +81,7 @@ export const generateNodeMap = (
       result,
     );
     if (list === null) {
-      getOrInit(subjectNode!, activeProperty!, () => []).push(result);
+      getOrInit(subjectNode, activeProperty!, () => []).push(result);
     } else {
       list['@list'].push(result);
     }
@@ -108,7 +108,7 @@ export const generateNodeMap = (
     // 6.6
     const reference = { '@id': id };
     if (list === null) {
-      const values: Array<Json> = getOrInit(subjectNode!, activeProperty!, () => []);
+      const values: Array<Json> = getOrInit(subjectNode, activeProperty, () => []);
       addUnique(values, reference);
     } else {
       list['@list'].push(reference);
@@ -170,7 +170,7 @@ export const flattenExpanded = (expanded: Json, ordered: boolean): Array<JsonObj
   const nodeMap: NodeMap = {};
   nodeMap['@default'] = {};
   generateNodeMap(expanded, nodeMap, new IdIssuer());
-  const defaultGraph = nodeMap['@default']!;
+  const defaultGraph = nodeMap['@default'];
   const named = Object.keys(nodeMap).filter((g) => g !== '@default');
   const graphNames = ordered ? Arr.sort(named, compareStrings) : named;
   for (const graphName of graphNames) {

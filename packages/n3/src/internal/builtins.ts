@@ -419,11 +419,7 @@ const listBuiltins = {
     if (!ready(s)) return undefined;
     if (s._tag !== 'Collection' || !s.items.every(Model.isCollection)) return [];
     // SAFETY: every item was checked with `Model.isCollection` above.
-    return ctx.unify(
-      o,
-      new Model.Collection(s.items.flatMap((l) => (l as Model.Collection).items)),
-      b,
-    );
+    return ctx.unify(o, new Model.Collection(s.items.flatMap((l) => l.items)), b);
   },
   iterate: (s, o, b, ctx) => {
     if (s._tag !== 'Collection') return ready(s) ? [] : undefined;
@@ -556,9 +552,7 @@ const logBuiltins = {
     const goals = goalsOf(where);
     if (scope === undefined || goals === undefined) return [];
     // SAFETY: substituting into a term gives a term.
-    const values = ctx
-      .query(scope, goals, b, true)
-      .map((sol) => Model.substitute(template, sol) as Model.N3Term);
+    const values = ctx.query(scope, goals, b, true).map((sol) => Model.substitute(template, sol));
     return ctx.unify(result, new Model.Collection(values), b);
   },
   forAllIn: (s, o, b, ctx) => {

@@ -360,7 +360,7 @@ export const termFromJson = (j: JsonTerm): Term.GroundTerm => {
       Term.triple(
         termFromJson(x.value.subject) as Term.Subject,
         termFromJson(x.value.predicate) as Term.Predicate,
-        termFromJson(x.value.object) as Term.Object,
+        termFromJson(x.value.object),
       ),
     ),
     Match.exhaustive,
@@ -534,7 +534,7 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
       return Term.triple(
         part('subject') as Term.Subject,
         part('predicate') as Term.Predicate,
-        part('object') as Term.Object,
+        part('object'),
       );
     }),
     Match.orElse((name) => {

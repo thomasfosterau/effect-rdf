@@ -230,7 +230,7 @@ const step = (
           // SAFETY: path values are nodes, which can be objects.
           for (const q of Dataset.match(data, {
             predicate: path.predicate,
-            object: node as Term.Object,
+            object: node,
           })) {
             out.set(q.subject.key, q.subject);
           }

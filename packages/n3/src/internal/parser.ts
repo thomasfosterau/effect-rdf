@@ -92,7 +92,7 @@ export const isPnPrefix = (s: string): boolean => {
 /** Whether a string is a valid quick variable name (without `?`). @internal */
 export const isVarName = (s: string): boolean => {
   const cps = Array.from(s, (ch) => ch.codePointAt(0)!);
-  return Arr.isReadonlyArrayNonEmpty(cps) && isPnCharsU(cps[0]!) && cps.slice(1).every(isPnChars);
+  return Arr.isReadonlyArrayNonEmpty(cps) && isPnCharsU(cps[0]) && cps.slice(1).every(isPnChars);
 };
 
 // -----------------------------------------------------------------------------
@@ -246,7 +246,7 @@ const FALSE = Term.literal('false', xsd.boolean);
  */
 const numberStart: P<void> = Parser.make<void>((state) => {
   // SAFETY: the N3 parser runs on string input, never bytes.
-  const input = state.input as string;
+  const input = state.input;
   const isDigit = (k: number) => {
     const c = input.charCodeAt(k);
     return c >= 0x30 && c <= 0x39;

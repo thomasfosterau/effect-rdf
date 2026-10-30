@@ -179,7 +179,7 @@ const HEX = /^[0-9A-Fa-f]+$/;
  */
 const string: Parser.Parser<Partial> = Parser.make<Partial>((state) => {
   // SAFETY: the lexer runs on string input (`Parser.run` over a `string`), never bytes.
-  const input = state.input as string;
+  const input = state.input;
   const start = state.pos;
   const quote = input[start]!;
   const long = input.startsWith(quote.repeat(3), start);

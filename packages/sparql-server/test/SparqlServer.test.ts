@@ -503,7 +503,7 @@ describe('Graph Store Protocol', () => {
           (yield* put(client, '?default', 'x', 'text/turtle; charset=ISO-8859-1')).status,
         ).toBe(415);
         expect((yield* get(client, `${gsp}?default&graph=x`)).status).toBe(400);
-        expect((yield* get(client, `${gsp}`)).status).toBe(400);
+        expect((yield* get(client, gsp)).status).toBe(400);
         expect((yield* get(client, `${gsp}?default`, { accept: 'image/png' })).status).toBe(406);
         const patch = yield* client.execute(HttpClientRequest.patch(`${BASE}${gsp}?default`));
         expect(patch.status).toBe(405);

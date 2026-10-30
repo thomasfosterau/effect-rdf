@@ -30,11 +30,7 @@ export const empty: PrefixMap = { prefixes: new Map() };
 export const make = (
   prefixes: Readonly<Record<string, string>> | Iterable<readonly [string, string]>,
 ): PrefixMap => ({
-  prefixes: new Map(
-    Symbol.iterator in prefixes
-      ? (prefixes as Iterable<readonly [string, string]>)
-      : Object.entries(prefixes),
-  ),
+  prefixes: new Map(Symbol.iterator in prefixes ? prefixes : Object.entries(prefixes)),
 });
 
 /**

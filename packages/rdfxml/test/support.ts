@@ -95,7 +95,7 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
         // SAFETY: the regex only captures `ltr` or `rtl`.
         return m[2] !== undefined
           ? Term.literal(value, { language: m[1]!, direction: m[2] as Term.Direction })
-          : Term.literal(value, m[1]!);
+          : Term.literal(value, m[1]);
       }
       if (input.startsWith('^^', pos)) {
         pos += 2;
@@ -285,7 +285,7 @@ export const readManifest = (file: string): Array<TestCase> => {
     const types = preds.get(RDF_TYPE) ?? [];
     if (!types.some((t) => t.kind === 'iri' && t.value === `${MF}Manifest`)) continue;
     // SAFETY: `mf:assumedTestBase` is an IRI string.
-    const assumed = preds.get(`${MF}assumedTestBase`)?.[0]?.value as string | undefined;
+    const assumed = preds.get(`${MF}assumedTestBase`)?.[0]?.value;
     for (const inc of preds.get(`${MF}include`) ?? []) {
       if (inc.kind !== 'list') continue;
       for (const item of inc.items) {

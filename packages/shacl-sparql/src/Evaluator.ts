@@ -147,10 +147,7 @@ export const make = (
   }
   const contexts = new WeakMap<Dataset.Dataset, WeakMap<Dataset.Dataset, Context>>();
 
-  const contextFor = (
-    data: Dataset.Dataset,
-    shapes: Dataset.Dataset,
-  ): Effect.Effect<Context, never> =>
+  const contextFor = (data: Dataset.Dataset, shapes: Dataset.Dataset): Effect.Effect<Context> =>
     Effect.suspend(() => {
       let byShapes = contexts.get(data);
       if (byShapes === undefined) contexts.set(data, (byShapes = new WeakMap()));

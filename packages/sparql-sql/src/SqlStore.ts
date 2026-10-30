@@ -141,18 +141,11 @@ const num = (v: unknown): number => (Predicate.isNumber(v) ? v : Number(v));
 // SAFETY: strings and nullish values returned above; what the driver hands back otherwise is a
 // number.
 const str = (v: unknown): string =>
-  Predicate.isString(v) ? v : v === null || v === undefined ? '' : String(v as number);
+  Predicate.isString(v) ? v : v === null || v === undefined ? '' : String(v);
 
 // SAFETY: a stored triple term is ground, so its subject and object are ground terms.
 const depth = (t: Term.GroundTerm): number =>
-  t._tag === 'Triple'
-    ? 1 +
-      Math.max(
-        depth(t.subject as Term.GroundTerm),
-        depth(t.predicate),
-        depth(t.object as Term.GroundTerm),
-      )
-    : 0;
+  t._tag === 'Triple' ? 1 + Math.max(depth(t.subject), depth(t.predicate), depth(t.object)) : 0;
 
 const CACHE_LIMIT = 200_000;
 
@@ -217,7 +210,7 @@ const termOf = (state: DecodeState, id: number): Term.GroundTerm => {
   const t = Term.triple(
     termOf(state, comps[0]) as Term.Subject,
     termOf(state, comps[1]) as Term.Predicate,
-    termOf(state, comps[2]) as Term.Object,
+    termOf(state, comps[2]),
   );
   state.known.set(id, t);
   return t;
@@ -408,10 +401,10 @@ export const make = (
           levels[d]!.set(t.key, t);
           if (t._tag === 'Triple') {
             // SAFETY: a ground triple term's subject is a ground term.
-            add(t.subject as Term.GroundTerm);
+            add(t.subject);
             add(t.predicate);
             // SAFETY: a ground triple term's object is a ground term.
-            add(t.object as Term.GroundTerm);
+            add(t.object);
           }
         };
         for (const t of terms) add(t);
@@ -535,7 +528,7 @@ export const make = (
           if (t !== undefined && t._tag !== 'DefaultGraph') {
             // SAFETY: the pattern positions hold ground terms or `undefined`, and the default
             // graph was excluded.
-            terms.push(t as Term.GroundTerm);
+            terms.push(t);
           }
         }
         const ids = yield* resolveTerms(terms, false);
@@ -596,7 +589,7 @@ export const make = (
           return new Term.Quad(
             termOf(state, num(r[0])) as Term.Subject,
             termOf(state, num(r[1])) as Term.Predicate,
-            termOf(state, num(r[2])) as Term.Object,
+            termOf(state, num(r[2])),
             g === 0 ? Term.defaultGraph : (termOf(state, g) as Term.NamedNode | Term.BlankNode),
           );
         });
@@ -807,7 +800,7 @@ export const make = (
       sql.withTransaction(effect).pipe(
         Effect.mapError((e) =>
           // SAFETY: `withTransaction` adds only `SqlError` to `E`, and that case was handled.
-          SqlError.isSqlError(e) ? storeError('transaction failed')(e) : (e as E),
+          SqlError.isSqlError(e) ? storeError('transaction failed')(e) : e,
         ),
       );
 

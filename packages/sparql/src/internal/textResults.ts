@@ -126,7 +126,7 @@ const literal = Parser.seq(
     }
     // SAFETY: a non-array suffix is the `^^` datatype, which the `iri` parser produces as a named
     // node.
-    return Term.literal(lex, s as Term.NamedNode);
+    return Term.literal(lex, s);
   }),
 );
 
@@ -169,7 +169,7 @@ const tripleTerm: Parser.Parser<Term.Triple> = Parser.preceded(
 ).pipe(
   // SAFETY: the three parts come from `term`, and the triple term's grammar puts a subject, an
   // IRI predicate and an object there.
-  Parser.map(([s, p, o]) => Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object)),
+  Parser.map(([s, p, o]) => Term.triple(s as Term.Subject, p as Term.Predicate, o)),
 );
 
 const term: Parser.Parser<Term.GroundTerm> = Parser.preceded(

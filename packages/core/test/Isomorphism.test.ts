@@ -22,7 +22,7 @@ describe('Isomorphism', () => {
   it('rejects non-isomorphic graphs', () => {
     // a 6-cycle vs two 3-cycles: indistinguishable by naive refinement
     const cycle = (labels: ReadonlyArray<string>) =>
-      labels.map((l, i) => Term.quad(b(l), p, b(labels[(i + 1) % labels.length]!)));
+      labels.map((l, i) => Term.quad(b(l), p, b(labels[(i + 1) % labels.length])));
     const six = Dataset.fromIterable(cycle(['1', '2', '3', '4', '5', '6']));
     const threes = Dataset.fromIterable([...cycle(['a', 'b', 'c']), ...cycle(['d', 'e', 'f'])]);
     expect(Isomorphism.isomorphic(six, threes)).toBe(false);

@@ -183,7 +183,7 @@ export const resolveImports = Effect.fnUntraced(function* (
   const { imports: _, ...rest } = schema;
   // SAFETY: dropping the optional `imports` (and re-adding `shapes` only when non-empty) leaves a
   // valid `ShExJ.Schema`; the spread just loses the nominal type.
-  return (Arr.isReadonlyArrayNonEmpty(shapes) ? { ...rest, shapes } : rest) as ShExJ.Schema;
+  return Arr.isReadonlyArrayNonEmpty(shapes) ? { ...rest, shapes } : rest;
 });
 
 // -----------------------------------------------------------------------------
@@ -260,7 +260,7 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
 
   // SAFETY: `satisfies Validator` checks the literal; the assertion only widens it to the
   // interface.
-  return { schema: resolved, index, validate } satisfies Validator as Validator;
+  return { schema: resolved, index, validate } satisfies Validator;
 });
 
 /**
