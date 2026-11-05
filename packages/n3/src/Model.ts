@@ -30,7 +30,7 @@ import * as Arr from 'effect/Array';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
-import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import * as Order from 'effect/Order';
 import { hasProperty } from 'effect/Predicate';
@@ -38,6 +38,8 @@ import * as Schema from 'effect/Schema';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Guards from './internal/guards.ts';
+import { loop } from './internal/loop.ts';
 
 /**
  * @since 0.1.0
@@ -54,12 +56,15 @@ export type TypeId = typeof TypeId;
 abstract class N3Base implements Equal.Equal, Pipeable {
   readonly [TypeId]: TypeId = TypeId;
   abstract readonly _tag: string;
-  #key: string | undefined;
-  #hash: number | undefined;
+  /** The key once computed (no key is empty: the shortest are `()` and `{}`). */
+  #key = '';
+  /** The hash once computed (0 until then; a hash of 0 is merely computed again). */
+  #hash = 0;
 
   /** A canonical, N3-like serialisation used for equality and hashing. */
   get key(): string {
-    return (this.#key ??= this.computeKey());
+    if (this.#key === '') this.#key = this.computeKey();
+    return this.#key;
   }
 
   protected abstract computeKey(): string;
@@ -79,8 +84,7 @@ abstract class N3Base implements Equal.Equal, Pipeable {
   }
 
   equals(that: unknown): boolean {
-    // SAFETY: `hasProperty(that, TypeId)` holds, so it is an N3 term.
-    return hasProperty(that, TypeId) && (that as N3Base).key === this.key;
+    return isN3Base(that) && that.key === this.key;
   }
 
   [Equal.symbol](that: Equal.Equal): boolean {
@@ -88,7 +92,8 @@ abstract class N3Base implements Equal.Equal, Pipeable {
   }
 
   [Hash.symbol](): number {
-    return (this.#hash ??= this.computeHash());
+    if (this.#hash === 0) this.#hash = this.computeHash();
+    return this.#hash;
   }
 
   pipe() {
@@ -107,6 +112,9 @@ abstract class N3Base implements Equal.Equal, Pipeable {
     return `${this._tag}(${this.key})`;
   }
 }
+
+/** Whether a value is an N3 collection, statement or formula (it carries the `TypeId`). */
+const isN3Base = (u: unknown): u is N3Base => hasProperty(u, TypeId);
 
 /**
  * An N3 list (collection): an ordered, first-class sequence of terms,
@@ -202,6 +210,13 @@ const sameFormula = (a: Formula, b: Formula): boolean => {
   return as.every((s) => bs.some((t) => sameStatement(s, t)));
 };
 
+/** A placeholder for the probe's statement before the first is placed. */
+const emptyStatement: Statement = new Statement(
+  Term.namedNode(''),
+  Term.namedNode(''),
+  Term.namedNode(''),
+);
+
 /**
  * The statements without duplicates, keeping the first of each: by their
  * structural hashes, comparing keys only when two hashes are equal, so that
@@ -216,15 +231,28 @@ const deduplicate = (all: ReadonlyArray<Statement>): ReadonlyArray<Statement> =>
   const hashes = new Int32Array(mask + 1);
   const slots = new Int32Array(mask + 1);
   const unique: Array<Statement> = [];
-  all.forEach((s, k) => {
-    const hash = s[Hash.symbol]() | 0;
-    let i = hash & mask;
-    let slot = slots[i] ?? 0;
-    while (slot !== 0) {
-      if (hashes[i] === hash && sameStatement(s, all[slot - 1] ?? s)) return;
-      i = (i + 1) & mask;
-      slot = slots[i] ?? 0;
+  // The probe of the statement being placed: one closure for the whole table
+  let current: Statement = emptyStatement;
+  let hash = 0;
+  let i = 0;
+  let duplicate = false;
+  const probe = (): boolean => {
+    const slot = slots[i] ?? 0;
+    if (slot === 0) return false;
+    if (hashes[i] === hash && sameStatement(current, all[slot - 1] ?? current)) {
+      duplicate = true;
+      return false;
     }
+    i = (i + 1) & mask;
+    return true;
+  };
+  all.forEach((s, k) => {
+    current = s;
+    hash = s[Hash.symbol]() | 0;
+    i = hash & mask;
+    duplicate = false;
+    loop(probe);
+    if (duplicate) return;
     hashes[i] = hash;
     slots[i] = k + 1;
     unique.push(s);
@@ -413,45 +441,34 @@ export const isN3Term = (u: unknown): u is N3Term =>
  */
 export const isGround = (self: N3Term | Statement): boolean => groundness(self);
 
-// Built once: `isGround` runs for every term it visits.
-const groundness: (self: N3Term | Statement) => boolean = Match.type<N3Term | Statement>().pipe(
-  Match.withReturnType<boolean>(),
-  Match.tag('NamedNode', 'BlankNode', 'Literal', () => true),
-  Match.tag('Variable', () => false),
-  Match.tag('Collection', (self) => self.items.every(isGround)),
-  Match.tag('Formula', (self) => self.statements.every(isGround)),
-  Match.tag(
-    'Statement',
-    (self) => isGround(self.subject) && isGround(self.predicate) && isGround(self.object),
-  ),
-  Match.exhaustive,
-);
+// Plain refinements rather than `Match`: `isGround` runs for every term it visits.
+const groundness = (self: N3Term | Statement): boolean =>
+  self instanceof Statement
+    ? groundness(self.subject) && groundness(self.predicate) && groundness(self.object)
+    : self instanceof Formula
+      ? self.statements.every(groundness)
+      : self instanceof Collection
+        ? self.items.every(groundness)
+        : !Guards.isVariable(self);
 
-// Built once: `collect` runs for every term it visits.
-const collect: (
+/** Adds the atoms of `self` that pass `test` to `out`, by key, in order of first occurrence. */
+const collect = <A extends N3Term>(
   self: N3Term | Statement,
-  test: (t: N3Term) => boolean,
-  out: Map<string, N3Term>,
-) => void = Match.fn(
-  (self: N3Term | Statement, _test: (t: N3Term) => boolean, _out: Map<string, N3Term>) => self,
-).pipe(
-  Match.withReturnType<void>(),
-  Match.tag('NamedNode', 'BlankNode', 'Literal', 'Variable', (self, _self, test, out) => {
-    if (test(self)) out.set(self.key, self);
-  }),
-  Match.tag('Collection', (self, _self, test, out) => {
-    for (const i of self.items) collect(i, test, out);
-  }),
-  Match.tag('Formula', (self, _self, test, out) => {
-    for (const s of self.statements) collect(s, test, out);
-  }),
-  Match.tag('Statement', (self, _self, test, out) => {
+  test: (t: N3Term) => t is A,
+  out: MutableHashMap.MutableHashMap<string, A>,
+): void => {
+  if (self instanceof Statement) {
     collect(self.subject, test, out);
     collect(self.predicate, test, out);
     collect(self.object, test, out);
-  }),
-  Match.exhaustive,
-);
+  } else if (self instanceof Formula) {
+    self.statements.forEach((s) => collect(s, test, out));
+  } else if (self instanceof Collection) {
+    self.items.forEach((i) => collect(i, test, out));
+  } else if (test(self)) {
+    MutableHashMap.set(out, self.key, self);
+  }
+};
 
 /**
  * All distinct variables occurring in a term, statement or formula
@@ -462,10 +479,9 @@ const collect: (
  * @category getters
  */
 export const variables = (self: N3Term | Statement): ReadonlyArray<Term.Variable> => {
-  const out = new Map<string, N3Term>();
-  collect(self, Term.isVariable, out);
-  // SAFETY: `collect` was given `Term.isVariable`, so it only kept variables.
-  return Array.from(out.values()) as Array<Term.Variable>;
+  const out = MutableHashMap.empty<string, Term.Variable>();
+  collect(self, Guards.isVariable, out);
+  return Arr.fromIterable(MutableHashMap.values(out));
 };
 
 /**
@@ -476,10 +492,9 @@ export const variables = (self: N3Term | Statement): ReadonlyArray<Term.Variable
  * @category getters
  */
 export const blankNodes = (self: N3Term | Statement): ReadonlyArray<Term.BlankNode> => {
-  const out = new Map<string, N3Term>();
-  collect(self, Term.isBlankNode, out);
-  // SAFETY: `collect` was given `Term.isBlankNode`, so it only kept blank nodes.
-  return Array.from(out.values()) as Array<Term.BlankNode>;
+  const out = MutableHashMap.empty<string, Term.BlankNode>();
+  collect(self, Guards.isBlankNode, out);
+  return Arr.fromIterable(MutableHashMap.values(out));
 };
 
 // -----------------------------------------------------------------------------
@@ -501,42 +516,21 @@ export function mapTerms(
   self: N3Term | Statement,
   f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
 ): N3Term | Statement {
-  return mapAtoms(self, f);
+  return self instanceof Statement ? mapStatement(self, f) : mapTerm(self, f);
 }
 
-// Built once: `mapTerms` runs it for every term it visits.
-const mapAtoms: (
-  t: N3Term | Statement,
-  f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
-) => N3Term | Statement = Match.fn(
-  (
-    t: N3Term | Statement,
-    _f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
-  ) => t,
-).pipe(
-  Match.withReturnType<N3Term | Statement>(),
-  Match.tag(
-    'Collection',
-    // SAFETY: `mapAtoms` maps a term to a term.
-    (t, _t, f) => new Collection(t.items.map((i) => mapAtoms(i, f) as N3Term)),
-  ),
-  Match.tag(
-    'Formula',
-    // SAFETY: `mapAtoms` maps a statement to a statement.
-    (t, _t, f) => new Formula(t.statements.map((s) => mapAtoms(s, f) as Statement)),
-  ),
-  Match.tag(
-    'Statement',
-    // SAFETY: `mapAtoms` maps a term to a term.
-    (t, _t, f) =>
-      new Statement(
-        mapAtoms(t.subject, f) as N3Term,
-        mapAtoms(t.predicate, f) as N3Term,
-        mapAtoms(t.object, f) as N3Term,
-      ),
-  ),
-  Match.orElse((t, _t, f) => f(t)),
-);
+type Atom = Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable;
+
+// Plain refinements rather than `Match`: `mapTerms` runs for every term it visits.
+const mapTerm = (t: N3Term, f: (term: Atom) => N3Term): N3Term =>
+  t instanceof Formula
+    ? new Formula(t.statements.map((s) => mapStatement(s, f)))
+    : t instanceof Collection
+      ? new Collection(t.items.map((i) => mapTerm(i, f)))
+      : f(t);
+
+const mapStatement = (s: Statement, f: (term: Atom) => N3Term): Statement =>
+  new Statement(mapTerm(s.subject, f), mapTerm(s.predicate, f), mapTerm(s.object, f));
 
 /**
  * Replaces variables by the terms bound to them (by variable name); unbound
@@ -553,7 +547,7 @@ export function substitute(
   self: N3Term | Statement,
   bindings: ReadonlyMap<string, N3Term>,
 ): N3Term | Statement {
-  return mapTerms(self, (t) => (t._tag === 'Variable' ? (bindings.get(t.value) ?? t) : t));
+  return mapTerms(self, (t) => (Guards.isVariable(t) ? (bindings.get(t.value) ?? t) : t));
 }
 
 /**

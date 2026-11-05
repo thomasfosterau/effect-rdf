@@ -126,8 +126,8 @@ describe('N3.parse', () => {
 
   it('scopes blank node labels to the document', () => {
     const a = Arr.getUnsafe(statements('_:x :p { _:x :q :r } .'), 0);
-    // SAFETY: the test document's object is a formula.
-    expect(a.subject).toEqual((a.object as Model.Formula).statements[0]?.subject);
+    expect(Model.isFormula(a.object)).toBe(true);
+    expect(a.subject).toEqual(Model.isFormula(a.object) && a.object.statements[0]?.subject);
   });
 
   it('maps legacy @forAll / @forSome', () => {
@@ -158,7 +158,7 @@ describe('N3.parse', () => {
     expect(error._tag).toBe('RdfParseError');
     expect(error.line).toBe(2);
     expect(error.column).toBe(7);
-    for (const bad of [
+    [
       '@keywords a .',
       ':a :b :c',
       'nope:a :b :c .',
@@ -167,12 +167,12 @@ describe('N3.parse', () => {
       '<a b> <c> <d> .',
       ':a :b :c. .',
       '[ id _:b :p :o ] .',
-    ]) {
+    ].forEach((bad) => {
       expect({ bad, failed: Exit.isFailure(Effect.runSyncExit(N3.parse(bad))) }).toEqual({
         bad,
         failed: true,
       });
-    }
+    });
   });
 });
 
@@ -228,7 +228,7 @@ describe('Mapping', () => {
     Effect.gen(function* () {
       const doc = parse(':alice :believes { :bob :knows :carol } . :l :p ( :a ( :b ) ) .');
       const dataset = yield* Mapping.toDataset(doc);
-      const graphs = Dataset.graphs(dataset).filter((g) => g._tag === 'BlankNode');
+      const graphs = Dataset.graphs(dataset).filter(Term.isBlankNode);
       expect(graphs.length).toBe(1);
       expect(Dataset.count(dataset, { graph: Arr.getUnsafe(graphs, 0) })).toBe(1);
       const back = yield* Mapping.fromDataset(dataset);
@@ -346,11 +346,11 @@ describe('Reasoner', () => {
         { :a :tall true } => { { ?y :cm ?c } => { ?y :measured true } } .
       `);
       const { inferred } = yield* Reasoner.reason(doc);
-      const keys = inferred.statements.map((s) => s.key);
-      expect(keys).toContain(`<${EX}a> <${EX}m> "1.8"^^<${xsd.decimal.value}>`);
-      expect(keys).toContain(`<${EX}a> <${EX}greeting> "Hello, Ann"`);
-      expect(keys).toContain(`<${EX}big> <${EX}item> "3"^^<${xsd.integer.value}>`);
-      expect(keys).toContain(`<${EX}a> <${EX}measured> "true"^^<${xsd.boolean.value}>`);
+      const inferredKeys = inferred.statements.map((s) => s.key);
+      expect(inferredKeys).toContain(`<${EX}a> <${EX}m> "1.8"^^<${xsd.decimal.value}>`);
+      expect(inferredKeys).toContain(`<${EX}a> <${EX}greeting> "Hello, Ann"`);
+      expect(inferredKeys).toContain(`<${EX}big> <${EX}item> "3"^^<${xsd.integer.value}>`);
+      expect(inferredKeys).toContain(`<${EX}a> <${EX}measured> "true"^^<${xsd.boolean.value}>`);
     }),
   );
 

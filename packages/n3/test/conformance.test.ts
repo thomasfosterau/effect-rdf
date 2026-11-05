@@ -18,6 +18,9 @@ import { assert, describe, expect, it } from 'vite-plus/test';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import { Isomorphism, Mapping, Model, N3 } from '../src/index.ts';
@@ -37,9 +40,13 @@ interface Entry {
   readonly id: string;
   readonly type: string;
   readonly action: string;
-  readonly result: string | undefined;
+  readonly result: Option.Option<string>;
   readonly rejected: boolean;
 }
+
+/** The IRI of a manifest term (manifest types, actions and results are IRIs). */
+const iriOf = (t: Model.N3Term): string =>
+  Term.isNamedNode(t) ? t.value : assert.fail(`Expected an IRI in the manifest, found ${t.key}`);
 
 const localPath = (iri: string): string => path.join(root, iri.slice(BASE.length));
 
@@ -58,29 +65,25 @@ const readManifest = (relative: string): ReadonlyArray<Entry> => {
   const one = (s: Model.N3Term, p: string) => objects(s, p)[0];
   const manifest = new Term.NamedNode(iri);
   const entries = one(manifest, `${MF}entries`);
-  if (entries === undefined || entries._tag !== 'Collection') return [];
+  if (!Model.isCollection(entries)) return [];
   return entries.items.map((e) => {
-    // SAFETY: manifest types are IRIs.
-    const types = objects(e, `${RDF}type`).map((t) => (t as Term.NamedNode).value);
+    const types = objects(e, `${RDF}type`).map(iriOf);
     const type =
       types.map((t) => t.replace(TEST, '').replace(RDFT, '')).find((t) => t.startsWith('Test')) ??
       '';
-    const result = one(e, `${MF}result`);
-    // SAFETY: test actions and results are IRIs in the N3 manifests.
+    const action = one(e, `${MF}action`);
     return {
-      id: e._tag === 'NamedNode' ? e.value.slice(e.value.lastIndexOf('#') + 1) : e.key,
+      id: Term.isNamedNode(e) ? e.value.slice(e.value.lastIndexOf('#') + 1) : e.key,
       type,
-      action: (one(e, `${MF}action`) as Term.NamedNode).value,
-      result: result === undefined ? undefined : (result as Term.NamedNode).value,
+      action: action === undefined ? assert.fail(`No action for ${e.key}`) : iriOf(action),
+      result: Option.map(Option.fromUndefinedOr(one(e, `${MF}result`)), iriOf),
       rejected: objects(e, `${RDFT}approval`).some((a) => a.key === `<${RDFT}Rejected>`),
     };
   });
 };
 
 /** Test id → why the test is treated specially. */
-interface Reasons {
-  readonly [id: string]: string;
-}
+type Reasons = Record.ReadonlyRecord<string, string>;
 
 /** Turtle negative syntax tests whose input is valid N3. */
 const validInN3: Reasons = {
@@ -182,8 +185,8 @@ const run = (entry: Entry): void => {
     assert.fail(String(exit.cause));
   }
   roundTrip(entry, exit.value);
-  if (entry.result !== undefined && entry.type.includes('Eval')) {
-    const expected = parseFile(entry.result);
+  if (Option.isSome(entry.result) && entry.type.includes('Eval')) {
+    const expected = parseFile(entry.result.value);
     if (!Exit.isSuccess(expected))
       assert.fail(`Cannot parse expected result: ${String(expected.cause)}`);
     const ok = Isomorphism.isomorphic(exit.value.formula, expected.value.formula);
@@ -206,7 +209,7 @@ const loaded = exists
   : [];
 
 describe.skipIf(!exists)('N3 test suite', () => {
-  for (const { manifest, entries } of loaded) {
+  loaded.forEach(({ manifest, entries }) => {
     const active = entries.filter((e) => skip[e.id] === undefined);
     describe(manifest, () => {
       it.each(active.filter((e) => !e.rejected))('$type $id', (entry) => {
@@ -222,11 +225,13 @@ describe.skipIf(!exists)('N3 test suite', () => {
         });
       },
     );
-  }
+  });
 
   it('documents every skipped test', () => {
-    const ids = new Set(loaded.flatMap(({ entries }) => entries.map((e) => e.id)));
-    for (const id of Object.keys(skip)) expect(ids.has(id)).toBe(true);
-    for (const id of Object.keys(validInN3)) expect(ids.has(id)).toBe(true);
+    const ids = MutableHashSet.fromIterable(
+      loaded.flatMap(({ entries }) => entries.map((e) => e.id)),
+    );
+    Record.keys(skip).forEach((id) => expect(MutableHashSet.has(ids, id)).toBe(true));
+    Record.keys(validInN3).forEach((id) => expect(MutableHashSet.has(ids, id)).toBe(true));
   });
 });

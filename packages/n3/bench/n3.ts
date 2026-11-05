@@ -42,15 +42,14 @@ const big = Array.from({ length: 3000 }, (_, i) => block(i)).join('');
 const bench = (name: string, inputs: ReadonlyArray<{ text: string; baseIri: string }>) => {
   const size = inputs.reduce((n, d) => n + d.text.length, 0);
   const run = () => {
-    for (const d of inputs) Effect.runSync(Effect.result(N3.parse(d.text, { baseIri: d.baseIri })));
+    inputs.forEach((d) => Effect.runSync(Effect.result(N3.parse(d.text, { baseIri: d.baseIri }))));
   };
-  for (let i = 0; i < 3; i++) run();
-  const samples: Array<number> = [];
-  for (let i = 0; i < 9; i++) {
+  Arr.makeBy(3, run);
+  const samples = Arr.makeBy(9, () => {
     const t = performance.now();
     run();
-    samples.push(performance.now() - t);
-  }
+    return performance.now() - t;
+  });
   const sorted = Arr.sort(samples, Order.Number);
   const median = sorted[Math.floor(samples.length / 2)] ?? 0;
   // oxlint-disable-next-line no-console -- benchmark output

@@ -27,11 +27,16 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Schema from 'effect/Schema';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Builtins from './internal/builtins.ts';
+import * as Guards from './internal/guards.ts';
+import { loop } from './internal/loop.ts';
 import * as Isomorphism from './Isomorphism.ts';
 import * as Model from './Model.ts';
 import { log } from './Vocab.ts';
@@ -90,41 +95,50 @@ export interface Result {
 const TRUE_KEY = Term.literal('true', xsd.boolean).key;
 const FALSE_KEY = Term.literal('false', xsd.boolean).key;
 
-const goalsOf = (t: Model.N3Term): ReadonlyArray<Model.Statement> | undefined =>
-  Model.isFormula(t) ? t.statements : t.key === TRUE_KEY ? [] : undefined;
+const noGoals: ReadonlyArray<Model.Statement> = [];
+
+const goalsOf = (t: Model.N3Term): Option.Option<ReadonlyArray<Model.Statement>> =>
+  Model.isFormula(t)
+    ? Option.some(t.statements)
+    : t.key === TRUE_KEY
+      ? Option.some(noGoals)
+      : Option.none();
 
 /** Premise blank nodes become rule-local variables. */
 const BLANK_VAR = '\u0000b:';
 
 /** Blank nodes at the top level of statements (not inside nested formulas). */
-const topBlanks = (statements: ReadonlyArray<Model.Statement>): Set<string> => {
-  const out = new Set<string>();
+const topBlanks = (
+  statements: ReadonlyArray<Model.Statement>,
+): MutableHashSet.MutableHashSet<string> => {
+  const out = MutableHashSet.empty<string>();
   const go = (t: Model.N3Term) => {
-    if (t._tag === 'BlankNode') out.add(t.value);
-    else if (t._tag === 'Collection') t.items.forEach(go);
+    if (Guards.isBlankNode(t)) MutableHashSet.add(out, t.value);
+    else if (Model.isCollection(t)) t.items.forEach(go);
   };
-  for (const s of statements) {
+  statements.forEach((s) => {
     go(s.subject);
     go(s.predicate);
     go(s.object);
-  }
+  });
   return out;
 };
 
 /** Replaces the given blank nodes (outside nested formulas) by variables. */
-const blanksToVariables = <T extends Model.N3Term>(t: T, blanks: ReadonlySet<string>): T => {
-  const go = (x: Model.N3Term): Model.N3Term =>
-    x._tag === 'BlankNode' && blanks.has(x.value)
-      ? new Term.Variable(BLANK_VAR + x.value)
-      : x._tag === 'Collection'
-        ? new Model.Collection(x.items.map(go))
-        : x;
-  // SAFETY: `go` keeps the kind of a term (blank nodes become variables only where `T` allows any
-  // N3 term).
-  return go(t) as T;
-};
+const blanksToVariables = (
+  t: Model.N3Term,
+  blanks: MutableHashSet.MutableHashSet<string>,
+): Model.N3Term =>
+  Guards.isBlankNode(t) && MutableHashSet.has(blanks, t.value)
+    ? new Term.Variable(BLANK_VAR + t.value)
+    : Model.isCollection(t)
+      ? new Model.Collection(t.items.map((x) => blanksToVariables(x, blanks)))
+      : t;
 
-const statementBlanksToVariables = (s: Model.Statement, blanks: ReadonlySet<string>) =>
+const statementBlanksToVariables = (
+  s: Model.Statement,
+  blanks: MutableHashSet.MutableHashSet<string>,
+) =>
   new Model.Statement(
     blanksToVariables(s.subject, blanks),
     blanksToVariables(s.predicate, blanks),
@@ -138,29 +152,30 @@ const statementBlanksToVariables = (s: Model.Statement, blanks: ReadonlySet<stri
  * @since 0.1.0
  * @category rules
  */
-export const rules = (formula: Model.Formula): ReadonlyArray<Rule> => {
-  const out: Array<Rule> = [];
-  for (const s of formula.statements) {
-    if (s.predicate._tag !== 'NamedNode') continue;
-    const forward = s.predicate.value === log.implies.value;
-    const backward = s.predicate.value === log.isImpliedBy.value;
-    if (!forward && !backward) continue;
-    const premiseTerm = forward ? s.subject : s.object;
-    const conclusion = forward ? s.object : s.subject;
-    const premise = goalsOf(premiseTerm);
-    if (premise === undefined) continue;
-    // Blank nodes of the premise are query variables, also in the conclusion.
-    const blanks = topBlanks(premise);
-    out.push({
-      premise: premise.map((p) => statementBlanksToVariables(p, blanks)),
-      conclusion: Model.isFormula(conclusion)
-        ? new Model.Formula(conclusion.statements.map((c) => statementBlanksToVariables(c, blanks)))
-        : conclusion,
-      source: s,
-    });
-  }
-  return out;
-};
+export const rules = (formula: Model.Formula): ReadonlyArray<Rule> =>
+  Arr.getSomes(
+    formula.statements.map((s): Option.Option<Rule> => {
+      if (!Guards.isNamedNode(s.predicate)) return Option.none();
+      const forward = s.predicate.value === log.implies.value;
+      const backward = s.predicate.value === log.isImpliedBy.value;
+      if (!forward && !backward) return Option.none();
+      const premiseTerm = forward ? s.subject : s.object;
+      const conclusion = forward ? s.object : s.subject;
+      return Option.map(goalsOf(premiseTerm), (premise): Rule => {
+        // Blank nodes of the premise are query variables, also in the conclusion.
+        const blanks = topBlanks(premise);
+        return {
+          premise: premise.map((p) => statementBlanksToVariables(p, blanks)),
+          conclusion: Model.isFormula(conclusion)
+            ? new Model.Formula(
+                conclusion.statements.map((c) => statementBlanksToVariables(c, blanks)),
+              )
+            : conclusion,
+          source: s,
+        };
+      });
+    }),
+  );
 
 // -----------------------------------------------------------------------------
 // Matching
@@ -168,56 +183,73 @@ export const rules = (formula: Model.Formula): ReadonlyArray<Rule> => {
 
 type Bindings = Builtins.Bindings;
 
+/** The bindings that bind nothing. */
+const noBindings: Bindings = MutableHashMap.empty<string, Model.N3Term>().backing;
+
+/** `b` with `name` bound to `value` (a copy: bindings are shared between solutions). */
+const extend = (b: Bindings, name: string, value: Model.N3Term): Bindings => {
+  const next = MutableHashMap.fromIterable(b);
+  MutableHashMap.set(next, name, value);
+  return next.backing;
+};
+
+const noStatements: ReadonlyArray<Model.Statement> = [];
+
 class Store {
   readonly all: Array<Model.Statement> = [];
-  readonly keys = new Set<string>();
-  readonly byPredicate = new Map<string, Array<Model.Statement>>();
+  readonly keys = MutableHashSet.empty<string>();
+  readonly byPredicate = MutableHashMap.empty<string, Array<Model.Statement>>();
   constructor(statements: Iterable<Model.Statement> = []) {
-    for (const s of statements) this.add(s);
+    Arr.fromIterable(statements).forEach((s) => this.add(s));
+  }
+  has(s: Model.Statement): boolean {
+    return MutableHashSet.has(this.keys, s.key);
   }
   add(s: Model.Statement): boolean {
-    if (this.keys.has(s.key)) return false;
-    this.keys.add(s.key);
+    if (this.has(s)) return false;
+    MutableHashSet.add(this.keys, s.key);
     this.all.push(s);
     const k = s.predicate.key;
-    let l = this.byPredicate.get(k);
-    if (l === undefined) this.byPredicate.set(k, (l = []));
-    l.push(s);
+    const l = this.byPredicate.backing.get(k);
+    if (l === undefined) MutableHashMap.set(this.byPredicate, k, [s]);
+    else l.push(s);
     return true;
+  }
+  /** The statements with the predicate `key`. */
+  withPredicate(key: string): ReadonlyArray<Model.Statement> {
+    return this.byPredicate.backing.get(key) ?? noStatements;
   }
 }
 
+/** The term a variable is bound to, through chains of variables (it recurses once per link). */
 const walk = (t: Model.N3Term, b: Bindings): Model.N3Term => {
-  let cur = t;
-  while (cur._tag === 'Variable') {
-    const next = b.get(cur.value);
-    if (next === undefined) return cur;
-    cur = next;
-  }
-  return cur;
+  if (!Guards.isVariable(t)) return t;
+  const next = b.get(t.value);
+  return next === undefined ? t : walk(next, b);
 };
 
-// SAFETY: substituting into a term gives a term.
 const resolve = (t: Model.N3Term, b: Bindings): Model.N3Term =>
   b.size === 0 ? t : Model.substitute(t, b);
 
 const unify = (pattern: Model.N3Term, term: Model.N3Term, b: Bindings): Array<Bindings> => {
   const p = walk(pattern, b);
-  if (p._tag === 'Variable') {
-    if (term._tag === 'Variable' && term.value === p.value) return [b];
-    return [new Map(b).set(p.value, term)];
+  if (Guards.isVariable(p)) {
+    if (Guards.isVariable(term) && term.value === p.value) return [b];
+    return [extend(b, p.value, term)];
   }
-  const t = term._tag === 'Variable' ? walk(term, b) : term;
-  if (p._tag === 'Collection') {
-    if (t._tag !== 'Collection' || t.items.length !== p.items.length) return [];
-    let results: Array<Bindings> = [b];
-    p.items.forEach((item, i) => {
-      results = results.flatMap((r) => unify(item, t.items[i]!, r));
-    });
-    return results;
+  const t = Guards.isVariable(term) ? walk(term, b) : term;
+  if (p instanceof Model.Collection) {
+    if (!(t instanceof Model.Collection) || t.items.length !== p.items.length) return [];
+    return p.items.reduce<Array<Bindings>>(
+      (results, item, i) => {
+        const other = t.items[i];
+        return other === undefined ? [] : results.flatMap((r) => unify(item, other, r));
+      },
+      [b],
+    );
   }
-  if (p._tag === 'Formula') {
-    if (t._tag !== 'Formula' || t.statements.length !== p.statements.length) return [];
+  if (p instanceof Model.Formula) {
+    if (!(t instanceof Model.Formula) || t.statements.length !== p.statements.length) return [];
     if (Model.isGround(p)) return p.key === t.key || Isomorphism.isomorphic(p, t) ? [b] : [];
     return matchFormula(p.statements, t.statements, b);
   }
@@ -231,18 +263,18 @@ const matchFormula = (
   b: Bindings,
 ): Array<Bindings> => {
   const out: Array<Bindings> = [];
-  const used = new Set<number>();
+  const used = new Uint8Array(target.length);
   const go = (i: number, cur: Bindings) => {
-    if (i === patterns.length) {
+    const p = patterns[i];
+    if (p === undefined) {
       out.push(cur);
       return;
     }
-    const p = patterns[i]!;
     target.forEach((s, j) => {
-      if (used.has(j)) return;
-      used.add(j);
-      for (const r of unifyStatement(p, s, cur)) go(i + 1, r);
-      used.delete(j);
+      if (used[j] === 1) return;
+      used[j] = 1;
+      unifyStatement(p, s, cur).forEach((r) => go(i + 1, r));
+      used[j] = 0;
     });
   };
   go(0, b);
@@ -282,34 +314,40 @@ const solve = (
     conclusion: engine.conclusion,
   };
   const go = (remaining: ReadonlyArray<Model.Statement>, cur: Bindings, deferred: number) => {
-    if (Arr.isReadonlyArrayEmpty(remaining)) {
+    if (!Arr.isReadonlyArrayNonEmpty(remaining)) {
       out.push(cur);
       return;
     }
-    // SAFETY: `remaining` was checked to be non-empty above.
-    const [goal, ...rest] = remaining as [Model.Statement, ...Array<Model.Statement>];
-    const builtin = engine.builtins ? Builtins.builtinFor(walk(goal.predicate, cur)) : undefined;
-    if (builtin !== undefined) {
-      const results = builtin(resolve(goal.subject, cur), resolve(goal.object, cur), cur, ctx);
-      if (results === undefined) {
+    const [goal, ...rest] = remaining;
+    const builtin = engine.builtins
+      ? Builtins.builtinFor(walk(goal.predicate, cur))
+      : Option.none<Builtins.Builtin>();
+    if (Option.isSome(builtin)) {
+      const results = builtin.value(
+        resolve(goal.subject, cur),
+        resolve(goal.object, cur),
+        cur,
+        ctx,
+      );
+      if (Option.isNone(results)) {
         // Not ready: try the other goals first (once around the remaining goals).
         if (deferred < remaining.length) go([...rest, goal], cur, deferred + 1);
         return;
       }
-      for (const r of results) go(rest, r, 0);
+      results.value.forEach((r) => go(rest, r, 0));
       return;
     }
     const predicate = walk(goal.predicate, cur);
     const subject = walk(goal.subject, cur);
     const listPredicate = predicate.key === rdf.first.key || predicate.key === rdf.rest.key;
-    if (listPredicate && subject._tag === 'Variable' && deferred < remaining.length) {
+    if (listPredicate && Guards.isVariable(subject) && deferred < remaining.length) {
       // The subject may become bound to a collection by a later goal.
       go([...rest, goal], cur, deferred + 1);
       return;
     }
     if (
       listPredicate &&
-      subject._tag === 'Collection' &&
+      subject instanceof Model.Collection &&
       Arr.isReadonlyArrayNonEmpty(subject.items)
     ) {
       // Collections are lists: answer rdf:first / rdf:rest structurally.
@@ -319,14 +357,15 @@ const solve = (
           : subject.items.length === 1
             ? rdf.nil
             : new Model.Collection(subject.items.slice(1));
-      for (const r of unify(goal.object, value, cur)) go(rest, r, 0);
+      unify(goal.object, value, cur).forEach((r) => go(rest, r, 0));
       return;
     }
-    const candidates =
-      predicate._tag === 'Variable' ? store.all : (store.byPredicate.get(predicate.key) ?? []);
-    for (const s of candidates) {
-      for (const r of unifyStatement(goal, s, cur)) go(rest, r, 0);
-    }
+    const candidates = Guards.isVariable(predicate)
+      ? store.all
+      : store.withPredicate(predicate.key);
+    candidates.forEach((s) => {
+      unifyStatement(goal, s, cur).forEach((r) => go(rest, r, 0));
+    });
   };
   go(goals, b, 0);
   return out;
@@ -339,11 +378,13 @@ const solve = (
 const hash = (s: string): string => {
   let h1 = 0x811c9dc5;
   let h2 = 0x01000193;
-  for (let i = 0; i < s.length; i++) {
+  loop((i) => {
+    if (i >= s.length) return false;
     const c = s.charCodeAt(i);
     h1 = Math.imul(h1 ^ c, 0x01000193);
     h2 = Math.imul(h2 ^ c, 0x5bd1e995);
-  }
+    return true;
+  });
   return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
 };
 
@@ -358,33 +399,34 @@ const instantiate = (rule: Rule, b: Bindings): ReadonlyArray<Model.Statement> =>
   const conclusion = walk(rule.conclusion, b);
   if (conclusion.key === FALSE_KEY) throw new Inconsistency(rule.source);
   // A conclusion bound through a variable is asserted as it is.
-  if (conclusion !== rule.conclusion) return goalsOf(resolve(conclusion, b)) ?? [];
+  if (conclusion !== rule.conclusion) {
+    return Option.getOrElse(goalsOf(resolve(conclusion, b)), () => noGoals);
+  }
   const goals = goalsOf(conclusion);
-  if (goals === undefined) return [];
+  if (Option.isNone(goals)) return noGoals;
   // Fresh blank nodes depend only on the bindings used by the conclusion.
-  const used = new Set(Model.variables(conclusion).map((v) => v.value));
-  const entries = Array.from(b)
-    .filter(([k]) => used.has(k))
+  const used = MutableHashSet.fromIterable(Model.variables(conclusion).map((v) => v.value));
+  const entries = Arr.fromIterable(b)
+    .filter(([k]) => MutableHashSet.has(used, k))
     .map(([k, v]) => `${k}=${resolve(v, b).key}`);
   const signature = Arr.sort(entries, Order.String).join('|');
-  const fresh = new Map<string, Term.BlankNode>();
+  const fresh = MutableHashMap.empty<string, Term.BlankNode>();
   const skolem = (label: string): Term.BlankNode => {
-    let node = fresh.get(label);
-    if (node === undefined) {
-      node = new Term.BlankNode(`sk${hash(`${rule.source.key}|${signature}|${label}`)}`);
-      fresh.set(label, node);
-    }
+    const known = fresh.backing.get(label);
+    if (known !== undefined) return known;
+    const node = new Term.BlankNode(`sk${hash(`${rule.source.key}|${signature}|${label}`)}`);
+    MutableHashMap.set(fresh, label, node);
     return node;
   };
   // Blank nodes at the top level of the conclusion are instantiated per
   // firing (before the bindings are applied).
   const top = (t: Model.N3Term): Model.N3Term =>
-    t._tag === 'BlankNode'
+    Guards.isBlankNode(t)
       ? skolem(t.value)
-      : t._tag === 'Collection'
+      : Model.isCollection(t)
         ? new Model.Collection(t.items.map(top))
         : t;
-  return goals.map(
+  return goals.value.map(
     (s) =>
       new Model.Statement(
         resolve(top(s.subject), b),
@@ -407,43 +449,53 @@ const closureOf = (input: Model.Formula, options?: Options, depth = 0): Result =
   const maxStatements = options?.maxStatements ?? 1_000_000;
   const store = new Store(input.statements);
   const inferred: Array<Model.Statement> = [];
-  let snapshot: Model.Formula | undefined;
+  // The formula of the store as it stood at the start of the round, made on first use
+  let snapshot = Option.none<Model.Formula>();
   const engine: Engine = {
     builtins: options?.builtins ?? true,
-    document: () => (snapshot ??= new Model.Formula(store.all)),
+    document: () => {
+      if (Option.isSome(snapshot)) return snapshot.value;
+      const f = new Model.Formula(store.all);
+      snapshot = Option.some(f);
+      return f;
+    },
     conclusion: (f) => {
       if (depth > 8) throw new LimitExceeded('log:conclusion nested too deeply');
       return closureOf(f, options, depth + 1).closure;
     },
   };
-  for (let round = 1; round <= maxRounds; round++) {
-    snapshot = undefined;
+  let result = Option.none<Result>();
+  loop((i) => {
+    const round = i + 1;
+    if (round > maxRounds) return false;
+    snapshot = Option.none();
     const fresh: Array<Model.Statement> = [];
-    for (const rule of rules(new Model.Formula(store.all))) {
-      for (const b of solve(store, rule.premise, new Map(), engine)) {
-        for (const s of instantiate(rule, b)) {
-          if (!store.keys.has(s.key)) fresh.push(s);
-        }
-      }
-    }
+    rules(new Model.Formula(store.all)).forEach((rule) => {
+      solve(store, rule.premise, noBindings, engine).forEach((b) => {
+        instantiate(rule, b).forEach((s) => {
+          if (!store.has(s)) fresh.push(s);
+        });
+      });
+    });
     let added = 0;
-    for (const s of fresh) {
+    fresh.forEach((s) => {
       if (store.add(s)) {
         inferred.push(s);
         added++;
       }
-    }
+    });
     if (store.all.length > maxStatements) {
       throw new LimitExceeded(`Closure exceeds ${maxStatements} statements`);
     }
-    if (added === 0) {
-      return {
-        closure: new Model.Formula(store.all),
-        inferred: new Model.Formula(inferred),
-        rounds: round,
-      };
-    }
-  }
+    if (added > 0) return true;
+    result = Option.some({
+      closure: new Model.Formula(store.all),
+      inferred: new Model.Formula(inferred),
+      rounds: round,
+    });
+    return false;
+  });
+  if (Option.isSome(result)) return result.value;
   throw new LimitExceeded(`No fixpoint after ${maxRounds} rounds`);
 };
 
@@ -502,16 +554,15 @@ export const query = (
   const store = new Store(formula.statements);
   const blanks = topBlanks(pattern.statements);
   const goals = pattern.statements.map((s) => statementBlanksToVariables(s, blanks));
-  return solve(store, goals, new Map(), {
+  return solve(store, goals, noBindings, {
     builtins: true,
     document: () => formula,
     conclusion: (f) => closureOf(f).closure,
-  }).map(
-    (b) =>
-      new Map(
-        Array.from(b)
-          .filter(([k]) => !k.startsWith(BLANK_VAR))
-          .map(([k, v]) => [k, resolve(v, b)] as const),
-      ),
-  );
+  }).map((b) => {
+    const answer = MutableHashMap.empty<string, Model.N3Term>();
+    b.forEach((v, k) => {
+      if (!k.startsWith(BLANK_VAR)) MutableHashMap.set(answer, k, resolve(v, b));
+    });
+    return answer.backing;
+  });
 };
