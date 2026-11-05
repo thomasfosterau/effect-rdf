@@ -238,16 +238,16 @@ describe('SPARQL-based targets', () => {
   );
 });
 
-describe('Pre-binding restrictions', () => {
-  const failing = (select: string) =>
-    Effect.gen(function* () {
-      const graph = ttl(`
-        ex:Shape a sh:NodeShape ; sh:targetNode ex:a ;
-          sh:sparql [ sh:select """${select}""" ] .
-      `);
-      return (yield* Effect.flip(validate(graph))).message;
-    });
+const failing = (select: string) =>
+  Effect.gen(function* () {
+    const graph = ttl(`
+      ex:Shape a sh:NodeShape ; sh:targetNode ex:a ;
+        sh:sparql [ sh:select """${select}""" ] .
+    `);
+    return (yield* Effect.flip(validate(graph))).message;
+  });
 
+describe('Pre-binding restrictions', () => {
   it.effect('reject MINUS, VALUES, SERVICE, AS $this and incomplete sub-queries', () =>
     Effect.gen(function* () {
       expect(yield* failing('SELECT $this WHERE { $this ?p ?o MINUS { $this ?p 1 } }')).toMatch(

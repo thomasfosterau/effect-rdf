@@ -220,6 +220,44 @@ const termOf = (state: DecodeState, id: number): Term.GroundTerm => {
   return t;
 };
 
+/** The dictionary key of a `id, kind, value, datatype, lang, dir` result row. */
+const rowKeyOf = (r: ReadonlyArray<unknown>) =>
+  Enc.rowKey({
+    kind: num(r[1]),
+    value: str(r[2]),
+    datatype: str(r[3]),
+    lang: str(r[4]),
+    dir: str(r[5]),
+  });
+
+/**
+ * The dictionary rows of one depth level of terms; a triple term whose
+ * components have no id yet is left out.
+ */
+const encodeLevel = (
+  level: ReadonlyMap<string, Term.GroundTerm>,
+  ids: ReadonlyMap<string, number>,
+) => {
+  const rows: Array<{ readonly term: Term.GroundTerm; readonly row: Enc.TermRow }> = [];
+  for (const t of level.values()) {
+    if (t._tag === 'Triple') {
+      const s = ids.get(t.subject.key);
+      const p = ids.get(t.predicate.key);
+      const o = ids.get(t.object.key);
+      if (s === undefined || p === undefined || o === undefined) continue;
+      rows.push({ term: t, row: Enc.encode(t, [s, p, o]) });
+    } else rows.push({ term: t, row: Enc.encode(t) });
+  }
+  return rows;
+};
+
+const newState = (): DecodeState => ({ known: new Map(), triples: new Map() });
+
+const isResolved = (state: DecodeState, c: number) => state.known.has(c) || state.triples.has(c);
+
+const graphId = (g: Term.Graph, ids: ReadonlyMap<string, number>): number | undefined =>
+  g._tag === 'DefaultGraph' ? 0 : ids.get(g.key);
+
 /**
  * Creates a SQL store over the `SqlClient` service.
  *
@@ -257,16 +295,6 @@ export const make = (
       Effect.asVoid(sql.unsafe(text, params).raw);
 
     // --- term dictionary ------------------------------------------------------
-
-    /** The dictionary key of a `id, kind, value, datatype, lang, dir` result row. */
-    const rowKeyOf = (r: ReadonlyArray<unknown>) =>
-      Enc.rowKey({
-        kind: num(r[1]),
-        value: str(r[2]),
-        datatype: str(r[3]),
-        lang: str(r[4]),
-        dir: str(r[5]),
-      });
 
     const lookupRows = (rows: ReadonlyArray<Enc.TermRow>) => {
       const found = new Map<string, number>();
@@ -347,27 +375,6 @@ export const make = (
       });
 
     /**
-     * The dictionary rows of one depth level of terms; a triple term whose
-     * components have no id yet is left out.
-     */
-    const encodeLevel = (
-      level: ReadonlyMap<string, Term.GroundTerm>,
-      ids: ReadonlyMap<string, number>,
-    ) => {
-      const rows: Array<{ readonly term: Term.GroundTerm; readonly row: Enc.TermRow }> = [];
-      for (const t of level.values()) {
-        if (t._tag === 'Triple') {
-          const s = ids.get(t.subject.key);
-          const p = ids.get(t.predicate.key);
-          const o = ids.get(t.object.key);
-          if (s === undefined || p === undefined || o === undefined) continue;
-          rows.push({ term: t, row: Enc.encode(t, [s, p, o]) });
-        } else rows.push({ term: t, row: Enc.encode(t) });
-      }
-      return rows;
-    };
-
-    /**
      * The ids of dictionary rows by key. With `create`, rows are inserted first
      * (new rows come back with their ids) and the rest looked up.
      */
@@ -438,8 +445,6 @@ export const make = (
 
     // --- decoding -------------------------------------------------------------
 
-    const newState = (): DecodeState => ({ known: new Map(), triples: new Map() });
-
     /**
      * Records the term with id `id` whose `kind, value, datatype, lang, dir`
      * columns start at `row[at]` (`kind` is null for an id with no term row).
@@ -480,9 +485,6 @@ export const make = (
         },
       );
 
-    const isResolved = (state: DecodeState, c: number) =>
-      state.known.has(c) || state.triples.has(c);
-
     /** Fetches the components of the triple terms of a decode state, until none is missing. */
     const complete = (
       state: DecodeState,
@@ -521,9 +523,6 @@ export const make = (
       });
 
     // --- quads ------------------------------------------------------------------
-
-    const graphId = (g: Term.Graph, ids: ReadonlyMap<string, number>): number | undefined =>
-      g._tag === 'DefaultGraph' ? 0 : ids.get(g.key);
 
     const patternConditions = (pattern: Store.QuadPattern) =>
       Effect.gen(function* () {

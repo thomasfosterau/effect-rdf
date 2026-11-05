@@ -240,6 +240,9 @@ const attributes = (tag: string): ReadonlyMap<string, string> => {
   return out;
 };
 
+const parseScript = (content: string) =>
+  Result.mapError(parseJson(content), (e) => JsonLdError.make('invalid script element', String(e)));
+
 /**
  * Extracts embedded JSON-LD from an HTML document (`<script
  * type="application/ld+json">` elements), honouring a fragment identifier
@@ -271,10 +274,6 @@ export const extractHtml = (
       if (type !== 'application/ld+json') continue;
       scripts.push({ attrs, content: m[2] ?? '' });
     }
-    const parse = (content: string) =>
-      Result.mapError(parseJson(content), (e) =>
-        JsonLdError.make('invalid script element', String(e)),
-      );
     const remote = (document: Result.Result<unknown, JsonLdError.JsonLdError>) =>
       Effect.fromResult(
         Result.map(document, (d): RemoteDocument => ({ documentUrl, document: d })),
@@ -284,11 +283,11 @@ export const extractHtml = (
       if (script === undefined) {
         return Effect.fail(loadingFailed(url, `no script element with id ${fragment}`));
       }
-      return remote(parse(script.content));
+      return remote(parseScript(script.content));
     }
     if (options?.extractAllScripts === true) {
       return remote(
-        Result.map(Result.all(scripts.map((s) => parse(s.content))), (values) =>
+        Result.map(Result.all(scripts.map((s) => parseScript(s.content))), (values) =>
           values.flatMap((v) => (Array.isArray(v) ? v : [v])),
         ),
       );
@@ -296,7 +295,7 @@ export const extractHtml = (
     if (Arr.isReadonlyArrayEmpty(scripts)) {
       return Effect.fail(loadingFailed(url, 'no JSON-LD script element'));
     }
-    return remote(parse(scripts[0]!.content));
+    return remote(parseScript(scripts[0]!.content));
   });
 
 /**

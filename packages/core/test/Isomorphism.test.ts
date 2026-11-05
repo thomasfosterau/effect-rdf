@@ -4,6 +4,16 @@ import { Dataset, Isomorphism, Term } from '../src/index.ts';
 const p = Term.namedNode('http://example.org/p');
 const b = Term.blankNode;
 
+const cycle = (labels: ReadonlyArray<string>) =>
+  labels.map((l, i) => Term.quad(b(l), p, b(labels[(i + 1) % labels.length])));
+
+const largeGraph = (prefix: string) =>
+  Dataset.fromIterable(
+    Array.from({ length: 20_000 }, (_, i) =>
+      Term.quad(b(`${prefix}${i}`), p, Term.literal(String(i))),
+    ),
+  );
+
 describe('Isomorphism', () => {
   it('detects isomorphic graphs with renamed blank nodes', () => {
     const x = Dataset.make(
@@ -21,8 +31,6 @@ describe('Isomorphism', () => {
 
   it('rejects non-isomorphic graphs', () => {
     // a 6-cycle vs two 3-cycles: indistinguishable by naive refinement
-    const cycle = (labels: ReadonlyArray<string>) =>
-      labels.map((l, i) => Term.quad(b(l), p, b(labels[(i + 1) % labels.length])));
     const six = Dataset.fromIterable(cycle(['1', '2', '3', '4', '5', '6']));
     const threes = Dataset.fromIterable([...cycle(['a', 'b', 'c']), ...cycle(['d', 'e', 'f'])]);
     expect(Isomorphism.isomorphic(six, threes)).toBe(false);
@@ -48,12 +56,6 @@ describe('Isomorphism', () => {
 
 describe('Isomorphism (large graphs)', () => {
   it('handles many blank nodes without overflowing the stack', () => {
-    const graph = (prefix: string) =>
-      Dataset.fromIterable(
-        Array.from({ length: 20_000 }, (_, i) =>
-          Term.quad(b(`${prefix}${i}`), p, Term.literal(String(i))),
-        ),
-      );
-    expect(Isomorphism.isomorphic(graph('x'), graph('y'))).toBe(true);
+    expect(Isomorphism.isomorphic(largeGraph('x'), largeGraph('y'))).toBe(true);
   });
 });

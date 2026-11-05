@@ -446,10 +446,34 @@ export const parse = (dataset: Dataset.Dataset): Effect.Effect<ShapesGraph, Shap
     return Result.isSuccess(result) ? Effect.succeed(result.success) : Effect.fail(result.failure);
   });
 
+const failShapes = (message: string, node?: Term.Term): never => {
+  throw new ParseFailure(message, node);
+};
+
+const isTrueTerm = (t: Term.Term | undefined) => t !== undefined && t.key === TRUE;
+
+const shapeRef = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): ShapeId =>
+  isShapeId(t)
+    ? t
+    : failShapes(`the value of ${p.key} on ${owner.key} must be an IRI or blank node`, owner);
+
+const iriOf = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): Term.NamedNode =>
+  t._tag === 'NamedNode'
+    ? t
+    : failShapes(`the value of ${p.key} on ${owner.key} must be an IRI`, owner);
+
+const nonNegativeInteger = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): number => {
+  if (t._tag === 'Literal' && Xsd.isIntegerDatatype(t.datatype.value) && Xsd.isWellFormed(t)) {
+    const n = Number(t.value);
+    if (n >= 0) return n;
+  }
+  return failShapes(
+    `the value of ${p.key} on ${owner.key} must be a non-negative xsd:integer`,
+    owner,
+  );
+};
+
 const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
-  const fail = (message: string, node?: Term.Term): never => {
-    throw new ParseFailure(message, node);
-  };
   const objects = (s: Term.Term, p: Term.NamedNode): ReadonlyArray<Term.GroundTerm> =>
     isShapeId(s) ? Dataset.objectsOf(g, s, p) : [];
   const list = (
@@ -459,29 +483,16 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
   ): ReadonlyArray<Term.GroundTerm> => {
     const items = Term.isObject(head) ? Dataset.list(g, head) : Option.none();
     if (Option.isNone(items))
-      return fail(`the value of ${p.key} on ${owner.key} must be a well-formed RDF list`, owner);
+      return failShapes(
+        `the value of ${p.key} on ${owner.key} must be a well-formed RDF list`,
+        owner,
+      );
     return items.value;
   };
-  const isTrue = (t: Term.Term | undefined) => t !== undefined && t.key === TRUE;
   const single = (s: Term.Term, p: Term.NamedNode): Term.GroundTerm | undefined => {
     const vs = objects(s, p);
-    if (vs.length > 1) fail(`${s.key} has more than one value for ${p.key}`, s);
+    if (vs.length > 1) failShapes(`${s.key} has more than one value for ${p.key}`, s);
     return vs[0];
-  };
-  const shapeRef = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): ShapeId =>
-    isShapeId(t)
-      ? t
-      : fail(`the value of ${p.key} on ${owner.key} must be an IRI or blank node`, owner);
-  const iri = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): Term.NamedNode =>
-    t._tag === 'NamedNode'
-      ? t
-      : fail(`the value of ${p.key} on ${owner.key} must be an IRI`, owner);
-  const nonNegativeInteger = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): number => {
-    if (t._tag === 'Literal' && Xsd.isIntegerDatatype(t.datatype.value) && Xsd.isWellFormed(t)) {
-      const n = Number(t.value);
-      if (n >= 0) return n;
-    }
-    return fail(`the value of ${p.key} on ${owner.key} must be a non-negative xsd:integer`, owner);
   };
 
   // --- Custom constraint components -----------------------------------------
@@ -493,9 +504,9 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     for (const param of objects(c, sh.parameter)) {
       const path = single(param, sh.path);
       if (path === undefined || path._tag !== 'NamedNode')
-        fail(`parameter ${param.key} of ${c.key} must have an IRI sh:path`, param);
+        failShapes(`parameter ${param.key} of ${c.key} must have an IRI sh:path`, param);
       // SAFETY: a non-IRI path failed above.
-      (isTrue(single(param, sh.optional)) ? optional : mandatory).push(path as Term.NamedNode);
+      (isTrueTerm(single(param, sh.optional)) ? optional : mandatory).push(path as Term.NamedNode);
     }
     if (Arr.isReadonlyArrayNonEmpty(mandatory))
       components.push({ component: c, mandatory, optional });
@@ -504,7 +515,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
   // --- Collect shapes (§2.1) ------------------------------------------------
   const candidates = new Map<string, ShapeId>();
   const addCandidate = (t: Term.Term, reason: string) => {
-    if (!isShapeId(t)) fail(`${t.key} cannot be a shape (${reason})`, t);
+    if (!isShapeId(t)) failShapes(`${t.key} cannot be a shape (${reason})`, t);
     else if (!candidates.has(t.key)) candidates.set(t.key, t);
   };
   for (const cls of [sh.NodeShape, sh.PropertyShape]) {
@@ -537,7 +548,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     const targets: Array<Target> = [];
     for (const n of objects(id, sh.targetNode)) targets.push({ _tag: 'TargetNode', node: n });
     for (const c of objects(id, sh.targetClass)) {
-      if (!isShapeId(c)) fail(`the value of sh:targetClass on ${id.key} must be an IRI`, id);
+      if (!isShapeId(c)) failShapes(`the value of sh:targetClass on ${id.key} must be an IRI`, id);
       // SAFETY: `isShapeId` holds (checked above), so it is an IRI or blank node.
       targets.push({ _tag: 'TargetClass', class: c as Term.Resource, implicit: false });
     }
@@ -545,32 +556,33 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       targets.push({ _tag: 'TargetClass', class: id, implicit: true });
     }
     for (const p of objects(id, sh.targetSubjectsOf))
-      targets.push({ _tag: 'TargetSubjectsOf', predicate: iri(id, sh.targetSubjectsOf, p) });
+      targets.push({ _tag: 'TargetSubjectsOf', predicate: iriOf(id, sh.targetSubjectsOf, p) });
     for (const p of objects(id, sh.targetObjectsOf))
-      targets.push({ _tag: 'TargetObjectsOf', predicate: iri(id, sh.targetObjectsOf, p) });
+      targets.push({ _tag: 'TargetObjectsOf', predicate: iriOf(id, sh.targetObjectsOf, p) });
     for (const t of objects(id, sh.target)) targets.push({ _tag: 'SparqlTarget', node: t });
 
     // Shape characteristics
     const severityNode = single(id, sh.severity);
-    const severity = severityNode === undefined ? sh.Violation : iri(id, sh.severity, severityNode);
+    const severity =
+      severityNode === undefined ? sh.Violation : iriOf(id, sh.severity, severityNode);
     const messages = objects(id, sh.message).filter(Term.isLiteral);
-    const deactivated = isTrue(single(id, sh.deactivated));
+    const deactivated = isTrueTerm(single(id, sh.deactivated));
 
     // Constraints
     const constraints: Array<Constraint> = [];
     const push = (c: Constraint) => constraints.push(c);
 
     for (const c of objects(id, sh.class)) {
-      if (!isShapeId(c)) fail(`the value of sh:class on ${id.key} must be an IRI`, id);
+      if (!isShapeId(c)) failShapes(`the value of sh:class on ${id.key} must be an IRI`, id);
       // SAFETY: `isShapeId` holds (checked above), so it is an IRI or blank node.
       push({ _tag: 'Class', class: c as Term.Resource });
     }
     for (const d of objects(id, sh.datatype)) {
-      push({ _tag: 'Datatype', datatype: iri(id, sh.datatype, d) });
+      push({ _tag: 'Datatype', datatype: iriOf(id, sh.datatype, d) });
     }
     for (const k of objects(id, sh.nodeKind)) {
       const nodeKind = nodeKinds.get(k._tag === 'NamedNode' ? k.value : '');
-      if (nodeKind === undefined) fail(`${k.key} is not a valid sh:nodeKind`, id);
+      if (nodeKind === undefined) failShapes(`${k.key} is not a valid sh:nodeKind`, id);
       push({ _tag: 'NodeKind', nodeKind: nodeKind! });
     }
     for (const n of objects(id, sh.minCount))
@@ -584,7 +596,8 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       [sh.maxInclusive, 'MaxInclusive'],
     ] as const) {
       for (const v of objects(id, p)) {
-        if (v._tag !== 'Literal') fail(`the value of ${p.key} on ${id.key} must be a literal`, id);
+        if (v._tag !== 'Literal')
+          failShapes(`the value of ${p.key} on ${id.key} must be a literal`, id);
         push({ _tag: tag, value: v });
       }
     }
@@ -598,14 +611,14 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       let flags = '';
       if (flagsNode !== undefined) {
         if (flagsNode._tag !== 'Literal')
-          return fail(`the value of sh:flags on ${id.key} must be a literal`, id);
+          return failShapes(`the value of sh:flags on ${id.key} must be a literal`, id);
         flags = flagsNode.value;
       }
       for (const p of patterns) {
         if (p._tag !== 'Literal')
-          return fail(`the value of sh:pattern on ${id.key} must be a literal`, id);
+          return failShapes(`the value of sh:pattern on ${id.key} must be a literal`, id);
         const compiled = Regex.compile(p.value, flags);
-        if ('error' in compiled) fail(`${compiled.error} (sh:pattern on ${id.key})`, id);
+        if ('error' in compiled) failShapes(`${compiled.error} (sh:pattern on ${id.key})`, id);
         else push({ _tag: 'Pattern', pattern: p.value, flags, regex: compiled.regex });
       }
     }
@@ -613,18 +626,18 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       const languages = list(id, l, sh.languageIn).map((t) =>
         t._tag === 'Literal'
           ? t.value
-          : fail(`sh:languageIn members of ${id.key} must be literals`, id),
+          : failShapes(`sh:languageIn members of ${id.key} must be literals`, id),
       );
       push({ _tag: 'LanguageIn', languages });
     }
-    for (const u of objects(id, sh.uniqueLang)) if (isTrue(u)) push({ _tag: 'UniqueLang' });
+    for (const u of objects(id, sh.uniqueLang)) if (isTrueTerm(u)) push({ _tag: 'UniqueLang' });
     for (const [p, tag] of [
       [sh.equals, 'Equals'],
       [sh.disjoint, 'Disjoint'],
       [sh.lessThan, 'LessThan'],
       [sh.lessThanOrEquals, 'LessThanOrEquals'],
     ] as const) {
-      for (const v of objects(id, p)) push({ _tag: tag, predicate: iri(id, p, v) });
+      for (const v of objects(id, p)) push({ _tag: tag, predicate: iriOf(id, p, v) });
     }
     for (const s of objects(id, sh.not)) push({ _tag: 'Not', shape: shapeRef(id, sh.not, s) });
     for (const [p, tag] of [
@@ -645,7 +658,7 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     if (Arr.isReadonlyArrayNonEmpty(qualifiedShapes)) {
       const minNode = single(id, sh.qualifiedMinCount);
       const maxNode = single(id, sh.qualifiedMaxCount);
-      const disjoint = isTrue(single(id, sh.qualifiedValueShapesDisjoint));
+      const disjoint = isTrueTerm(single(id, sh.qualifiedValueShapesDisjoint));
       for (const qNode of qualifiedShapes) {
         const q = shapeRef(id, sh.qualifiedValueShape, qNode);
         const siblings = new Map<string, ShapeId>();
@@ -675,13 +688,13 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     }
 
     // Closed shapes
-    if (isTrue(single(id, sh.closed))) {
+    if (isTrueTerm(single(id, sh.closed))) {
       const ignoredNode = single(id, sh.ignoredProperties);
       const ignoredProperties =
         ignoredNode === undefined
           ? []
           : list(id, ignoredNode, sh.ignoredProperties).map((t) =>
-              iri(id, sh.ignoredProperties, t),
+              iriOf(id, sh.ignoredProperties, t),
             );
       const allowed = new Map<string, Term.NamedNode>();
       for (const p of objects(id, sh.property)) {
@@ -698,8 +711,8 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     // SHACL-SPARQL
     for (const s of objects(id, sh.sparql)) {
       if (!isShapeId(s))
-        fail(`the value of sh:sparql on ${id.key} must be an IRI or blank node`, id);
-      else if (!isTrue(single(s, sh.deactivated))) push({ _tag: 'Sparql', node: s });
+        failShapes(`the value of sh:sparql on ${id.key} must be an IRI or blank node`, id);
+      else if (!isTrueTerm(single(s, sh.deactivated))) push({ _tag: 'Sparql', node: s });
     }
     for (const decl of components) {
       const bindings = [...decl.mandatory, ...decl.optional].map(
@@ -723,8 +736,8 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     if (pathNode !== undefined) {
       const path = Path.fromRdf(g, pathNode);
       if (Result.isFailure(path))
-        fail(`ill-formed sh:path of ${id.key}: ${path.failure.message}`, id);
-      // SAFETY: a failure called `fail` above, which throws.
+        failShapes(`ill-formed sh:path of ${id.key}: ${path.failure.message}`, id);
+      // SAFETY: a failure called `failShapes` above, which throws.
       return {
         _tag: 'PropertyShape',
         id,

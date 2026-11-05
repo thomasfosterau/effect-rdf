@@ -88,7 +88,7 @@ export default defineConfig({
       // combinators, and helpers defined beside the one test or grammar rule
       // that uses them. A new site is a defect, not headroom.
       'eslint/no-shadow': 'warn', // 301
-      'unicorn/consistent-function-scoping': 'warn', // 63
+      'unicorn/consistent-function-scoping': 'warn', // 12
       // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
       // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
       // autofixable findings (unnecessary assertions, type arguments and

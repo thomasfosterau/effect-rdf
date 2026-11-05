@@ -18,6 +18,20 @@ const parseErr = (input: string): Xml.XmlParseError => {
 const elements = (el: Xml.Element): Array<Xml.Element> =>
   el.children.filter((c): c is Xml.Element => c._tag === 'Element');
 
+const laughs = (body: string) =>
+  `<!DOCTYPE a [<!ENTITY l0 "${body}">${Array.from(
+    { length: 9 },
+    (_, i) => `<!ENTITY l${i + 1} "${`&l${i};`.repeat(10)}">`,
+  ).join('')}]><a>&l9;</a>`;
+
+const deep = (n: number) => '<a>'.repeat(n) + '</a>'.repeat(n);
+
+const chain = (n: number, open: string, close: string) =>
+  `<!DOCTYPE a [${Array.from(
+    { length: n },
+    (_, i) => `<!ENTITY e${i} "${open}${i + 1 < n ? `&e${i + 1};` : ''}${close}">`,
+  ).join('')}]>`;
+
 describe('Xml.parse', () => {
   it.effect('parses elements, attributes and namespaces', () =>
     Effect.gen(function* () {
@@ -145,24 +159,13 @@ describe('Xml.parse', () => {
   );
 
   it('rejects hostile documents with parse errors', () => {
-    const laughs = (body: string) =>
-      `<!DOCTYPE a [<!ENTITY l0 "${body}">${Array.from(
-        { length: 9 },
-        (_, i) => `<!ENTITY l${i + 1} "${`&l${i};`.repeat(10)}">`,
-      ).join('')}]><a>&l9;</a>`;
     expect(parseErr(laughs('ha')).message).toContain('Entity expansion limit exceeded');
     expect(parseErr(laughs('<b/>')).message).toContain('Entity expansion limit exceeded');
     expect(
       parseErr(`<!DOCTYPE a [<!ENTITY x SYSTEM "file:///etc/passwd">]><a>&x;</a>`).message,
     ).toBe('External entity "x" is not supported');
-    const deep = (n: number) => '<a>'.repeat(n) + '</a>'.repeat(n);
     expect(parseOk(deep(1024)).root.localName).toBe('a');
     expect(parseErr(deep(100_000)).message).toBe('Elements are nested too deeply');
-    const chain = (n: number, open: string, close: string) =>
-      `<!DOCTYPE a [${Array.from(
-        { length: n },
-        (_, i) => `<!ENTITY e${i} "${open}${i + 1 < n ? `&e${i + 1};` : ''}${close}">`,
-      ).join('')}]>`;
     expect(parseOk(`${chain(60, '<b>', '</b>')}<a>&e0;</a>`).root.children).toHaveLength(1);
     expect(parseErr(`${chain(2000, '<b>', '</b>')}<a>&e0;</a>`).message).toContain(
       'Entity references are nested too deeply',
@@ -191,11 +194,11 @@ describe('Xml.parse', () => {
   });
 });
 
-describe('Xml.canonicalize', () => {
-  const content = (input: string) => parseOk(input).root.children;
+const childrenOf = (input: string) => parseOk(input).root.children;
 
+describe('Xml.canonicalize', () => {
   it('renders visibly utilised namespaces only', () => {
-    const nodes = content(
+    const nodes = childrenOf(
       `<r xmlns="urn:d" xmlns:a="urn:a" xmlns:unused="urn:u"><a:x><y a:attr="1"/></a:x></r>`,
     );
     expect(Xml.canonicalize(nodes)).toBe(
@@ -204,13 +207,13 @@ describe('Xml.canonicalize', () => {
   });
 
   it('undeclares the default namespace when needed', () => {
-    const nodes = content(`<r xmlns="urn:d"><x><y xmlns=""/></x></r>`);
+    const nodes = childrenOf(`<r xmlns="urn:d"><x><y xmlns=""/></x></r>`);
     expect(Xml.canonicalize(nodes)).toBe('<x xmlns="urn:d"><y xmlns=""></y></x>');
-    expect(Xml.canonicalize(content('<r><x/></r>'))).toBe('<x></x>');
+    expect(Xml.canonicalize(childrenOf('<r><x/></r>'))).toBe('<x></x>');
   });
 
   it('sorts attributes and escapes values', () => {
-    const nodes = content(
+    const nodes = childrenOf(
       `<r xmlns:b="urn:b" xmlns:a="urn:z"><e z="&quot;&lt;&amp;&#9;&#10;&#13;" b:y="1" a:y="2" a="&gt;"/></r>`,
     );
     expect(Xml.canonicalize(nodes)).toBe(
@@ -219,7 +222,7 @@ describe('Xml.canonicalize', () => {
   });
 
   it('escapes text, keeps comments and processing instructions', () => {
-    const nodes = content(`<r>a &lt; b &amp;&gt; &#13;<!--c--><?pi x?></r>`);
+    const nodes = childrenOf(`<r>a &lt; b &amp;&gt; &#13;<!--c--><?pi x?></r>`);
     expect(Xml.canonicalize(nodes)).toBe('a &lt; b &amp;&gt; &#xD;<!--c--><?pi x?>');
   });
 });

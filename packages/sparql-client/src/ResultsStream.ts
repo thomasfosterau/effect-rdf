@@ -365,6 +365,8 @@ const HEAD_END = /<\/head\s*>|<head\b[^>]*\/>/;
 const RESULTS_START = /<results\b[^>]*?(\/?)>/;
 const RESULT_END = /<result\b[^>]*\/>|<\/result\s*>/g;
 
+const parseXmlResults = (doc: string) => runSyncParse(Results.Xml.parse(doc));
+
 /**
  * An incremental parser for SPARQL XML results.
  *
@@ -376,7 +378,6 @@ export const xml = (): Incremental => {
   let phase: 'root' | 'head' | 'body' | 'results' | 'whole' | 'done' = 'root';
   let root = '';
   let head = '';
-  const parse = (doc: string) => runSyncParse(Results.Xml.parse(doc));
   const step = (out: Array<ResultEvent>): boolean => {
     return Match.value(phase).pipe(
       Match.when('root', () => {
@@ -396,7 +397,7 @@ export const xml = (): Incremental => {
         if (m === null) return false;
         head = buffer.slice(0, m.index + m[0].length);
         buffer = buffer.slice(m.index + m[0].length);
-        const parsed = parse(`${root}${head}</sparql>`);
+        const parsed = parseXmlResults(`${root}${head}</sparql>`);
         out.push(variablesEvent(parsed._tag === 'ResultSet' ? parsed.variables : []));
         phase = 'body';
         return true;
@@ -407,7 +408,9 @@ export const xml = (): Incremental => {
         if (boolean >= 0 && (results === null || boolean < results.index)) {
           const end = buffer.indexOf('</boolean>');
           if (end < 0) return false;
-          const parsed = parse(`${root}<head/>${buffer.slice(boolean, end + 10)}</sparql>`);
+          const parsed = parseXmlResults(
+            `${root}<head/>${buffer.slice(boolean, end + 10)}</sparql>`,
+          );
           if (parsed._tag === 'Boolean') out.push({ _tag: 'Boolean', value: parsed.value });
           buffer = '';
           phase = 'done';
@@ -425,7 +428,9 @@ export const xml = (): Incremental => {
           last = m.index + m[0].length;
         }
         if (last < 0) return false;
-        const parsed = parse(`${root}<head/><results>${buffer.slice(0, last)}</results></sparql>`);
+        const parsed = parseXmlResults(
+          `${root}<head/><results>${buffer.slice(0, last)}</results></sparql>`,
+        );
         if (parsed._tag === 'ResultSet') {
           for (const bindings of parsed.bindings) out.push({ _tag: 'Solution', bindings });
         }
@@ -458,12 +463,12 @@ export const xml = (): Incremental => {
     },
     end: () => {
       if (phase === 'whole' || phase === 'root') {
-        return fromParsed(parse(whole + buffer));
+        return fromParsed(parseXmlResults(whole + buffer));
       }
       if (phase === 'head' || phase === 'body') {
         // No <results> or <boolean>: let the full parser report the problem.
         if (phase === 'head') fail('xml', 'Unexpected end of document');
-        const parsed = parse(`${root}${head}${buffer}`);
+        const parsed = parseXmlResults(`${root}${head}${buffer}`);
         return parsed._tag === 'Boolean' ? [{ _tag: 'Boolean', value: parsed.value }] : [];
       }
       if (phase === 'results' && !/<\/results\s*>/.test(buffer)) {
@@ -618,28 +623,29 @@ export const run = <E, R>(
   input: Stream.Stream<string, E, R>,
   make: () => Incremental,
   format: string,
-): Stream.Stream<ResultEvent, E | Results.ResultsParseError, R> =>
-  Stream.suspend(() => {
+): Stream.Stream<ResultEvent, E | Results.ResultsParseError, R> => {
+  const step = (f: () => ReadonlyArray<ResultEvent>) =>
+    Effect.try({
+      try: f,
+      catch: (e) =>
+        e instanceof Results.ResultsParseError
+          ? e
+          : new Results.ResultsParseError({
+              format,
+              message:
+                Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
+                  ? e.message
+                  : String(e),
+            }),
+    });
+  return Stream.suspend(() => {
     const parser = make();
-    const step = (f: () => ReadonlyArray<ResultEvent>) =>
-      Effect.try({
-        try: f,
-        catch: (e) =>
-          e instanceof Results.ResultsParseError
-            ? e
-            : new Results.ResultsParseError({
-                format,
-                message:
-                  Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
-                    ? e.message
-                    : String(e),
-              }),
-      });
     return Stream.concat(
       Stream.flattenIterable(Stream.mapEffect(input, (chunk) => step(() => parser.push(chunk)))),
       Stream.flattenIterable(Stream.fromEffect(step(() => parser.end()))),
     );
   });
+};
 
 /**
  * Finds the incremental parser for a results media type.

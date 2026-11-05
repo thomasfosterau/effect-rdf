@@ -155,6 +155,8 @@ const termText = (t: Term.Term | undefined): string =>
         ? t.value
         : t.key;
 
+const unescapeBackslashes = (s: string) => s.replace(/\\(.)/gs, '$1');
+
 /**
  * The ShEx Test extension: `print(s|p|o|n|"text")` records a line and
  * succeeds, `fail(...)` records a line and fails. The `onPrint` callback
@@ -168,7 +170,6 @@ export const testExtension = (
 ): Handler => {
   const re =
     /^\s*(print|fail|p)\s*\(\s*(?:([spon])|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)\s*$/s;
-  const unescape = (s: string) => s.replace(/\\(.)/gs, '$1');
   return (action, context) => {
     if (!action.name.startsWith(testExtensionIri)) return Option.none();
     if (action.code === undefined) return Option.some(true);
@@ -187,7 +188,7 @@ export const testExtension = (
               ? (t?.object ?? context.node)
               : context.node,
       );
-    } else line = unescape(dq ?? sq ?? '');
+    } else line = unescapeBackslashes(dq ?? sq ?? '');
     onPrint(line, action.name);
     return Option.some(fn !== 'fail');
   };

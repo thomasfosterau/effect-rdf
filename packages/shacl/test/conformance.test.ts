@@ -84,6 +84,16 @@ const blankKeys = (ds: Dataset.Dataset): Set<string> => {
   return out;
 };
 
+const optMatches = <A>(e: Option.Option<A>, a: Option.Option<A>, f: (x: A, y: A) => boolean) =>
+  Option.isNone(e) ? Option.isNone(a) : Option.isSome(a) && f(e.value, a.value);
+
+const describeResults = (rs: ReadonlyArray<ValidationReport.ValidationResult>) =>
+  ValidationReport.format({
+    _tag: 'ValidationReport',
+    conforms: Arr.isReadonlyArrayEmpty(rs),
+    results: rs,
+  });
+
 const runCase = (tc: TestCase) =>
   Effect.gen(function* () {
     // SAFETY: only called with manifest nodes, which are IRIs or blank nodes.
@@ -119,8 +129,6 @@ const runCase = (tc: TestCase) =>
       e._tag === 'BlankNode' && a._tag === 'BlankNode' && !known.has(e.key)
         ? true
         : e.key === a.key;
-    const optMatches = <A>(e: Option.Option<A>, a: Option.Option<A>, f: (x: A, y: A) => boolean) =>
-      Option.isNone(e) ? Option.isNone(a) : Option.isSome(a) && f(e.value, a.value);
     const resultMatches = (
       e: ValidationReport.ValidationResult,
       a: ValidationReport.ValidationResult,
@@ -132,13 +140,6 @@ const runCase = (tc: TestCase) =>
       optMatches(e.value, a.value, termMatches) &&
       optMatches(e.resultPath, a.resultPath, Path.equals) &&
       e.messages.every((m) => a.messages.some((n) => n.key === m.key));
-
-    const describeResults = (rs: ReadonlyArray<ValidationReport.ValidationResult>) =>
-      ValidationReport.format({
-        _tag: 'ValidationReport',
-        conforms: Arr.isReadonlyArrayEmpty(rs),
-        results: rs,
-      });
 
     // Backtracking bipartite matching of expected to actual results.
     const used = new Set<number>();

@@ -449,6 +449,8 @@ const makeEngine = (
   const conforms = (id: Term.Term, node: Term.GroundTerm): Effect.Effect<boolean, EngineError> =>
     Effect.map(validateShape(shapeById(id), node), (rs) => Arr.isReadonlyArrayEmpty(rs));
 
+  const nestedResults = (id: Term.Term, v: Term.GroundTerm) => validateShape(shapeById(id), v);
+
   const evaluate = Effect.fnUntraced(function* (
     shape: Shapes.Shape,
     focus: Term.GroundTerm,
@@ -488,7 +490,6 @@ const makeEngine = (
     };
     const each = (failed: (v: Term.GroundTerm) => boolean): Results =>
       valueNodes.filter(failed).map((v) => result(v));
-    const nestedResults = (id: Term.Term, v: Term.GroundTerm) => validateShape(shapeById(id), v);
 
     return yield* Match.value(c)
       .pipe(

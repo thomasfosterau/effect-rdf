@@ -450,14 +450,15 @@ describe('SHACL-SPARQL extension point', () => {
   );
 });
 
+const messageLookup = (name: string) =>
+  name === 'value' ? ex('a') : name === 'n' ? Term.literal('3', xsd.integer) : undefined;
+
 describe('Message templates', () => {
   it('substitutes {?var} and {$var} placeholders', () => {
-    const lookup = (name: string) =>
-      name === 'value' ? ex('a') : name === 'n' ? Term.literal('3', xsd.integer) : undefined;
-    expect(Message.format('{$value} has {?n} items ({?unknown})', lookup)).toBe(
+    expect(Message.format('{$value} has {?n} items ({?unknown})', messageLookup)).toBe(
       'http://example.org/a has 3 items ({?unknown})',
     );
-    const message = Message.substitute(Term.literal('Wert {?n}', 'de'), lookup);
+    const message = Message.substitute(Term.literal('Wert {?n}', 'de'), messageLookup);
     expect(message.value).toBe('Wert 3');
     expect(message.language).toBe('de');
     expect(Message.variables('{?a} {$b} {c}')).toEqual(['a', 'b']);

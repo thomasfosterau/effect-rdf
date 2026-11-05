@@ -126,6 +126,62 @@ const parametersOf = (
 const literals = (shapes: Dataset.Dataset, node: Node, p: Term.NamedNode) =>
   Dataset.objectsOf(shapes, node, p).filter(Term.isLiteral);
 
+const prebinding = (record: Iterable<readonly [string, Term.GroundTerm | undefined]>) => ({
+  bindings: Bindings.fromEntries(record),
+});
+
+/** Maps a solution to a violation (§5.3.2 "Mapping of Solution Bindings to Result Properties"). */
+const toViolation = (
+  solution: Solution,
+  shape: Shapes.Shape,
+  messages: ReadonlyArray<Term.Literal>,
+  parameters: ReadonlyArray<readonly [string, Term.GroundTerm]>,
+): Effect.Effect<Sparql.Violation, Sparql.SparqlEvaluationError> => {
+  const failure = solution.get('failure');
+  if (failure !== undefined && failure.key === TRUE) {
+    return Effect.fail(
+      evaluationError(`a SPARQL constraint of ${shape.id.key} reported a failure`),
+    );
+  }
+  const path = solution.get('path');
+  const value = solution.get('value');
+  const message = solution.get('message');
+  const bindings = new Map<string, Term.GroundTerm>(parameters);
+  for (const [k, v] of solution) bindings.set(k, v);
+  return Effect.succeed({
+    focusNode: solution.get('this'),
+    path: path !== undefined && path._tag === 'NamedNode' ? Path.predicate(path) : undefined,
+    value: value ?? (shape._tag === 'NodeShape' ? solution.get('this') : undefined),
+    messages: message !== undefined && message._tag === 'Literal' ? [message] : messages,
+    bindings,
+  });
+};
+
+/** Selects the validator of a constraint component for a shape (§6.2.3). */
+const validatorOf = (
+  shapes: Dataset.Dataset,
+  component: Node,
+  shape: Shapes.Shape,
+): { readonly node: Node; readonly form: 'select' | 'ask' } | undefined => {
+  const withQuery = (p: Term.NamedNode, query: Term.NamedNode) =>
+    Dataset.objectsOf(shapes, component, p)
+      .filter(isNode)
+      .find((v) => Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, v, query)));
+  const specific =
+    shape._tag === 'NodeShape'
+      ? withQuery(sh.nodeValidator, sh.select)
+      : withQuery(sh.propertyValidator, sh.select);
+  if (specific !== undefined) return { node: specific, form: 'select' };
+  const general = withQuery(sh.validator, sh.ask);
+  return general === undefined ? undefined : { node: general, form: 'ask' };
+};
+
+const focusNodes = (solutions: ReadonlyArray<Solution>) =>
+  solutions.flatMap((s) => {
+    const t = s.get('this');
+    return t === undefined ? [] : [t];
+  });
+
 /**
  * Creates the evaluator service.
  *
@@ -187,10 +243,6 @@ export const make = (
     );
   };
 
-  const prebinding = (record: Iterable<readonly [string, Term.GroundTerm | undefined]>) => ({
-    bindings: Bindings.fromEntries(record),
-  });
-
   const select = (
     context: Context,
     query: Ast.Query,
@@ -210,33 +262,6 @@ export const make = (
     context.engine
       .ask(query, prebinding(bound))
       .pipe(Effect.mapError((e) => evaluationError(`SPARQL evaluation failed: ${e.message}`, e)));
-
-  /** Maps a solution to a violation (§5.3.2 "Mapping of Solution Bindings to Result Properties"). */
-  const toViolation = (
-    solution: Solution,
-    shape: Shapes.Shape,
-    messages: ReadonlyArray<Term.Literal>,
-    parameters: ReadonlyArray<readonly [string, Term.GroundTerm]>,
-  ): Effect.Effect<Sparql.Violation, Sparql.SparqlEvaluationError> => {
-    const failure = solution.get('failure');
-    if (failure !== undefined && failure.key === TRUE) {
-      return Effect.fail(
-        evaluationError(`a SPARQL constraint of ${shape.id.key} reported a failure`),
-      );
-    }
-    const path = solution.get('path');
-    const value = solution.get('value');
-    const message = solution.get('message');
-    const bindings = new Map<string, Term.GroundTerm>(parameters);
-    for (const [k, v] of solution) bindings.set(k, v);
-    return Effect.succeed({
-      focusNode: solution.get('this'),
-      path: path !== undefined && path._tag === 'NamedNode' ? Path.predicate(path) : undefined,
-      value: value ?? (shape._tag === 'NodeShape' ? solution.get('this') : undefined),
-      messages: message !== undefined && message._tag === 'Literal' ? [message] : messages,
-      bindings,
-    });
-  };
 
   const evaluateSparqlConstraint = Effect.fnUntraced(function* (
     input: Sparql.ConstraintInput,
@@ -260,25 +285,6 @@ export const make = (
       concurrency: 1,
     });
   });
-
-  /** Selects the validator of a constraint component for a shape (§6.2.3). */
-  const validatorOf = (
-    shapes: Dataset.Dataset,
-    component: Node,
-    shape: Shapes.Shape,
-  ): { readonly node: Node; readonly form: 'select' | 'ask' } | undefined => {
-    const withQuery = (p: Term.NamedNode, query: Term.NamedNode) =>
-      Dataset.objectsOf(shapes, component, p)
-        .filter(isNode)
-        .find((v) => Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, v, query)));
-    const specific =
-      shape._tag === 'NodeShape'
-        ? withQuery(sh.nodeValidator, sh.select)
-        : withQuery(sh.propertyValidator, sh.select);
-    if (specific !== undefined) return { node: specific, form: 'select' };
-    const general = withQuery(sh.validator, sh.ask);
-    return general === undefined ? undefined : { node: general, form: 'ask' };
-  };
 
   const evaluateComponent = Effect.fnUntraced(function* (
     input: Sparql.ConstraintInput,
@@ -362,11 +368,6 @@ export const make = (
         );
       }
       const context = yield* contextFor(input.dataGraph, shapes);
-      const focusNodes = (solutions: ReadonlyArray<Solution>) =>
-        solutions.flatMap((s) => {
-          const t = s.get('this');
-          return t === undefined ? [] : [t];
-        });
 
       // SPARQL-based target: the target node carries the query.
       if (Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, target, sh.select))) {

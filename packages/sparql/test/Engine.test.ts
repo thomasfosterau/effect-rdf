@@ -153,27 +153,33 @@ describe('Engine', () => {
   );
 });
 
-describe('Pre-binding', () => {
-  const run = (query: string, bindings: Record<string, Term.GroundTerm>) =>
-    Effect.gen(function* () {
-      const engine = yield* Engine.SparqlEngine;
-      const result = yield* engine.select(`PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n${query}`, {
-        bindings: Bindings.make(bindings),
-      });
-      return (yield* Stream.runCollect(result.bindings)).map((b) => b.toString());
+const selectPrebound = (query: string, bindings: Record<string, Term.GroundTerm>) =>
+  Effect.gen(function* () {
+    const engine = yield* Engine.SparqlEngine;
+    const result = yield* engine.select(`PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n${query}`, {
+      bindings: Bindings.make(bindings),
     });
+    return (yield* Stream.runCollect(result.bindings)).map((b) => b.toString());
+  });
 
+describe('Pre-binding', () => {
   it.effect('makes pre-bound values visible in FILTERs of empty groups', () =>
     Effect.gen(function* () {
       expect(
-        yield* run('SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }', {
-          this: ex('alice'),
-        }),
+        yield* selectPrebound(
+          'SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }',
+          {
+            this: ex('alice'),
+          },
+        ),
       ).toEqual(['{ ?this → <http://example.org/alice> }']);
       expect(
-        yield* run('SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }', {
-          this: ex('bob'),
-        }),
+        yield* selectPrebound(
+          'SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }',
+          {
+            this: ex('bob'),
+          },
+        ),
       ).toEqual([]);
     }).pipe(Effect.provide(TestLayer)),
   );
@@ -181,16 +187,16 @@ describe('Pre-binding', () => {
   it.effect('pre-binds BGPs, UNION branches, BIND and nested groups', () =>
     Effect.gen(function* () {
       expect(
-        yield* run('SELECT ?name WHERE { $this foaf:name ?name }', { this: ex('bob') }),
+        yield* selectPrebound('SELECT ?name WHERE { $this foaf:name ?name }', { this: ex('bob') }),
       ).toEqual(['{ ?name → "Bob" }']);
       expect(
-        yield* run(
+        yield* selectPrebound(
           'SELECT $this ?x WHERE { { FILTER (false) } UNION { BIND ($this AS ?x) } FILTER bound($this) }',
           { this: ex('bob') },
         ),
       ).toEqual(['{ ?this → <http://example.org/bob>, ?x → <http://example.org/bob> }']);
       expect(
-        yield* run(
+        yield* selectPrebound(
           'SELECT ?n WHERE { ?p foaf:knows ?q . FILTER EXISTS { $this foaf:name ?n0 } ?q foaf:name ?n }',
           { this: ex('carol') },
         ),
@@ -346,10 +352,11 @@ describe('Hash functions', () => {
   });
 });
 
+const remoteTitles = (endpoint: Term.NamedNode) =>
+  Stream.make(Bindings.make({ title: Term.literal(`from ${endpoint.value}`) }));
+
 describe('SERVICE with a variable endpoint', () => {
-  const remote = (endpoint: Term.NamedNode) =>
-    Stream.make(Bindings.make({ title: Term.literal(`from ${endpoint.value}`) }));
-  const FederatedLayer = Engine.layer({ service: (endpoint) => remote(endpoint) }).pipe(
+  const FederatedLayer = Engine.layer({ service: (endpoint) => remoteTitles(endpoint) }).pipe(
     Layer.provideMerge(
       Store.layerMemory(
         Dataset.make(

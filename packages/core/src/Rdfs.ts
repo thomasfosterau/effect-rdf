@@ -163,11 +163,12 @@ export const closure = (
   return result;
 };
 
+const asSubject = (o: Term.Object): Term.Subject | undefined =>
+  o._tag === 'Literal' ? undefined : o;
+
 const closeGraph = (input: Dataset.Dataset, graph: Term.Graph, full: boolean): Dataset.Dataset => {
   let ds = input;
   const q = (s: Term.Subject, p: Term.Predicate, o: Term.Object) => new Term.Quad(s, p, o, graph);
-  const asSubject = (o: Term.Object): Term.Subject | undefined =>
-    o._tag === 'Literal' ? undefined : o;
   let changed = true;
   while (changed) {
     const before = ds.size;

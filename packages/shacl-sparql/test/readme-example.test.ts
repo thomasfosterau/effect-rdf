@@ -76,11 +76,11 @@ const program = Effect.fn('program')(function* () {
   return { people, report: ValidationReport.format(report), jsonld };
 });
 // --- README example: end ---
+const between = (text: string, start: string, end: string) =>
+  text.slice(text.indexOf(start) + start.length, text.indexOf(end, text.indexOf(start)));
 
 describe('README quick tour', () => {
   it('matches the code in the README', () => {
-    const between = (text: string, start: string, end: string) =>
-      text.slice(text.indexOf(start) + start.length, text.indexOf(end, text.indexOf(start)));
     const readme = readFileSync(new URL('../../../README.md', import.meta.url), 'utf8');
     const self = readFileSync(new URL(import.meta.url), 'utf8');
     const inReadme = between(readme, '## Quick tour', '\nEffect.runPromise');
