@@ -122,11 +122,6 @@ export default defineConfig({
       // the issue lists them. A new site is a defect, not headroom. Once a
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
-      'effect/imperative-loops': 'warn', // 85
-      // 631 at adoption; dropping the unnecessary `a!` in `a!._tag` (sparql
-      // Functions.ts) made 15 existing checks visible to the rule.
-      'effect/avoid-direct-tag-checks': 'warn', // 75
-      'effect/avoid-non-null-assertion': 'warn', // 66
       'effect/avoid-native-object-helpers': 'warn', // 16
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
