@@ -1,6 +1,7 @@
 import { assert, expect, layer } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import * as Arr from 'effect/Array';
 import * as Order from 'effect/Order';
@@ -29,8 +30,12 @@ const TestLayer = Engine.layer({ baseIri: 'http://example.org/' }).pipe(
   Layer.provideMerge(StoreLayer),
 );
 
-const lex = (t: Term.GroundTerm | undefined): string | undefined =>
-  t === undefined || t._tag === 'Triple' ? undefined : t.value;
+/** The lexical form of a bound non-triple term (`'undefined'` when there is none). */
+const lex = (t: Option.Option<Term.GroundTerm>): string =>
+  Option.match(
+    Option.filter(t, (x) => !Term.isTriple(x)),
+    { onNone: () => 'undefined', onSome: (x) => x.value },
+  );
 
 // A fresh in-memory database for each test.
 layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
@@ -87,23 +92,18 @@ layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
       const rows = yield* Stream.runCollect(result.bindings);
       expect(
         Arr.sort(
-          rows.map(
-            (b) =>
-              `${lex(Bindings.getUndefined(b, 'name'))}:${lex(Bindings.getUndefined(b, 'age'))}`,
-          ),
+          rows.map((b) => `${lex(Bindings.get(b, 'name'))}:${lex(Bindings.get(b, 'age'))}`),
           Order.String,
         ),
       ).toEqual(['Alice:30', 'Bob:undefined']);
       const count = yield* engine.select('SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }');
       const c = yield* Stream.runCollect(count.bindings);
-      expect(lex(Bindings.getUndefined(c[0] ?? assert.fail('expected a COUNT row'), 'n'))).toBe(
-        '1',
-      );
+      expect(lex(Bindings.get(c[0] ?? assert.fail('expected a COUNT row'), 'n'))).toBe('1');
       const since = yield* engine.select(
         'SELECT ?y WHERE { <<( ?a <http://xmlns.com/foaf/0.1/knows> ?b )>> <http://example.org/since> ?y }',
       );
       const s = yield* Stream.runCollect(since.bindings);
-      expect(s.map((b) => lex(Bindings.getUndefined(b, 'y')))).toEqual(['2020']);
+      expect(s.map((b) => lex(Bindings.get(b, 'y')))).toEqual(['2020']);
     }),
   );
 });

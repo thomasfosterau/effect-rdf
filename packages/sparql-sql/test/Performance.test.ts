@@ -11,18 +11,16 @@ const ex = Namespace.make('http://example.org/');
 const N = 100_000;
 
 const triples = (): Array<Term.Quad> => {
-  const out: Array<Term.Quad> = [];
   const people = N / 4;
-  for (let i = 0; i < people; i++) {
+  return Array.from({ length: people }, (_, i) => {
     const p = ex(`person/${i}`);
-    out.push(
+    return [
       Term.quad(p, ex('name'), Term.literal(`Person ${i}`)),
       Term.quad(p, ex('age'), Xsd.integer(i % 90)),
       Term.quad(p, ex('knows'), ex(`person/${(i * 7 + 1) % people}`)),
       Term.quad(p, ex('type'), ex(i % 3 === 0 ? 'Student' : 'Employee')),
-    );
-  }
-  return out;
+    ];
+  }).flat();
 };
 
 describe('Performance', () => {
@@ -51,7 +49,7 @@ describe('Performance', () => {
           const rows = yield* Stream.runCollect(result.bindings);
           const queried = performance.now() - queryStart;
           const n = Bindings.getUndefined(rows[0] ?? assert.fail('expected a COUNT row'), 'n');
-          expect(n?._tag === 'Literal' && Number(n.value) > 0).toBe(true);
+          expect(Term.isLiteral(n) && Number(n.value) > 0).toBe(true);
           expect(queried).toBeLessThan(10_000);
           yield* Effect.logInfo(
             `Loaded ${N} triples in ${loaded.toFixed(0)} ms; join + filter + count in ${queried.toFixed(0)} ms`,

@@ -5,6 +5,9 @@
  */
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Stream from 'effect/Stream';
 import * as Arr from 'effect/Array';
@@ -44,15 +47,14 @@ const run = (query: string, quads: ReadonlyArray<Term.Quad> = data) => {
     events.length = 0;
     const engine = Engine.make(store);
     const result = yield* engine.query(PREFIX + query);
-    const rows =
-      result._tag === 'Select'
-        ? Arr.sort(
-            (yield* Stream.runCollect(result.bindings)).map((b) => b.toString()),
-            Order.String,
-          )
-        : result._tag === 'Ask'
-          ? [String(result.value)]
-          : [];
+    const rows = Predicate.isTagged(result, 'Select')
+      ? Arr.sort(
+          (yield* Stream.runCollect(result.bindings)).map((b) => b.toString()),
+          Order.String,
+        )
+      : Predicate.isTagged(result, 'Ask')
+        ? [String(result.value)]
+        : [];
     return { rows, events };
   }).pipe(
     withLayer(SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) })),
@@ -118,7 +120,7 @@ describe('SQL execution', () => {
         const { events } = yield* run(query);
         const sql = executedSql(events);
         // A string is a substring of the SQL; a RegExp matches it.
-        for (const p of patterns) expect(sql).toMatch(p);
+        patterns.forEach((p) => expect(sql).toMatch(p));
         // The root was translated: no other node was offered.
         expect(events.length).toBe(1);
       }),
@@ -151,7 +153,11 @@ describe('SQL execution', () => {
       );
       expect(rows.length).toBe(2);
       expect(events[0]).toMatchObject({ _tag: 'Declined' });
-      expect(events.some((e) => e._tag === 'Executed' && e.operation._tag === 'Bgp')).toBe(true);
+      expect(
+        events.some(
+          (e) => Predicate.isTagged(e, 'Executed') && Predicate.isTagged(e.operation, 'Bgp'),
+        ),
+      ).toBe(true);
     }),
   );
 
@@ -189,7 +195,7 @@ describe('SQL execution', () => {
 const compilePostgres = (query: string) => {
   const algebra = Translate.translateQuery(Parser.parseQueryUnsafe(PREFIX + query));
   let next = 1;
-  const ids = new Map<string, number>();
+  const ids = MutableHashMap.empty<string, number>();
   return Translation.compile(
     algebra.input,
     {
@@ -198,11 +204,12 @@ const compilePostgres = (query: string) => {
       dataset: { defaultGraph: 'default', namedGraphs: 'all' },
       activeGraph: { _tag: 'DefaultGraph' },
     },
-    (t) => {
-      let id = ids.get(t.key);
-      if (id === undefined) ids.set(t.key, (id = next++));
-      return id;
-    },
+    (t) =>
+      Option.getOrElse(MutableHashMap.get(ids, t.key), () => {
+        const id = next++;
+        MutableHashMap.set(ids, t.key, id);
+        return id;
+      }),
   );
 };
 

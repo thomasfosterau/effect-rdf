@@ -33,8 +33,12 @@
  *
  * @since 0.1.0
  */
-import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
+import * as Equal from 'effect/Equal';
+import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Algebra from '@thomasfosterau/effect-sparql/Algebra';
@@ -141,19 +145,22 @@ const unsupported = (reason: string): never => {
 // Constants
 // -----------------------------------------------------------------------------
 
-const collectTerm = (
-  term: Ast.TermPattern | Term.Term,
-  out: Map<string, Term.GroundTerm>,
-): void => {
+/** Terms by key. */
+type TermsByKey = MutableHashMap.MutableHashMap<string, Term.GroundTerm>;
+
+/** Whether a term (pattern) is a triple term with no variables. */
+const isGroundTriple = (t: Ast.TermPattern | Term.Term): t is Term.Triple =>
+  Term.isTriple(t) && Term.isGround(t);
+
+const collectTerm = (term: Ast.TermPattern | Term.Term, out: TermsByKey): void => {
   return Match.value(term).pipe(
     Match.tag('NamedNode', 'Literal', (t) => {
-      out.set(t.key, t);
+      MutableHashMap.set(out, t.key, t);
       return;
     }),
     Match.tag('Triple', (t) => {
-      if (Term.isGround(t)) {
-        // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
-        out.set(t.key, t as Term.Triple);
+      if (isGroundTriple(t)) {
+        MutableHashMap.set(out, t.key, t);
       } else {
         collectTerm(t.subject, out);
         collectTerm(t.predicate, out);
@@ -165,7 +172,7 @@ const collectTerm = (
   );
 };
 
-const collectExpression = (e: Algebra.Expression, out: Map<string, Term.GroundTerm>): void => {
+const collectExpression = (e: Algebra.Expression, out: TermsByKey): void => {
   Match.value(e).pipe(
     Match.tag('Operation', 'FunctionCall', (call) =>
       call.args.forEach((a) => collectExpression(a, out)),
@@ -175,19 +182,15 @@ const collectExpression = (e: Algebra.Expression, out: Map<string, Term.GroundTe
   );
 };
 
-const collectOperation = (
-  operation: Algebra.Operation,
-  out: Map<string, Term.GroundTerm>,
-): void => {
+const collectOperation = (operation: Algebra.Operation, out: TermsByKey): void => {
   return Match.value(operation).pipe(
-    Match.tag('Bgp', (op) => {
-      for (const p of op.patterns) {
+    Match.tag('Bgp', (op) =>
+      op.patterns.forEach((p) => {
         collectTerm(p.subject, out);
         collectTerm(p.predicate, out);
         collectTerm(p.object, out);
-      }
-      return;
-    }),
+      }),
+    ),
     Match.tag('Path', () => undefined),
     Match.tag('Join', 'Union', 'Minus', (op) => {
       collectOperation(op.left, out);
@@ -215,10 +218,9 @@ const collectOperation = (
       collectOperation(op.input, out);
       return;
     }),
-    Match.tag('Values', (op) => {
-      for (const b of op.bindings) for (const [, t] of b) collectTerm(t, out);
-      return;
-    }),
+    Match.tag('Values', (op) =>
+      op.bindings.forEach((b) => Arr.forEach(b, ([, t]) => collectTerm(t, out))),
+    ),
     Match.tag('Group', 'OrderBy', 'Project', 'Distinct', 'Reduced', 'Slice', 'Service', (op) => {
       collectOperation(op.input, out);
       return;
@@ -238,23 +240,23 @@ export const constants = (
   op: Algebra.Operation,
   context: Pick<TranslationContext, 'dataset' | 'activeGraph'>,
 ): ReadonlyArray<Term.GroundTerm> => {
-  const out = new Map<string, Term.GroundTerm>();
+  const out: TermsByKey = MutableHashMap.empty();
   collectOperation(op, out);
   const { defaultGraph, namedGraphs } = context.dataset;
-  if (Array.isArray(defaultGraph)) {
-    // SAFETY: `Array.isArray` holds, and the array form of the dataset's default graph lists graph
-    // terms.
-    for (const g of defaultGraph as ReadonlyArray<Term.Graph>) {
-      if (g._tag !== 'DefaultGraph') out.set(g.key, g);
-    }
+  if (!Predicate.isString(defaultGraph)) {
+    defaultGraph.forEach((g) => {
+      if (!Term.isDefaultGraph(g)) MutableHashMap.set(out, g.key, g);
+    });
   }
-  if (namedGraphs !== 'all') for (const g of namedGraphs) out.set(g.key, g);
-  if (context.activeGraph._tag === 'NamedGraph') {
-    out.set(context.activeGraph.graph.key, context.activeGraph.graph);
+  if (!Predicate.isString(namedGraphs)) {
+    namedGraphs.forEach((g) => MutableHashMap.set(out, g.key, g));
   }
-  out.set(TRUE.key, TRUE);
-  out.set(FALSE.key, FALSE);
-  return Array.from(out.values());
+  if (Predicate.isTagged(context.activeGraph, 'NamedGraph')) {
+    MutableHashMap.set(out, context.activeGraph.graph.key, context.activeGraph.graph);
+  }
+  MutableHashMap.set(out, TRUE.key, TRUE);
+  MutableHashMap.set(out, FALSE.key, FALSE);
+  return Arr.fromIterable(MutableHashMap.values(out));
 };
 
 // -----------------------------------------------------------------------------
@@ -267,21 +269,41 @@ interface Col {
   readonly type: 'id' | 'int';
 }
 
+/** The columns of a block, by variable (in order of binding). */
+type Cols = MutableHashMap.MutableHashMap<string, Col>;
+
+/** Column types without their SQL, by variable. */
+type ColTypes = MutableHashMap.MutableHashMap<string, Omit<Col, 'sql'>>;
+
 interface Item {
   readonly source: string;
   readonly alias: string;
   /** The `ON` condition of a `LEFT JOIN`; inner joins have none. */
-  readonly left?: string | undefined;
+  readonly left: Option.Option<string>;
 }
+
+/** A FROM item joined unconditionally. */
+const inner = (source: string, alias: string): Item => ({ source, alias, left: Option.none() });
 
 /** A `SELECT` under construction: FROM items, WHERE conditions and variables. */
 interface Block {
   readonly items: ReadonlyArray<Item>;
   readonly where: ReadonlyArray<string>;
-  readonly cols: ReadonlyMap<string, Col>;
+  readonly cols: Cols;
 }
 
-const EMPTY: Block = { items: [], where: [], cols: new Map() };
+/** A block selecting from one subquery. */
+interface Wrapped extends Block {
+  readonly items: readonly [Item];
+}
+
+const EMPTY: Block = { items: [], where: [], cols: MutableHashMap.empty() };
+
+/** Whether a block is the unit (no items, conditions or columns). */
+const isUnit = (block: Block): boolean =>
+  Arr.isReadonlyArrayEmpty(block.items) &&
+  Arr.isReadonlyArrayEmpty(block.where) &&
+  MutableHashMap.isEmpty(block.cols);
 
 type GraphCtx =
   | { readonly kind: 'default' }
@@ -289,6 +311,10 @@ type GraphCtx =
   | { readonly kind: 'var'; readonly hidden: string };
 
 const isHidden = (name: string): boolean => name.startsWith('#');
+
+/** The distinct values of `items`, in order of first occurrence. */
+const distinct = <A extends string | number>(items: Iterable<A>): Array<A> =>
+  Arr.fromIterable(MutableHashSet.fromIterable(items));
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 const TRUE = new Term.Literal('true', Term.namedNode(`${XSD}boolean`));
@@ -298,7 +324,10 @@ const FALSE = new Term.Literal('false', Term.namedNode(`${XSD}boolean`));
 // Expression operands
 // -----------------------------------------------------------------------------
 
-type Static = string | number | boolean | null;
+type Scalar = string | number | boolean;
+
+/** A statically known value: none is SQL `NULL`. */
+type Static = Option.Option<Scalar>;
 
 /** A field of an operand: statically known or a SQL expression. */
 type F = { readonly s: Static } | { readonly q: string };
@@ -314,13 +343,12 @@ interface JoinCompat {
 /** Numeric-promotion branches of a comparison, and the class pairs they handle. */
 interface Promotions {
   readonly branches: Array<readonly [C, string]>;
-  readonly handled: Set<string>;
+  readonly handled: MutableHashSet.MutableHashSet<string>;
 }
 
-interface Operand {
-  readonly tag: 'term' | 'const' | 'int' | 'str' | 'bool' | 'iri' | 'null';
-  /** Possible comparison classes (`undefined` = any). */
-  readonly classes: ReadonlyArray<number> | undefined;
+interface Fields {
+  /** Possible comparison classes (none = any). */
+  readonly classes: Option.Option<ReadonlyArray<number>>;
   readonly isNull: F;
   readonly cls: F;
   readonly kind: F;
@@ -329,17 +357,37 @@ interface Operand {
   readonly lang: F;
   readonly dir: F;
   readonly num: F;
-  /** The term id, for term-valued operands. */
-  readonly id?: F | undefined;
-  /** The constant term. */
-  readonly term?: Term.GroundTerm | undefined;
-  /** The SQL boolean of `bool` operands. */
-  readonly bool?: string | undefined;
 }
 
-const S = (s: Static): F => ({ s });
+type Operand =
+  /** A term-valued expression (`id` is its term id). */
+  | (Fields & { readonly tag: 'term'; readonly id: F })
+  /** A constant term. */
+  | (Fields & { readonly tag: 'const'; readonly id: F; readonly term: Term.GroundTerm })
+  /** A boolean (`bool` is its SQL boolean). */
+  | (Fields & { readonly tag: 'bool'; readonly bool: string })
+  | (Fields & { readonly tag: 'int' })
+  | (Fields & { readonly tag: 'str' })
+  | (Fields & { readonly tag: 'iri' })
+  | (Fields & { readonly tag: 'null' });
+
+/** The term id of a term-valued operand. */
+const operandId = (o: Operand): Option.Option<F> =>
+  o.tag === 'term' || o.tag === 'const' ? Option.some(o.id) : Option.none();
+
+const S = (s: Scalar): F => ({ s: Option.some(s) });
+const SO = (s: Static): F => ({ s });
+const SNULL: F = { s: Option.none() };
 const Q = (q: string): F => ({ q });
 const isStatic = (f: F): f is { readonly s: Static } => 's' in f;
+
+/** The statically known number of a field. */
+const staticNumber = (f: F): Option.Option<number> =>
+  isStatic(f) ? Option.filter(f.s, Predicate.isNumber) : Option.none();
+
+/** Whether a field is statically the value `v`. */
+const isStaticValue = (f: F, v: Scalar): boolean =>
+  isStatic(f) && Option.exists(f.s, (s) => s === v);
 
 const RISK_ORDER: ReadonlyArray<readonly [number, number]> = [
   [1, 3],
@@ -357,46 +405,46 @@ const RISK_ORDER: ReadonlyArray<readonly [number, number]> = [
 ];
 const RISK_EQUAL: ReadonlyArray<readonly [number, number]> = [...RISK_ORDER, [10, 10]];
 
+/** The SQL conditions of `cs` (dropping the statically known ones). */
+const conditions = (cs: ReadonlyArray<C>): Array<string> => cs.filter(Predicate.isString);
+
 const and = (...cs: ReadonlyArray<C>): C => {
-  const parts: Array<string> = [];
-  for (const c of cs) {
-    if (c === false) return false;
-    if (c !== true) parts.push(c);
-  }
-  return Arr.isReadonlyArrayEmpty(parts)
-    ? true
-    : parts.length === 1
-      ? parts[0]!
-      : `(${parts.join(' AND ')})`;
+  if (cs.includes(false)) return false;
+  const parts = conditions(cs);
+  return Arr.match(parts, {
+    onEmpty: () => true,
+    onNonEmpty: ([first, ...rest]) =>
+      Arr.isReadonlyArrayEmpty(rest) ? first : `(${parts.join(' AND ')})`,
+  });
 };
 
 const or = (...cs: ReadonlyArray<C>): C => {
-  const parts: Array<string> = [];
-  for (const c of cs) {
-    if (c === true) return true;
-    if (c !== false) parts.push(c);
-  }
-  return Arr.isReadonlyArrayEmpty(parts)
-    ? false
-    : parts.length === 1
-      ? parts[0]!
-      : `(${parts.join(' OR ')})`;
+  if (cs.includes(true)) return true;
+  const parts = conditions(cs);
+  return Arr.match(parts, {
+    onEmpty: () => false,
+    onNonEmpty: ([first, ...rest]) =>
+      Arr.isReadonlyArrayEmpty(rest) ? first : `(${parts.join(' OR ')})`,
+  });
 };
 
 const condSql = (c: C): string => (c === true ? 'TRUE' : c === false ? 'FALSE' : c);
 
+const isLive = (branch: readonly [C, string]): branch is readonly [string, string] =>
+  Predicate.isString(branch[0]);
+
+/**
+ * A `CASE` of the branches up to the first that always holds (whose value is
+ * then the `ELSE`), dropping the branches that never hold.
+ */
 const caseOf = (branches: ReadonlyArray<readonly [C, string]>, otherwise: string): string => {
-  const live: Array<readonly [string, string]> = [];
-  for (const [c, v] of branches) {
-    if (c === false) continue;
-    if (c === true) {
-      if (Arr.isReadonlyArrayEmpty(live)) return v;
-      return `(CASE ${live.map(([w, r]) => `WHEN ${w} THEN ${r}`).join(' ')} ELSE ${v} END)`;
-    }
-    live.push([c, v]);
-  }
-  if (Arr.isReadonlyArrayEmpty(live)) return otherwise;
-  return `(CASE ${live.map(([w, r]) => `WHEN ${w} THEN ${r}`).join(' ')} ELSE ${otherwise} END)`;
+  const fallback = Option.match(
+    Arr.findFirst(branches, ([c]) => c === true),
+    { onNone: () => otherwise, onSome: ([, v]) => v },
+  );
+  const live = Arr.takeWhile(branches, ([c]) => c !== true).filter(isLive);
+  if (Arr.isReadonlyArrayEmpty(live)) return fallback;
+  return `(CASE ${live.map(([w, r]) => `WHEN ${w} THEN ${r}`).join(' ')} ELSE ${fallback} END)`;
 };
 
 // -----------------------------------------------------------------------------
@@ -404,8 +452,44 @@ const caseOf = (branches: ReadonlyArray<readonly [C, string]>, otherwise: string
 // -----------------------------------------------------------------------------
 
 interface Env {
-  readonly cols: ReadonlyMap<string, Col>;
+  readonly cols: Cols;
   readonly graph: GraphCtx;
+}
+
+/** A query-local term and its (negative) id. */
+interface Local {
+  readonly id: number;
+  readonly term: Term.GroundTerm;
+}
+
+/** Query-local terms by key. */
+type Locals = MutableHashMap.MutableHashMap<string, Local>;
+
+/** An aggregate of a `GROUP`: the SQL of its value over the grouped subquery `s`. */
+interface Aggregate {
+  readonly target: string;
+  readonly sql: (s: string) => string;
+  readonly col: Omit<Col, 'sql'>;
+}
+
+/** A group key variable (`source`, bound to `col`) and the variable it is projected as. */
+interface GroupKey {
+  readonly source: string;
+  readonly target: string;
+  readonly col: Col;
+}
+
+/** The input of a `GRAPH ?var` and the column of its graph ids. */
+interface GraphInput {
+  readonly input: Block;
+  readonly gcol: Col;
+}
+
+/** A variable of both sides of a `MINUS`, with its column on each side. */
+interface Shared {
+  readonly name: string;
+  readonly left: Col;
+  readonly right: Col;
 }
 
 class Compiler {
@@ -414,23 +498,23 @@ class Compiler {
   readonly Q: string;
   readonly G: string;
   counter = 0;
-  readonly colNames = new Map<string, string>();
+  readonly colNames = MutableHashMap.empty<string, string>();
   readonly params: Array<unknown> = [];
-  readonly paramIndex = new Map<string, number>();
+  readonly paramIndex = MutableHashMap.empty<string, number>();
   readonly risks: Array<Risk> = [];
   readonly localClasses = new Set<number>();
 
   readonly context: TranslationContext;
-  readonly resolve: (term: Term.GroundTerm) => number | undefined;
+  readonly resolve: (term: Term.GroundTerm) => Option.Option<number>;
   /** Query-local terms, by key (stable across the two compilation passes). */
-  readonly locals: Map<string, { readonly id: number; readonly term: Term.GroundTerm }>;
+  readonly locals: Locals;
   /** Whether the query-local terms are complete (second pass). */
   readonly localsKnown: boolean;
 
   constructor(
     context: TranslationContext,
-    resolve: (term: Term.GroundTerm) => number | undefined,
-    locals: Map<string, { readonly id: number; readonly term: Term.GroundTerm }>,
+    resolve: (term: Term.GroundTerm) => Option.Option<number>,
+    locals: Locals,
     localsKnown: boolean,
   ) {
     this.context = context;
@@ -448,23 +532,24 @@ class Compiler {
   }
 
   col(name: string): string {
-    let c = this.colNames.get(name);
-    if (c === undefined) this.colNames.set(name, (c = `c${this.colNames.size}`));
-    return c;
+    return Option.getOrElse(MutableHashMap.get(this.colNames, name), () => {
+      const c = `c${MutableHashMap.size(this.colNames)}`;
+      MutableHashMap.set(this.colNames, name, c);
+      return c;
+    });
   }
 
   param(value: string): string {
-    let i = this.paramIndex.get(value);
-    if (i === undefined) {
+    const i = Option.getOrElse(MutableHashMap.get(this.paramIndex, value), () => {
       this.params.push(value);
-      i = this.params.length;
-      this.paramIndex.set(value, i);
-    }
+      const n = this.params.length;
+      MutableHashMap.set(this.paramIndex, value, n);
+      return n;
+    });
     return this.dialect.castText(`\ue000${i}\ue000`);
   }
 
-  lit(v: Static): string {
-    if (v === null) return 'NULL';
+  lit(v: Scalar): string {
     if (Predicate.isBoolean(v)) return v ? 'TRUE' : 'FALSE';
     if (Predicate.isNumber(v)) {
       if (!Number.isFinite(v)) return 'NULL';
@@ -475,20 +560,28 @@ class Compiler {
     return this.param(v);
   }
 
+  /** A statically known value as SQL (none is `NULL`). */
+  litOf(v: Static): string {
+    return Option.match(v, { onNone: () => 'NULL', onSome: (s) => this.lit(s) });
+  }
+
   f(field: F): string {
-    return isStatic(field) ? this.lit(field.s) : field.q;
+    return isStatic(field) ? this.litOf(field.s) : field.q;
   }
 
   /** The id of a constant term (a query-local negative id if it is not in the dictionary). */
   idOf(term: Term.GroundTerm | Term.DefaultGraph): number {
-    if (term._tag === 'DefaultGraph') return 0;
-    const id = this.resolve(term);
-    if (id !== undefined) return id;
-    let local = this.locals.get(term.key);
-    if (local === undefined) {
-      local = { id: -(this.locals.size + 1), term };
-      this.locals.set(term.key, local);
-    }
+    if (Term.isDefaultGraph(term)) return 0;
+    return Option.getOrElse(this.resolve(term), () => this.localId(term));
+  }
+
+  /** The query-local id of a term that is not in the dictionary. */
+  localId(term: Term.GroundTerm): number {
+    const local = Option.getOrElse(MutableHashMap.get(this.locals, term.key), () => {
+      const created: Local = { id: -(MutableHashMap.size(this.locals) + 1), term };
+      MutableHashMap.set(this.locals, term.key, created);
+      return created;
+    });
     this.localClasses.add(Enc.classify(term).cls);
     return local.id;
   }
@@ -496,15 +589,15 @@ class Compiler {
   // --- rendering --------------------------------------------------------------
 
   from(items: ReadonlyArray<Item>): string {
-    if (Arr.isReadonlyArrayEmpty(items)) return '';
-    let out = ` FROM ${items[0]!.source} ${items[0]!.alias}`;
-    for (const it of items.slice(1)) {
-      out +=
-        it.left !== undefined
-          ? ` LEFT JOIN ${it.source} ${it.alias} ON ${it.left}`
-          : ` JOIN ${it.source} ${it.alias} ON TRUE`;
-    }
-    return out;
+    if (!Arr.isReadonlyArrayNonEmpty(items)) return '';
+    const [first, ...rest] = items;
+    const joins = rest.map((it) =>
+      Option.match(it.left, {
+        onNone: () => ` JOIN ${it.source} ${it.alias} ON TRUE`,
+        onSome: (on) => ` LEFT JOIN ${it.source} ${it.alias} ON ${on}`,
+      }),
+    );
+    return ` FROM ${first.source} ${first.alias}${joins.join('')}`;
   }
 
   whereClause(where: ReadonlyArray<string>): string {
@@ -517,28 +610,39 @@ class Compiler {
 
   render(
     block: Block,
-    names: ReadonlyArray<string> = Array.from(block.cols.keys()),
+    names: ReadonlyArray<string> = Arr.fromIterable(MutableHashMap.keys(block.cols)),
     options: {
       readonly distinct?: boolean;
-      readonly types?: ReadonlyMap<string, 'id' | 'int'>;
+      readonly types?: MutableHashMap.MutableHashMap<string, 'id' | 'int'>;
     } = {},
   ): string {
+    const { types } = options;
     const select = names.map((n) => {
-      const c = block.cols.get(n);
-      return `${c !== undefined ? c.sql : this.nullCol(options.types?.get(n) ?? 'id')} AS ${this.col(n)}`;
+      const sql = Option.match(MutableHashMap.get(block.cols, n), {
+        onNone: () =>
+          this.nullCol(
+            types === undefined
+              ? 'id'
+              : Option.getOrElse(MutableHashMap.get(types, n), () => 'id' as const),
+          ),
+        onSome: (c) => c.sql,
+      });
+      return `${sql} AS ${this.col(n)}`;
     });
     return `SELECT ${options.distinct === true ? 'DISTINCT ' : ''}${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')}${this.from(block.items)}${this.whereClause(block.where)}`;
   }
 
   /** Wraps SQL as a subquery item. */
-  wrapSql(sql: string, cols: ReadonlyMap<string, Omit<Col, 'sql'>>): Block {
+  wrapSql(sql: string, cols: ColTypes): Wrapped {
     const alias = this.alias('s');
-    const out = new Map<string, Col>();
-    for (const [n, c] of cols) out.set(n, { ...c, sql: `${alias}.${this.col(n)}` });
-    return { items: [{ source: `(${sql})`, alias }], where: [], cols: out };
+    const out: Cols = MutableHashMap.empty();
+    MutableHashMap.forEach(cols, (c, n) => {
+      MutableHashMap.set(out, n, { ...c, sql: `${alias}.${this.col(n)}` });
+    });
+    return { items: [inner(`(${sql})`, alias)], where: [], cols: out };
   }
 
-  wrap(block: Block, options: { readonly distinct?: boolean } = {}): Block {
+  wrap(block: Block, options: { readonly distinct?: boolean } = {}): Wrapped {
     return this.wrapSql(this.render(block, undefined, options), block.cols);
   }
 
@@ -556,28 +660,29 @@ class Compiler {
   }
 
   join(a: Block, b: Block): Block {
-    if (Arr.isReadonlyArrayEmpty(b.items) && Arr.isReadonlyArrayEmpty(b.where) && b.cols.size === 0)
-      return a;
-    if (Arr.isReadonlyArrayEmpty(a.items) && Arr.isReadonlyArrayEmpty(a.where) && a.cols.size === 0)
-      return b;
-    const cols = new Map(a.cols);
+    if (isUnit(b)) return a;
+    if (isUnit(a)) return b;
+    const cols = MutableHashMap.fromIterable(a.cols);
     const where = [...a.where, ...b.where];
-    for (const [n, cb] of b.cols) {
-      const ca = cols.get(n);
-      if (ca === undefined) cols.set(n, cb);
-      else {
-        const { cond, merged } = this.compat(ca, cb);
-        where.push(cond);
-        cols.set(n, merged);
-      }
-    }
+    MutableHashMap.forEach(b.cols, (cb, n) =>
+      Option.match(MutableHashMap.get(cols, n), {
+        onNone: () => {
+          MutableHashMap.set(cols, n, cb);
+        },
+        onSome: (ca) => {
+          const { cond, merged } = this.compat(ca, cb);
+          where.push(cond);
+          MutableHashMap.set(cols, n, merged);
+        },
+      }),
+    );
     return { items: [...a.items, ...b.items], where, cols };
   }
 
   /** Ensures a block has a FROM item (so that a LEFT JOIN can be appended). */
   anchored(block: Block): Block {
     if (Arr.isReadonlyArrayNonEmpty(block.items)) return block;
-    return { ...block, items: [{ source: '(SELECT 1 AS one)', alias: this.alias('u') }] };
+    return { ...block, items: [inner('(SELECT 1 AS one)', this.alias('u'))] };
   }
 
   // --- operators --------------------------------------------------------------
@@ -599,19 +704,23 @@ class Compiler {
       Match.tag('Graph', (op) => this.graph(op, g, unit)),
       Match.tag('Extend', (op) => {
         const input = this.op(op.input, g, unit);
-        if (input.cols.has(op.variable.value)) return unsupported('BIND to a bound variable');
+        if (MutableHashMap.has(input.cols, op.variable.value)) {
+          return unsupported('BIND to a bound variable');
+        }
         const col = this.termValued(this.operand(op.expression, { cols: input.cols, graph: g }));
-        const cols = new Map(input.cols);
-        cols.set(op.variable.value, col);
+        const cols = MutableHashMap.fromIterable(input.cols);
+        MutableHashMap.set(cols, op.variable.value, col);
         return { ...input, cols };
       }),
       Match.tag('Minus', (op) => this.minus(this.op(op.left, g, unit), this.op(op.right, g, unit))),
       Match.tag('Group', (op) => this.group(op, g, unit)),
       Match.tag('Project', (op) => {
         const input = this.op(op.input, g, unit);
-        const keep = new Set(op.variables.map((v) => v.value));
-        const cols = new Map<string, Col>();
-        for (const [n, c] of input.cols) if (keep.has(n) || isHidden(n)) cols.set(n, c);
+        const keep = MutableHashSet.fromIterable(op.variables.map((v) => v.value));
+        const cols: Cols = MutableHashMap.empty();
+        MutableHashMap.forEach(input.cols, (c, n) => {
+          if (MutableHashSet.has(keep, n) || isHidden(n)) MutableHashMap.set(cols, n, c);
+        });
         return { ...input, cols };
       }),
       Match.tag('Distinct', (op) => this.wrap(this.op(op.input, g, unit), { distinct: true })),
@@ -640,12 +749,16 @@ class Compiler {
   bgp(patterns: ReadonlyArray<Ast.TriplePattern>, ctx: GraphCtx): Block {
     const items: Array<Item> = [];
     const where: Array<string> = [];
-    const cols = new Map<string, Col>();
-    const bind = (name: string, sql: string) => {
-      const c = cols.get(name);
-      if (c === undefined) cols.set(name, { sql, nullable: false, type: 'id' });
-      else where.push(`${c.sql} = ${sql}`);
-    };
+    const cols: Cols = MutableHashMap.empty();
+    const bind = (name: string, sql: string) =>
+      Option.match(MutableHashMap.get(cols, name), {
+        onNone: () => {
+          MutableHashMap.set(cols, name, { sql, nullable: false, type: 'id' });
+        },
+        onSome: (c) => {
+          where.push(`${c.sql} = ${sql}`);
+        },
+      });
     const position = (t: Ast.TermPattern, sql: string, bound: Array<string>): void => {
       return Match.value(t).pipe(
         Match.tag('Variable', (pattern) => {
@@ -658,13 +771,12 @@ class Compiler {
           return;
         }),
         Match.tag('Triple', (pattern) => {
-          if (Term.isGround(pattern)) {
-            // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
-            bound.push(`${sql} = ${this.idOf(pattern as Term.Triple)}`);
+          if (isGroundTriple(pattern)) {
+            bound.push(`${sql} = ${this.idOf(pattern)}`);
             return;
           }
           const ta = this.alias('t');
-          items.push({ source: this.T, alias: ta });
+          items.push(inner(this.T, ta));
           where.push(`${ta}.id = ${sql}`, `${ta}.kind = ${Enc.Kind.Triple}`);
           position(pattern.subject, `${ta}.sub`, where);
           position(pattern.predicate, `${ta}.pre`, where);
@@ -675,51 +787,48 @@ class Compiler {
       );
     };
     const { defaultGraph } = this.context.dataset;
-    for (const p of patterns) {
+    patterns.forEach((p) => {
       const a = this.alias('q');
       const merged =
         ctx.kind === 'default' &&
         (defaultGraph === 'union' || (Array.isArray(defaultGraph) && defaultGraph.length > 1));
       if (merged) {
         // The default graph is a merge of several graphs: match each triple once.
-        const inner: Array<string> = [];
-        if (defaultGraph !== 'union') {
-          // SAFETY: not `union`, `default` or `all` was handled before, so the default graph is the
-          // list of graph terms.
-          inner.push(
-            `g IN (${(defaultGraph as ReadonlyArray<Term.Graph>).map((x) => this.idOf(x)).join(', ')})`,
-          );
+        const conds: Array<string> = [];
+        if (!Predicate.isString(defaultGraph)) {
+          conds.push(`g IN (${defaultGraph.map((x) => this.idOf(x)).join(', ')})`);
         }
         const deferred: Array<() => void> = [];
         const positionIn = (t: Ast.TermPattern, column: string) => {
-          if (t._tag === 'Variable' || (t._tag === 'Triple' && !Term.isGround(t))) {
+          if (Term.isVariable(t) || (Term.isTriple(t) && !Term.isGround(t))) {
             deferred.push(() => position(t, `${a}.${column}`, where));
-          } else position(t, column, inner);
+          } else position(t, column, conds);
         };
         positionIn(p.subject, 's');
         positionIn(p.predicate, 'p');
         positionIn(p.object, 'o');
-        items.push({
-          source: `(SELECT DISTINCT s, p, o FROM ${this.Q}${Arr.isReadonlyArrayNonEmpty(inner) ? ` WHERE ${inner.join(' AND ')}` : ''})`,
-          alias: a,
-        });
+        items.push(
+          inner(
+            `(SELECT DISTINCT s, p, o FROM ${this.Q}${Arr.isReadonlyArrayNonEmpty(conds) ? ` WHERE ${conds.join(' AND ')}` : ''})`,
+            a,
+          ),
+        );
         deferred.forEach((f) => f());
-        continue;
+        return;
       }
-      items.push({ source: this.Q, alias: a });
+      items.push(inner(this.Q, a));
       Match.value(ctx).pipe(
         Match.when({ kind: 'default' }, () => {
           if (defaultGraph === 'default') where.push(`${a}.g = 0`);
-          else if (Array.isArray(defaultGraph) && defaultGraph.length === 1) {
-            // SAFETY: `Array.isArray` holds, so the default graph is a list of graph terms.
-            where.push(`${a}.g = ${this.idOf((defaultGraph as ReadonlyArray<Term.Graph>)[0]!)}`);
+          else if (!Predicate.isString(defaultGraph) && Predicate.isTupleOf(defaultGraph, 1)) {
+            where.push(`${a}.g = ${this.idOf(defaultGraph[0])}`);
           } else where.push('1 = 0');
         }),
-        Match.when({ kind: 'const' }, (g) => {
-          where.push(`${a}.g = ${g.id}`);
+        Match.when({ kind: 'const' }, (graph) => {
+          where.push(`${a}.g = ${graph.id}`);
         }),
-        Match.when({ kind: 'var' }, (g) => {
-          bind(g.hidden, `${a}.g`);
+        Match.when({ kind: 'var' }, (graph) => {
+          bind(graph.hidden, `${a}.g`);
           where.push(this.namedGraphCond(`${a}.g`));
         }),
         Match.exhaustive,
@@ -727,7 +836,7 @@ class Compiler {
       position(p.subject, `${a}.s`, where);
       position(p.predicate, `${a}.p`, where);
       position(p.object, `${a}.o`, where);
-    }
+    });
     return { items, where, cols };
   }
 
@@ -755,8 +864,12 @@ class Compiler {
   values(op: Algebra.Values): Block {
     const vars = op.variables.map((v) => v.value);
     if (Arr.isReadonlyArrayEmpty(op.bindings)) {
-      const cols = new Map<string, Col>();
-      for (const v of vars) cols.set(v, { sql: this.dialect.nullId, nullable: true, type: 'id' });
+      const cols = MutableHashMap.fromIterable(
+        vars.map((v): readonly [string, Col] => [
+          v,
+          { sql: this.dialect.nullId, nullable: true, type: 'id' },
+        ]),
+      );
       return { items: [], where: ['1 = 0'], cols };
     }
     const rows = op.bindings.map((b) =>
@@ -773,20 +886,22 @@ class Compiler {
     const select = Arr.isReadonlyArrayEmpty(vars)
       ? 'column1 AS one'
       : vars.map((v, i) => `column${i + 1} AS ${this.col(v)}`);
-    const cols = new Map<string, Col>();
-    for (const v of vars) {
-      cols.set(v, {
-        sql: `${a}.${this.col(v)}`,
-        nullable: !op.bindings.every((b) => b.map.has(v)),
-        type: 'id',
-      });
-    }
+    const cols = MutableHashMap.fromIterable(
+      vars.map((v): readonly [string, Col] => [
+        v,
+        {
+          sql: `${a}.${this.col(v)}`,
+          nullable: !op.bindings.every((b) => b.map.has(v)),
+          type: 'id',
+        },
+      ]),
+    );
     return {
       items: [
-        {
-          source: `(SELECT ${Predicate.isString(select) ? select : select.join(', ')} FROM (VALUES ${rows.join(', ')}) AS ${a}_rows)`,
-          alias: a,
-        },
+        inner(
+          `(SELECT ${Predicate.isString(select) ? select : select.join(', ')} FROM (VALUES ${rows.join(', ')}) AS ${a}_rows)`,
+          a,
+        ),
       ],
       where: [],
       cols,
@@ -796,106 +911,108 @@ class Compiler {
   leftJoin(op: Algebra.LeftJoin, g: GraphCtx, unit: Block): Block {
     const left = this.op(op.left, g, unit);
     const right = this.op(op.right, g, unit);
-    for (const [n, c] of right.cols) {
-      if (isHidden(n) && (left.cols.get(n)?.nullable ?? true) && !c.nullable) {
-        return unsupported('OPTIONAL graph-dependent pattern under GRAPH ?var');
+    MutableHashMap.forEach(right.cols, (c, n) => {
+      const leftNullable = Option.match(MutableHashMap.get(left.cols, n), {
+        onNone: () => true,
+        onSome: (l) => l.nullable,
+      });
+      if (isHidden(n) && leftNullable && !c.nullable) {
+        unsupported('OPTIONAL graph-dependent pattern under GRAPH ?var');
       }
-    }
-    if (
-      op.expression === undefined &&
-      Arr.isReadonlyArrayEmpty(right.items) &&
-      Arr.isReadonlyArrayEmpty(right.where) &&
-      right.cols.size === 0
-    ) {
-      return left;
-    }
+    });
+    if (op.expression === undefined && isUnit(right)) return left;
     const a = this.anchored(left);
     const r = this.wrap(right);
     const conds: Array<string> = [];
-    const merged = new Map(a.cols);
-    const out = new Map(a.cols);
-    for (const [n, cr] of r.cols) {
-      const ca = a.cols.get(n);
-      if (ca === undefined) {
-        merged.set(n, cr);
-        out.set(n, { ...cr, nullable: true });
-      } else {
-        const { cond, merged: m } = this.compat(ca, cr);
-        conds.push(cond);
-        merged.set(n, m);
-        out.set(
-          n,
-          ca.nullable
-            ? { sql: `COALESCE(${ca.sql}, ${cr.sql})`, nullable: true, type: ca.type }
-            : ca,
-        );
-      }
-    }
+    const merged = MutableHashMap.fromIterable(a.cols);
+    const out = MutableHashMap.fromIterable(a.cols);
+    MutableHashMap.forEach(r.cols, (cr, n) =>
+      Option.match(MutableHashMap.get(a.cols, n), {
+        onNone: () => {
+          MutableHashMap.set(merged, n, cr);
+          MutableHashMap.set(out, n, { ...cr, nullable: true });
+        },
+        onSome: (ca) => {
+          const { cond, merged: m } = this.compat(ca, cr);
+          conds.push(cond);
+          MutableHashMap.set(merged, n, m);
+          MutableHashMap.set(
+            out,
+            n,
+            ca.nullable
+              ? { sql: `COALESCE(${ca.sql}, ${cr.sql})`, nullable: true, type: ca.type }
+              : ca,
+          );
+        },
+      }),
+    );
     if (op.expression !== undefined) {
       const e = this.ebv(this.operand(op.expression, { cols: merged, graph: g }));
       if (e !== 'TRUE') conds.push(e);
     }
     const on = Arr.isReadonlyArrayEmpty(conds) ? 'TRUE' : conds.join(' AND ');
+    const [item] = r.items;
     return {
-      items: [...a.items, { source: r.items[0]!.source, alias: r.items[0]!.alias, left: on }],
+      items: [...a.items, { source: item.source, alias: item.alias, left: Option.some(on) }],
       where: a.where,
       cols: out,
     };
   }
 
   union(a: Block, b: Block): Block {
-    const names = Array.from(new Set([...a.cols.keys(), ...b.cols.keys()]));
-    const cols = new Map<string, Omit<Col, 'sql'>>();
-    const types = new Map<string, 'id' | 'int'>();
-    for (const n of names) {
-      const ca = a.cols.get(n);
-      const cb = b.cols.get(n);
-      if (ca !== undefined && cb !== undefined && ca.type !== cb.type) {
-        return unsupported('UNION of integer and term columns');
+    const names = distinct([...MutableHashMap.keys(a.cols), ...MutableHashMap.keys(b.cols)]);
+    const cols: ColTypes = MutableHashMap.empty();
+    const types = MutableHashMap.empty<string, 'id' | 'int'>();
+    names.forEach((n) => {
+      const ca = MutableHashMap.get(a.cols, n);
+      const cb = MutableHashMap.get(b.cols, n);
+      if (Option.isSome(ca) && Option.isSome(cb) && ca.value.type !== cb.value.type) {
+        unsupported('UNION of integer and term columns');
       }
-      if (isHidden(n) && (ca === undefined || cb === undefined || ca.nullable || cb.nullable)) {
-        return unsupported('UNION of graph-dependent and independent patterns under GRAPH ?var');
+      const nullable =
+        Option.isNone(ca) || Option.isNone(cb) || ca.value.nullable || cb.value.nullable;
+      if (isHidden(n) && nullable) {
+        unsupported('UNION of graph-dependent and independent patterns under GRAPH ?var');
       }
-      const type = (ca ?? cb)!.type;
-      types.set(n, type);
-      cols.set(n, {
-        nullable: ca === undefined || cb === undefined || ca.nullable || cb.nullable,
-        type,
-      });
-    }
+      // `n` is a column of `a` or of `b`.
+      const type = Option.isSome(ca) ? ca.value.type : Option.isSome(cb) ? cb.value.type : 'id';
+      MutableHashMap.set(types, n, type);
+      MutableHashMap.set(cols, n, { nullable, type });
+    });
     const sql = `${this.render(a, names, { types })} UNION ALL ${this.render(b, names, { types })}`;
     return this.wrapSql(sql, cols);
   }
 
   minus(a: Block, b: Block): Block {
-    const shared = Array.from(b.cols.keys()).filter((n) => a.cols.has(n));
-    for (const n of b.cols.keys()) {
-      if (isHidden(n) && !a.cols.has(n)) {
-        return unsupported('MINUS of a graph-dependent pattern under GRAPH ?var');
-      }
+    const bNames = Arr.fromIterable(MutableHashMap.keys(b.cols));
+    const shared = bNames.filter((n) => MutableHashMap.has(a.cols, n));
+    if (bNames.some((n) => isHidden(n) && !MutableHashMap.has(a.cols, n))) {
+      return unsupported('MINUS of a graph-dependent pattern under GRAPH ?var');
     }
     const overlap = shared.filter((n) => !isHidden(n));
     if (Arr.isReadonlyArrayEmpty(overlap)) return a;
     const m = this.wrap(b);
-    const conds: Array<string> = [];
-    const overlapConds: Array<C> = [];
-    for (const n of shared) {
-      const ca = a.cols.get(n)!;
-      const cb = m.cols.get(n)!;
-      conds.push(this.compat(ca, cb).cond);
-      if (!isHidden(n)) {
-        overlapConds.push(
+    const pairs = Arr.filterMap(shared, (name): Result.Result<Shared, void> => {
+      const left = MutableHashMap.get(a.cols, name);
+      const right = MutableHashMap.get(m.cols, name);
+      return Option.isSome(left) && Option.isSome(right)
+        ? Result.succeed({ name, left: left.value, right: right.value })
+        : Result.failVoid;
+    });
+    const conds = pairs.map(({ left, right }) => this.compat(left, right).cond);
+    const overlapCond = or(
+      ...pairs
+        .filter(({ name }) => !isHidden(name))
+        .map(({ left, right }) =>
           and(
-            ca.nullable ? `${ca.sql} IS NOT NULL` : true,
-            cb.nullable ? `${cb.sql} IS NOT NULL` : true,
+            left.nullable ? `${left.sql} IS NOT NULL` : true,
+            right.nullable ? `${right.sql} IS NOT NULL` : true,
           ),
-        );
-      }
-    }
-    const overlapCond = or(...overlapConds);
+        ),
+    );
     if (overlapCond === false) return a;
     if (overlapCond !== true) conds.push(overlapCond);
-    const item = m.items[0]!;
+    const [item] = m.items;
     return {
       ...a,
       where: [
@@ -906,40 +1023,45 @@ class Compiler {
   }
 
   graph(op: Algebra.Graph, g: GraphCtx, unit: Block): Block {
-    if (op.name._tag === 'NamedNode') {
-      const id = this.idOf(op.name);
+    const name = op.name;
+    if (Term.isNamedNode(name)) {
+      const id = this.idOf(name);
       const input = this.op(op.input, { kind: 'const', id }, unit);
       const named = this.context.dataset.namedGraphs;
-      let cond: string;
-      if (named === 'all') {
-        cond = `(EXISTS (SELECT 1 FROM ${this.G} WHERE id = ${id}) OR EXISTS (SELECT 1 FROM ${this.Q} WHERE g = ${id}))`;
-      } else cond = named.some((n) => n.key === op.name.key) ? 'TRUE' : '1 = 0';
+      const cond =
+        named === 'all'
+          ? `(EXISTS (SELECT 1 FROM ${this.G} WHERE id = ${id}) OR EXISTS (SELECT 1 FROM ${this.Q} WHERE g = ${id}))`
+          : named.some((n) => n.key === name.key)
+            ? 'TRUE'
+            : '1 = 0';
       return cond === 'TRUE' ? input : { ...input, where: [...input.where, cond] };
     }
     const hidden = `#${this.alias('g')}`;
-    let input = this.op(op.input, { kind: 'var', hidden }, unit);
-    let gcol = input.cols.get(hidden);
-    if (gcol !== undefined && gcol.nullable) {
+    const body = this.op(op.input, { kind: 'var', hidden }, unit);
+    const bound = MutableHashMap.get(body.cols, hidden);
+    if (Option.isSome(bound) && bound.value.nullable) {
       return unsupported('Graph-independent solutions under GRAPH ?var');
     }
-    if (gcol === undefined) {
-      const alias = this.alias('n');
-      input = {
-        ...input,
-        items: [...input.items, { source: this.namedGraphsSource(), alias }],
-      };
-      gcol = { sql: `${alias}.g`, nullable: false, type: 'id' };
-    }
-    const cols = new Map(input.cols);
-    cols.delete(hidden);
+    const { input, gcol } = Option.match(bound, {
+      onSome: (c): GraphInput => ({ input: body, gcol: c }),
+      onNone: (): GraphInput => {
+        const alias = this.alias('n');
+        return {
+          input: { ...body, items: [...body.items, inner(this.namedGraphsSource(), alias)] },
+          gcol: { sql: `${alias}.g`, nullable: false, type: 'id' },
+        };
+      },
+    });
+    const cols = MutableHashMap.fromIterable(input.cols);
+    MutableHashMap.remove(cols, hidden);
     const where = [...input.where];
-    const existing = cols.get(op.name.value);
-    if (existing === undefined) cols.set(op.name.value, gcol);
-    else {
-      const { cond } = this.compat(existing, gcol);
-      where.push(cond);
-      cols.set(op.name.value, gcol);
-    }
+    Option.match(MutableHashMap.get(cols, name.value), {
+      onNone: () => undefined,
+      onSome: (existing) => {
+        where.push(this.compat(existing, gcol).cond);
+      },
+    });
+    MutableHashMap.set(cols, name.value, gcol);
     void g;
     return { items: input.items, where, cols };
   }
@@ -947,87 +1069,78 @@ class Compiler {
   group(op: Algebra.Group, g: GraphCtx, unit: Block): Block {
     if (g.kind === 'var') return unsupported('GROUP inside GRAPH ?var');
     const input = this.op(op.input, g, unit);
-    const needed = new Set<string>();
-    const keyVars: Array<{ readonly source: string; readonly target: string }> = [];
-    for (const k of op.keys) {
-      if (k.expression._tag !== 'Variable') return unsupported('Non-variable group key');
-      if (!input.cols.has(k.expression.value)) return unsupported('Group key is never bound');
-      needed.add(k.expression.value);
-      keyVars.push({ source: k.expression.value, target: k.variable.value });
-    }
-    const aggs: Array<{
-      readonly target: string;
-      readonly sql: (s: string) => string;
-      readonly col: Omit<Col, 'sql'>;
-    }> = [];
-    for (const { variable, aggregate } of op.aggregates) {
+    const needed = MutableHashSet.empty<string>();
+    const keyVars = op.keys.map((k): GroupKey => {
+      const e = k.expression;
+      if (!Term.isVariable(e)) return unsupported('Non-variable group key');
+      const col = Option.getOrElse(MutableHashMap.get(input.cols, e.value), () =>
+        unsupported('Group key is never bound'),
+      );
+      MutableHashSet.add(needed, e.value);
+      return { source: e.value, target: k.variable.value, col };
+    });
+    const aggs = op.aggregates.map(({ variable, aggregate }): Aggregate => {
       const e = aggregate.expression;
       if (aggregate.name === 'COUNT') {
         if (e === '*') {
           if (aggregate.distinct) return unsupported('COUNT(DISTINCT *)');
-          aggs.push({
+          return {
             target: variable.value,
             sql: () => 'COUNT(*)',
             col: { nullable: false, type: 'int' },
-          });
-          continue;
+          };
         }
-        if (e._tag !== 'Variable') return unsupported('COUNT of an expression');
+        if (!Term.isVariable(e)) return unsupported('COUNT of an expression');
         const name = e.value;
-        if (!input.cols.has(name)) {
-          aggs.push({
-            target: variable.value,
-            sql: () => '0',
-            col: { nullable: false, type: 'int' },
-          });
-          continue;
+        if (!MutableHashMap.has(input.cols, name)) {
+          return { target: variable.value, sql: () => '0', col: { nullable: false, type: 'int' } };
         }
-        needed.add(name);
-        aggs.push({
+        MutableHashSet.add(needed, name);
+        return {
           target: variable.value,
           sql: (s) => `COUNT(${aggregate.distinct ? 'DISTINCT ' : ''}${s}.${this.col(name)})`,
           col: { nullable: false, type: 'int' },
-        });
-        continue;
+        };
       }
-      if (aggregate.name === 'SAMPLE' && e !== '*' && e._tag === 'Variable') {
+      if (aggregate.name === 'SAMPLE' && Term.isVariable(e)) {
         const name = e.value;
-        const c = input.cols.get(name);
-        if (c === undefined) {
-          aggs.push({
+        return Option.match(MutableHashMap.get(input.cols, name), {
+          onNone: (): Aggregate => ({
             target: variable.value,
             sql: () => this.dialect.nullId,
             col: { nullable: true, type: 'id' },
-          });
-          continue;
-        }
-        needed.add(name);
-        aggs.push({
-          target: variable.value,
-          sql: (s) => `MIN(${s}.${this.col(name)})`,
-          col: { nullable: true, type: c.type },
+          }),
+          onSome: (c): Aggregate => {
+            MutableHashSet.add(needed, name);
+            return {
+              target: variable.value,
+              sql: (s) => `MIN(${s}.${this.col(name)})`,
+              col: { nullable: true, type: c.type },
+            };
+          },
         });
-        continue;
       }
       return unsupported(`Aggregate ${aggregate.name}`);
-    }
+    });
     const s = this.alias('a');
-    const select: Array<string> = [];
-    const cols = new Map<string, Omit<Col, 'sql'>>();
-    for (const k of keyVars) {
-      const c = input.cols.get(k.source)!;
-      select.push(`${s}.${this.col(k.source)} AS ${this.col(k.target)}`);
-      cols.set(k.target, { nullable: c.nullable, type: c.type });
-    }
-    for (const a of aggs) {
-      select.push(`${a.sql(s)} AS ${this.col(a.target)}`);
-      cols.set(a.target, a.col);
-    }
-    const inner = this.render(input, Array.from(needed));
+    const cols: ColTypes = MutableHashMap.empty();
+    const select = [
+      ...keyVars.map((k) => {
+        const sql = `${s}.${this.col(k.source)} AS ${this.col(k.target)}`;
+        MutableHashMap.set(cols, k.target, { nullable: k.col.nullable, type: k.col.type });
+        return sql;
+      }),
+      ...aggs.map((agg) => {
+        const sql = `${agg.sql(s)} AS ${this.col(agg.target)}`;
+        MutableHashMap.set(cols, agg.target, agg.col);
+        return sql;
+      }),
+    ];
+    const innerSql = this.render(input, Arr.fromIterable(needed));
     const groupBy = Arr.isReadonlyArrayEmpty(keyVars)
       ? ''
-      : ` GROUP BY ${Array.from(new Set(keyVars.map((k) => `${s}.${this.col(k.source)}`))).join(', ')}`;
-    const sql = `SELECT ${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')} FROM (${inner}) ${s}${groupBy}`;
+      : ` GROUP BY ${distinct(keyVars.map((k) => `${s}.${this.col(k.source)}`)).join(', ')}`;
+    const sql = `SELECT ${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')} FROM (${innerSql}) ${s}${groupBy}`;
     return this.wrapSql(sql, cols);
   }
 
@@ -1036,26 +1149,29 @@ class Compiler {
   /** A dictionary attribute of a term id expression. */
   attr(id: string, field: 'kind' | 'value' | 'datatype' | 'lang' | 'dir' | 'cls' | 'num'): string {
     const lookup = `(SELECT ${field} FROM ${this.T} WHERE id = ${id})`;
-    if (this.locals.size === 0) return lookup;
+    if (MutableHashMap.isEmpty(this.locals)) return lookup;
     if (!this.localsKnown) return lookup;
-    const branches = Array.from(this.locals.values()).map(({ id: localId, term }) => {
-      const v = this.lit(Enc.encode(term, [0, 0, 0])[field]);
-      // Typed values, so that the branches agree with the dictionary column.
-      const typed =
-        field === 'num'
-          ? this.dialect.castDouble(v)
-          : field === 'kind' || field === 'cls'
-            ? this.dialect.castInt(v)
-            : this.dialect.castText(v);
-      return `WHEN ${localId} THEN ${typed}`;
-    });
+    const branches = Arr.fromIterable(MutableHashMap.values(this.locals)).map(
+      ({ id: localId, term }) => {
+        const row = Enc.encode(term, [0, 0, 0]);
+        const v = field === 'num' ? this.litOf(row.num) : this.lit(row[field]);
+        // Typed values, so that the branches agree with the dictionary column.
+        const typed =
+          field === 'num'
+            ? this.dialect.castDouble(v)
+            : field === 'kind' || field === 'cls'
+              ? this.dialect.castInt(v)
+              : this.dialect.castText(v);
+        return `WHEN ${localId} THEN ${typed}`;
+      },
+    );
     return `(CASE WHEN ${id} < 0 THEN (CASE ${id} ${branches.join(' ')} END) ELSE ${lookup} END)`;
   }
 
   termOperand(id: string, nullable: boolean): Operand {
     return {
       tag: 'term',
-      classes: undefined,
+      classes: Option.none(),
       isNull: nullable ? Q(`${id} IS NULL`) : S(false),
       cls: Q(this.attr(id, 'cls')),
       kind: Q(this.attr(id, 'kind')),
@@ -1072,17 +1188,18 @@ class Compiler {
     const { cls, num } = Enc.classify(constant);
     const base = {
       tag: 'const' as const,
-      classes: [cls],
+      classes: Option.some([cls]),
       isNull: S(false),
       cls: S(cls),
-      num: S(num),
+      num: SO(num),
       id: S(this.idOf(constant)),
       term: constant,
     };
     return Match.value(constant).pipe(
+      Match.withReturnType<Operand>(),
       Match.tag('NamedNode', 'BlankNode', (term) => ({
         ...base,
-        kind: S(term._tag === 'NamedNode' ? Enc.Kind.NamedNode : Enc.Kind.BlankNode),
+        kind: S(Term.isNamedNode(term) ? Enc.Kind.NamedNode : Enc.Kind.BlankNode),
         value: S(term.value),
         datatype: S(''),
         lang: S(''),
@@ -1099,7 +1216,7 @@ class Compiler {
       Match.tag('Triple', () => ({
         ...base,
         kind: S(Enc.Kind.Triple),
-        value: S(null),
+        value: SNULL,
         datatype: S(''),
         lang: S(''),
         dir: S(''),
@@ -1111,7 +1228,7 @@ class Compiler {
   intOperand(sql: string, nullable: boolean): Operand {
     return {
       tag: 'int',
-      classes: [Enc.Cls.SafeNumber],
+      classes: Option.some([Enc.Cls.SafeNumber]),
       isNull: nullable ? Q(`${sql} IS NULL`) : S(false),
       cls: S(Enc.Cls.SafeNumber),
       kind: S(Enc.Kind.Literal),
@@ -1126,7 +1243,7 @@ class Compiler {
   strOperand(sql: string): Operand {
     return {
       tag: 'str',
-      classes: [Enc.Cls.String],
+      classes: Option.some([Enc.Cls.String]),
       isNull: Q(`${sql} IS NULL`),
       cls: S(Enc.Cls.String),
       kind: S(Enc.Kind.Literal),
@@ -1134,7 +1251,7 @@ class Compiler {
       datatype: S(Term.XSD_STRING),
       lang: S(''),
       dir: S(''),
-      num: S(null),
+      num: SNULL,
     };
   }
 
@@ -1142,7 +1259,7 @@ class Compiler {
     if (sql === 'TRUE' || sql === 'FALSE') return this.constOperand(sql === 'TRUE' ? TRUE : FALSE);
     return {
       tag: 'bool',
-      classes: [Enc.Cls.Boolean],
+      classes: Option.some([Enc.Cls.Boolean]),
       isNull: Q(`${sql} IS NULL`),
       cls: S(Enc.Cls.Boolean),
       kind: S(Enc.Kind.Literal),
@@ -1158,7 +1275,7 @@ class Compiler {
   iriOperand(sql: string): Operand {
     return {
       tag: 'iri',
-      classes: [Enc.Cls.Resource],
+      classes: Option.some([Enc.Cls.Resource]),
       isNull: Q(`${sql} IS NULL`),
       cls: S(Enc.Cls.Resource),
       kind: S(Enc.Kind.NamedNode),
@@ -1166,21 +1283,21 @@ class Compiler {
       datatype: S(''),
       lang: S(''),
       dir: S(''),
-      num: S(null),
+      num: SNULL,
     };
   }
 
   readonly NULL: Operand = {
     tag: 'null',
-    classes: [],
+    classes: Option.some([]),
     isNull: S(true),
-    cls: S(null),
-    kind: S(null),
-    value: S(null),
-    datatype: S(null),
-    lang: S(null),
-    dir: S(null),
-    num: S(null),
+    cls: SNULL,
+    kind: SNULL,
+    value: SNULL,
+    datatype: SNULL,
+    lang: SNULL,
+    dir: SNULL,
+    num: SNULL,
   };
 
   /** A term-valued expression as a column (for `BIND`). */
@@ -1188,22 +1305,22 @@ class Compiler {
     return Match.value(operand).pipe(
       Match.withReturnType<Col>(),
       Match.when({ tag: 'term' }, (o) => ({
-        sql: this.f(o.id!),
-        nullable: !isStatic(o.isNull) || o.isNull.s !== false,
+        sql: this.f(o.id),
+        nullable: !isStaticValue(o.isNull, false),
         type: 'id',
       })),
       Match.when({ tag: 'const' }, (o) => ({
-        sql: String(this.idOf(o.term!)),
+        sql: String(this.idOf(o.term)),
         nullable: false,
         type: 'id',
       })),
       Match.when({ tag: 'int' }, (o) => ({
         sql: this.f(o.num),
-        nullable: !isStatic(o.isNull) || o.isNull.s !== false,
+        nullable: !isStaticValue(o.isNull, false),
         type: 'int',
       })),
       Match.when({ tag: 'bool' }, (o) => ({
-        sql: `(CASE WHEN ${o.bool!} THEN ${this.idOf(TRUE)} WHEN NOT ${o.bool!} THEN ${this.idOf(FALSE)} END)`,
+        sql: `(CASE WHEN ${o.bool} THEN ${this.idOf(TRUE)} WHEN NOT ${o.bool} THEN ${this.idOf(FALSE)} END)`,
         nullable: true,
         type: 'id',
       })),
@@ -1215,20 +1332,22 @@ class Compiler {
   /** Compiles an expression to an operand. */
   operand(expr: Algebra.Expression, env: Env): Operand {
     return Match.value(expr).pipe(
-      Match.tag('Variable', (e) => {
-        const c = env.cols.get(e.value);
-        if (c === undefined) return this.NULL;
-        return c.type === 'int'
-          ? this.intOperand(c.sql, c.nullable)
-          : this.termOperand(c.sql, c.nullable);
-      }),
+      Match.tag('Variable', (e) =>
+        Option.match(MutableHashMap.get(env.cols, e.value), {
+          onNone: () => this.NULL,
+          onSome: (c) =>
+            c.type === 'int'
+              ? this.intOperand(c.sql, c.nullable)
+              : this.termOperand(c.sql, c.nullable),
+        }),
+      ),
       Match.tag('NamedNode', 'Literal', (e) => this.constOperand(e)),
       Match.tag('BlankNode', () => unsupported('Blank node in an expression')),
-      Match.tag('Triple', (e) => {
-        if (!Term.isGround(e)) return unsupported('Triple term pattern in an expression');
-        // SAFETY: `Term.isGround` holds, so the triple term has no variables.
-        return this.constOperand(e as Term.Triple);
-      }),
+      Match.tag('Triple', (e) =>
+        isGroundTriple(e)
+          ? this.constOperand(e)
+          : unsupported('Triple term pattern in an expression'),
+      ),
       Match.tag('FunctionCall', (e) => unsupported(`Function <${e.function.value}>`)),
       Match.tag('Exists', (e) => this.boolOperand(this.exists(e, env))),
       Match.tag('Operation', (e) => this.operation(e, env)),
@@ -1238,7 +1357,11 @@ class Compiler {
 
   operation(expr: Algebra.OperationExpression, env: Env): Operand {
     const args = expr.args;
-    const arg = (i: number) => this.operand(args[i]!, env);
+    const arg = (i: number) =>
+      Option.match(Arr.get(args, i), {
+        onNone: () => unsupported(`Operator ${expr.operator} without argument ${i + 1}`),
+        onSome: (a) => this.operand(a, env),
+      });
     const bool = (sql: string) => this.boolOperand(sql);
     return Match.value(expr)
       .pipe(
@@ -1257,18 +1380,25 @@ class Compiler {
           return bool(e.operator === 'IN' ? any : `(NOT ${any})`);
         }),
         Match.when({ operator: 'BOUND' }, () => {
-          const v = args[0]!;
-          if (v._tag !== 'Variable') return unsupported('BOUND of a non-variable');
-          const c = env.cols.get(v.value);
-          return bool(c === undefined ? 'FALSE' : c.nullable ? `(${c.sql} IS NOT NULL)` : 'TRUE');
+          const v = args[0];
+          if (!Term.isVariable(v)) return unsupported('BOUND of a non-variable');
+          return bool(
+            Option.match(MutableHashMap.get(env.cols, v.value), {
+              onNone: () => 'FALSE',
+              onSome: (c) => (c.nullable ? `(${c.sql} IS NOT NULL)` : 'TRUE'),
+            }),
+          );
         }),
         Match.when({ operator: 'SAMETERM' }, () => {
           const a = arg(0);
           const b = arg(1);
           if (a.tag === 'null' || b.tag === 'null') return bool('NULL');
-          if (a.id === undefined || b.id === undefined)
+          const ia = operandId(a);
+          const ib = operandId(b);
+          if (Option.isNone(ia) || Option.isNone(ib)) {
             return unsupported('sameTerm of computed values');
-          return bool(`(${this.f(a.id)} = ${this.f(b.id)})`);
+          }
+          return bool(`(${this.f(ia.value)} = ${this.f(ib.value)})`);
         }),
         Match.when({ operator: Match.is('ISIRI', 'ISURI') }, () =>
           bool(this.kindTest(arg(0), Enc.Kind.NamedNode)),
@@ -1293,9 +1423,10 @@ class Compiler {
         Match.when({ operator: 'STR' }, () => {
           const a = arg(0);
           if (a.tag === 'const') {
-            const t = a.term!;
-            if (t._tag === 'NamedNode' || t._tag === 'Literal')
+            const t = a.term;
+            if (Term.isNamedNode(t) || Term.isLiteral(t)) {
               return this.constOperand(Term.literal(t.value));
+            }
             return this.NULL;
           }
           if (a.tag === 'str' || a.tag === 'null') return a;
@@ -1315,8 +1446,8 @@ class Compiler {
         Match.when({ operator: 'LANG' }, () => {
           const a = arg(0);
           if (a.tag === 'const') {
-            const t = a.term!;
-            return t._tag === 'Literal' ? this.constOperand(Term.literal(t.language)) : this.NULL;
+            const t = a.term;
+            return Term.isLiteral(t) ? this.constOperand(Term.literal(t.language)) : this.NULL;
           }
           if (a.tag === 'null') return a;
           return this.strOperand(
@@ -1334,8 +1465,8 @@ class Compiler {
         Match.when({ operator: 'DATATYPE' }, () => {
           const a = arg(0);
           if (a.tag === 'const') {
-            const t = a.term!;
-            return t._tag === 'Literal' ? this.constOperand(t.datatype) : this.NULL;
+            const t = a.term;
+            return Term.isLiteral(t) ? this.constOperand(t.datatype) : this.NULL;
           }
           if (a.tag === 'null') return a;
           return this.iriOperand(
@@ -1388,9 +1519,10 @@ class Compiler {
           const a = arg(0);
           const b = arg(1);
           if (b.tag !== 'const') return unsupported('LANGMATCHES with a non-constant range');
-          const range = b.term!;
-          if (range._tag !== 'Literal' || Enc.classify(range).cls !== Enc.Cls.String)
+          const range = b.term;
+          if (!Term.isLiteral(range) || Enc.classify(range).cls !== Enc.Cls.String) {
             return bool('NULL');
+          }
           // eslint-disable-next-line no-control-regex
           if (!/^[\x00-\x7f]*$/.test(range.value)) return unsupported('Non-ASCII language range');
           const r = range.value.toLowerCase();
@@ -1413,13 +1545,16 @@ class Compiler {
         }),
         Match.when({ operator: 'COALESCE' }, () => {
           const parts = args.map((_, i) => arg(i)).filter((o) => o.tag !== 'null');
-          if (Arr.isReadonlyArrayEmpty(parts)) return this.NULL;
-          const cols = parts.map((o) => this.termValued(o));
-          const type = cols[0]!.type;
-          if (cols.some((c) => c.type !== type))
+          if (!Arr.isReadonlyArrayNonEmpty(parts)) return this.NULL;
+          const cols = Arr.map(parts, (o) => this.termValued(o));
+          const [first, ...rest] = cols;
+          const type = first.type;
+          if (rest.some((c) => c.type !== type)) {
             return unsupported('COALESCE of integer and term values');
-          const sql =
-            cols.length === 1 ? cols[0]!.sql : `COALESCE(${cols.map((c) => c.sql).join(', ')})`;
+          }
+          const sql = Arr.isReadonlyArrayEmpty(rest)
+            ? first.sql
+            : `COALESCE(${cols.map((c) => c.sql).join(', ')})`;
           const nullable = cols.every((c) => c.nullable);
           return type === 'int' ? this.intOperand(sql, nullable) : this.termOperand(sql, nullable);
         }),
@@ -1430,27 +1565,27 @@ class Compiler {
   // --- conditions -------------------------------------------------------------
 
   isNullC(o: Operand): C {
-    return isStatic(o.isNull) ? o.isNull.s === true : o.isNull.q;
+    return isStatic(o.isNull) ? Option.exists(o.isNull.s, (s) => s === true) : o.isNull.q;
   }
 
-  eqC(f: F, v: Static): C {
-    if (isStatic(f)) return f.s === null ? false : f.s === v;
+  eqC(f: F, v: Scalar): C {
+    if (isStatic(f)) return Option.exists(f.s, (s) => s === v);
     return `${f.q} = ${this.lit(v)}`;
   }
 
   clsIn(o: Operand, classes: ReadonlyArray<number>): C {
     const f = o.cls;
-    if (isStatic(f)) return Predicate.isNumber(f.s) && classes.includes(f.s);
+    if (isStatic(f)) return Option.exists(f.s, (s) => Predicate.isNumber(s) && classes.includes(s));
     return classes.length === 1 ? `${f.q} = ${classes[0]}` : `${f.q} IN (${classes.join(', ')})`;
   }
 
   eqFF(a: F, b: F): C {
-    if (isStatic(a) && isStatic(b)) return a.s === b.s;
+    if (isStatic(a) && isStatic(b)) return Equal.equals(a.s, b.s);
     return `${this.f(a)} = ${this.f(b)}`;
   }
 
   ne(a: F, b: F): C {
-    if (isStatic(a) && isStatic(b)) return a.s !== b.s;
+    if (isStatic(a) && isStatic(b)) return !Equal.equals(a.s, b.s);
     return `${this.f(a)} <> ${this.f(b)}`;
   }
 
@@ -1468,22 +1603,30 @@ class Compiler {
     pairs: ReadonlyArray<readonly [number, number]>,
     a: Operand,
     b: Operand,
-    handled: ReadonlySet<string> = new Set(),
+    handled: MutableHashSet.MutableHashSet<string> = MutableHashSet.empty(),
   ): void {
-    const possible = (o: Operand, c: number) => o.classes === undefined || o.classes.includes(c);
-    for (const [x, y] of pairs) {
-      for (const [p, q] of x === y ? [[x, y] as const] : [[x, y] as const, [y, x] as const]) {
-        if (!possible(a, p) || !possible(b, q) || handled.has(`${p},${q}`)) continue;
+    const possible = (o: Operand, c: number) =>
+      Option.match(o.classes, { onNone: () => true, onSome: (classes) => classes.includes(c) });
+    pairs.forEach(([x, y]) => {
+      const orders: ReadonlyArray<readonly [number, number]> =
+        x === y
+          ? [[x, y]]
+          : [
+              [x, y],
+              [y, x],
+            ];
+      orders.forEach(([p, q]) => {
+        if (!possible(a, p) || !possible(b, q) || MutableHashSet.has(handled, `${p},${q}`)) return;
         const r: Risk = {
           a: p,
-          aStatic: a.classes !== undefined,
+          aStatic: Option.isSome(a.classes),
           b: q,
-          bStatic: b.classes !== undefined,
+          bStatic: Option.isSome(b.classes),
         };
         if (r.aStatic && r.bStatic) unsupported('Comparison that SQL cannot evaluate exactly');
         this.risks.push(r);
-      }
-    }
+      });
+    });
   }
 
   /**
@@ -1494,19 +1637,21 @@ class Compiler {
    */
   promoted(a: Operand, b: Operand, op: string): Promotions {
     const branches: Array<readonly [C, string]> = [];
-    const handled = new Set<string>();
+    const handled = MutableHashSet.empty<string>();
     const one = (t: Operand, c: Operand, flip: boolean) => {
-      if (c.tag !== 'const' || t.tag === 'const' || !isStatic(c.num) || !isStatic(c.cls)) return;
-      const v = c.num.s;
-      const cc = c.cls.s;
-      if (!Predicate.isNumber(v)) return;
-      const add = (cls: number, value: number) => {
-        if (!Number.isFinite(value)) return;
+      if (c.tag !== 'const' || t.tag === 'const') return;
+      const value = staticNumber(c.num);
+      const constClass = staticNumber(c.cls);
+      if (Option.isNone(value) || Option.isNone(constClass)) return;
+      const v = value.value;
+      const cc = constClass.value;
+      const add = (cls: number, n: number) => {
+        if (!Number.isFinite(n)) return;
         const cmp = flip
-          ? `${this.lit(value)} ${op} ${this.f(t.num)}`
-          : `${this.f(t.num)} ${op} ${this.lit(value)}`;
+          ? `${this.lit(n)} ${op} ${this.f(t.num)}`
+          : `${this.f(t.num)} ${op} ${this.lit(n)}`;
         branches.push([this.clsIn(t, [cls]), cmp]);
-        handled.add(flip ? `${cc},${cls}` : `${cls},${cc}`);
+        MutableHashSet.add(handled, flip ? `${cc},${cls}` : `${cls},${cc}`);
       };
       if (cc === Enc.Cls.SafeNumber) add(Enc.Cls.Float, Math.fround(v));
       else if (cc === Enc.Cls.Double) add(Enc.Cls.Float, v);
@@ -1517,24 +1662,38 @@ class Compiler {
     return { branches, handled };
   }
 
+  /**
+   * The branches comparing two numbers of the same SQL-comparable kind
+   * (integers, decimals and doubles together; floats with floats) by `num`.
+   */
+  numericBranches(a: Operand, b: Operand, num: string): Array<readonly [C, string]> {
+    return [
+      [and(this.clsIn(a, [1, 2]), this.clsIn(b, [1, 2])), num],
+      [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],
+    ];
+  }
+
   /** SPARQL `=` (value equality, with errors as `NULL`). */
   equals(a: Operand, b: Operand): string {
     if (a.tag === 'null' || b.tag === 'null') return 'NULL';
     if (a.tag === 'const' && b.tag === 'const') {
-      const r = Expression.equals(a.term!, b.term!);
+      const r = Expression.equals(a.term, b.term);
       return Result.isSuccess(r) ? (r.success ? 'TRUE' : 'FALSE') : 'NULL';
     }
     const promoted = this.promoted(a, b, '=');
     this.risk(RISK_EQUAL, a, b, promoted.handled);
-    const bothIds = a.id !== undefined && b.id !== undefined;
+    const ia = operandId(a);
+    const ib = operandId(b);
+    const bothIds = Option.isSome(ia) && Option.isSome(ib);
+    const sameId: C =
+      Option.isSome(ia) && Option.isSome(ib) ? this.eqFF(ia.value, ib.value) : false;
     const num = `${this.f(a.num)} = ${this.f(b.num)}`;
     return caseOf(
       [
         [or(this.isNullC(a), this.isNullC(b)), 'NULL'],
-        [bothIds ? this.eqFF(a.id, b.id) : false, 'TRUE'],
+        [sameId, 'TRUE'],
         ...promoted.branches,
-        [and(this.clsIn(a, [1, 2]), this.clsIn(b, [1, 2])), num],
-        [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],
+        ...this.numericBranches(a, b, num),
         [and(this.clsIn(a, [6]), this.clsIn(b, [6])), num],
         [and(this.clsIn(a, [4]), this.clsIn(b, [4])), `${this.f(a.value)} = ${this.f(b.value)}`],
         [
@@ -1567,8 +1726,7 @@ class Compiler {
       [
         [or(this.isNullC(a), this.isNullC(b)), 'NULL'],
         ...promoted.branches,
-        [and(this.clsIn(a, [1, 2]), this.clsIn(b, [1, 2])), num],
-        [and(this.clsIn(a, [3]), this.clsIn(b, [3])), num],
+        ...this.numericBranches(a, b, num),
         [and(this.clsIn(a, [4]), this.clsIn(b, [4])), str],
         [
           and(
@@ -1588,10 +1746,10 @@ class Compiler {
   /** The effective boolean value (SQL boolean, `NULL` = error). */
   ebv(operand: Operand): string {
     return Match.value(operand).pipe(
-      Match.when({ tag: 'bool' }, (o) => o.bool!),
+      Match.when({ tag: 'bool' }, (o) => o.bool),
       Match.when({ tag: Match.is('null', 'iri') }, () => 'NULL'),
       Match.when({ tag: 'const' }, (o) => {
-        const r = Expression.effectiveBooleanValue(o.term!);
+        const r = Expression.effectiveBooleanValue(o.term);
         return Result.isSuccess(r) ? (r.success ? 'TRUE' : 'FALSE') : 'NULL';
       }),
       Match.when({ tag: 'int' }, (o) => `(${this.f(o.num)} <> 0)`),
@@ -1617,19 +1775,20 @@ class Compiler {
   /** `EXISTS` / `NOT EXISTS` as a correlated subquery. */
   exists(e: Algebra.ExistsExpression, env: Env): string {
     const context: Block = { items: [], where: [], cols: env.cols };
-    const inner = this.op(e.input, env.graph, context);
-    const where = [...inner.where];
+    const body = this.op(e.input, env.graph, context);
+    const where = [...body.where];
     if (env.graph.kind === 'var') {
       const hidden = env.graph.hidden;
-      const ic = inner.cols.get(hidden);
-      const oc = env.cols.get(hidden);
-      if (ic !== undefined) {
-        if (oc === undefined || oc.nullable)
+      const ic = MutableHashMap.get(body.cols, hidden);
+      const oc = MutableHashMap.get(env.cols, hidden);
+      if (Option.isSome(ic)) {
+        if (Option.isNone(oc) || oc.value.nullable) {
           return unsupported('EXISTS in a graph-independent pattern');
-        if (ic.sql !== oc.sql) where.push(`${ic.sql} = ${oc.sql}`);
+        }
+        if (ic.value.sql !== oc.value.sql) where.push(`${ic.value.sql} = ${oc.value.sql}`);
       }
     }
-    const sql = `EXISTS (SELECT 1${this.from(inner.items)}${this.whereClause(where)})`;
+    const sql = `EXISTS (SELECT 1${this.from(body.items)}${this.whereClause(where)})`;
     return e.negated ? `(NOT ${sql})` : sql;
   }
 }
@@ -1641,23 +1800,22 @@ class Compiler {
 const compileOnce = (
   op: Algebra.Operation,
   context: TranslationContext,
-  resolve: (term: Term.GroundTerm) => number | undefined,
-  locals: Map<string, { readonly id: number; readonly term: Term.GroundTerm }>,
+  resolve: (term: Term.GroundTerm) => Option.Option<number>,
+  locals: Locals,
   localsKnown: boolean,
 ): CompiledQuery => {
   const c = new Compiler(context, resolve, locals, localsKnown);
-  const g: GraphCtx =
-    context.activeGraph._tag === 'NamedGraph'
-      ? { kind: 'const', id: c.idOf(context.activeGraph.graph) }
-      : { kind: 'default' };
+  const g: GraphCtx = Predicate.isTagged(context.activeGraph, 'NamedGraph')
+    ? { kind: 'const', id: c.idOf(context.activeGraph.graph) }
+    : { kind: 'default' };
   const block = c.op(op, g, EMPTY);
-  const names = Array.from(block.cols.keys()).filter((n) => !isHidden(n));
-  const inner = c.render(block, names);
+  const visible = Arr.fromIterable(block.cols).filter(([n]) => !isHidden(n));
+  const names = visible.map(([n]) => n);
+  const innerSql = c.render(block, names);
   const select: Array<string> = [];
   const joins: Array<string> = [];
   const columns: Array<OutputColumn> = [];
-  names.forEach((n, i) => {
-    const col = block.cols.get(n)!;
+  visible.forEach(([n, col], i) => {
     const name = `r.${c.col(n)}`;
     columns.push({ variable: n, type: col.type });
     if (col.type === 'int') {
@@ -1668,25 +1826,27 @@ const compileOnce = (
     select.push(name, `${t}.kind`, `${t}.value`, `${t}.datatype`, `${t}.lang`, `${t}.dir`);
     joins.push(` LEFT JOIN ${c.T} ${t} ON ${t}.id = ${name}`);
   });
-  const marked = `SELECT ${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')} FROM (${inner}) r${joins.join('')}`;
+  const marked = `SELECT ${Arr.isReadonlyArrayEmpty(select) ? '1 AS one' : select.join(', ')} FROM (${innerSql}) r${joins.join('')}`;
   // Number the parameters in order of use (fragments of discarded branches
   // may have allocated parameters that are not used).
   const params: Array<unknown> = [];
-  const numbering = new Map<string, number>();
+  const numbering = MutableHashMap.empty<string, number>();
   const sql = marked.replace(/\ue000(\d+)\ue000/g, (_, i: string) => {
     if (context.dialect.anonymousParameters) {
       params.push(c.params[Number(i) - 1]);
       return context.dialect.placeholder(params.length);
     }
-    let n = numbering.get(i);
-    if (n === undefined) {
+    const n = Option.getOrElse(MutableHashMap.get(numbering, i), () => {
       params.push(c.params[Number(i) - 1]);
-      numbering.set(i, (n = params.length));
-    }
+      MutableHashMap.set(numbering, i, params.length);
+      return params.length;
+    });
     return context.dialect.placeholder(n);
   });
-  const byId = new Map<number, Term.GroundTerm>();
-  for (const { id, term } of locals.values()) byId.set(id, term);
+  // `CompiledQuery.locals` is a `ReadonlyMap`.
+  const byId = new Map(
+    Arr.fromIterable(MutableHashMap.values(locals)).map(({ id, term }) => [id, term] as const),
+  );
   return {
     sql,
     params,
@@ -1710,13 +1870,14 @@ export const compile = (
   context: TranslationContext,
   resolve: (term: Term.GroundTerm) => number | undefined,
 ): Result.Result<CompiledQuery, string> => {
+  const resolveId = (term: Term.GroundTerm) => Option.fromNullishOr(resolve(term));
   return Result.try({
     try: () => {
-      const locals = new Map<string, { readonly id: number; readonly term: Term.GroundTerm }>();
-      const first = compileOnce(op, context, resolve, locals, false);
-      if (locals.size === 0) return first;
+      const locals: Locals = MutableHashMap.empty();
+      const first = compileOnce(op, context, resolveId, locals, false);
+      if (MutableHashMap.isEmpty(locals)) return first;
       // Second pass: dictionary attributes of query-local terms are inlined.
-      return compileOnce(op, context, resolve, locals, true);
+      return compileOnce(op, context, resolveId, locals, true);
     },
     // An `Unsupported` is the expected failure; anything else is a defect and
     // keeps propagating.

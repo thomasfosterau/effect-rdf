@@ -5,6 +5,9 @@
  */
 import * as Match from 'effect/Match';
 import * as BigDecimal from 'effect/BigDecimal';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
@@ -64,7 +67,7 @@ export const WELL_FORMED_KNOWN: ReadonlyArray<number> = [1, 2, 3, 4, 6, 7, 8, 11
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 
-const TEMPORAL = new Set(
+const TEMPORAL = MutableHashSet.fromIterable(
   [
     'dateTime',
     'dateTimeStamp',
@@ -92,52 +95,68 @@ const decimalDigits = (d: BigDecimal.BigDecimal): number => {
 /** A term's comparison class and, for numbers and booleans, its numeric value. */
 export interface Classification {
   readonly cls: number;
-  readonly num: number | null;
+  /** The numeric value (none for terms without one, SQL `NULL` in the `num` column). */
+  readonly num: Option.Option<number>;
 }
+
+const noNumber = (cls: number): Classification => ({ cls, num: Option.none() });
+
+const withNumber = (cls: number, num: number): Classification => ({ cls, num: Option.some(num) });
 
 // Built once: `classify` runs it for every numeric literal.
 const numericClass = Match.type<Xsd.Value>().pipe(
   Match.withReturnType<Classification>(),
   Match.tag('Integer', (v) =>
     v.value <= MAX_SAFE && v.value >= -MAX_SAFE
-      ? { cls: Cls.SafeNumber, num: Number(v.value) }
-      : { cls: Cls.UnsafeNumber, num: Number(v.value) },
+      ? withNumber(Cls.SafeNumber, Number(v.value))
+      : withNumber(Cls.UnsafeNumber, Number(v.value)),
   ),
   Match.tag('Decimal', (v) =>
     decimalDigits(v.value) <= 15
-      ? { cls: Cls.SafeNumber, num: Number(BigDecimal.format(v.value)) }
-      : { cls: Cls.UnsafeNumber, num: BigDecimal.toNumberUnsafe(v.value) },
+      ? withNumber(Cls.SafeNumber, Number(BigDecimal.format(v.value)))
+      : withNumber(Cls.UnsafeNumber, BigDecimal.toNumberUnsafe(v.value)),
   ),
-  Match.tag('Float', 'Double', (v) =>
-    Number.isFinite(v.value)
-      ? { cls: v._tag === 'Float' ? Cls.Float : Cls.Double, num: v.value }
-      : { cls: Cls.SpecialFloat, num: null },
+  Match.tag('Float', (v) =>
+    Number.isFinite(v.value) ? withNumber(Cls.Float, v.value) : noNumber(Cls.SpecialFloat),
   ),
-  Match.orElse(() => ({ cls: Cls.IllFormedNumeric, num: null })),
+  Match.tag('Double', (v) =>
+    Number.isFinite(v.value) ? withNumber(Cls.Double, v.value) : noNumber(Cls.SpecialFloat),
+  ),
+  Match.orElse(() => noNumber(Cls.IllFormedNumeric)),
 );
+
+const RESOURCE = noNumber(Cls.Resource);
+const TRIPLE = noNumber(Cls.Triple);
+const LANG_STRING = noNumber(Cls.LangString);
+const STRING = noNumber(Cls.String);
+const UNKNOWN = noNumber(Cls.Unknown);
+const ILL_FORMED_NUMERIC = noNumber(Cls.IllFormedNumeric);
+const ILL_FORMED = noNumber(Cls.IllFormed);
+const TEMPORAL_CLASS = noNumber(Cls.Temporal);
+const OTHER_KNOWN = noNumber(Cls.OtherKnown);
 
 // Built once: `classify` runs for every term `encode` writes.
 const classifyTerm = Match.type<Term.GroundTerm>().pipe(
   Match.withReturnType<Classification>(),
-  Match.tag('NamedNode', 'BlankNode', () => ({ cls: Cls.Resource, num: null })),
-  Match.tag('Triple', () => ({ cls: Cls.Triple, num: null })),
+  Match.tag('NamedNode', 'BlankNode', () => RESOURCE),
+  Match.tag('Triple', () => TRIPLE),
   Match.tag('Literal', (term) => {
-    if (term.language !== '') return { cls: Cls.LangString, num: null };
+    if (term.language !== '') return LANG_STRING;
     const dt = term.datatype.value;
-    if (dt === Term.XSD_STRING) return { cls: Cls.String, num: null };
-    if (!Xsd.isKnownDatatype(dt)) return { cls: Cls.Unknown, num: null };
+    if (dt === Term.XSD_STRING) return STRING;
+    if (!Xsd.isKnownDatatype(dt)) return UNKNOWN;
     const valid = Xsd.isValidLexical(dt, term.value);
     if (Xsd.isNumericDatatype(dt)) {
-      if (!valid) return { cls: Cls.IllFormedNumeric, num: null };
+      if (!valid) return ILL_FORMED_NUMERIC;
       const v = Xsd.toValue(term);
       return numericClass(v);
     }
-    if (!valid) return { cls: Cls.IllFormed, num: null };
+    if (!valid) return ILL_FORMED;
     if (dt === `${XSD}boolean`) {
-      return { cls: Cls.Boolean, num: term.value === 'true' || term.value === '1' ? 1 : 0 };
+      return withNumber(Cls.Boolean, term.value === 'true' || term.value === '1' ? 1 : 0);
     }
-    if (TEMPORAL.has(dt)) return { cls: Cls.Temporal, num: null };
-    return { cls: Cls.OtherKnown, num: null };
+    if (MutableHashSet.has(TEMPORAL, dt)) return TEMPORAL_CLASS;
+    return OTHER_KNOWN;
   }),
   Match.exhaustive,
 );
@@ -152,12 +171,13 @@ export interface TermRow {
   readonly datatype: string;
   readonly lang: string;
   readonly dir: string;
-  /** Triple term components. */
-  readonly sub: number | null;
-  readonly pre: number | null;
-  readonly obj: number | null;
+  /** Triple term components (none for other terms, SQL `NULL` in the columns). */
+  readonly sub: Option.Option<number>;
+  readonly pre: Option.Option<number>;
+  readonly obj: Option.Option<number>;
   readonly cls: number;
-  readonly num: number | null;
+  /** The numeric value (none: SQL `NULL`). */
+  readonly num: Option.Option<number>;
 }
 
 // Built once: `encode` runs for every term a load or update writes.
@@ -175,9 +195,9 @@ const encodeRow = Match.fn(
     datatype: '',
     lang: '',
     dir: '',
-    sub: null,
-    pre: null,
-    obj: null,
+    sub: Option.none(),
+    pre: Option.none(),
+    obj: Option.none(),
     cls,
     num,
   })),
@@ -187,9 +207,9 @@ const encodeRow = Match.fn(
     datatype: '',
     lang: '',
     dir: '',
-    sub: null,
-    pre: null,
-    obj: null,
+    sub: Option.none(),
+    pre: Option.none(),
+    obj: Option.none(),
     cls,
     num,
   })),
@@ -199,9 +219,9 @@ const encodeRow = Match.fn(
     datatype: term.datatype.value,
     lang: term.language,
     dir: term.direction ?? '',
-    sub: null,
-    pre: null,
-    obj: null,
+    sub: Option.none(),
+    pre: Option.none(),
+    obj: Option.none(),
     cls,
     num,
   })),
@@ -215,9 +235,9 @@ const encodeRow = Match.fn(
       datatype: '',
       lang: '',
       dir: '',
-      sub: componentIds[0],
-      pre: componentIds[1],
-      obj: componentIds[2],
+      sub: Option.some(componentIds[0]),
+      pre: Option.some(componentIds[1]),
+      obj: Option.some(componentIds[2]),
       cls,
       num,
     };
@@ -244,22 +264,20 @@ export const rowKey = (row: {
   readonly dir: string;
 }): string => `${row.kind}\u0000${row.value}\u0000${row.datatype}\u0000${row.lang}\u0000${row.dir}`;
 
-const datatypes = new Map<string, Term.NamedNode>();
+const datatypes = MutableHashMap.empty<string, Term.NamedNode>();
 
-const datatype = (iri: string): Term.NamedNode => {
-  let n = datatypes.get(iri);
-  if (n === undefined) {
-    n = Term.namedNode(iri);
-    if (datatypes.size < 10_000) datatypes.set(iri, n);
-  }
-  return n;
-};
+const datatype = (iri: string): Term.NamedNode =>
+  Option.getOrElse(MutableHashMap.get(datatypes, iri), () => {
+    const n = Term.namedNode(iri);
+    if (MutableHashMap.size(datatypes) < 10_000) MutableHashMap.set(datatypes, iri, n);
+    return n;
+  });
 
 // Built once: `decode` runs for every term a query result reads back.
 const decodeRow = Match.fn(
   (kind: number, _value: string, _dt: string, _lang: string, _dir: string) => kind,
 ).pipe(
-  Match.withReturnType<Term.GroundTerm | readonly [number, number, number]>(),
+  Match.withReturnType<Decoded>(),
   Match.when(Kind.NamedNode, (_kind, _k, value) => Term.namedNode(value)),
   Match.when(Kind.BlankNode, (_kind, _k, value) => Term.blankNode(value)),
   Match.when(
@@ -268,10 +286,19 @@ const decodeRow = Match.fn(
       new Term.Literal(value, datatype(dt), lang, dir === 'ltr' || dir === 'rtl' ? dir : undefined),
   ),
   Match.orElse((_kind, _k, value) => {
-    const [s, p, o] = value.split(' ').map(Number);
-    return [s!, p!, o!];
+    const [s = Number.NaN, p = Number.NaN, o = Number.NaN] = value.split(' ').map(Number);
+    return [s, p, o];
   }),
 );
+
+/** A decoded dictionary row: the term, or the component ids of a triple term. */
+export type Decoded = Term.GroundTerm | ComponentIds;
+
+/** The subject, predicate and object ids of a triple term. */
+export type ComponentIds = readonly [number, number, number];
+
+/** Whether a decoded row is the component ids of a triple term. */
+export const isComponentIds = (decoded: Decoded): decoded is ComponentIds => Array.isArray(decoded);
 
 /**
  * Decodes a non-triple dictionary row; returns the component ids for triple
@@ -283,4 +310,4 @@ export const decode = (
   dt: string,
   lang: string,
   dir: string,
-): Term.GroundTerm | readonly [number, number, number] => decodeRow(kind, value, dt, lang, dir);
+): Decoded => decodeRow(kind, value, dt, lang, dir);
