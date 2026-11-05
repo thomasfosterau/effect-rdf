@@ -26,7 +26,7 @@ const stripContext = (json: any) => {
 };
 
 describe.skipIf(!hasShexTest)('shexTest schemas (ShExC → ShExJ)', () => {
-  for (const entry of entries) {
+  entries.forEach((entry) => {
     const skip = schemaSkips[entry.name];
     it.skipIf(skip !== undefined)(entry.name, () => {
       const input = readText('schemas', entry.shex);
@@ -43,5 +43,5 @@ describe.skipIf(!hasShexTest)('shexTest schemas (ShExC → ShExJ)', () => {
       const decoded = Effect.runSyncExit(ShExJ.decode(expected));
       if (Exit.isFailure(decoded)) assert.fail(String(decoded.cause));
     });
-  }
+  });
 });

@@ -3,6 +3,7 @@ import { assert, describe, expect, it } from '@effect/vitest';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as SemAct from '../src/SemAct.ts';
@@ -40,12 +41,13 @@ const validationBase = `${suiteBase}validation/`;
 export const validationSkips: Readonly<Record<string, string>> = {};
 
 /** Maps a suite IRI to a path relative to the suite directory. */
-const suitePath = (iri: string): string | undefined =>
-  iri.startsWith(suiteBase) ? iri.slice(suiteBase.length) : undefined;
+const suitePath = (iri: string): Option.Option<string> =>
+  iri.startsWith(suiteBase) ? Option.some(iri.slice(suiteBase.length)) : Option.none();
 
 const loadShExC = (iri: string): Effect.Effect<ShExJ.Schema, ShExImportError> => {
-  const rel = suitePath(iri);
-  const candidates = rel === undefined ? [] : /\.[a-z]+$/.test(rel) ? [rel] : [`${rel}.shex`];
+  const candidates = Arr.fromOption(
+    Option.map(suitePath(iri), (rel) => (/\.[a-z]+$/.test(rel) ? rel : `${rel}.shex`)),
+  );
   const file = candidates.find((c) => exists(c));
   if (file === undefined)
     return Effect.fail(new ShExImportError({ iri, message: 'not found in the test suite' }));
@@ -62,7 +64,9 @@ const runEntry = (entry: Entry) =>
     const schema = yield* loadShExC(schemaIri);
     const dataIri = Iri.resolve(entry.dataURL, validationBase);
     const dataset = parseTurtle(
-      readText(suitePath(dataIri) ?? assert.fail(`No local copy of ${dataIri}`)),
+      readText(
+        Option.getOrElse(suitePath(dataIri), () => assert.fail(`No local copy of ${dataIri}`)),
+      ),
       dataIri,
     );
     let map: ShapeMap.QueryShapeMap;
@@ -111,7 +115,7 @@ const runEntry = (entry: Entry) =>
   });
 
 describe.skipIf(!hasShexTest)('shexTest validation', () => {
-  for (const entry of manifest.entries) {
+  manifest.entries.forEach((entry) => {
     const skip = validationSkips[entry.name];
     it.skipIf(skip !== undefined)(entry.name, () => {
       const exit = Effect.runSyncExit(runEntry(entry));
@@ -136,5 +140,5 @@ describe.skipIf(!hasShexTest)('shexTest validation', () => {
         assert.deepStrictEqual(Arr.sort(exit.value.prints, Order.String), expected);
       }
     });
-  }
+  });
 });

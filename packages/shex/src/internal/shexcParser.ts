@@ -18,8 +18,12 @@ import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import type * as ShExJ from '../ShExJ.ts';
 import { quote } from './lexer.ts';
@@ -34,7 +38,7 @@ const XSD_DOUBLE = `${XSD}double`;
 const XSD_FLOAT = `${XSD}float`;
 const XSD_BOOLEAN = `${XSD}boolean`;
 
-const numericDatatypes = new Set(
+const numericDatatypes = MutableHashSet.fromIterable(
   [
     'integer',
     'decimal',
@@ -68,15 +72,15 @@ type AnyShapeExpr = ShExJ.ShapeExprOrRef;
 
 /** Options for the ShExC parser. */
 export interface ParserOptions {
-  readonly baseIri?: string | undefined;
-  readonly prefixes?: Readonly<Record<string, string>> | undefined;
+  readonly baseIri: Option.Option<string>;
+  readonly prefixes: PrefixMap.PrefixMap;
 }
 
 /** The result of parsing ShExC. */
 export interface ParserResult {
   readonly schema: ShExJ.Schema;
-  readonly prefixes: ReadonlyMap<string, string>;
-  readonly baseIri: string | undefined;
+  readonly prefixes: PrefixMap.PrefixMap;
+  readonly baseIri: Option.Option<string>;
 }
 
 /** A parse error at a character offset. */
@@ -113,8 +117,10 @@ const select = <A, B = never>(
   cases: ReadonlyArray<readonly [ReadonlyArray<string>, P<A>]>,
   otherwise?: P<B>,
 ): P<A | B> => {
-  const record: Record<string, P<A | B>> = {};
-  for (const [kinds, p] of cases) for (const k of kinds) record[k] ??= p;
+  // The first case listing a kind wins, as `fromEntries` keeps the last entry for a key.
+  const record = Record.fromEntries(
+    Arr.flatMap(Arr.reverse(cases), ([kinds, p]) => Arr.map(kinds, (k) => [k, p] as const)),
+  );
   const chosen: P<A | B> =
     otherwise === undefined
       ? Parser.dispatch(nextKind, record)
@@ -126,25 +132,24 @@ const select = <A, B = never>(
 const failAt = <A>(message: string, at: number): Result.Result<A, SemanticError> =>
   Result.fail({ message, at });
 
-const optional = <A>(p: P<A>): P<A | undefined> =>
-  Parser.opt(p).pipe(Parser.map((o) => (o._tag === 'Some' ? o.value : undefined)));
-
 /** Whether the next token is of one of `kinds` (consumed if so). */
 const accept = (...kinds: ReadonlyArray<string>): P<boolean> =>
   Parser.opt(Token.oneOf<ReadonlyArray<Tok>>((t) => kinds.includes(t.kind))).pipe(
-    Parser.map((o) => o._tag === 'Some'),
+    Parser.map(Option.isSome),
   );
 
 const IRI_KINDS = ['IRIREF', 'PNAME'];
+
+/** The IRI of a resolved token (at token index `at`), or its resolution error. */
+const tokenIri = (t: Tok, at: number): Result.Result<string, SemanticError> =>
+  Option.isNone(t.error) ? Result.succeed(t.iri) : failAt(t.error.value, at);
 
 /** The IRI of an IRIREF or PNAME token, or the token's resolution error. */
 const iri: P<string> = Parser.seq(
   Parser.location,
   Token.oneOf<ReadonlyArray<Tok>>((t) => t.kind === 'IRIREF' || t.kind === 'PNAME'),
 ).pipe(
-  Parser.tryMap(([at, t]) =>
-    t.error === undefined ? Result.succeed(t.iri) : failAt<string>(t.error, at),
-  ),
+  Parser.tryMap(([at, t]) => tokenIri(t, at)),
   Parser.cut,
   Parser.expected('an IRI'),
 );
@@ -174,9 +179,9 @@ const literal: P<ShExJ.ObjectLiteral> = select('a literal', [
   ],
   [
     ['STRING'],
-    Parser.seq(anyToken, optional(Parser.preceded(tok('^^'), Parser.cut(iri)))).pipe(
-      Parser.map(([t, type]): ShExJ.ObjectLiteral =>
-        type === undefined ? { value: t.text } : { value: t.text, type },
+    Parser.seq(anyToken, Parser.opt(Parser.preceded(tok('^^'), Parser.cut(iri)))).pipe(
+      Parser.map(([t, datatype]): ShExJ.ObjectLiteral =>
+        Option.isSome(datatype) ? { value: t.text, type: datatype.value } : { value: t.text },
       ),
     ),
   ],
@@ -198,6 +203,9 @@ interface Atom {
 
 const plain = (e: AnyShapeExpr): Atom => ({ e, nested: false });
 
+const isJunction = (e: AnyShapeExpr): e is ShExJ.ShapeAnd | ShExJ.ShapeOr =>
+  !Predicate.isString(e) && (e.type === 'ShapeAnd' || e.type === 'ShapeOr');
+
 const junction = (
   type: 'ShapeAnd' | 'ShapeOr',
   atom: Atom,
@@ -205,10 +213,8 @@ const junction = (
 ): AnyShapeExpr => {
   if (Arr.isReadonlyArrayEmpty(juncts)) return atom.e;
   const e = atom.e;
-  if (!Predicate.isString(e) && e.type === type && !atom.nested) {
-    // SAFETY: `e.type === type` and `type` is `ShapeAnd` or `ShapeOr`, both of which have
-    // `shapeExprs`.
-    return { ...e, shapeExprs: (e as ShExJ.ShapeAnd).shapeExprs.concat(juncts) };
+  if (isJunction(e) && e.type === type && !atom.nested) {
+    return { ...e, shapeExprs: e.shapeExprs.concat(juncts) };
   }
   return { type, shapeExprs: [e, ...juncts] };
 };
@@ -226,28 +232,30 @@ type Rest =
       readonly ors: ReadonlyArray<AnyShapeExpr>;
     };
 
+const isAndRest = Predicate.isTagged('And');
+
 const prepend = (rest: Rest, atoms: ReadonlyArray<AnyShapeExpr>): AnyShapeExpr => {
-  if (rest._tag === 'Or') return { type: 'ShapeOr', shapeExprs: [...atoms, ...rest.ors] };
+  if (!isAndRest(rest)) return { type: 'ShapeOr', shapeExprs: [...atoms, ...rest.ors] };
   const and: ShExJ.ShapeAnd = { type: 'ShapeAnd', shapeExprs: [...atoms, ...rest.ands] };
   return Arr.isReadonlyArrayNonEmpty(rest.ors)
     ? { type: 'ShapeOr', shapeExprs: [and, ...rest.ors] }
     : and;
 };
 
-const prependAtom = (atom: Atom, rest: Rest | undefined): AnyShapeExpr => {
-  if (rest === undefined) return atom.e;
-  const e = atom.e;
-  if (
-    !Predicate.isString(e) &&
-    e.type === 'ShapeAnd' &&
-    rest._tag === 'And' &&
-    Arr.isReadonlyArrayEmpty(rest.ors) &&
-    !atom.nested
-  ) {
-    return prepend(rest, e.shapeExprs);
-  }
-  return prepend(rest, [e]);
-};
+const prependAtom = (atom: Atom, rest: Option.Option<Rest>): AnyShapeExpr =>
+  Option.match(rest, {
+    onNone: () => atom.e,
+    onSome: (r) => {
+      const e = atom.e;
+      return !Predicate.isString(e) &&
+        e.type === 'ShapeAnd' &&
+        isAndRest(r) &&
+        Arr.isReadonlyArrayEmpty(r.ors) &&
+        !atom.nested
+        ? prepend(r, e.shapeExprs)
+        : prepend(r, [e]);
+    },
+  });
 
 // -----------------------------------------------------------------------------
 // Annotations, semantic actions and cardinalities
@@ -275,12 +283,15 @@ const codeDecls: P<Array<ShExJ.SemAct>> = Parser.repeat(
       Parser.seq(
         iri,
         select('code or %', [
-          [['CODE'], anyToken.pipe(Parser.map((t) => t.text))],
-          [['%'], anyToken.pipe(Parser.as(undefined))],
+          [['CODE'], anyToken.pipe(Parser.map((t) => Option.some(t.text)))],
+          [['%'], anyToken.pipe(Parser.as(Option.none<string>()))],
         ]),
       ).pipe(
         Parser.map(([name, code]): ShExJ.SemAct =>
-          code === undefined ? { type: 'SemAct', name } : { type: 'SemAct', name, code },
+          Option.match(code, {
+            onNone: () => ({ type: 'SemAct', name }),
+            onSome: (c) => ({ type: 'SemAct', name, code: c }),
+          }),
         ),
       ),
     ),
@@ -288,9 +299,9 @@ const codeDecls: P<Array<ShExJ.SemAct>> = Parser.repeat(
   { min: 1 },
 );
 
-const semanticActions: P<Array<ShExJ.SemAct> | undefined> = optional(codeDecls);
+const semanticActions: P<Option.Option<Array<ShExJ.SemAct>>> = Parser.opt(codeDecls);
 
-const cardinality: P<{ min: number; max: number } | undefined> = optional(
+const cardinality: P<Option.Option<{ min: number; max: number }>> = Parser.opt(
   select('a cardinality', [
     [['*'], anyToken.pipe(Parser.as({ min: 0, max: -1 }))],
     [['+'], anyToken.pipe(Parser.as({ min: 1, max: -1 }))],
@@ -321,7 +332,7 @@ const rawNumeric: P<number> = select('a numeric literal', [
         if (dt === XSD_DECIMAL || dt === XSD_FLOAT || dt === XSD_DOUBLE) {
           return Result.succeed(parseFloat(value));
         }
-        if (numericDatatypes.has(dt)) return Result.succeed(parseInt(value, 10));
+        if (MutableHashSet.has(numericDatatypes, dt)) return Result.succeed(parseInt(value, 10));
         return failAt<number>(`numeric range facet expected numeric datatype instead of ${dt}`, at);
       }),
       Parser.cut,
@@ -331,69 +342,61 @@ const rawNumeric: P<number> = select('a numeric literal', [
 
 type Facet = readonly [key: string, value: number | string, at: number, flags?: string];
 
-const STRING_FACETS = ['REGEXP', 'LENGTH', 'MINLENGTH', 'MAXLENGTH'];
-const NUMERIC_FACETS = [
-  'TOTALDIGITS',
-  'FRACTIONDIGITS',
-  'MININCLUSIVE',
-  'MINEXCLUSIVE',
-  'MAXINCLUSIVE',
-  'MAXEXCLUSIVE',
-];
-
-/** Facet keyword → its parser. */
-interface FacetCases {
-  readonly [keyword: string]: P<Facet>;
-}
+const LENGTH_FACETS = ['LENGTH', 'MINLENGTH', 'MAXLENGTH'];
+const DIGITS_FACETS = ['TOTALDIGITS', 'FRACTIONDIGITS'];
+const RANGE_FACETS = ['MININCLUSIVE', 'MINEXCLUSIVE', 'MAXINCLUSIVE', 'MAXEXCLUSIVE'];
+const NUMERIC_FACETS = [...DIGITS_FACETS, ...RANGE_FACETS];
 
 /** Facet name → its value, as the facets are read. */
 interface FacetValues {
   [facet: string]: number | string;
 }
 
-const facetCases: FacetCases = {
-  REGEXP: Parser.seq(Parser.location, anyToken).pipe(
-    Parser.map(([at, t]): Facet => ['pattern', t.text, at, t.suffix]),
-  ),
-  ...Object.fromEntries(
-    ['LENGTH', 'MINLENGTH', 'MAXLENGTH', 'TOTALDIGITS', 'FRACTIONDIGITS'].map((k) => [
-      k,
-      Parser.seq(Parser.location, anyToken, integer).pipe(
-        Parser.map(([at, t, n]): Facet => [t.text.toLowerCase(), n, at]),
-      ),
-    ]),
-  ),
-  ...Object.fromEntries(
-    ['MININCLUSIVE', 'MINEXCLUSIVE', 'MAXINCLUSIVE', 'MAXEXCLUSIVE'].map((k) => [
-      k,
-      Parser.seq(Parser.location, anyToken, Parser.cut(rawNumeric)).pipe(
-        Parser.map(([at, t, n]): Facet => [t.text.toLowerCase(), n, at]),
-      ),
-    ]),
-  ),
-};
+type FacetCase = readonly [ReadonlyArray<string>, P<Facet>];
+
+const integerFacet: P<Facet> = Parser.seq(Parser.location, anyToken, integer).pipe(
+  Parser.map(([at, t, n]): Facet => [t.text.toLowerCase(), n, at]),
+);
+
+const stringFacetCases: ReadonlyArray<FacetCase> = [
+  [
+    ['REGEXP'],
+    Parser.seq(Parser.location, anyToken).pipe(
+      Parser.map(([at, t]): Facet => ['pattern', t.text, at, t.suffix]),
+    ),
+  ],
+  [LENGTH_FACETS, integerFacet],
+];
+
+const numericFacetCases: ReadonlyArray<FacetCase> = [
+  [DIGITS_FACETS, integerFacet],
+  [
+    RANGE_FACETS,
+    Parser.seq(Parser.location, anyToken, Parser.cut(rawNumeric)).pipe(
+      Parser.map(([at, t, n]): Facet => [t.text.toLowerCase(), n, at]),
+    ),
+  ],
+];
+
+const noFacets = (): Result.Result<FacetValues, SemanticError> => Result.succeed({});
 
 const facets = (strings: boolean, numerics: boolean): P<Mutable<ShExJ.Facets>> =>
   Parser.repeat(
-    select(
-      'a facet',
-      [...(strings ? STRING_FACETS : []), ...(numerics ? NUMERIC_FACETS : [])].map(
-        (k) => [[k], facetCases[k]!] as const,
+    select('a facet', [
+      ...(strings ? stringFacetCases : []),
+      ...(numerics ? numericFacetCases : []),
+    ]),
+  ).pipe(
+    Parser.tryMap((list) =>
+      Arr.reduce(list, noFacets(), (acc, [key, value, at, flags]) =>
+        Result.flatMap(acc, (out) => {
+          if (key in out) return failAt<FacetValues>(`facet ${key} defined multiple times`, at);
+          out[key] = value;
+          if (flags !== undefined && flags !== '') out['flags'] = flags;
+          return Result.succeed(out);
+        }),
       ),
     ),
-  ).pipe(
-    Parser.tryMap((list) => {
-      const out: FacetValues = {};
-      for (const [key, value, at, flags] of list) {
-        if (key in out) {
-          return failAt<Mutable<ShExJ.Facets>>(`facet ${key} defined multiple times`, at);
-        }
-        out[key] = value;
-        if (flags !== undefined && flags !== '') out['flags'] = flags;
-      }
-      // SAFETY: every field was set with its facet's type.
-      return Result.succeed(out);
-    }),
     Parser.cut,
   );
 
@@ -428,8 +431,14 @@ const stemmed = <A, X>(
   exclude: P<X>,
   build: (head: A, stem: boolean, exclusions: Array<X>) => ShExJ.ValueSetValue,
 ): P<ShExJ.ValueSetValue> =>
-  Parser.seq(head, optional(Parser.preceded(tok('~'), Parser.repeat(exclude)))).pipe(
-    Parser.map(([h, exclusions]) => build(h, exclusions !== undefined, exclusions ?? [])),
+  Parser.seq(head, Parser.opt(Parser.preceded(tok('~'), Parser.repeat(exclude)))).pipe(
+    Parser.map(([h, exclusions]) =>
+      build(
+        h,
+        Option.isSome(exclusions),
+        Option.getOrElse(exclusions, () => []),
+      ),
+    ),
   );
 
 /** The exclusions after a `.` wildcard: their kind is chosen by the first one. */
@@ -446,17 +455,21 @@ const wildcardExclusions: P<ShExJ.ValueSetValue> = Parser.preceded(
           exclusions,
         })),
       ),
-      ...Object.fromEntries(
-        IRI_KINDS.map((k) => [
-          k,
-          Parser.repeat(iriExclusion).pipe(
-            Parser.map((exclusions): ShExJ.ValueSetValue => ({
-              type: 'IriStemRange',
-              stem: { type: 'Wildcard' },
-              exclusions,
-            })),
-          ),
-        ]),
+      ...Record.fromEntries(
+        Arr.map(
+          IRI_KINDS,
+          (k) =>
+            [
+              k,
+              Parser.repeat(iriExclusion).pipe(
+                Parser.map((exclusions): ShExJ.ValueSetValue => ({
+                  type: 'IriStemRange',
+                  stem: { type: 'Wildcard' },
+                  exclusions,
+                })),
+              ),
+            ] as const,
+        ),
       ),
     },
     Parser.repeat(literalExclusion).pipe(
@@ -542,19 +555,22 @@ const litInlineNodeConstraint: P<ShExJ.NodeConstraint> = select('a node constrai
   [
     IRI_KINDS,
     Parser.seq(Parser.location, iri, facets(true, true)).pipe(
-      Parser.tryMap(([at, datatype, f]) => {
-        if (!numericDatatypes.has(datatype)) {
-          for (const name of numericFacetNames) {
-            if (name in f) {
-              return failAt<ShExJ.NodeConstraint>(
+      Parser.tryMap(([at, datatype, f]) =>
+        Option.match(
+          MutableHashSet.has(numericDatatypes, datatype)
+            ? Option.none()
+            : Arr.findFirst(numericFacetNames, (name) => name in f),
+          {
+            onNone: () =>
+              Result.succeed<ShExJ.NodeConstraint>({ type: 'NodeConstraint', datatype, ...f }),
+            onSome: (name) =>
+              failAt<ShExJ.NodeConstraint>(
                 `facet ${name} not allowed for unknown datatype ${datatype}`,
                 at,
-              );
-            }
-          }
-        }
-        return Result.succeed<ShExJ.NodeConstraint>({ type: 'NodeConstraint', datatype, ...f });
-      }),
+              ),
+          },
+        ),
+      ),
       Parser.cut,
     ),
   ],
@@ -576,43 +592,38 @@ const NODE_KINDS = ['IRI', 'BNODE', 'NONLITERAL'];
 const NON_LIT_KINDS = [...NODE_KINDS, 'LENGTH', 'MINLENGTH', 'MAXLENGTH', 'REGEXP'];
 const LIT_KINDS = ['LITERAL', ...NUMERIC_FACETS, ...IRI_KINDS, '['];
 
+const nodeKindOf = (kind: string): ShExJ.NodeKind =>
+  kind === 'IRI' ? 'iri' : kind === 'BNODE' ? 'bnode' : 'nonliteral';
+
 const nonLitInlineNodeConstraint: P<ShExJ.NodeConstraint> = Parser.seq(
-  optional(select('a node kind', [[NODE_KINDS, anyToken.pipe(Parser.map((t) => t.text))]])),
+  Parser.opt(select('a node kind', [[NODE_KINDS, anyToken.pipe(Parser.map((t) => t.text))]])),
   facets(true, false),
 ).pipe(
-  Parser.map(([kind, f]): ShExJ.NodeConstraint => {
-    const nodeKind: ShExJ.NodeKind | undefined =
-      kind === undefined
-        ? undefined
-        : kind === 'IRI'
-          ? 'iri'
-          : kind === 'BNODE'
-            ? 'bnode'
-            : 'nonliteral';
-    return nodeKind === undefined
-      ? { type: 'NodeConstraint', ...f }
-      : { type: 'NodeConstraint', nodeKind, ...f };
-  }),
+  Parser.map(([kind, f]): ShExJ.NodeConstraint =>
+    Option.isSome(kind)
+      ? { type: 'NodeConstraint', nodeKind: nodeKindOf(kind.value), ...f }
+      : { type: 'NodeConstraint', ...f },
+  ),
 );
 
 /** A non-literal node constraint, if one starts here. */
-const nonLitNodeConstraintOpt: P<ShExJ.NodeConstraint | undefined> = optional(
+const nonLitNodeConstraintOpt: P<Option.Option<ShExJ.NodeConstraint>> = Parser.opt(
   select('a node constraint', [[NON_LIT_KINDS, Parser.cut(nonLitInlineNodeConstraint)]]),
 );
 
 const withAnnotations = (nc: P<ShExJ.NodeConstraint>): P<ShExJ.NodeConstraint> =>
   Parser.seq(nc, annotations, semanticActions).pipe(
     Parser.map(([constraint, annots, semActs]) => {
-      if (Arr.isReadonlyArrayEmpty(annots) && semActs === undefined) return constraint;
+      if (Arr.isReadonlyArrayEmpty(annots) && Option.isNone(semActs)) return constraint;
       const out: Mutable<ShExJ.NodeConstraint> = constraint;
       if (Arr.isReadonlyArrayNonEmpty(annots)) out.annotations = annots;
-      if (semActs !== undefined) out.semActs = semActs;
+      if (Option.isSome(semActs)) out.semActs = semActs.value;
       return out;
     }),
   );
 
 /** A non-literal node constraint with its annotations, if one starts here. */
-const annotatedNonLitNodeConstraintOpt: P<ShExJ.NodeConstraint | undefined> = optional(
+const annotatedNonLitNodeConstraintOpt: P<Option.Option<ShExJ.NodeConstraint>> = Parser.opt(
   select('a node constraint', [
     [NON_LIT_KINDS, Parser.cut(withAnnotations(nonLitInlineNodeConstraint))],
   ]),
@@ -629,9 +640,7 @@ const shapeRef: P<string> = select('a shape reference', [
   [
     ['ATPNAME'],
     Parser.seq(Parser.location, anyToken).pipe(
-      Parser.tryMap(([at, t]) =>
-        t.error === undefined ? Result.succeed(t.iri) : failAt<string>(t.error, at),
-      ),
+      Parser.tryMap(([at, t]) => tokenIri(t, at)),
       Parser.cut,
     ),
   ],
@@ -678,27 +687,25 @@ const inlineShapeDefinition: P<ShExJ.Shape> = Parser.seq(
     Parser.cut(tok('{')),
     select(
       'a triple expression',
-      [[['}'], Parser.succeed(undefined)]],
-      Parser.cut(tripleExpression),
+      [[['}'], Parser.succeed(Option.none<ShExJ.TripleExprOrRef>())]],
+      Parser.cut(tripleExpression).pipe(Parser.map(Option.some)),
     ),
     Parser.cut(tok('}')),
   ),
 ).pipe(
   Parser.map(([qualifiers, expression]): ShExJ.Shape => {
-    if (expression === undefined && Arr.isReadonlyArrayEmpty(qualifiers)) return EMPTY;
-    let extendsList: Array<AnyShapeExpr> | undefined;
-    let extra: Array<string> | undefined;
-    let closed: boolean | undefined;
-    for (const q of qualifiers) {
-      if (q._tag === 'Extends') (extendsList ??= []).push(q.e);
-      else if (q._tag === 'Extra') (extra ??= []).push(...q.predicates);
-      else closed = true;
-    }
+    if (Option.isNone(expression) && Arr.isReadonlyArrayEmpty(qualifiers)) return EMPTY;
+    const extendsList = Arr.filterMap(qualifiers, (q) =>
+      Predicate.isTagged(q, 'Extends') ? Result.succeed(q.e) : Result.failVoid,
+    );
+    const extra = Arr.flatMap(qualifiers, (q) =>
+      Predicate.isTagged(q, 'Extra') ? q.predicates : [],
+    );
     const shape: Mutable<ShExJ.Shape> = { type: 'Shape' };
-    if (expression !== undefined) shape.expression = expression;
-    if (extendsList !== undefined) shape.extends = extendsList;
-    if (extra !== undefined) shape.extra = extra;
-    if (closed !== undefined) shape.closed = closed;
+    if (Option.isSome(expression)) shape.expression = expression.value;
+    if (Arr.isReadonlyArrayNonEmpty(extendsList)) shape.extends = extendsList;
+    if (Arr.some(qualifiers, (q) => Predicate.isTagged(q, 'Extra'))) shape.extra = extra;
+    if (Arr.some(qualifiers, (q) => Predicate.isTagged(q, 'Closed'))) shape.closed = true;
     return shape;
   }),
 );
@@ -711,7 +718,7 @@ const shapeDefinition: P<AnyShapeExpr> = Parser.seq(
   Parser.map(([def, annots, semActs]) => {
     const out: Mutable<ShExJ.Shape> = def === EMPTY ? { type: 'Shape' } : def;
     if (Arr.isReadonlyArrayNonEmpty(annots)) out.annotations = annots;
-    if (semActs !== undefined) out.semActs = semActs;
+    if (Option.isSome(semActs)) out.semActs = semActs.value;
     return out;
   }),
 );
@@ -729,12 +736,16 @@ const inlineShapeOrRef: P<AnyShapeExpr> = select(
 );
 
 /** A shape definition or reference, if one starts here. */
-const shapeOrRefOpt = (p: P<AnyShapeExpr>): P<AnyShapeExpr | undefined> =>
-  optional(
+const shapeOrRefOpt = (p: P<AnyShapeExpr>): P<Option.Option<AnyShapeExpr>> =>
+  Parser.opt(
     select('a shape definition or reference', [
       [[...SHAPE_DEF_KINDS, ...REF_KINDS], Parser.cut(p)],
     ]),
   );
+
+/** A node constraint, conjoined with the shape definition or reference after it if any. */
+const andRef = (nc: ShExJ.NodeConstraint, ref: Option.Option<AnyShapeExpr>): AnyShapeExpr =>
+  Option.isSome(ref) ? { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref.value] } : nc;
 
 /** shapeAtom (with `allowRef`) and shapeAtomNoRef. */
 const shapeAtom = (allowRef: boolean): P<Atom> =>
@@ -743,9 +754,7 @@ const shapeAtom = (allowRef: boolean): P<Atom> =>
       NON_LIT_KINDS,
       Parser.cut(
         Parser.seq(withAnnotations(nonLitInlineNodeConstraint), shapeOrRefOpt(shapeOrRef)).pipe(
-          Parser.map(([nc, ref]) =>
-            plain(ref === undefined ? nc : { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] }),
-          ),
+          Parser.map(([nc, ref]) => plain(andRef(nc, ref))),
         ),
       ),
     ],
@@ -755,7 +764,12 @@ const shapeAtom = (allowRef: boolean): P<Atom> =>
       Parser.cut(
         Parser.seq(shapeOrRef, annotatedNonLitNodeConstraintOpt).pipe(
           Parser.map(([sor, nc]) =>
-            plain(nc === undefined ? sor : junction('ShapeAnd', plain(sor), [nc])),
+            plain(
+              Option.match(nc, {
+                onNone: () => sor,
+                onSome: (c) => junction('ShapeAnd', plain(sor), [c]),
+              }),
+            ),
           ),
         ),
       ),
@@ -797,15 +811,13 @@ const shapeOrRest: P<Rest> = select("'AND' or 'OR'", [
   [
     ['AND'],
     Parser.seq(Parser.repeat(Parser.preceded(tok('AND'), Parser.cut(shapeNot))), ors).pipe(
-      Parser.map(([conjuncts, operands]): Rest => {
-        const ands: Array<AnyShapeExpr> = [];
-        for (const c of conjuncts) {
-          if (!Predicate.isString(c.e) && c.e.type === 'ShapeAnd' && !c.nested) {
-            ands.push(...c.e.shapeExprs);
-          } else ands.push(c.e);
-        }
-        return { _tag: 'And', ands, ors: operands };
-      }),
+      Parser.map(([conjuncts, operands]): Rest => ({
+        _tag: 'And',
+        ands: Arr.flatMap(conjuncts, (c) =>
+          !Predicate.isString(c.e) && c.e.type === 'ShapeAnd' && !c.nested ? c.e.shapeExprs : [c.e],
+        ),
+        ors: operands,
+      })),
     ),
   ],
 ]);
@@ -826,14 +838,14 @@ const shapeExpressionBodyDef: P<AnyShapeExpr> = select(
             [
               [
                 REF_KINDS,
-                Parser.seq(shapeRef, optional(shapeOrRest)).pipe(
+                Parser.seq(shapeRef, Parser.opt(shapeOrRest)).pipe(
                   Parser.map(([ref, rest]) =>
                     prependAtom(plain({ type: 'ShapeNot', shapeExpr: ref }), rest),
                   ),
                 ),
               ],
             ],
-            Parser.seq(shapeAtom(false), optional(shapeOrRest)).pipe(
+            Parser.seq(shapeAtom(false), Parser.opt(shapeOrRest)).pipe(
               Parser.map(([a, rest]) =>
                 prependAtom(plain({ type: 'ShapeNot', shapeExpr: a.e }), rest),
               ),
@@ -849,7 +861,7 @@ const shapeExpressionBodyDef: P<AnyShapeExpr> = select(
       ),
     ],
   ],
-  Parser.seq(shapeAtom(false), optional(shapeOrRest)).pipe(
+  Parser.seq(shapeAtom(false), Parser.opt(shapeOrRest)).pipe(
     Parser.map(([a, rest]) => prependAtom(a, rest)),
   ),
 );
@@ -867,9 +879,7 @@ const inlineAtom = (extendsAtom: boolean): P<Atom> =>
               Parser.map(([nc, ref]) => plain({ type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] })),
             )
           : Parser.seq(nonLitInlineNodeConstraint, shapeOrRefOpt(inlineShapeOrRef)).pipe(
-              Parser.map(([nc, ref]) =>
-                plain(ref === undefined ? nc : { type: 'ShapeAnd', shapeExprs: [{ ...nc }, ref] }),
-              ),
+              Parser.map(([nc, ref]) => plain(andRef(nc, ref))),
             ),
       ),
     ],
@@ -879,7 +889,12 @@ const inlineAtom = (extendsAtom: boolean): P<Atom> =>
       Parser.cut(
         Parser.seq(inlineShapeOrRef, nonLitNodeConstraintOpt).pipe(
           Parser.map(([sor, nc]) =>
-            plain(nc === undefined ? sor : { type: 'ShapeAnd', shapeExprs: [sor, nc] }),
+            plain(
+              Option.match(nc, {
+                onNone: () => sor,
+                onSome: (c): AnyShapeExpr => ({ type: 'ShapeAnd', shapeExprs: [sor, c] }),
+              }),
+            ),
           ),
         ),
       ),
@@ -941,11 +956,11 @@ const tripleConstraint: P<ShExJ.TripleConstraint> = Parser.seq(
       ? { type: 'TripleConstraint', inverse: true, predicate: pred }
       : { type: 'TripleConstraint', predicate: pred };
     if (valueExpr !== EMPTY) tc.valueExpr = valueExpr;
-    if (card !== undefined) {
-      tc.min = card.min;
-      tc.max = card.max;
+    if (Option.isSome(card)) {
+      tc.min = card.value.min;
+      tc.max = card.value.max;
     }
-    if (semActs !== undefined) tc.semActs = semActs;
+    if (Option.isSome(semActs)) tc.semActs = semActs.value;
     if (Arr.isReadonlyArrayNonEmpty(annots)) tc.annotations = annots;
     return tc;
   }),
@@ -959,7 +974,7 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
   semanticActions,
 ).pipe(
   Parser.tryMap(([at, expr, card, annots, semActs]) => {
-    if (card === undefined && Arr.isReadonlyArrayEmpty(annots) && semActs === undefined) {
+    if (Option.isNone(card) && Arr.isReadonlyArrayEmpty(annots) && Option.isNone(semActs)) {
       return Result.succeed(expr);
     }
     if (Predicate.isString(expr)) {
@@ -968,22 +983,18 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
         at,
       );
     }
-    // SAFETY: it is not an inclusion string, and an `EachOf` is the triple expression shape that
-    // carries all of these fields.
-    let out = expr as Mutable<ShExJ.EachOf>;
-    if (
-      card !== undefined &&
+    const out: Mutable<ShExJ.TripleExpr> =
+      Option.isSome(card) &&
       expr.type === 'TripleConstraint' &&
       (expr.min !== undefined || expr.max !== undefined)
-    ) {
-      out = { type: 'EachOf', expressions: [expr] };
-    }
-    if (card !== undefined) {
-      out.min = card.min;
-      out.max = card.max;
+        ? { type: 'EachOf', expressions: [expr] }
+        : expr;
+    if (Option.isSome(card)) {
+      out.min = card.value.min;
+      out.max = card.value.max;
     }
     if (Arr.isReadonlyArrayNonEmpty(annots)) out.annotations = annots;
-    if (semActs !== undefined) out.semActs = [...(out.semActs ?? []), ...semActs];
+    if (Option.isSome(semActs)) out.semActs = [...(out.semActs ?? []), ...semActs.value];
     return Result.succeed<ShExJ.TripleExprOrRef>(out);
   }),
   Parser.cut,
@@ -1056,36 +1067,39 @@ type Statement =
   | { readonly _tag: 'Start'; readonly expr: AnyShapeExpr; readonly at: number }
   | { readonly _tag: 'Decl'; readonly decl: ShExJ.ShapeDecl; readonly at: number };
 
-const directiveCases: ReadonlyArray<readonly [ReadonlyArray<string>, P<Statement | undefined>]> = [
-  [
-    ['BASE'],
-    Parser.preceded(anyToken, Parser.cut(tok('IRIREF', 'an IRI reference'))).pipe(
-      Parser.as(undefined),
-    ),
-  ],
-  [
-    ['PREFIX'],
-    Parser.preceded(
-      anyToken,
-      Parser.cut(
-        Parser.seq(
-          Token.oneOf<ReadonlyArray<Tok>>((t) => t.type === 'PNAME' && t.iri === '').pipe(
-            Parser.expected('a prefix name'),
-          ),
-          iri,
-        ),
-      ),
-    ).pipe(Parser.as(undefined)),
-  ],
-  [
-    ['IMPORT'],
-    Parser.preceded(anyToken, Parser.cut(iri)).pipe(
-      Parser.map((base): Statement => ({ _tag: 'Import', iri: base })),
-    ),
-  ],
-];
+const noStatement = Option.none<Statement>();
 
-const directive: P<Statement | undefined> = select('a directive', directiveCases);
+const directiveCases: ReadonlyArray<readonly [ReadonlyArray<string>, P<Option.Option<Statement>>]> =
+  [
+    [
+      ['BASE'],
+      Parser.preceded(anyToken, Parser.cut(tok('IRIREF', 'an IRI reference'))).pipe(
+        Parser.as(noStatement),
+      ),
+    ],
+    [
+      ['PREFIX'],
+      Parser.preceded(
+        anyToken,
+        Parser.cut(
+          Parser.seq(
+            Token.oneOf<ReadonlyArray<Tok>>((t) => t.type === 'PNAME' && t.iri === '').pipe(
+              Parser.expected('a prefix name'),
+            ),
+            iri,
+          ),
+        ),
+      ).pipe(Parser.as(noStatement)),
+    ],
+    [
+      ['IMPORT'],
+      Parser.preceded(anyToken, Parser.cut(iri)).pipe(
+        Parser.map((base) => Option.some<Statement>({ _tag: 'Import', iri: base })),
+      ),
+    ],
+  ];
+
+const directive: P<Option.Option<Statement>> = select('a directive', directiveCases);
 
 const startDecl: P<Statement> = Parser.seq(
   Parser.location,
@@ -1114,8 +1128,10 @@ const shapeExprDecl: P<Statement> = Parser.seq(
       [['EXTERNAL'], anyToken.pipe(Parser.as<AnyShapeExpr>({ type: 'ShapeExternal' }))],
       [
         REF_KINDS,
-        Parser.seq(shapeRef, optional(shapeOrRest)).pipe(
-          Parser.map(([ref, rest]) => (rest === undefined ? ref : prepend(rest, [ref]))),
+        Parser.seq(shapeRef, Parser.opt(shapeOrRest)).pipe(
+          Parser.map(([ref, rest]) =>
+            Option.match(rest, { onNone: () => ref, onSome: (r) => prepend(r, [ref]) }),
+          ),
         ),
       ],
     ],
@@ -1131,15 +1147,18 @@ const shapeExprDecl: P<Statement> = Parser.seq(
   }),
 );
 
-const statement: P<Statement | undefined> = select('a directive or shape declaration', [
+const statement: P<Option.Option<Statement>> = select('a directive or shape declaration', [
   ...directiveCases,
-  [['START'], startDecl],
-  [['ABSTRACT', 'BLANK_NODE_LABEL', ...IRI_KINDS], Parser.cut(shapeExprDecl)],
+  [['START'], startDecl.pipe(Parser.map(Option.some))],
+  [
+    ['ABSTRACT', 'BLANK_NODE_LABEL', ...IRI_KINDS],
+    Parser.cut(shapeExprDecl).pipe(Parser.map(Option.some)),
+  ],
 ]);
 
 const document = Compiler.jit(
   Parser.terminated(
-    Parser.seq(Parser.repeat(directive), optional(codeDecls), Parser.repeat(statement)),
+    Parser.seq(Parser.repeat(directive), Parser.opt(codeDecls), Parser.repeat(statement)),
     Parser.eof,
   ),
 );
@@ -1148,7 +1167,7 @@ const document = Compiler.jit(
 // Checks in document order
 // -----------------------------------------------------------------------------
 
-type Visit = (t: ShExJ.TripleExpr) => void;
+type Visit = (t: ShExJ.TripleExpr, id: string) => void;
 
 const labelledShape = (s: AnyShapeExpr, f: Visit): void => {
   if (!Predicate.isString(s)) labelledShapeExpr(s, f);
@@ -1159,7 +1178,7 @@ const labelledTriple = (t: ShExJ.TripleExprOrRef, f: Visit): void => {
   if (t.type === 'TripleConstraint') {
     if (t.valueExpr !== undefined) labelledShape(t.valueExpr, f);
   } else t.expressions.forEach((e) => labelledTriple(e, f));
-  if (t.id !== undefined) f(t);
+  if (t.id !== undefined) f(t, t.id);
 };
 
 // Built once: it runs for every shape expression of every declaration.
@@ -1184,46 +1203,63 @@ const labelledShapeExpr: (s: ShExJ.ShapeExpr, f: Visit) => void = Match.fn(
 const eachLabelled = (e: AnyShapeExpr, f: Visit): void => labelledShape(e, f);
 
 const assemble = (
-  statements: ReadonlyArray<Statement | undefined>,
-  startActs: ReadonlyArray<ShExJ.SemAct> | undefined,
+  statements: ReadonlyArray<Statement>,
+  startActs: Option.Option<ReadonlyArray<ShExJ.SemAct>>,
 ): Result.Result<ShExJ.Schema, SemanticError> => {
   const imports: Array<string> = [];
-  const shapes = new Map<string, ShExJ.ShapeDecl>();
-  const productions = new Set<string>();
-  let start: AnyShapeExpr | undefined;
-  let error: SemanticError | undefined;
-  const production = (t: ShExJ.TripleExpr) => {
-    if (error !== undefined) return;
-    const id = t.id!;
+  // In document order, which the schema keeps.
+  const shapes: Array<ShExJ.ShapeDecl> = [];
+  const shapeIds = MutableHashSet.empty<string>();
+  const productions = MutableHashSet.empty<string>();
+  let error = Option.none<SemanticError>();
+  const production: Visit = (t, id) => {
+    if (Option.isSome(error)) return;
     const at = labelAt.get(t) ?? 0;
-    if (shapes.has(id)) error = { message: `${id} is a shape expression`, at };
-    else if (productions.has(id)) error = { message: `${id} already defined`, at };
-    else productions.add(id);
+    if (MutableHashSet.has(shapeIds, id))
+      error = Option.some({ message: `${id} is a shape expression`, at });
+    else if (MutableHashSet.has(productions, id))
+      error = Option.some({ message: `${id} already defined`, at });
+    else MutableHashSet.add(productions, id);
   };
-  for (const s of statements) {
-    if (s === undefined) continue;
-    if (s._tag === 'Import') imports.push(s.iri);
-    else if (s._tag === 'Start') {
-      if (start !== undefined) return failAt('start already defined', s.at);
-      eachLabelled(s.expr, production);
-      if (error !== undefined) return Result.fail(error);
-      start = s.expr;
-    } else {
-      const { decl, at } = s;
-      decl.restricts?.forEach((r) => eachLabelled(r, production));
-      eachLabelled(decl.shapeExpr, production);
-      if (error !== undefined) return Result.fail(error);
-      if (productions.has(decl.id)) return failAt(`${decl.id} is a triple expression`, at);
-      if (shapes.has(decl.id)) return failAt(`${decl.id} already defined`, at);
-      shapes.set(decl.id, decl);
+  const step = (
+    start: Option.Option<AnyShapeExpr>,
+    s: Statement,
+  ): Result.Result<Option.Option<AnyShapeExpr>, SemanticError> => {
+    if (Predicate.isTagged(s, 'Import')) {
+      imports.push(s.iri);
+      return Result.succeed(start);
     }
-  }
-  const schema: Mutable<ShExJ.Schema> = { type: 'Schema' };
-  if (Arr.isReadonlyArrayNonEmpty(imports)) schema.imports = imports;
-  if (startActs !== undefined) schema.startActs = startActs;
-  if (start !== undefined) schema.start = start;
-  if (shapes.size > 0) schema.shapes = Array.from(shapes.values());
-  return Result.succeed(schema);
+    if (Predicate.isTagged(s, 'Start')) {
+      if (Option.isSome(start)) return failAt('start already defined', s.at);
+      eachLabelled(s.expr, production);
+      return Option.isSome(error) ? Result.fail(error.value) : Result.succeed(Option.some(s.expr));
+    }
+    const { decl, at } = s;
+    decl.restricts?.forEach((r) => eachLabelled(r, production));
+    eachLabelled(decl.shapeExpr, production);
+    if (Option.isSome(error)) return Result.fail(error.value);
+    if (MutableHashSet.has(productions, decl.id))
+      return failAt(`${decl.id} is a triple expression`, at);
+    if (MutableHashSet.has(shapeIds, decl.id)) return failAt(`${decl.id} already defined`, at);
+    MutableHashSet.add(shapeIds, decl.id);
+    shapes.push(decl);
+    return Result.succeed(start);
+  };
+  const noStart: Result.Result<Option.Option<AnyShapeExpr>, SemanticError> = Result.succeed(
+    Option.none(),
+  );
+  return Arr.reduce(statements, noStart, (acc, s) =>
+    Result.flatMap(acc, (start) => step(start, s)),
+  ).pipe(
+    Result.map((start) => {
+      const schema: Mutable<ShExJ.Schema> = { type: 'Schema' };
+      if (Arr.isReadonlyArrayNonEmpty(imports)) schema.imports = imports;
+      if (Option.isSome(startActs)) schema.startActs = startActs.value;
+      if (Option.isSome(start)) schema.start = start.value;
+      if (Arr.isReadonlyArrayNonEmpty(shapes)) schema.shapes = shapes;
+      return schema;
+    }),
+  );
 };
 
 // -----------------------------------------------------------------------------
@@ -1254,14 +1290,14 @@ const grammarError = (
 /** Parses a ShExC document. Errors carry the character offset. */
 export const parseShExC = (
   input: string,
-  options: ParserOptions = {},
+  options: ParserOptions,
 ): Result.Result<ParserResult, ShExCError> => {
   const tokens = tokenize(input);
   const resolved = resolve(tokens, options.baseIri, options.prefixes);
   const parsed = Parser.parse(document, tokens);
   if (Result.isFailure(parsed)) return Result.fail(grammarError(input, tokens, parsed.failure));
   const [directives, startActs, statements] = parsed.success;
-  const schema = assemble([...directives, ...statements], startActs);
+  const schema = assemble(Arr.getSomes([...directives, ...statements]), startActs);
   if (Result.isFailure(schema)) {
     return Result.fail({
       message: schema.failure.message,

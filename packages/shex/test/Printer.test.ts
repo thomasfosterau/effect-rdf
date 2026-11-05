@@ -1,7 +1,10 @@
 /* eslint-disable vitest/valid-title, vitest/valid-expect, vitest/no-conditional-expect, vitest/expect-expect -- conformance tests are generated from manifests */
 import { assert, describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Record from 'effect/Record';
+import * as Result from 'effect/Result';
 import type * as Schema from 'effect/Schema';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as ShExC from '../src/ShExC.ts';
@@ -20,24 +23,19 @@ const entries: ReadonlyArray<{ name: string; json: string }> = hasShexTest
 const normalise = (v: Schema.Json): Schema.Json => {
   if (Array.isArray(v)) return v.map(normalise);
   if (isJsonObject(v)) {
-    const out: { [key: string]: Schema.Json } = {};
-    for (const [k, x] of Object.entries(v)) {
-      if (
-        k === 'valueExpr' &&
-        isJsonObject(x) &&
-        Object.keys(x).length === 1 &&
-        x['type'] === 'Shape'
-      )
-        continue;
-      out[k] = normalise(x);
-    }
-    return out;
+    return Record.fromEntries(
+      Arr.filterMap(Record.toEntries(v), ([k, x]) =>
+        k === 'valueExpr' && isJsonObject(x) && Record.size(x) === 1 && x['type'] === 'Shape'
+          ? Result.failVoid
+          : Result.succeed([k, normalise(x)] as const),
+      ),
+    );
   }
   return v;
 };
 
 describe.skipIf(!hasShexTest)('ShExC printer round trip (ShExJ → ShExC → ShExJ)', () => {
-  for (const entry of entries) {
+  entries.forEach((entry) => {
     it(entry.name, () => {
       const { '@context': _, ...json } = readJson('schemas', entry.json);
       const schema = ShExJ.resolveIris(json, `${suiteBase}schemas/${entry.json}`);
@@ -48,5 +46,5 @@ describe.skipIf(!hasShexTest)('ShExC printer round trip (ShExJ → ShExC → ShE
       if (Exit.isFailure(exit)) assert.fail(`${String(exit.cause)}\n${text}`);
       expect(normalise(canonical(exit.value)), text).toEqual(normalise(canonical(schema)));
     });
-  }
+  });
 });

@@ -9,7 +9,12 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Iterable from 'effect/Iterable';
 import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import { iterate } from './internal/iterate.ts';
 import { ShExStructureError } from './ShExError.ts';
 import type * as ShExJ from './ShExJ.ts';
 import * as Predicate from 'effect/Predicate';
@@ -42,10 +47,12 @@ const forEachShapeExprChild: (
   Match.orElse(() => undefined),
 );
 
+type Labels<A> = MutableHashMap.MutableHashMap<string, A>;
+
 /** Collects the labelled triple expressions of a shape expression tree. */
 const collectTripleExprs = (
   root: ShExJ.ShapeExprOrRef,
-  out: Map<string, ShExJ.TripleExpr>,
+  out: Labels<ShExJ.TripleExpr>,
   duplicates: Array<string>,
 ): void => {
   const visitShape = (e: ShExJ.ShapeExprOrRef): void => {
@@ -60,9 +67,10 @@ const collectTripleExprs = (
   const visitTriple = (t: ShExJ.TripleExprOrRef): void => {
     if (Predicate.isString(t)) return;
     if (t.id !== undefined) {
-      const existing = out.get(t.id);
-      if (existing !== undefined && existing !== t) duplicates.push(t.id);
-      out.set(t.id, t);
+      const id = t.id;
+      if (Option.exists(MutableHashMap.get(out, id), (existing) => existing !== t))
+        duplicates.push(id);
+      MutableHashMap.set(out, id, t);
     }
     if (t.type === 'TripleConstraint') {
       if (t.valueExpr !== undefined) visitShape(t.valueExpr);
@@ -71,6 +79,44 @@ const collectTripleExprs = (
     }
   };
   visitShape(root);
+};
+
+/** The labelled triple expressions of a schema, and the labels declared more than once. */
+interface TripleExprIndex {
+  readonly tripleExprs: Labels<ShExJ.TripleExpr>;
+  readonly duplicates: Array<string>;
+}
+
+const tripleExprsOf = (schema: ShExJ.Schema): TripleExprIndex => {
+  const tripleExprs = MutableHashMap.empty<string, ShExJ.TripleExpr>();
+  const duplicates: Array<string> = [];
+  schema.shapes?.forEach((d) => {
+    collectTripleExprs(d.shapeExpr, tripleExprs, duplicates);
+    d.restricts?.forEach((r) => collectTripleExprs(r, tripleExprs, duplicates));
+  });
+  if (schema.start !== undefined) collectTripleExprs(schema.start, tripleExprs, duplicates);
+  return { tripleExprs, duplicates };
+};
+
+/** `nestedShapes`, with the declarations looked up by `declOf`. */
+const nestedShapesBy = (
+  declOf: (label: string) => Option.Option<ShExJ.ShapeDecl>,
+  e: ShExJ.ShapeExprOrRef,
+): ReadonlyArray<ShExJ.Shape> => {
+  const out: Array<ShExJ.Shape> = [];
+  const seen = MutableHashSet.empty<string>();
+  const go = (x: ShExJ.ShapeExprOrRef): void => {
+    if (Predicate.isString(x)) {
+      if (MutableHashSet.has(seen, x)) return;
+      MutableHashSet.add(seen, x);
+      Option.map(declOf(x), (decl) => go(decl.shapeExpr));
+      return;
+    }
+    if (x.type === 'Shape') out.push(x);
+    else forEachShapeExprChild(x, go);
+  };
+  go(e);
+  return out;
 };
 
 /**
@@ -83,23 +129,8 @@ const collectTripleExprs = (
 export const nestedShapes = (
   shapes: ReadonlyMap<string, ShExJ.ShapeDecl>,
   e: ShExJ.ShapeExprOrRef,
-): ReadonlyArray<ShExJ.Shape> => {
-  const out: Array<ShExJ.Shape> = [];
-  const seen = new Set<string>();
-  const go = (x: ShExJ.ShapeExprOrRef): void => {
-    if (Predicate.isString(x)) {
-      if (seen.has(x)) return;
-      seen.add(x);
-      const decl = shapes.get(x);
-      if (decl !== undefined) go(decl.shapeExpr);
-      return;
-    }
-    if (x.type === 'Shape') out.push(x);
-    else forEachShapeExprChild(x, go);
-  };
-  go(e);
-  return out;
-};
+): ReadonlyArray<ShExJ.Shape> =>
+  nestedShapesBy((label) => Option.fromUndefinedOr(shapes.get(label)), e);
 
 /** All shape labels referenced inside a shape expression (anywhere). */
 const refsOf = (e: ShExJ.ShapeExprOrRef, out: Array<string>): void => {
@@ -115,6 +146,48 @@ const refsOf = (e: ShExJ.ShapeExprOrRef, out: Array<string>): void => {
   forEachShapeExprChild(e, (c) => refsOf(c, out));
 };
 
+/** The labels a declaration extends: the references in the `EXTENDS` of its nested shapes. */
+const parentsOf = (
+  declOf: (label: string) => Option.Option<ShExJ.ShapeDecl>,
+  d: ShExJ.ShapeDecl,
+): Array<string> => {
+  const parents: Array<string> = [];
+  nestedShapesBy(declOf, d.shapeExpr).forEach((s) =>
+    s.extends?.forEach((ext) => refsOf(ext, parents)),
+  );
+  return parents;
+};
+
+/** Appends `value` to the list of `key`, starting the list if there is none. */
+const append = <A>(map: Labels<Array<A>>, key: string, value: A): void =>
+  Option.match(MutableHashMap.get(map, key), {
+    onNone: () => {
+      MutableHashMap.set(map, key, [value]);
+    },
+    onSome: (list) => {
+      list.push(value);
+    },
+  });
+
+/** The labels reachable from `label` in `children` (depth first, each once). */
+const descendantsOf = (children: Labels<Array<string>>, label: string): ReadonlyArray<string> => {
+  const out: Array<string> = [];
+  const seen = MutableHashSet.make(label);
+  const stack = [label];
+  iterate(stack, (pending) => {
+    const l = pending.pop();
+    if (l === undefined) return Option.none();
+    Option.getOrElse(MutableHashMap.get(children, l), () => []).forEach((c) => {
+      if (MutableHashSet.has(seen, c)) return;
+      MutableHashSet.add(seen, c);
+      out.push(c);
+      pending.push(c);
+    });
+    return Option.some(pending);
+  });
+  return out;
+};
+
 /**
  * Builds the index of a schema (which should already include the
  * declarations of its imports).
@@ -123,48 +196,31 @@ const refsOf = (e: ShExJ.ShapeExprOrRef, out: Array<string>): void => {
  * @category constructors
  */
 export const makeIndex = (schema: ShExJ.Schema): SchemaIndex => {
-  const shapes = new Map<string, ShExJ.ShapeDecl>();
-  for (const d of schema.shapes ?? []) shapes.set(d.id, d);
-  const tripleExprs = new Map<string, ShExJ.TripleExpr>();
-  const duplicates: Array<string> = [];
-  for (const d of schema.shapes ?? []) {
-    collectTripleExprs(d.shapeExpr, tripleExprs, duplicates);
-    d.restricts?.forEach((r) => collectTripleExprs(r, tripleExprs, duplicates));
-  }
-  if (schema.start !== undefined) collectTripleExprs(schema.start, tripleExprs, duplicates);
-  // Extension hierarchy: parent label -> direct children.
-  const children = new Map<string, Set<string>>();
-  for (const d of schema.shapes ?? []) {
-    for (const s of nestedShapes(shapes, d.shapeExpr)) {
-      for (const ext of s.extends ?? []) {
-        const parents: Array<string> = [];
-        refsOf(ext, parents);
-        for (const p of parents) {
-          let set = children.get(p);
-          if (set === undefined) children.set(p, (set = new Set()));
-          set.add(d.id);
-        }
-      }
-    }
-  }
-  const descendants = new Map<string, ReadonlyArray<string>>();
-  for (const label of children.keys()) {
-    const out: Array<string> = [];
-    const seen = new Set<string>([label]);
-    const stack = [label];
-    while (Arr.isReadonlyArrayNonEmpty(stack)) {
-      const l = stack.pop()!;
-      for (const c of children.get(l) ?? []) {
-        if (!seen.has(c)) {
-          seen.add(c);
-          out.push(c);
-          stack.push(c);
-        }
-      }
-    }
-    descendants.set(label, out);
-  }
-  return { schema, shapes, tripleExprs, descendants };
+  const decls = MutableHashMap.fromIterable(
+    Arr.map(schema.shapes ?? [], (d) => [d.id, d] as const),
+  );
+  const declOf = (label: string) => MutableHashMap.get(decls, label);
+  const { tripleExprs } = tripleExprsOf(schema);
+  // Extension hierarchy: parent label -> direct children (each once, in order).
+  const children = MutableHashMap.empty<string, Array<string>>();
+  schema.shapes?.forEach((d) =>
+    parentsOf(declOf, d).forEach((p) => {
+      if (!Option.exists(MutableHashMap.get(children, p), (l) => l.includes(d.id)))
+        append(children, p, d.id);
+    }),
+  );
+  // `SchemaIndex` exposes `ReadonlyMap`s, so the index is built on native maps.
+  return {
+    schema,
+    shapes: new Map(decls),
+    tripleExprs: new Map(tripleExprs),
+    descendants: new Map(
+      Arr.map(Arr.fromIterable(MutableHashMap.keys(children)), (label) => [
+        label,
+        descendantsOf(children, label),
+      ]),
+    ),
+  };
 };
 
 // -----------------------------------------------------------------------------
@@ -177,23 +233,24 @@ interface Edge {
 }
 
 /** The cycles of a dependency graph, each rendered as `a -> b -> a`. */
-const cyclesOf = (graph: ReadonlyMap<string, ReadonlyArray<string>>): ReadonlyArray<string> => {
-  const state = new Map<string, number>();
+const cyclesOf = (graph: Labels<ReadonlyArray<string>>): ReadonlyArray<string> => {
+  // 1: on the current path; 2: done.
+  const state = MutableHashMap.empty<string, number>();
   const found: Array<string> = [];
   const visit = (n: string, path: Array<string>): void => {
-    const s = state.get(n);
-    if (s === 2) return;
-    if (s === 1) {
+    const s = MutableHashMap.get(state, n);
+    if (Option.contains(s, 2)) return;
+    if (Option.contains(s, 1)) {
       found.push([...path.slice(path.indexOf(n)), n].join(' -> '));
       return;
     }
-    state.set(n, 1);
+    MutableHashMap.set(state, n, 1);
     path.push(n);
-    for (const m of graph.get(n) ?? []) visit(m, path);
+    Option.getOrElse(MutableHashMap.get(graph, n), () => []).forEach((m) => visit(m, path));
     path.pop();
-    state.set(n, 2);
+    MutableHashMap.set(state, n, 2);
   };
-  for (const n of graph.keys()) visit(n, []);
+  Iterable.forEach(MutableHashMap.keys(graph), (n) => visit(n, []));
   return found;
 };
 
@@ -210,62 +267,56 @@ export const problems = (
   options: { readonly allowUnresolved?: boolean } = {},
 ): ReadonlyArray<string> => {
   const errors: Array<string> = [];
-  const shapes = new Map<string, ShExJ.ShapeDecl>();
-  for (const d of schema.shapes ?? []) {
-    if (shapes.has(d.id)) errors.push(`shape ${d.id} is declared more than once`);
-    shapes.set(d.id, d);
-  }
-  const tripleExprs = new Map<string, ShExJ.TripleExpr>();
-  const duplicates: Array<string> = [];
-  for (const d of schema.shapes ?? []) {
-    collectTripleExprs(d.shapeExpr, tripleExprs, duplicates);
-    d.restricts?.forEach((r) => collectTripleExprs(r, tripleExprs, duplicates));
-  }
-  if (schema.start !== undefined) collectTripleExprs(schema.start, tripleExprs, duplicates);
-  for (const d of duplicates) errors.push(`triple expression ${d} is declared more than once`);
-  for (const l of tripleExprs.keys()) {
-    if (shapes.has(l)) errors.push(`${l} labels both a shape and a triple expression`);
-  }
+  const shapes = MutableHashMap.empty<string, ShExJ.ShapeDecl>();
+  schema.shapes?.forEach((d) => {
+    if (MutableHashMap.has(shapes, d.id)) errors.push(`shape ${d.id} is declared more than once`);
+    MutableHashMap.set(shapes, d.id, d);
+  });
+  const isShape = (label: string) => MutableHashMap.has(shapes, label);
+  const { tripleExprs, duplicates } = tripleExprsOf(schema);
+  duplicates.forEach((d) => errors.push(`triple expression ${d} is declared more than once`));
+  Iterable.forEach(MutableHashMap.keys(tripleExprs), (l) => {
+    if (isShape(l)) errors.push(`${l} labels both a shape and a triple expression`);
+  });
 
   const checkRef = (label: string) => {
-    if (!shapes.has(label) && options.allowUnresolved !== true)
+    if (!isShape(label) && options.allowUnresolved !== true)
       errors.push(`reference to undeclared shape ${label}`);
   };
   const checkInclude = (label: string) => {
-    if (tripleExprs.has(label)) return;
-    if (shapes.has(label))
-      errors.push(`inclusion &${label} names a shape, not a triple expression`);
+    if (MutableHashMap.has(tripleExprs, label)) return;
+    if (isShape(label)) errors.push(`inclusion &${label} names a shape, not a triple expression`);
     else if (options.allowUnresolved !== true)
       errors.push(`inclusion of undeclared triple expression ${label}`);
   };
 
   // Dependency graph with polarity, and the direct (non-triple) reference graph.
-  const deps = new Map<string, Array<Edge>>();
-  const direct = new Map<string, Array<string>>();
+  const deps = MutableHashMap.empty<string, Array<Edge>>();
+  const direct = MutableHashMap.empty<string, Array<string>>();
 
   const walkShape = (
     from: string,
     e: ShExJ.ShapeExprOrRef,
     negative: boolean,
     isDirect: boolean,
-    visitingIncludes: Set<string>,
+    visitingIncludes: MutableHashSet.MutableHashSet<string>,
   ): void => {
     if (Predicate.isString(e)) {
       checkRef(e);
-      deps.get(from)!.push({ to: e, negative });
-      if (isDirect) direct.get(from)!.push(e);
+      append(deps, from, { to: e, negative });
+      if (isDirect) append(direct, from, e);
       return;
     }
     Match.value(e).pipe(
-      Match.discriminator('type')('ShapeAnd', 'ShapeOr', (expr) => {
-        for (const c of expr.shapeExprs) walkShape(from, c, negative, isDirect, visitingIncludes);
-      }),
+      Match.discriminator('type')('ShapeAnd', 'ShapeOr', (expr) =>
+        expr.shapeExprs.forEach((c) => walkShape(from, c, negative, isDirect, visitingIncludes)),
+      ),
       Match.discriminator('type')('ShapeNot', (expr) =>
         walkShape(from, expr.shapeExpr, true, isDirect, visitingIncludes),
       ),
       Match.discriminator('type')('Shape', (expr) => {
-        for (const x of expr.extends ?? []) walkShape(from, x, negative, false, visitingIncludes);
-        const extra = new Set(expr.extra ?? []);
+        expr.extends?.forEach((x) => walkShape(from, x, negative, false, visitingIncludes));
+        const extra = MutableHashSet.fromIterable(expr.extra ?? []);
         if (expr.expression !== undefined)
           walkTriple(from, expr.expression, negative, extra, visitingIncludes);
       }),
@@ -276,107 +327,124 @@ export const problems = (
     from: string,
     t: ShExJ.TripleExprOrRef,
     negative: boolean,
-    extra: ReadonlySet<string>,
-    visitingIncludes: Set<string>,
+    extra: MutableHashSet.MutableHashSet<string>,
+    visitingIncludes: MutableHashSet.MutableHashSet<string>,
   ): void => {
     if (Predicate.isString(t)) {
       checkInclude(t);
-      const target = tripleExprs.get(t);
-      if (target !== undefined && !visitingIncludes.has(t)) {
-        visitingIncludes.add(t);
+      if (MutableHashSet.has(visitingIncludes, t)) return;
+      Option.map(MutableHashMap.get(tripleExprs, t), (target) => {
+        MutableHashSet.add(visitingIncludes, t);
         walkTriple(from, target, negative, extra, visitingIncludes);
-        visitingIncludes.delete(t);
-      }
+        MutableHashSet.remove(visitingIncludes, t);
+      });
       return;
     }
     if (t.type === 'TripleConstraint') {
       if (t.valueExpr !== undefined) {
-        const neg = negative || (extra.has(t.predicate) && t.inverse !== true);
+        const neg = negative || (MutableHashSet.has(extra, t.predicate) && t.inverse !== true);
         walkShape(from, t.valueExpr, neg, false, visitingIncludes);
       }
       return;
     }
-    for (const c of t.expressions) walkTriple(from, c, negative, extra, visitingIncludes);
+    t.expressions.forEach((c) => walkTriple(from, c, negative, extra, visitingIncludes));
   };
 
-  const roots: Array<readonly [string, ShExJ.ShapeExprOrRef]> = [];
-  for (const d of schema.shapes ?? []) {
-    roots.push([d.id, d.shapeExpr]);
-    for (const r of d.restricts ?? []) roots.push([d.id, r]);
-  }
-  for (const [label] of roots) {
-    deps.set(label, []);
-    direct.set(label, []);
-  }
-  for (const [label, expr] of roots) walkShape(label, expr, false, true, new Set());
+  const roots = Arr.flatMap(schema.shapes ?? [], (d) => [
+    [d.id, d.shapeExpr] as const,
+    ...Arr.map(d.restricts ?? [], (r) => [d.id, r] as const),
+  ]);
+  roots.forEach(([label]) => {
+    MutableHashMap.set(deps, label, []);
+    MutableHashMap.set(direct, label, []);
+  });
+  roots.forEach(([label, expr]) => walkShape(label, expr, false, true, MutableHashSet.empty()));
   if (schema.start !== undefined) {
-    deps.set('\u0000start', []);
-    direct.set('\u0000start', []);
-    walkShape('\u0000start', schema.start, false, true, new Set());
+    MutableHashMap.set(deps, '\u0000start', []);
+    MutableHashMap.set(direct, '\u0000start', []);
+    walkShape('\u0000start', schema.start, false, true, MutableHashSet.empty());
   }
 
   // Direct self-reference cycles.
-  for (const c of cyclesOf(direct)) errors.push(`shape expression refers to itself: ${c}`);
+  cyclesOf(direct).forEach((c) => errors.push(`shape expression refers to itself: ${c}`));
 
   // Negation requirement: no strongly connected component contains a negative edge.
-  const sccOf = tarjan(Array.from(deps.keys()), (n) => (deps.get(n) ?? []).map((e) => e.to));
-  for (const [from, edges] of deps) {
-    for (const e of edges) {
-      if (e.negative && sccOf.get(from) !== undefined && sccOf.get(from) === sccOf.get(e.to)) {
+  const sccOf = tarjan(Arr.fromIterable(MutableHashMap.keys(deps)), (n) =>
+    Arr.map(
+      Option.getOrElse(MutableHashMap.get(deps, n), () => []),
+      (e) => e.to,
+    ),
+  );
+  Iterable.forEach(deps, ([from, edges]) =>
+    edges.forEach((e) => {
+      const component = MutableHashMap.get(sccOf, from);
+      if (
+        e.negative &&
+        Option.exists(component, (c) => Option.contains(MutableHashMap.get(sccOf, e.to), c))
+      ) {
         errors.push(`reference cycle through negation between ${from} and ${e.to}`);
       }
-    }
-  }
+    }),
+  );
 
   // Acyclic extension hierarchy.
-  const extendsGraph = new Map<string, Array<string>>();
-  for (const d of schema.shapes ?? []) {
-    const parents: Array<string> = [];
-    for (const s of nestedShapes(shapes, d.shapeExpr)) {
-      for (const ext of s.extends ?? []) refsOf(ext, parents);
-    }
-    extendsGraph.set(d.id, parents);
-  }
-  for (const c of cyclesOf(extendsGraph)) errors.push(`cyclic extension hierarchy: ${c}`);
-  return Array.from(new Set(errors));
+  const declOf = (label: string) => MutableHashMap.get(shapes, label);
+  const extendsGraph = MutableHashMap.empty<string, ReadonlyArray<string>>();
+  schema.shapes?.forEach((d) => MutableHashMap.set(extendsGraph, d.id, parentsOf(declOf, d)));
+  cyclesOf(extendsGraph).forEach((c) => errors.push(`cyclic extension hierarchy: ${c}`));
+  return Arr.dedupe(errors);
 };
 
+/** Tarjan's bookkeeping for one node. */
+interface Visited {
+  readonly index: number;
+  low: number;
+  onStack: boolean;
+}
+
+/** The strongly connected component of every node, by Tarjan's algorithm. */
 const tarjan = (
   nodes: ReadonlyArray<string>,
   succ: (n: string) => ReadonlyArray<string>,
-): ReadonlyMap<string, number> => {
+): Labels<number> => {
   let index = 0;
   let component = 0;
-  const indices = new Map<string, number>();
-  const low = new Map<string, number>();
-  const onStack = new Set<string>();
+  const visited = MutableHashMap.empty<string, Visited>();
   const stack: Array<string> = [];
-  const result = new Map<string, number>();
-  const strong = (v: string): void => {
-    indices.set(v, index);
-    low.set(v, index);
+  const result = MutableHashMap.empty<string, number>();
+  const strong = (v: string): Visited => {
+    const nv: Visited = { index, low: index, onStack: true };
+    MutableHashMap.set(visited, v, nv);
     index++;
     stack.push(v);
-    onStack.add(v);
-    for (const w of succ(v)) {
-      if (!indices.has(w)) {
-        strong(w);
-        low.set(v, Math.min(low.get(v)!, low.get(w)!));
-      } else if (onStack.has(w)) {
-        low.set(v, Math.min(low.get(v)!, indices.get(w)!));
-      }
-    }
-    if (low.get(v) === indices.get(v)) {
-      let w: string;
-      do {
-        w = stack.pop()!;
-        onStack.delete(w);
-        result.set(w, component);
-      } while (w !== v);
+    succ(v).forEach((w) =>
+      Option.match(MutableHashMap.get(visited, w), {
+        onNone: () => {
+          nv.low = Math.min(nv.low, strong(w).low);
+        },
+        onSome: (nw) => {
+          if (nw.onStack) nv.low = Math.min(nv.low, nw.index);
+        },
+      }),
+    );
+    if (nv.low === nv.index) {
+      // Pop the component, down to and including `v`.
+      iterate(stack, (pending) => {
+        const w = pending.pop();
+        if (w === undefined) return Option.none();
+        Option.map(MutableHashMap.get(visited, w), (nw) => {
+          nw.onStack = false;
+        });
+        MutableHashMap.set(result, w, component);
+        return w === v ? Option.none() : Option.some(pending);
+      });
       component++;
     }
+    return nv;
   };
-  for (const n of nodes) if (!indices.has(n)) strong(n);
+  nodes.forEach((n) => {
+    if (!MutableHashMap.has(visited, n)) strong(n);
+  });
   return result;
 };
 

@@ -9,22 +9,30 @@
 import * as Schema from 'effect/Schema';
 
 /**
+ * Replaces one escape: a numeric escape (`\uXXXX`, `\UXXXXXXXX`, the only
+ * ones longer than two characters) by its code point, any other by `keep`
+ * applied to the escaped character.
+ */
+const unescapeOne =
+  (keep: (c: string, all: string) => string) =>
+  (all: string): string =>
+    all.length > 2 ? String.fromCodePoint(parseInt(all.slice(2), 16)) : keep(all.slice(1), all);
+
+/**
  * Unescapes a ShExC `REGEXP` body: `\/` becomes `/` and numeric escapes are
  * replaced by their code points; every other escape is kept verbatim.
  */
 export const unescapeRegexp = (s: string): string =>
   s.replace(
     /\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|\\(.)/gs,
-    (all, u4: string | undefined, u8: string | undefined, c: string | undefined) =>
-      c !== undefined ? (c === '/' ? '/' : all) : String.fromCodePoint(parseInt(u4 ?? u8!, 16)),
+    unescapeOne((c, all) => (c === '/' ? '/' : all)),
   );
 
 /** Unescapes a semantic action `CODE` body (`\%`, `\\` and UCHAR). */
 export const unescapeCode = (s: string): string =>
   s.replace(
     /\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|\\([%\\])/g,
-    (_, u4: string | undefined, u8: string | undefined, c: string | undefined) =>
-      c !== undefined ? c : String.fromCodePoint(parseInt(u4 ?? u8!, 16)),
+    unescapeOne((c) => c),
   );
 
 /** A 1-based line and column in the source text. */
@@ -35,15 +43,11 @@ export interface Position {
 
 /** Converts a string offset to a 1-based line and column. */
 export const lineColumn = (input: string, pos: number): Position => {
-  let line = 1;
-  let lineStart = 0;
-  for (let i = 0; i < pos && i < input.length; i++) {
-    if (input.charCodeAt(i) === 10) {
-      line++;
-      lineStart = i + 1;
-    }
-  }
-  return { line, column: pos - lineStart + 1 };
+  const before = input.slice(0, Math.max(pos, 0));
+  return {
+    line: before.split('\n').length,
+    column: pos - (before.lastIndexOf('\n') + 1) + 1,
+  };
 };
 
 const encodeJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.String));

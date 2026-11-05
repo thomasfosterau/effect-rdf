@@ -19,10 +19,10 @@ const issueList = (issue: SchemaIssue.Issue): ReadonlyArray<SchemaIssue.Issue> =
     Match.tag('Composite', (c) => c.issues),
     Match.orElse((i) => [i]),
   );
-const messageOf = (issue: SchemaIssue.Issue): string | undefined =>
+const messageOf = (issue: SchemaIssue.Issue): Option.Option<string> =>
   Match.value(issue).pipe(
-    Match.tag('InvalidValue', (i) => i.annotations?.message),
-    Match.orElse(() => undefined),
+    Match.tag('InvalidValue', (i) => Option.fromUndefinedOr(i.annotations?.message)),
+    Match.orElse(() => Option.none()),
   );
 const resultHas = (issue: SchemaIssue.Issue, key: string): boolean =>
   Match.value(issue).pipe(
@@ -217,7 +217,7 @@ describe('Validator', () => {
       const error = yield* Effect.flip(Schema.decodeEffect(people)(data));
       const issues = issueList(error.issue);
       expect(issues).toHaveLength(2);
-      expect(issues.map((issue) => messageOf(issue))).toEqual([
+      expect(issues.map((issue) => Option.getOrUndefined(messageOf(issue)))).toEqual([
         expect.stringMatching(new RegExp(`^${ex('carol').key}@`)),
         expect.stringMatching(new RegExp(`^${ex('dave').key}@`)),
       ]);

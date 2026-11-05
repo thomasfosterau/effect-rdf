@@ -49,18 +49,17 @@ const big = [
 
 const bench = (name: string, inputs: ReadonlyArray<{ text: string; baseIri: string }>) => {
   const size = inputs.reduce((n, d) => n + d.text.length, 0);
-  const run = () => {
-    for (const d of inputs) {
+  const run = () =>
+    inputs.forEach((d) => {
       Effect.runSync(Effect.result(ShExC.parse(d.text, { baseIri: d.baseIri })));
-    }
-  };
-  for (let i = 0; i < 5; i++) run();
-  const samples: Array<number> = [];
-  for (let i = 0; i < 15; i++) {
+    });
+  // Warm up, then sample.
+  Arr.makeBy(5, run);
+  const samples = Arr.makeBy(15, () => {
     const t = performance.now();
     run();
-    samples.push(performance.now() - t);
-  }
+    return performance.now() - t;
+  });
   const sorted = Arr.sort(samples, Order.Number);
   const median = sorted[Math.floor(samples.length / 2)] ?? 0;
   // oxlint-disable-next-line no-console -- benchmark output

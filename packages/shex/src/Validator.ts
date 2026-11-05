@@ -15,6 +15,10 @@ import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import type * as SchemaAST from 'effect/SchemaAST';
 import * as SchemaIssue from 'effect/SchemaIssue';
@@ -168,22 +172,27 @@ export const resolveImports = Effect.fnUntraced(function* (
 ) {
   if (schema.imports === undefined || Arr.isReadonlyArrayEmpty(schema.imports)) return schema;
   const loader = yield* SchemaLoader;
-  const seen = new Set<string>(schemaIri === undefined ? [] : [schemaIri]);
+  const seen = MutableHashSet.fromIterable(schemaIri === undefined ? [] : [schemaIri]);
   const shapes: Array<ShExJ.ShapeDecl> = [...(schema.shapes ?? [])];
-  const labels = new Set(shapes.map((s) => s.id));
-  const queue = [...schema.imports];
-  while (Arr.isReadonlyArrayNonEmpty(queue)) {
-    const iri = queue.shift()!;
-    if (seen.has(iri)) continue;
-    seen.add(iri);
-    const imported = yield* loader.load(iri);
-    for (const d of imported.shapes ?? []) {
-      if (labels.has(d.id)) continue;
-      labels.add(d.id);
-      shapes.push(d);
-    }
-    queue.push(...(imported.imports ?? []));
-  }
+  const labels = MutableHashSet.fromIterable(shapes.map((s) => s.id));
+  // Breadth first, each IRI once: the queue holds the imports still to load.
+  const load = (queue: ReadonlyArray<string>): Effect.Effect<void, ShExImportError> =>
+    Arr.match(queue, {
+      onEmpty: () => Effect.void,
+      onNonEmpty: ([iri, ...rest]) => {
+        if (MutableHashSet.has(seen, iri)) return load(rest);
+        MutableHashSet.add(seen, iri);
+        return Effect.flatMap(loader.load(iri), (imported) => {
+          imported.shapes?.forEach((d) => {
+            if (MutableHashSet.has(labels, d.id)) return;
+            MutableHashSet.add(labels, d.id);
+            shapes.push(d);
+          });
+          return load([...rest, ...(imported.imports ?? [])]);
+        });
+      },
+    });
+  yield* load(schema.imports);
   const { imports: _, ...rest } = schema;
   // SAFETY: dropping the optional `imports` (and re-adding `shapes` only when non-empty) leaves a
   // valid `ShExJ.Schema`; the spread just loses the nominal type.
@@ -194,8 +203,8 @@ export const resolveImports = Effect.fnUntraced(function* (
 // Validation
 // -----------------------------------------------------------------------------
 
-const isQueryMap = (map: ShapeMap.QueryShapeMap): boolean =>
-  map.some((a) => a.node._tag === 'TriplePattern');
+const isFixedMap = (map: ShapeMap.QueryShapeMap): map is ShapeMap.FixedShapeMap =>
+  map.every((a) => !Predicate.isTagged(a.node, 'TriplePattern'));
 
 /**
  * Prepares a validator: loads imports through `SchemaLoader`, checks the
@@ -215,31 +224,27 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
     options.externalSemActs === undefined
       ? baseHandler
       : SemAct.withExternalCode(baseHandler, options.externalSemActs);
-  const externs = new Map<string, ShExJ.ShapeDecl>();
-  for (const d of options.externalShapes?.shapes ?? []) externs.set(d.id, d);
+  const externs = MutableHashMap.fromIterable(
+    Arr.map(options.externalShapes?.shapes ?? [], (d) => [d.id, d] as const),
+  );
 
   const validate = (
     dataset: Dataset.Dataset,
     shapeMap: ShapeMap.QueryShapeMap,
   ): Effect.Effect<ValidationReport, ShExValidationError> =>
     Effect.suspend(() => {
-      // SAFETY: `isQueryMap` is false, and a shape map is either a query map or a fixed map.
-      const fixed = isQueryMap(shapeMap)
-        ? ShapeMap.resolve(shapeMap, dataset)
-        : (shapeMap as ShapeMap.FixedShapeMap);
-      for (const a of fixed) {
-        if (ShapeMap.isStart(a.shape)) {
-          if (resolved.start === undefined)
-            return Effect.fail(
-              new ShExValidationError({
-                message: 'the shape map uses START but the schema has no start',
-              }),
-            );
-        } else if (!index.shapes.has(a.shape)) {
-          return Effect.fail(
-            new ShExValidationError({ message: `the schema does not declare shape ${a.shape}` }),
-          );
-        }
+      const fixed = isFixedMap(shapeMap) ? shapeMap : ShapeMap.resolve(shapeMap, dataset);
+      const invalid = Arr.findFirst(fixed, (a) =>
+        ShapeMap.isStart(a.shape)
+          ? resolved.start === undefined
+            ? Option.some('the shape map uses START but the schema has no start')
+            : Option.none()
+          : index.shapes.has(a.shape)
+            ? Option.none()
+            : Option.some(`the schema does not declare shape ${a.shape}`),
+      );
+      if (Option.isSome(invalid)) {
+        return Effect.fail(new ShExValidationError({ message: invalid.value }));
       }
       const engine = new Engine(index, dataset, handler, externs);
       const startFailure = engine.runSemActs(resolved.startActs, {
@@ -247,14 +252,20 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
         node: undefined,
       });
       const results: Array<ShapeResult> = fixed.map((a) => {
-        const reason =
-          startFailure ??
-          (ShapeMap.isStart(a.shape)
-            ? engine.validateStart(a.node, new Set())
-            : engine.validateLabel(a.node, a.shape, new Set()));
-        return reason === undefined
-          ? { node: a.node, shape: a.shape, status: 'conformant' }
-          : { node: a.node, shape: a.shape, status: 'nonconformant', reason };
+        const reason = Option.orElse(startFailure, () =>
+          ShapeMap.isStart(a.shape)
+            ? engine.validateStart(a.node, MutableHashSet.empty())
+            : engine.validateLabel(a.node, a.shape, MutableHashSet.empty()),
+        );
+        return Option.match(reason, {
+          onNone: (): ShapeResult => ({ node: a.node, shape: a.shape, status: 'conformant' }),
+          onSome: (why): ShapeResult => ({
+            node: a.node,
+            shape: a.shape,
+            status: 'nonconformant',
+            reason: why,
+          }),
+        });
       });
       const conformant = results.every((r) => r.status === 'conformant');
       return Effect.as(
@@ -299,7 +310,10 @@ export const validateNode = (
   shape: ShapeMap.ShapeSelector,
   options: Options = {},
 ): Effect.Effect<ShapeResult, ShExValidationError | ShExImportError | ShExStructureError> =>
-  Effect.map(validate(dataset, schema, [{ node, shape }], options), (r) => r.results[0]!);
+  // A one-association shape map yields exactly one result.
+  Effect.map(validate(dataset, schema, [{ node, shape }], options), (r) =>
+    Arr.getUnsafe(r.results, 0),
+  );
 
 // -----------------------------------------------------------------------------
 // Schema integration

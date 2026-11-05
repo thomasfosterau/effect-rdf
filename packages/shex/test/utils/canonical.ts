@@ -1,6 +1,11 @@
 import * as Arr from 'effect/Array';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
+import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import type * as ShExJ from '../../src/ShExJ.ts';
 
@@ -29,52 +34,55 @@ const isTripleExpression = (v: Schema.JsonObject): boolean =>
  */
 export const canonical = (schema: ShExJ.Schema): Schema.Json => {
   const json = toJson(schema);
-  const referencedTe = new Set<string>();
-  const collectRefs = (v: Schema.Json, key: string | undefined): void => {
+  const referencedTe = MutableHashSet.empty<string>();
+  const collectRefs = (v: Schema.Json, key: Option.Option<string>): void => {
     if (Predicate.isString(v)) {
-      if ((key === 'expression' || key === 'expressions') && v.startsWith('_:'))
-        referencedTe.add(v);
+      if (
+        Option.exists(key, (k) => k === 'expression' || k === 'expressions') &&
+        v.startsWith('_:')
+      )
+        MutableHashSet.add(referencedTe, v);
       return;
     }
     if (Array.isArray(v)) {
       v.forEach((x) => collectRefs(x, key));
       return;
     }
-    if (isJsonObject(v)) for (const [k, x] of Object.entries(v)) collectRefs(x, k);
+    if (isJsonObject(v)) Record.toEntries(v).forEach(([k, x]) => collectRefs(x, Option.some(k)));
   };
-  collectRefs(json, undefined);
-  const names = new Map<string, string>();
-  const rename = (label: string) => {
-    let n = names.get(label);
-    if (n === undefined) names.set(label, (n = `_:c${names.size}`));
-    return n;
-  };
+  collectRefs(json, Option.none());
+  const names = MutableHashMap.empty<string, string>();
+  const rename = (label: string) =>
+    Option.getOrElse(MutableHashMap.get(names, label), () => {
+      const n = `_:c${MutableHashMap.size(names)}`;
+      MutableHashMap.set(names, label, n);
+      return n;
+    });
   const byKey = Order.mapInput(Order.String, ([k]: readonly [string, Schema.Json]) => k);
-  const go = (v: Schema.Json, key: string | undefined): Schema.Json => {
-    if (Predicate.isString(v)) return v.startsWith('_:') && key !== 'value' ? rename(v) : v;
+  const go = (v: Schema.Json, key: Option.Option<string>): Schema.Json => {
+    if (Predicate.isString(v))
+      return v.startsWith('_:') && !Option.contains(key, 'value') ? rename(v) : v;
     if (Array.isArray(v)) {
       const items = v.map((x) => go(x, key));
-      return key === 'extra' && Arr.every(items, Predicate.isString)
+      return Option.contains(key, 'extra') && Arr.every(items, Predicate.isString)
         ? Arr.sort(items, Order.String)
         : items;
     }
     if (isJsonObject(v)) {
-      const out: { [key: string]: Schema.Json } = {};
       const isTe = isTripleExpression(v);
-      for (const [k, x] of Arr.sort(Object.entries(v), byKey)) {
-        if (
+      return Record.fromEntries(
+        Arr.filterMap(Arr.sort(Record.toEntries(v), byKey), ([k, x]) =>
           isTe &&
           k === 'id' &&
           Predicate.isString(x) &&
           x.startsWith('_:') &&
-          !referencedTe.has(x)
-        )
-          continue;
-        out[k] = go(x, k);
-      }
-      return out;
+          !MutableHashSet.has(referencedTe, x)
+            ? Result.failVoid
+            : Result.succeed([k, go(x, Option.some(k))] as const),
+        ),
+      );
     }
     return v;
   };
-  return go(json, undefined);
+  return go(json, Option.none());
 };

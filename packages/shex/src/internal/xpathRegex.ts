@@ -1,5 +1,7 @@
 import * as Arr from 'effect/Array';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
 /**
  * Translation of XPath / XML Schema regular expressions (as used by the
  * ShEx `pattern` facet and `fn:matches`) to JavaScript `RegExp`s.
@@ -58,7 +60,7 @@ const BLOCKS: Table<string> = {
   Katakana: '\\u30A0-\\u30FF',
 };
 
-const SYNTAX = new Set([
+const SYNTAX = MutableHashSet.make(
   '^',
   '$',
   '\\',
@@ -74,7 +76,15 @@ const SYNTAX = new Set([
   '}',
   '|',
   '/',
-]);
+);
+
+/** What a character class collects besides its body. */
+interface ClassState {
+  /** Complemented class escapes, which cannot go in the body. */
+  readonly extra: Array<string>;
+  /** The subtracted class (`-[…]`), translated. */
+  subtraction: Option.Option<string>;
+}
 
 /** An escape read by `Translator.escape`: a character, or a class body. */
 type Escape = { kind: 'char'; text: string } | { kind: 'class'; body: string; negated: boolean };
@@ -96,7 +106,7 @@ const escapeOf: (c: string, t: Translator) => Escape = Match.fn(
     if (ce !== undefined) return { kind: 'class', ...ce };
     if (/[0-9]/.test(c)) return { kind: 'char', text: `\\${c}` };
     if (c === '-') return { kind: 'char', text: '\\-' };
-    if (SYNTAX.has(c)) return { kind: 'char', text: `\\${c}` };
+    if (MutableHashSet.has(SYNTAX, c)) return { kind: 'char', text: `\\${c}` };
     return t.fail(`invalid escape \\${c}`);
   }),
 );
@@ -140,111 +150,102 @@ class Translator {
 
   /** Translates a character class (cursor after `[`); returns a JS fragment. */
   charClass(): string {
-    let negated = false;
-    if (this.src[this.i] === '^') {
-      negated = true;
-      this.i++;
-    }
-    let body = '';
-    const extra: Array<string> = [];
-    let subtraction: string | undefined;
-    let first = true;
-    for (;;) {
-      const c = this.src[this.i];
-      if (c === undefined) this.fail('unterminated character class');
-      if (c === ']' && !first) {
-        this.i++;
-        break;
-      }
-      first = false;
-      if (c === '-' && this.src[this.i + 1] === '[') {
-        this.i += 2;
-        subtraction = this.charClass();
-        if (this.src[this.i] !== ']') this.fail('expected ] after class subtraction');
-        this.i++;
-        break;
-      }
-      if (c === '\\') {
-        this.i++;
-        const e = this.escape();
-        if (e.kind === 'char') body += e.text;
-        else if (!e.negated) body += e.body;
-        else extra.push(`[^${e.body}]`);
-        continue;
-      }
-      this.i++;
-      if (c === '[' || c === '/' || c === '{' || c === '}' || c === '(' || c === ')' || c === '|') {
-        body += `\\${c}`;
-      } else if (c === '-') {
-        body += '\\-';
-      } else body += c;
-    }
+    const negated = this.src[this.i] === '^';
+    if (negated) this.i++;
+    const state: ClassState = { extra: [], subtraction: Option.none() };
+    const raw = Arr.unfold(true, (first) =>
+      Option.map(this.classAtom(first, state), (fragment) => [fragment, false] as const),
+    ).join('');
     // Ranges were emitted with escaped '-': restore range operators between plain characters.
-    body = restoreRanges(body);
-    let set: string;
-    if (Arr.isReadonlyArrayEmpty(extra)) set = `[${negated ? '^' : ''}${body}]`;
-    else {
-      const alts = [...(body === '' ? [] : [`[${body}]`]), ...extra];
-      const union = `(?:${alts.join('|')})`;
-      set = negated ? `(?:(?!${union})[\\s\\S])` : union;
+    const body = restoreRanges(raw);
+    const { extra } = state;
+    const set = Arr.isReadonlyArrayEmpty(extra)
+      ? `[${negated ? '^' : ''}${body}]`
+      : this.union(negated, [...(body === '' ? [] : [`[${body}]`]), ...extra]);
+    return Option.match(state.subtraction, {
+      onNone: () => set,
+      onSome: (subtraction) => `(?:(?!${subtraction})${set})`,
+    });
+  }
+
+  /** A class with complemented escapes: the union of its alternatives (or its complement). */
+  union(negated: boolean, alts: ReadonlyArray<string>): string {
+    const union = `(?:${alts.join('|')})`;
+    return negated ? `(?:(?!${union})[\\s\\S])` : union;
+  }
+
+  /**
+   * Reads the next atom of a character class, returning its body fragment,
+   * or none once the class ends (`]`, or a subtraction, which ends it).
+   */
+  classAtom(first: boolean, state: ClassState): Option.Option<string> {
+    const c = this.src[this.i];
+    if (c === undefined) this.fail('unterminated character class');
+    if (c === ']' && !first) {
+      this.i++;
+      return Option.none();
     }
-    return subtraction === undefined ? set : `(?:(?!${subtraction})${set})`;
+    if (c === '-' && this.src[this.i + 1] === '[') {
+      this.i += 2;
+      state.subtraction = Option.some(this.charClass());
+      if (this.src[this.i] !== ']') this.fail('expected ] after class subtraction');
+      this.i++;
+      return Option.none();
+    }
+    this.i++;
+    if (c === '\\') {
+      const e = this.escape();
+      if (e.kind === 'char') return Option.some(e.text);
+      if (!e.negated) return Option.some(e.body);
+      state.extra.push(`[^${e.body}]`);
+      return Option.some('');
+    }
+    if (c === '[' || c === '/' || c === '{' || c === '}' || c === '(' || c === ')' || c === '|') {
+      return Option.some(`\\${c}`);
+    }
+    return Option.some(c === '-' ? '\\-' : c);
+  }
+
+  /** Translates the atom at the cursor (outside a class). */
+  atom(): string {
+    const c = this.src.charAt(this.i);
+    if (this.extended && /\s/.test(c)) {
+      this.i++;
+      return '';
+    }
+    if (c === '\\') {
+      this.i++;
+      const e = this.escape();
+      return e.kind === 'char'
+        ? e.text === '\\-'
+          ? '-'
+          : e.text
+        : `[${e.negated ? '^' : ''}${e.body}]`;
+    }
+    if (c === '[') {
+      this.i++;
+      return this.charClass();
+    }
+    if (c === '{') {
+      const q = /^\{\d+(?:,\d*)?\}/.exec(this.src.slice(this.i));
+      if (q !== null) {
+        this.i += q[0].length;
+        return q[0];
+      }
+      this.i++;
+      return '\\{';
+    }
+    this.i++;
+    if (c === '.') return this.dotAll ? '[\\s\\S]' : '[^\\n\\r]';
+    if (c === '/') return '\\/';
+    if (c === ']' || c === '}') return `\\${c}`;
+    return c;
   }
 
   translate(): string {
-    let out = '';
-    while (this.i < this.src.length) {
-      const c = this.src[this.i]!;
-      if (this.extended && /\s/.test(c)) {
-        this.i++;
-        continue;
-      }
-      if (c === '\\') {
-        this.i++;
-        const e = this.escape();
-        out +=
-          e.kind === 'char'
-            ? e.text === '\\-'
-              ? '-'
-              : e.text
-            : `[${e.negated ? '^' : ''}${e.body}]`;
-        continue;
-      }
-      if (c === '[') {
-        this.i++;
-        out += this.charClass();
-        continue;
-      }
-      if (c === '.') {
-        this.i++;
-        out += this.dotAll ? '[\\s\\S]' : '[^\\n\\r]';
-        continue;
-      }
-      if (c === '/') {
-        this.i++;
-        out += '\\/';
-        continue;
-      }
-      if (c === '{') {
-        const q = /^\{\d+(?:,\d*)?\}/.exec(this.src.slice(this.i));
-        if (q !== null) {
-          out += q[0];
-          this.i += q[0].length;
-        } else {
-          out += '\\{';
-          this.i++;
-        }
-        continue;
-      }
-      if (c === ']' || c === '}') {
-        this.i++;
-        out += `\\${c}`;
-        continue;
-      }
-      out += c;
-      this.i++;
-    }
-    return out;
+    return Arr.unfold(this, (t) =>
+      t.i < t.src.length ? Option.some([t.atom(), t] as const) : Option.none(),
+    ).join('');
   }
 }
 
@@ -255,35 +256,17 @@ class Translator {
  */
 const restoreRanges = (body: string): string => {
   // Tokenise into atoms: escapes (\x, \p{..}, \u{..}) or single code points.
-  const atoms: Array<string> = [];
-  let i = 0;
-  while (i < body.length) {
-    if (body[i] === '\\') {
-      const m = /^\\(?:[pP]\{[^}]*\}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|.)/su.exec(body.slice(i));
-      atoms.push(m![0]);
-      i += m![0].length;
-    } else {
-      const cp = body.codePointAt(i)!;
-      const ch = String.fromCodePoint(cp);
-      atoms.push(ch);
-      i += ch.length;
-    }
-  }
-  let out = '';
-  for (let k = 0; k < atoms.length; k++) {
-    const a = atoms[k]!;
-    if (
-      a === '\\-' &&
-      k > 0 &&
-      k < atoms.length - 1 &&
-      isRangeEndpoint(atoms[k - 1]!) &&
-      isRangeEndpoint(atoms[k + 1]!)
-    ) {
-      out += '-';
-    } else out += a;
-  }
-  return out;
+  const atoms = body.match(CLASS_ATOM) ?? [];
+  const endpointAt = (k: number): boolean => {
+    const a = atoms[k];
+    return a !== undefined && isRangeEndpoint(a);
+  };
+  return Arr.map(atoms, (a, k) =>
+    a === '\\-' && endpointAt(k - 1) && endpointAt(k + 1) ? '-' : a,
+  ).join('');
 };
+
+const CLASS_ATOM = /\\(?:[pP]\{[^}]*\}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|.)|./gsu;
 
 const isRangeEndpoint = (atom: string): boolean => !/^\\[pPdDwWsS]/.test(atom) && atom !== '\\-';
 

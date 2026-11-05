@@ -8,13 +8,16 @@
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Predicate from 'effect/Predicate';
+import * as Schema from 'effect/Schema';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { ShExRError } from './ShExError.ts';
-import type * as ShExJ from './ShExJ.ts';
+import * as ShExJ from './ShExJ.ts';
 
 /**
  * The ShEx vocabulary namespace.
@@ -36,7 +39,28 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 class Fail extends Error {}
 
-const valueSetTypes = new Set([
+const integerFacetNames = [
+  'length',
+  'minlength',
+  'maxlength',
+  'totaldigits',
+  'fractiondigits',
+] as const;
+const rangeFacetNames = ['mininclusive', 'minexclusive', 'maxinclusive', 'maxexclusive'] as const;
+// In the order the reader has always read them.
+const numericFacetNames = [
+  'length',
+  'minlength',
+  'maxlength',
+  'mininclusive',
+  'minexclusive',
+  'maxinclusive',
+  'maxexclusive',
+  'totaldigits',
+  'fractiondigits',
+] as const;
+
+const valueSetTypes = MutableHashSet.make(
   'IriStem',
   'IriStemRange',
   'LiteralStem',
@@ -44,30 +68,49 @@ const valueSetTypes = new Set([
   'Language',
   'LanguageStem',
   'LanguageStemRange',
-]);
+);
+
+const decodeValueSetValue = Schema.decodeUnknownOption(ShExJ.ValueSetValueSchema);
+
+/** A stem or stem-range value as read, before it is checked against its kind. */
+interface RawValueSetValue {
+  readonly type: string;
+  readonly stem: string | ShExJ.Wildcard;
+  readonly exclusions?: ReadonlyArray<string | { readonly type: string; readonly stem: string }>;
+}
+
+/** The fields a ShExJ object may carry its semantic actions and annotations in. */
+interface Meta {
+  semActs?: ReadonlyArray<ShExJ.SemAct>;
+  annotations?: ReadonlyArray<ShExJ.Annotation>;
+}
 
 // -----------------------------------------------------------------------------
 // Reading
 // -----------------------------------------------------------------------------
 
 class Reader {
-  readonly teDefined = new Set<string>();
-  readonly teUses = new Map<string, number>();
+  readonly teDefined = MutableHashSet.empty<string>();
+  readonly teUses = MutableHashMap.empty<string, number>();
 
-  readonly expressionSites = new Set<string>();
+  readonly expressionSites = MutableHashSet.empty<string>();
 
   readonly dataset: Dataset.Dataset;
   constructor(dataset: Dataset.Dataset) {
     this.dataset = dataset;
-    for (const q of Dataset.match(dataset, { predicate: sx('expression') })) {
+    Dataset.match(dataset, { predicate: sx('expression') }).forEach((q) => {
       this.countUse(q.object);
-      this.expressionSites.add(q.object.key);
-    }
-    for (const q of Dataset.match(dataset, { predicate: rdfFirst })) this.countUse(q.object);
+      MutableHashSet.add(this.expressionSites, q.object.key);
+    });
+    Dataset.match(dataset, { predicate: rdfFirst }).forEach((q) => this.countUse(q.object));
+  }
+
+  uses(t: Term.Term): number {
+    return Option.getOrElse(MutableHashMap.get(this.teUses, t.key), () => 0);
   }
 
   countUse(t: Term.Term): void {
-    this.teUses.set(t.key, (this.teUses.get(t.key) ?? 0) + 1);
+    MutableHashMap.set(this.teUses, t.key, this.uses(t) + 1);
   }
 
   fail(message: string): never {
@@ -75,9 +118,9 @@ class Reader {
   }
 
   types(n: Term.Term): ReadonlyArray<string> {
-    if (n._tag !== 'NamedNode' && n._tag !== 'BlankNode') return [];
+    if (!Term.isResource(n)) return [];
     return Dataset.objectsOf(this.dataset, n, rdfType).map((t) =>
-      t._tag === 'NamedNode' ? t.value : '',
+      Term.isNamedNode(t) ? t.value : '',
     );
   }
 
@@ -85,55 +128,64 @@ class Reader {
     return this.types(n).includes(SX + local);
   }
 
-  one(n: Term.Term, p: string): Term.Object | undefined {
-    if (n._tag !== 'NamedNode' && n._tag !== 'BlankNode') return undefined;
+  one(n: Term.Term, p: string): Option.Option<Term.Object> {
+    if (!Term.isResource(n)) return Option.none();
     const os = Dataset.objectsOf(this.dataset, n, sx(p));
     if (os.length > 1) this.fail(`${n.key} has several sx:${p} values`);
-    return os[0];
+    return Arr.head(os);
+  }
+
+  /** The value of a required property. */
+  required(n: Term.Term, p: string, message: string): Term.Object {
+    return Option.getOrElse(this.one(n, p), () => this.fail(message));
   }
 
   all(n: Term.Term, p: string): ReadonlyArray<Term.Object> {
-    if (n._tag !== 'NamedNode' && n._tag !== 'BlankNode') return [];
+    if (!Term.isResource(n)) return [];
     return Dataset.objectsOf(this.dataset, n, sx(p));
   }
 
-  list(n: Term.Term | undefined): ReadonlyArray<Term.Object> {
-    if (n === undefined) return [];
-    // SAFETY: list heads are nodes, which can be objects.
-    const l = Dataset.list(this.dataset, n as Term.Object);
-    if (Option.isNone(l)) return this.fail(`${n.key} is not a well-formed RDF list`);
-    return l.value;
+  list(n: Option.Option<Term.Object>): ReadonlyArray<Term.Object> {
+    return Option.match(n, {
+      onNone: () => [],
+      onSome: (head) =>
+        Option.getOrElse(Dataset.list(this.dataset, head), () =>
+          this.fail(`${head.key} is not a well-formed RDF list`),
+        ),
+    });
   }
 
   label(n: Term.Term): string {
-    if (n._tag === 'NamedNode') return n.value;
-    if (n._tag === 'BlankNode') return `_:${n.value}`;
+    if (Term.isNamedNode(n)) return n.value;
+    if (Term.isBlankNode(n)) return `_:${n.value}`;
     return this.fail(`${n.key} cannot be a label`);
   }
 
-  iri(n: Term.Term | undefined, what: string): string {
-    if (n?._tag !== 'NamedNode') return this.fail(`expected an IRI for ${what}`);
-    return n.value;
+  iri(n: Option.Option<Term.Term>, what: string): string {
+    const t = Option.getOrUndefined(n);
+    if (!Term.isNamedNode(t)) return this.fail(`expected an IRI for ${what}`);
+    return t.value;
   }
 
-  str(n: Term.Term | undefined, what: string): string {
-    if (n?._tag !== 'Literal') return this.fail(`expected a literal for ${what}`);
-    return n.value;
+  str(n: Option.Option<Term.Term>, what: string): string {
+    const t = Option.getOrUndefined(n);
+    if (!Term.isLiteral(t)) return this.fail(`expected a literal for ${what}`);
+    return t.value;
   }
 
-  num(n: Term.Term | undefined, what: string): number {
+  num(n: Option.Option<Term.Term>, what: string): number {
     const v = Number(this.str(n, what));
     if (Number.isNaN(v)) this.fail(`expected a number for ${what}`);
     return v;
   }
 
-  bool(n: Term.Term | undefined): boolean {
-    return n?._tag === 'Literal' && (n.value === 'true' || n.value === '1');
+  bool(n: Option.Option<Term.Term>): boolean {
+    return Option.exists(n, (t) => Term.isLiteral(t) && (t.value === 'true' || t.value === '1'));
   }
 
   objectValue(n: Term.Term): ShExJ.ObjectValue {
-    if (n._tag === 'NamedNode') return n.value;
-    if (n._tag === 'Literal') {
+    if (Term.isNamedNode(n)) return n.value;
+    if (Term.isLiteral(n)) {
       if (n.language !== '') return { value: n.value, language: n.language };
       if (n.datatype.value === `${XSD}string`) return { value: n.value };
       return { value: n.value, type: n.datatype.value };
@@ -141,38 +193,21 @@ class Reader {
     return this.fail(`${n.key} is not an IRI or literal`);
   }
 
-  semActs(n: Term.Term): ReadonlyArray<ShExJ.SemAct> | undefined {
-    const l = this.one(n, 'semActs');
-    if (l === undefined) return undefined;
-    return this.list(l).map((a) => {
-      const act: Mutable<ShExJ.SemAct> = {
-        type: 'SemAct',
-        name: this.iri(this.one(a, 'name'), 'sx:name'),
-      };
-      const code = this.one(a, 'code');
-      if (code !== undefined) act.code = this.str(code, 'sx:code');
-      return act;
-    });
+  annotations(n: Term.Term): Option.Option<ReadonlyArray<ShExJ.Annotation>> {
+    return Option.map(this.one(n, 'annotation'), (l) =>
+      this.list(Option.some(l)).map((a) => ({
+        type: 'Annotation',
+        predicate: this.iri(this.one(a, 'predicate'), 'sx:predicate'),
+        object: this.objectValue(this.required(a, 'object', 'annotation without sx:object')),
+      })),
+    );
   }
 
-  annotations(n: Term.Term): ReadonlyArray<ShExJ.Annotation> | undefined {
-    const l = this.one(n, 'annotation');
-    if (l === undefined) return undefined;
-    return this.list(l).map((a) => ({
-      type: 'Annotation',
-      predicate: this.iri(this.one(a, 'predicate'), 'sx:predicate'),
-      object: this.objectValue(this.one(a, 'object') ?? this.fail('annotation without sx:object')),
-    }));
-  }
-
-  meta<T extends object>(n: Term.Term, out: T): T {
-    const acts = this.semActs(n);
+  meta(n: Term.Term, out: Meta): void {
+    const acts = this.semActsOf(n, 'semActs');
     const annots = this.annotations(n);
-    // SAFETY: `out` is a ShExJ object, which may carry `semActs` and `annotations`.
-    const o = out as Mutable<{ semActs?: unknown; annotations?: unknown }>;
-    if (acts !== undefined) o.semActs = acts;
-    if (annots !== undefined) o.annotations = annots;
-    return out;
+    if (Option.isSome(acts)) out.semActs = acts.value;
+    if (Option.isSome(annots)) out.annotations = annots.value;
   }
 
   /** A shape expression or a reference to a declaration. */
@@ -195,7 +230,7 @@ class Reader {
       return {
         type: 'ShapeNot',
         shapeExpr: this.shapeDeclOrExpr(
-          this.one(n, 'shapeExpr') ?? this.fail('ShapeNot without sx:shapeExpr'),
+          this.required(n, 'shapeExpr', 'ShapeNot without sx:shapeExpr'),
         ),
       };
     if (types.includes(`${SX}ShapeExternal`)) return { type: 'ShapeExternal' };
@@ -207,68 +242,63 @@ class Reader {
   nodeConstraint(n: Term.Term): ShExJ.NodeConstraint {
     const nc: Mutable<ShExJ.NodeConstraint> = { type: 'NodeConstraint' };
     const kind = this.one(n, 'nodeKind');
-    if (kind !== undefined) {
+    if (Option.isSome(kind)) {
       const k = this.iri(kind, 'sx:nodeKind').slice(SX.length);
       if (k !== 'iri' && k !== 'bnode' && k !== 'literal' && k !== 'nonliteral')
-        this.fail(`unknown node kind ${kind.key}`);
+        this.fail(`unknown node kind ${kind.value.key}`);
       nc.nodeKind = k;
     }
     const dt = this.one(n, 'datatype');
-    if (dt !== undefined) nc.datatype = this.iri(dt, 'sx:datatype');
-    for (const f of [
-      'length',
-      'minlength',
-      'maxlength',
-      'mininclusive',
-      'minexclusive',
-      'maxinclusive',
-      'maxexclusive',
-      'totaldigits',
-      'fractiondigits',
-    ] as const) {
+    if (Option.isSome(dt)) nc.datatype = this.iri(dt, 'sx:datatype');
+    numericFacetNames.forEach((f) => {
       const v = this.one(n, f);
-      if (v !== undefined) nc[f] = this.num(v, `sx:${f}`);
-    }
+      if (Option.isSome(v)) nc[f] = this.num(v, `sx:${f}`);
+    });
     const pattern = this.one(n, 'pattern');
-    if (pattern !== undefined) nc.pattern = this.str(pattern, 'sx:pattern');
+    if (Option.isSome(pattern)) nc.pattern = this.str(pattern, 'sx:pattern');
     const flags = this.one(n, 'flags');
-    if (flags !== undefined) nc.flags = this.str(flags, 'sx:flags');
+    if (Option.isSome(flags)) nc.flags = this.str(flags, 'sx:flags');
     const values = this.one(n, 'values');
-    if (values !== undefined) nc.values = this.list(values).map((v) => this.valueSetValue(v));
-    return this.meta(n, nc);
+    if (Option.isSome(values)) nc.values = this.list(values).map((v) => this.valueSetValue(v));
+    this.meta(n, nc);
+    return nc;
   }
 
   stem(n: Term.Term): string | ShExJ.Wildcard {
     if (this.hasType(n, 'Wildcard')) return { type: 'Wildcard' };
-    return n._tag === 'NamedNode' ? n.value : this.str(n, 'sx:stem');
+    return Term.isNamedNode(n) ? n.value : this.str(Option.some(n), 'sx:stem');
   }
 
   valueSetValue(n: Term.Term): ShExJ.ValueSetValue {
-    if (n._tag === 'Literal') return this.objectValue(n);
-    const types = this.types(n);
-    const t = types.map((x) => x.slice(SX.length)).find((x) => valueSetTypes.has(x));
-    if (t === undefined || n._tag === 'NamedNode') return this.objectValue(n);
-    const stem = () => this.stem(this.one(n, 'stem') ?? this.fail(`${t} without sx:stem`));
+    if (Term.isLiteral(n)) return this.objectValue(n);
+    const found = Arr.findFirst(
+      this.types(n).map((x) => x.slice(SX.length)),
+      (x) => MutableHashSet.has(valueSetTypes, x),
+    );
+    if (Option.isNone(found) || Term.isNamedNode(n)) return this.objectValue(n);
+    const t = found.value;
+    const stem = () => this.stem(this.required(n, 'stem', `${t} without sx:stem`));
     const exclusions = () =>
       this.list(this.one(n, 'exclusion')).map((e) =>
-        e._tag === 'Literal' || e._tag === 'NamedNode'
+        Term.isLiteral(e) || Term.isNamedNode(e)
           ? e.value
           : {
               type: (this.types(e)[0] ?? `${SX}IriStem`).slice(SX.length),
               stem: this.str(this.one(e, 'stem'), 'sx:stem'),
             },
       );
+    // The stem kinds carry a string stem, the stem-range kinds a stem and their exclusions.
+    const decoded = (value: RawValueSetValue): ShExJ.ValueSetValue =>
+      Option.getOrElse(decodeValueSetValue(value), () =>
+        this.fail(`${n.key} is not a well-formed ${t}`),
+      );
     return Match.value(t).pipe(
       Match.withReturnType<ShExJ.ValueSetValue>(),
-      Match.when(
-        Match.is('IriStem', 'LiteralStem', 'LanguageStem'),
-        // SAFETY: the stem kinds carry a string stem.
-        (kind) => ({ type: kind, stem: stem() as string }) as ShExJ.ValueSetValue,
+      Match.when(Match.is('IriStem', 'LiteralStem', 'LanguageStem'), (kind) =>
+        decoded({ type: kind, stem: stem() }),
       ),
-      Match.when(
-        Match.is('IriStemRange', 'LiteralStemRange', 'LanguageStemRange'),
-        // SAFETY: the stem-range kinds carry a stem and their exclusions.
-        (kind) => ({ type: kind, stem: stem(), exclusions: exclusions() }) as ShExJ.ValueSetValue,
+      Match.when(Match.is('IriStemRange', 'LiteralStemRange', 'LanguageStemRange'), (kind) =>
+        decoded({ type: kind, stem: stem(), exclusions: exclusions() }),
       ),
       Match.when('Language', () => ({
         type: 'Language',
@@ -281,18 +311,19 @@ class Reader {
   shape(n: Term.Term): ShExJ.Shape {
     const shape: Mutable<ShExJ.Shape> = { type: 'Shape' };
     const ext = this.one(n, 'extends');
-    if (ext !== undefined) shape.extends = this.list(ext).map((x) => this.shapeDeclOrExpr(x));
+    if (Option.isSome(ext)) shape.extends = this.list(ext).map((x) => this.shapeDeclOrExpr(x));
     const closed = this.one(n, 'closed');
-    if (closed !== undefined) shape.closed = this.bool(closed);
+    if (Option.isSome(closed)) shape.closed = this.bool(closed);
     const extra = this.all(n, 'extra');
     if (Arr.isReadonlyArrayNonEmpty(extra))
       shape.extra = Arr.sort(
-        extra.map((e) => this.iri(e, 'sx:extra')),
+        extra.map((e) => this.iri(Option.some(e), 'sx:extra')),
         Order.String,
       );
     const expr = this.one(n, 'expression');
-    if (expr !== undefined) shape.expression = this.tripleExpr(expr, true);
-    return this.meta(n, shape);
+    if (Option.isSome(expr)) shape.expression = this.tripleExpr(expr.value, true);
+    this.meta(n, shape);
+    return shape;
   }
 
   /**
@@ -302,12 +333,13 @@ class Reader {
    */
   tripleExpr(n: Term.Term, viaExpression = false): ShExJ.TripleExprOrRef {
     const types = this.types(n);
-    const labelled = n._tag === 'NamedNode' || (this.teUses.get(n.key) ?? 0) > 1;
+    const labelled = Term.isNamedNode(n) || this.uses(n) > 1;
     if (labelled) {
       const label = this.label(n);
-      if (this.teDefined.has(label) || Arr.isReadonlyArrayEmpty(types)) return label;
-      if (!viaExpression && this.expressionSites.has(n.key)) return label;
-      this.teDefined.add(label);
+      if (MutableHashSet.has(this.teDefined, label) || Arr.isReadonlyArrayEmpty(types))
+        return label;
+      if (!viaExpression && MutableHashSet.has(this.expressionSites, n.key)) return label;
+      MutableHashSet.add(this.teDefined, label);
     }
     let te: Mutable<ShExJ.TripleExpr>;
     if (types.includes(`${SX}TripleConstraint`)) {
@@ -316,9 +348,9 @@ class Reader {
         predicate: this.iri(this.one(n, 'predicate'), 'sx:predicate'),
       };
       const inverse = this.one(n, 'inverse');
-      if (inverse !== undefined) tc.inverse = this.bool(inverse);
+      if (Option.isSome(inverse)) tc.inverse = this.bool(inverse);
       const ve = this.one(n, 'valueExpr');
-      if (ve !== undefined) tc.valueExpr = this.shapeDeclOrExpr(ve);
+      if (Option.isSome(ve)) tc.valueExpr = this.shapeDeclOrExpr(ve.value);
       te = tc;
     } else if (types.includes(`${SX}EachOf`) || types.includes(`${SX}OneOf`)) {
       te = {
@@ -327,28 +359,30 @@ class Reader {
       };
     } else return this.fail(`${n.key} is not a triple expression`);
     const min = this.one(n, 'min');
-    if (min !== undefined) te.min = this.num(min, 'sx:min');
+    if (Option.isSome(min)) te.min = this.num(min, 'sx:min');
     const max = this.one(n, 'max');
-    if (max !== undefined) te.max = this.num(max, 'sx:max');
+    if (Option.isSome(max)) te.max = this.num(max, 'sx:max');
     this.meta(n, te);
-    // SAFETY: a labelled triple expression is the expression with its `id`.
+    // A labelled triple expression is the expression with its `id`.
     return labelled ? { id: this.label(n), ...te } : te;
   }
 
   schema(): ShExJ.Schema {
     const roots = Dataset.match(this.dataset, { predicate: rdfType, object: sx('Schema') });
-    if (roots.length !== 1) this.fail(`expected exactly one sx:Schema, found ${roots.length}`);
-    const root = roots[0]!.subject;
+    const root = Option.getOrElse(
+      Option.filter(Arr.head(roots), () => roots.length === 1),
+      () => this.fail(`expected exactly one sx:Schema, found ${roots.length}`),
+    ).subject;
     const schema: Mutable<ShExJ.Schema> = { type: 'Schema' };
     const imports = this.one(root, 'imports');
-    if (imports !== undefined)
-      schema.imports = this.list(imports).map((i) => this.iri(i, 'sx:imports'));
+    if (Option.isSome(imports))
+      schema.imports = this.list(imports).map((i) => this.iri(Option.some(i), 'sx:imports'));
     const startActs = this.semActsOf(root, 'startActs');
-    if (startActs !== undefined) schema.startActs = startActs;
+    if (Option.isSome(startActs)) schema.startActs = startActs.value;
     const start = this.one(root, 'start');
-    if (start !== undefined) schema.start = this.shapeDeclOrExpr(start);
+    if (Option.isSome(start)) schema.start = this.shapeDeclOrExpr(start.value);
     const shapes = this.one(root, 'shapes');
-    if (shapes !== undefined) {
+    if (Option.isSome(shapes)) {
       schema.shapes = this.list(shapes).map((d) => {
         const decl: Mutable<ShExJ.ShapeDecl> = {
           type: 'ShapeDecl',
@@ -356,31 +390,31 @@ class Reader {
           shapeExpr: { type: 'Shape' },
         };
         const abstract = this.one(d, 'abstract');
-        if (abstract !== undefined && this.bool(abstract)) decl.abstract = true;
+        if (Option.isSome(abstract) && this.bool(abstract)) decl.abstract = true;
         const restricts = this.one(d, 'restricts');
-        if (restricts !== undefined)
+        if (Option.isSome(restricts))
           decl.restricts = this.list(restricts).map((x) => this.shapeDeclOrExpr(x));
-        const se = this.one(d, 'shapeExpr');
-        decl.shapeExpr =
-          se === undefined ? this.fail(`${d.key} has no sx:shapeExpr`) : this.shapeDeclOrExpr(se);
+        decl.shapeExpr = this.shapeDeclOrExpr(
+          this.required(d, 'shapeExpr', `${d.key} has no sx:shapeExpr`),
+        );
         return decl;
       });
     }
     return schema;
   }
 
-  semActsOf(n: Term.Term, p: string): ReadonlyArray<ShExJ.SemAct> | undefined {
-    const l = this.one(n, p);
-    if (l === undefined) return undefined;
-    return this.list(l).map((a) => {
-      const act: Mutable<ShExJ.SemAct> = {
-        type: 'SemAct',
-        name: this.iri(this.one(a, 'name'), 'sx:name'),
-      };
-      const code = this.one(a, 'code');
-      if (code !== undefined) act.code = this.str(code, 'sx:code');
-      return act;
-    });
+  semActsOf(n: Term.Term, p: string): Option.Option<ReadonlyArray<ShExJ.SemAct>> {
+    return Option.map(this.one(n, p), (l) =>
+      this.list(Option.some(l)).map((a) => {
+        const act: Mutable<ShExJ.SemAct> = {
+          type: 'SemAct',
+          name: this.iri(this.one(a, 'name'), 'sx:name'),
+        };
+        const code = this.one(a, 'code');
+        if (Option.isSome(code)) act.code = this.str(code, 'sx:code');
+        return act;
+      }),
+    );
   }
 }
 
@@ -440,13 +474,12 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
   const add = (s: Term.Subject, p: Term.NamedNode, o: Term.Object) =>
     quads.push(Term.quad(s, p, o));
   const list = (items: ReadonlyArray<Term.Object>): Term.Object => {
-    if (Arr.isReadonlyArrayEmpty(items)) return rdfNil;
     const cells = items.map(() => Term.blankNode());
-    items.forEach((item, i) => {
-      add(cells[i]!, rdfFirst, item);
-      add(cells[i]!, rdfRest, cells[i + 1] ?? rdfNil);
+    Arr.zip(cells, items).forEach(([cell, item], i) => {
+      add(cell, rdfFirst, item);
+      add(cell, rdfRest, cells[i + 1] ?? rdfNil);
     });
-    return cells[0]!;
+    return Option.getOrElse(Arr.head(cells), (): Term.Object => rdfNil);
   };
   const meta = (
     s: Term.Subject,
@@ -502,12 +535,11 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
       Match.orElse((member) => {
         add(b, sx('stem'), stem(member.stem, false));
         const stemType = member.type.replace('Range', '');
-        // SAFETY: the stem-range kinds' exclusions are strings or stems.
         add(
           b,
           sx('exclusion'),
           list(
-            (member.exclusions as ReadonlyArray<string | { readonly stem: string }>).map((e) => {
+            Arr.map(member.exclusions, (e) => {
               if (Predicate.isString(e))
                 return member.type === 'IriStemRange' ? Term.namedNode(e) : Term.literal(e);
               const x = Term.blankNode();
@@ -536,16 +568,14 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
       Match.discriminator('type')('NodeConstraint', (expr) => {
         if (expr.nodeKind !== undefined) add(s, sx('nodeKind'), sx(expr.nodeKind));
         if (expr.datatype !== undefined) add(s, sx('datatype'), Term.namedNode(expr.datatype));
-        for (const f of [
-          'length',
-          'minlength',
-          'maxlength',
-          'totaldigits',
-          'fractiondigits',
-        ] as const)
-          if (expr[f] !== undefined) add(s, sx(f), integerLiteral(expr[f]));
-        for (const f of ['mininclusive', 'minexclusive', 'maxinclusive', 'maxexclusive'] as const)
-          if (expr[f] !== undefined) add(s, sx(f), numericLiteral(expr[f]));
+        integerFacetNames.forEach((f) => {
+          const v = expr[f];
+          if (v !== undefined) add(s, sx(f), integerLiteral(v));
+        });
+        rangeFacetNames.forEach((f) => {
+          const v = expr[f];
+          if (v !== undefined) add(s, sx(f), numericLiteral(v));
+        });
         if (expr.pattern !== undefined) add(s, sx('pattern'), Term.literal(expr.pattern));
         if (expr.flags !== undefined) add(s, sx('flags'), Term.literal(expr.flags));
         if (expr.values !== undefined) add(s, sx('values'), list(expr.values.map(valueSetValue)));
@@ -555,7 +585,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
         if (expr.extends !== undefined)
           add(s, sx('extends'), list(expr.extends.map((x) => shapeExpr(x))));
         if (expr.closed !== undefined) add(s, sx('closed'), booleanLiteral(expr.closed));
-        for (const p of expr.extra ?? []) add(s, sx('extra'), Term.namedNode(p));
+        expr.extra?.forEach((p) => add(s, sx('extra'), Term.namedNode(p)));
         if (expr.expression !== undefined) add(s, sx('expression'), tripleExpr(expr.expression));
         meta(s, expr);
       }),
