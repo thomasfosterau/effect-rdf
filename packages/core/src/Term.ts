@@ -53,6 +53,10 @@ export type Direction = 'ltr' | 'rtl';
 /** `isTerm` for a value already known to be an object. */
 const hasTermTypeId = (u: Equal.Equal): u is Term => TypeId in u;
 
+/** Mixed into the hashes of blank nodes and variables, so that `_:a` and `?a` differ from `<a>`. */
+const BLANK_SALT = 0x5f3a;
+const VARIABLE_SALT = 0x3f;
+
 abstract class TermBase implements Equal.Equal, Pipeable {
   readonly [TypeId]: TypeId = TypeId;
   abstract readonly _tag: string;
@@ -81,7 +85,16 @@ abstract class TermBase implements Equal.Equal, Pipeable {
   }
 
   [Hash.symbol](): number {
-    return (this.#hash ??= Hash.string(this.key));
+    return (this.#hash ??= this.computeHash());
+  }
+
+  /**
+   * The hash, consistent with `key` (terms with equal keys have equal
+   * hashes). IRIs, blank nodes, variables and literals hash their parts, so
+   * that hashing one builds no key.
+   */
+  protected computeHash(): number {
+    return Hash.string(this.key);
   }
 
   pipe() {
@@ -117,6 +130,9 @@ export class NamedNode<out Iri extends string = string> extends TermBase {
   protected computeKey(): string {
     return `<${escapeIri(this.value)}>`;
   }
+  protected override computeHash(): number {
+    return Hash.string(this.value);
+  }
 }
 
 /**
@@ -135,6 +151,9 @@ export class BlankNode extends TermBase {
   }
   protected computeKey(): string {
     return `_:${this.value}`;
+  }
+  protected override computeHash(): number {
+    return Hash.combine(Hash.string(this.value), BLANK_SALT);
   }
 }
 
@@ -169,6 +188,10 @@ export class Literal extends TermBase {
     if (this.datatype.value === XSD_STRING) return lexical;
     return `${lexical}^^${this.datatype.key}`;
   }
+  protected override computeHash(): number {
+    const h = Hash.combine(Hash.string(this.value), this.datatype[Hash.symbol]());
+    return this.language === '' ? h : Hash.combine(h, Hash.string(this.language));
+  }
 }
 
 /**
@@ -187,6 +210,9 @@ export class Variable<out Name extends string = string> extends TermBase {
   }
   protected computeKey(): string {
     return `?${this.value}`;
+  }
+  protected override computeHash(): number {
+    return Hash.combine(Hash.string(this.value), VARIABLE_SALT);
   }
 }
 
