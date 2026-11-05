@@ -1,10 +1,14 @@
 /** @internal */
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
-import * as Arr from 'effect/Array';
 
-/** @internal */
-export const resolveIri = (reference: string, base: string | null | undefined): string =>
-  base === null || base === undefined ? reference : Iri.resolve(reference, base);
+/**
+ * Resolves `reference` against `base`; a `null` base (`"@base": null`, or no
+ * document URL) leaves it unchanged.
+ *
+ * @internal
+ */
+export const resolveIri = (reference: string, base: string | null): string =>
+  base === null ? reference : Iri.resolve(reference, base);
 
 const PARTS =
   /^(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/s;
@@ -16,7 +20,8 @@ const PARTS =
  */
 export const removeBase = (base: string | null, iri: string): string => {
   if (base === null) return iri;
-  const b = PARTS.exec(base)!;
+  const b = PARTS.exec(base);
+  if (b === null) return iri;
   let root = '';
   if (base !== '') {
     if (b[1] === undefined) return iri;
@@ -25,23 +30,19 @@ export const removeBase = (base: string | null, iri: string): string => {
   if (!iri.startsWith(root)) return iri;
   const restStart = iri.charAt(root.length);
   if (root !== '' && restStart !== '' && !'/?#'.includes(restStart)) return iri;
-  const rel = PARTS.exec(iri.slice(root.length))!;
-  const relPath = Iri.removeDotSegments(rel[3] ?? '');
-  const basePath = Iri.removeDotSegments(b[3] ?? '');
-  const baseSegments = basePath.split('/');
-  const iriSegments = relPath.split('/');
+  const rel = PARTS.exec(iri.slice(root.length));
+  if (rel === null) return iri;
+  const baseSegments = Iri.removeDotSegments(b[3] ?? '').split('/');
+  const iriSegments = Iri.removeDotSegments(rel[3] ?? '').split('/');
   const last = rel[5] !== undefined || rel[4] !== undefined ? 0 : 1;
-  while (Arr.isReadonlyArrayNonEmpty(baseSegments) && iriSegments.length > last) {
-    if (baseSegments[0] !== iriSegments[0]) break;
-    baseSegments.shift();
-    iriSegments.shift();
-  }
-  let out = '';
-  if (Arr.isReadonlyArrayNonEmpty(baseSegments)) {
-    baseSegments.pop();
-    for (let i = 0; i < baseSegments.length; i++) out += '../';
-  }
-  out += iriSegments.join('/');
+  // The leading segments the two paths share, keeping at least `last` of the IRI's.
+  const differs = baseSegments.findIndex(
+    (segment, i) => iriSegments.length - i <= last || segment !== iriSegments[i],
+  );
+  const common = differs === -1 ? baseSegments.length : differs;
+  const baseRest = baseSegments.length - common;
+  let out = baseRest > 0 ? '../'.repeat(baseRest - 1) : '';
+  out += iriSegments.slice(common).join('/');
   if (rel[4] !== undefined) out += `?${rel[4]}`;
   if (rel[5] !== undefined) out += `#${rel[5]}`;
   if (out === '') out = './';

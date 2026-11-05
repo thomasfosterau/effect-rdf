@@ -6,6 +6,7 @@ import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientResponse from 'effect/http/HttpClientResponse';
@@ -209,7 +210,9 @@ describe('DocumentLoader', () => {
         contentType: 'text/html',
         body: '<html><script type="application/ld+json">{"@id": "x"}</script></html>',
       });
-      expect(result._tag === 'Document' && result.document.document).toEqual({ '@id': 'x' });
+      expect(Predicate.isTagged(result, 'Document') && result.document.document).toEqual({
+        '@id': 'x',
+      });
     }),
   );
 

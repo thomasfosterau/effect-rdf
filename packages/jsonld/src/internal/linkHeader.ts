@@ -9,6 +9,8 @@ import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
 import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Record from 'effect/Record';
+import * as Result from 'effect/Result';
 
 /** @internal */
 export interface Link {
@@ -19,7 +21,7 @@ export interface Link {
 const space = ' \t\r\n\f\v';
 const ows = Token.takeWhile(space);
 
-const target = Parser.delimited(Token.literal('<'), Token.takeTill('>'), Token.literal('>'));
+const linkTarget = Parser.delimited(Token.literal('<'), Token.takeTill('>'), Token.literal('>'));
 
 const name = Token.takeTill([space, ';,='], { min: 1 }).pipe(Parser.map((n) => n.toLowerCase()));
 
@@ -30,14 +32,14 @@ const quoted = Parser.delimited(
   Token.literal('"'),
 );
 
-const value = Parser.alt(quoted, Token.takeTill([space, ';,']));
+const paramValue = Parser.alt(quoted, Token.takeTill([space, ';,']));
 
 const param = Parser.preceded(
   Parser.seq(ows, Token.literal(';'), ows),
   Parser.seq(
     name,
     Parser.alt(
-      Parser.preceded(Parser.seq(ows, Token.literal('='), ows), value),
+      Parser.preceded(Parser.seq(ows, Token.literal('='), ows), paramValue),
       Parser.succeed(''),
     ),
   ),
@@ -45,7 +47,7 @@ const param = Parser.preceded(
 
 const linkValue = Parser.delimited(
   ows,
-  Parser.seq(target, Parser.repeat(param).pipe(Parser.map(Object.fromEntries))),
+  Parser.seq(linkTarget, Parser.repeat(param).pipe(Parser.map(Record.fromEntries))),
   Parser.seq(ows, Parser.opt(Token.literal(','))),
 ).pipe(Parser.map(([target, params]): Link => ({ target, params })));
 
@@ -54,5 +56,5 @@ const links = Compiler.jit(Parser.repeat(linkValue));
 /** The links of a header value (up to the first that cannot be read). */
 export const parse = (value: string): ReadonlyArray<Link> => {
   const result = Parser.parsePeek(links, value);
-  return result._tag === 'Success' ? result.success[1] : [];
+  return Result.isSuccess(result) ? result.success[1] : [];
 };

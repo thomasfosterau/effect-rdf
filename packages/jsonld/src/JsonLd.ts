@@ -16,7 +16,9 @@ import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as DocumentLoader from './DocumentLoader.ts';
@@ -43,6 +45,7 @@ import {
   isEmptyObject,
   isObject,
   isString,
+  loop,
 } from './internal/util.ts';
 import { parseJson } from './internal/json.ts';
 import * as Predicate from 'effect/Predicate';
@@ -171,7 +174,7 @@ export interface FrameOptions extends Options {
 
 type DocResult = Result.Result<LoadedDocument, JsonLdError.JsonLdError>;
 
-const getLoader = (options: Options | undefined) =>
+const getLoader = (options?: Options) =>
   options?.documentLoader !== undefined
     ? Effect.succeed(options.documentLoader)
     : Effect.map(Effect.serviceOption(DocumentLoader.DocumentLoader), (o) =>
@@ -182,14 +185,17 @@ const getLoader = (options: Options | undefined) =>
  * The environment of one algorithm run: documents come from `docs`, and a
  * document not loaded yet aborts the run with `NeedDocument`.
  */
-const makeEnv = (options: Options | undefined, docs: ReadonlyMap<string, DocResult>): Env => ({
+const makeEnv = (
+  docs: MutableHashMap.MutableHashMap<string, DocResult>,
+  options?: Options,
+): Env => ({
   processingMode: options?.processingMode ?? 'json-ld-1.1',
-  contextCache: new Map(),
+  contextCache: MutableHashMap.empty(),
   load: (url) => {
-    const hit = docs.get(url);
-    if (hit === undefined) throw new NeedDocument(url, undefined);
-    if (Result.isFailure(hit)) throw hit.failure;
-    return hit.success;
+    const hit = MutableHashMap.get(docs, url);
+    if (Option.isNone(hit)) throw new NeedDocument(url);
+    if (Result.isFailure(hit.value)) throw hit.value.failure;
+    return hit.value.success;
   },
 });
 
@@ -214,14 +220,11 @@ const attempt = <A>(
  * needs a document that has not been loaded yet it aborts with
  * `NeedDocument`, the document is loaded, and the algorithm is restarted.
  */
-const run = <A>(
-  options: Options | undefined,
-  f: (env: Env) => A,
-): Effect.Effect<A, JsonLdError.JsonLdError> =>
+const run = <A>(f: (env: Env) => A, options?: Options): Effect.Effect<A, JsonLdError.JsonLdError> =>
   Effect.gen(function* () {
     const loader = yield* getLoader(options);
-    const docs = new Map<string, DocResult>();
-    const env = makeEnv(options, docs);
+    const docs = MutableHashMap.empty<string, DocResult>();
+    const env = makeEnv(docs, options);
     // Re-run `f` until it no longer stops on a document it has not seen: each
     // stop loads that one document into `docs`, which `f` reads on the next run.
     const go: Effect.Effect<A, JsonLdError.JsonLdError> = Effect.suspend(() => {
@@ -234,7 +237,7 @@ const run = <A>(
           loader.load(failure.url, { profile: 'http://www.w3.org/ns/json-ld#context' }),
         ),
         (r) => {
-          docs.set(failure.url, r);
+          MutableHashMap.set(docs, failure.url, r);
           return go;
         },
       );
@@ -244,16 +247,19 @@ const run = <A>(
 
 interface ResolvedInput {
   readonly document: Json;
+  /** The URL of the document, which is the base IRI (`null`: none) unless one is given. */
   readonly documentUrl: string | null;
-  readonly contextUrl: string | undefined;
+  /** A context referenced by an HTTP `Link` header. */
+  readonly contextUrl: Option.Option<string>;
 }
 
 const isRemoteDocument = (u: unknown): u is DocumentLoader.RemoteDocument =>
   isObject(u) && Predicate.isString(u['documentUrl']) && 'document' in u;
 
+/** Resolves an input (an `Input`, or a frame, which is any JSON-LD input). */
 const resolveInput = (
-  input: Input,
-  options: Options | undefined,
+  input: unknown,
+  options?: Options,
 ): Effect.Effect<ResolvedInput, JsonLdError.JsonLdError> =>
   Effect.gen(function* () {
     if (isString(input)) {
@@ -267,40 +273,52 @@ const resolveInput = (
               : JsonLdError.make('loading document failed', e.message),
           ),
         );
-      return { document: doc.document, documentUrl: doc.documentUrl, contextUrl: doc.contextUrl };
+      return {
+        document: doc.document,
+        documentUrl: doc.documentUrl,
+        contextUrl: Option.fromUndefinedOr(doc.contextUrl),
+      };
     }
     if (isRemoteDocument(input)) {
       return {
         document: input.document,
         documentUrl: input.documentUrl,
-        contextUrl: input.contextUrl,
+        contextUrl: Option.fromUndefinedOr(input.contextUrl),
       };
     }
-    return { document: input, documentUrl: null, contextUrl: undefined };
+    return { document: input, documentUrl: null, contextUrl: Option.none() };
   });
 
 const expandSync = (
   env: Env,
   input: ResolvedInput,
-  options: Options | undefined,
-  frameExpansion = false,
+  frameExpansion: boolean,
+  options?: Options,
 ): Array<JsonObject> => {
   const base = options?.base !== undefined ? options.base : input.documentUrl;
   let active: ActiveContext = initialContext(base);
   if (options?.expandContext !== undefined && options.expandContext !== null) {
-    // SAFETY: `expandContext` is a JSON value supplied by the caller.
-    let ctx = options.expandContext as Json;
+    // `expandContext` is a JSON value supplied by the caller.
+    let ctx: Json = options.expandContext;
     if (isObject(ctx) && '@context' in ctx) ctx = ctx['@context'];
     active = processContext(env, active, ctx, active.originalBase);
   }
-  if (input.contextUrl !== undefined) {
-    active = processContext(env, active, input.contextUrl, input.contextUrl);
+  if (Option.isSome(input.contextUrl)) {
+    const contextUrl = input.contextUrl.value;
+    active = processContext(env, active, contextUrl, contextUrl);
   }
-  let expanded = expandElement(env, active, null, input.document, input.documentUrl ?? base, {
-    frameExpansion,
-    ordered: options?.ordered ?? false,
-  });
-  if (isObject(expanded) && Object.keys(expanded).length === 1 && '@graph' in expanded) {
+  let expanded = expandElement(
+    env,
+    active,
+    Option.none(),
+    input.document,
+    input.documentUrl ?? base,
+    {
+      frameExpansion,
+      ordered: options?.ordered ?? false,
+    },
+  );
+  if (isObject(expanded) && Record.keys(expanded).length === 1 && '@graph' in expanded) {
     expanded = expanded['@graph'];
   }
   if (expanded === null || expanded === undefined) expanded = [];
@@ -313,7 +331,7 @@ const compactSync = (
   expanded: Json,
   context: Json,
   documentUrl: string | null,
-  options: Options | undefined,
+  options?: Options,
 ): JsonObject => {
   if (isObject(context) && '@context' in context) context = context['@context'];
   const compactToRelative = options?.compactToRelative ?? true;
@@ -331,7 +349,7 @@ const compactSync = (
     ordered: options?.ordered ?? false,
     compactToRelative,
   };
-  let compacted = compactElement(env, active, null, expanded, compactOptions);
+  let compacted = compactElement(env, active, Option.none(), expanded, compactOptions);
   if (Array.isArray(compacted)) {
     compacted = Arr.isReadonlyArrayEmpty(compacted)
       ? {}
@@ -359,7 +377,7 @@ export const expand = (
   options?: Options,
 ): Effect.Effect<Array<JsonObjectValue>, JsonLdError.JsonLdError> =>
   Effect.flatMap(resolveInput(input, options), (resolved) =>
-    run(options, (env) => expandSync(env, resolved, options)),
+    run((env) => expandSync(env, resolved, false, options), options),
   );
 
 /**
@@ -376,10 +394,10 @@ export const compact = (
   options?: Options,
 ): Effect.Effect<JsonObjectValue, JsonLdError.JsonLdError> =>
   Effect.flatMap(resolveInput(input, options), (resolved) =>
-    run(options, (env) => {
-      const expanded = expandSync(env, resolved, { ...options, ordered: false });
+    run((env) => {
+      const expanded = expandSync(env, resolved, false, { ...options, ordered: false });
       return compactSync(env, expanded, context, resolved.documentUrl, options);
-    }),
+    }, options),
   );
 
 /**
@@ -395,13 +413,13 @@ export const flatten = (
   options?: Options,
 ): Effect.Effect<JsonValue, JsonLdError.JsonLdError> =>
   Effect.flatMap(resolveInput(input, options), (resolved) =>
-    run(options, (env) => {
-      const expanded = expandSync(env, resolved, options);
+    run((env) => {
+      const expanded = expandSync(env, resolved, false, options);
       const flattened = flattenExpanded(expanded, options?.ordered ?? false);
       if (context === undefined || context === null) return flattened;
       const compacted = compactSync(env, flattened, context, resolved.documentUrl, options);
       return compacted;
-    }),
+    }, options),
   );
 
 /**
@@ -412,40 +430,39 @@ export const flatten = (
  */
 export const frame = (
   input: Input,
-  frame: unknown,
+  frameInput: unknown,
   options?: FrameOptions,
 ): Effect.Effect<JsonObjectValue, JsonLdError.JsonLdError> =>
   Effect.gen(function* () {
     const resolved = yield* resolveInput(input, options);
-    // SAFETY: a frame is a JSON-LD input (document, URL or object), the same shape `resolveInput`
-    // takes.
-    const resolvedFrame = yield* resolveInput(frame as Input, options);
-    return yield* run(options, (env) => frameSync(env, resolved, resolvedFrame, options));
+    // A frame is a JSON-LD input (document, URL or object), as `resolveInput` takes.
+    const resolvedFrame = yield* resolveInput(frameInput, options);
+    return yield* run((env) => frameSync(env, resolved, resolvedFrame, options), options);
   });
+
+/** The `@context` entry of a document (`null` when it has none). */
+const contextOf = (document: JsonObject): Json => document['@context'] ?? null;
 
 const frameSync = (
   env: Env,
   resolved: ResolvedInput,
   resolvedFrame: ResolvedInput,
-  options: FrameOptions | undefined,
+  options?: FrameOptions,
 ): JsonObject => {
   const frameDocument: Json = resolvedFrame.document;
   if (!isObject(frameDocument) && !Array.isArray(frameDocument)) {
     return fail('invalid frame', 'a frame must be a JSON object');
   }
-  // SAFETY: `isObject(frameDocument)` holds in this branch.
-  const context: Json = isObject(frameDocument)
-    ? ((frameDocument as JsonObject)['@context'] ?? null)
-    : null;
+  const context: Json = isObject(frameDocument) ? contextOf(frameDocument) : null;
   const base = options?.base !== undefined ? options.base : resolved.documentUrl;
   const frameBase = resolvedFrame.documentUrl ?? base;
   const frameContext = processContext(env, initialContext(frameBase), context, frameBase);
   const merged = !(
     isObject(frameDocument) &&
-    Object.keys(frameDocument).some((k) => expandIri(env, frameContext, k, true) === '@graph')
+    Record.keys(frameDocument).some((k) => expandIri(env, frameContext, k, true) === '@graph')
   );
-  const expanded = expandSync(env, resolved, { ...options, ordered: false });
-  const expandedFrame = expandSync(env, resolvedFrame, { ...options, ordered: false }, true);
+  const expanded = expandSync(env, resolved, false, { ...options, ordered: false });
+  const expandedFrame = expandSync(env, resolvedFrame, true, { ...options, ordered: false });
   const is11 = env.processingMode !== 'json-ld-1.0';
   const framed = frameAlgorithm(expanded, expandedFrame, {
     embed: options?.embed ?? '@once',
@@ -467,7 +484,7 @@ const frameSync = (
     compactToRelative,
   };
   const omitGraph = options?.omitGraph ?? is11;
-  let compacted = compactElement(env, active, null, framed, compactOptions);
+  let compacted = compactElement(env, active, Option.none(), framed, compactOptions);
   if (omitGraph && Array.isArray(compacted)) {
     if (compacted.length === 1 && compactOptions.compactArrays) compacted = compacted[0];
   } else if (!omitGraph && isObject(compacted)) {
@@ -506,15 +523,21 @@ export const toRdf = (
 export const toQuads = (
   input: Input,
   options?: ToRdfOptions,
+): Effect.Effect<ReadonlyArray<Term.Quad>, JsonLdError.JsonLdError> => quadsOf(input, options);
+
+/** `toQuads` over any parsed JSON document. */
+const quadsOf = (
+  input: unknown,
+  options?: ToRdfOptions,
 ): Effect.Effect<ReadonlyArray<Term.Quad>, JsonLdError.JsonLdError> =>
   Effect.flatMap(resolveInput(input, options), (resolved) =>
-    run(options, (env) => {
-      const expanded = expandSync(env, resolved, options);
+    run((env) => {
+      const expanded = expandSync(env, resolved, false, options);
       return Rdf.toRdf(expanded, {
         produceGeneralizedRdf: options?.produceGeneralizedRdf ?? false,
-        rdfDirection: options?.rdfDirection ?? null,
+        rdfDirection: Option.fromNullishOr(options?.rdfDirection),
       });
-    }),
+    }, options),
   );
 
 /**
@@ -531,7 +554,7 @@ export const fromRdf = (
   Effect.try({
     try: () =>
       Rdf.fromRdf(quads, {
-        rdfDirection: options?.rdfDirection ?? null,
+        rdfDirection: Option.fromNullishOr(options?.rdfDirection),
         useNativeTypes: options?.useNativeTypes ?? false,
         useRdfType: options?.useRdfType ?? false,
         ordered: options?.ordered ?? false,
@@ -585,27 +608,36 @@ export interface SerializeOptions extends Serialization.SerializeOptions, FromRd
   readonly documentLoader?: DocumentLoader.Loader | undefined;
 }
 
+// A sticky scanner for `jsonErrorOffset`: JSON whitespace.
+const JSON_WS = /[ \t\n\r]*/y;
+
 /** Finds the offset of the first JSON syntax error in `input`. */
 const jsonErrorOffset = (input: string): number => {
   let i = 0;
-  const ws = () => {
-    while (i < input.length && ' \t\n\r'.includes(input[i]!)) i++;
+  const scan = (re: RegExp) => {
+    re.lastIndex = i;
+    re.exec(input);
+    i = re.lastIndex;
   };
-  const fail = (): never => {
+  const ws = () => scan(JSON_WS);
+  const stop = (): never => {
     throw i;
   };
   const literal = (word: string) => {
     if (input.startsWith(word, i)) i += word.length;
-    else fail();
+    else stop();
   };
   const string = () => {
     i++;
-    while (i < input.length && input[i] !== '"') {
+    // One character (or escape) per step, up to the closing quote.
+    loop(true, () => {
+      if (i >= input.length || input[i] === '"') return Option.none();
       if (input[i] === '\\') i++;
-      else if (input.charCodeAt(i) < 0x20) fail();
+      else if (input.charCodeAt(i) < 0x20) stop();
       i++;
-    }
-    if (i >= input.length) fail();
+      return Option.some(true);
+    });
+    if (i >= input.length) stop();
     i++;
   };
   const value = (): void => {
@@ -619,34 +651,37 @@ const jsonErrorOffset = (input: string): number => {
         i++;
         return;
       }
-      for (;;) {
+      // One member per step, until the closing bracket.
+      loop(true, () => {
         if (c === '{') {
           ws();
-          if (input[i] !== '"') fail();
+          if (input[i] !== '"') stop();
           string();
           ws();
-          if (input[i] !== ':') fail();
+          if (input[i] !== ':') stop();
           i++;
         }
         value();
         ws();
-        if (input[i] === ',') i++;
-        else if (input[i] === close) {
+        if (input[i] === ',') {
           i++;
-          return;
-        } else fail();
-      }
+          return Option.some(true);
+        }
+        if (input[i] !== close) stop();
+        i++;
+        return Option.none();
+      });
     } else if (c === '"') string();
     else if (c === 't') literal('true');
     else if (c === 'f') literal('false');
     else if (c === 'n') literal('null');
     else {
       const m = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/.exec(input.slice(i));
-      if (m === null || m[0] === '') return fail();
+      if (m === null || m[0] === '') return stop();
       i += m[0].length;
     }
   };
-  // `fail` throws at the offending offset, which is `i`.
+  // `stop` throws at the offending offset, which is `i`.
   return Result.merge(
     Result.try({
       try: () => {
@@ -687,8 +722,7 @@ export const parse = (
       ),
     );
     const base = options?.base !== undefined ? options.base : (options?.baseIri ?? null);
-    // SAFETY: the parsed JSON document is a JSON-LD input.
-    const quads = yield* toQuads(json as Input, { ...options, base }).pipe(
+    const quads = yield* quadsOf(json, { ...options, base }).pipe(
       Effect.mapError(
         (e) => new Serialization.RdfParseError({ format: format.name, message: e.message }),
       ),
@@ -696,11 +730,11 @@ export const parse = (
     const prefix = options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix();
     const graph = options?.graph;
     const relabel = (t: Term.Term): Term.Term =>
-      t._tag === 'BlankNode' ? Term.blankNode(`${prefix}${t.value}`) : t;
+      Term.isBlankNode(t) ? Term.blankNode(`${prefix}${t.value}`) : t;
     const dataset = Dataset.fromIterable(
       quads.map((q) => {
         const relabelled = Term.mapTerms(q, relabel);
-        return graph !== undefined && relabelled.graph._tag === 'DefaultGraph'
+        return graph !== undefined && Term.isDefaultGraph(relabelled.graph)
           ? Term.quad(relabelled.subject, relabelled.predicate, relabelled.object, graph)
           : relabelled;
       }),
@@ -717,13 +751,14 @@ const prefixesOf = (json: Json): PrefixMap.PrefixMap => {
   const visit = (ctx: Json): void => {
     if (Array.isArray(ctx)) ctx.forEach(visit);
     else if (isObject(ctx)) {
-      for (const [k, v] of Object.entries(ctx)) {
-        if (k.startsWith('@') || k.includes(':')) continue;
+      Record.keys(ctx).forEach((k) => {
+        if (k.startsWith('@') || k.includes(':')) return;
+        const v = ctx[k];
         const iri = isString(v) ? v : isObject(v) && isString(v['@id']) ? v['@id'] : undefined;
         if (iri !== undefined && /[/#:]$/.test(iri) && /^[a-z][a-z0-9+.-]*:/i.test(iri)) {
           entries.push([k, iri]);
         }
-      }
+      });
     }
   };
   if (isObject(json)) visit(json['@context']);
@@ -748,9 +783,9 @@ export const serialize = (
     if (isObject(context) && '@context' in context) context = context['@context'];
     if (options?.prefixes !== undefined && options.prefixes.prefixes.size > 0) {
       const prefixContext: JsonObject = {};
-      for (const [prefix, namespace] of options.prefixes.prefixes) {
+      options.prefixes.prefixes.forEach((namespace, prefix) => {
         prefixContext[prefix] = namespace;
-      }
+      });
       if (options.baseIri !== undefined) prefixContext['@base'] = options.baseIri;
       context =
         context === null

@@ -1,6 +1,9 @@
 /** @internal */
 import * as Arr from 'effect/Array';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -10,7 +13,7 @@ import * as Predicate from 'effect/Predicate';
 /** @internal */
 export type Json = any;
 /** @internal */
-export type JsonObject = Record<string, any>;
+export type JsonObject = globalThis.Record<string, any>;
 
 const JsonText = Schema.fromJsonString(Schema.Unknown);
 
@@ -26,7 +29,24 @@ export const stringifyJson = (value: Json): string =>
   Result.getOrElse(encodeJson(value), () => String(value));
 
 /** @internal */
-export const KEYWORDS: ReadonlySet<string> = new Set([
+export const hasOwn = (o: JsonObject, k: string): boolean =>
+  Object.prototype.hasOwnProperty.call(o, k);
+
+/**
+ * A membership test for a fixed set of strings: a lookup in a prototype-less
+ * record, so that no `Object.prototype` member is a member.
+ *
+ * @internal
+ */
+export const stringSet = (members: ReadonlyArray<string>): ((s: string) => boolean) => {
+  const record: globalThis.Record<string, true> = Object.create(null);
+  members.forEach((m) => {
+    record[m] = true;
+  });
+  return (s) => record[s] === true;
+};
+
+const isKeywordString = stringSet([
   '@base',
   '@container',
   '@context',
@@ -92,8 +112,13 @@ export const XSD_DOUBLE = `${XSD}double`;
 /** @internal */
 export const I18N = 'https://www.w3.org/ns/i18n#';
 
-/** @internal */
-export const fail = (code: JsonLdError.Code, message?: string): never => {
+/**
+ * Throws the `JsonLdError` with this code. Its type is declared on the
+ * binding, so that a call statement narrows like a `throw`.
+ *
+ * @internal
+ */
+export const fail: (code: JsonLdError.Code, message?: string) => never = (code, message) => {
   throw JsonLdError.make(code, message);
 };
 
@@ -118,9 +143,33 @@ export const mapJsonLdError = <A>(
     onError,
   );
 
+/**
+ * The active property of the algorithms: none at the top level of a document.
+ *
+ * @internal
+ */
+export type ActiveProperty = Option.Option<string>;
+
 /** @internal */
-export const hasOwn = (o: JsonObject, k: string): boolean =>
-  Object.prototype.hasOwnProperty.call(o, k);
+export const GRAPH_PROPERTY: ActiveProperty = Option.some('@graph');
+/** @internal */
+export const REVERSE_PROPERTY: ActiveProperty = Option.some('@reverse');
+
+/**
+ * The active property is `keyword` (`@graph`, `@reverse`, …).
+ *
+ * @internal
+ */
+export const isProperty = (activeProperty: ActiveProperty, keyword: string): boolean =>
+  Option.isSome(activeProperty) && activeProperty.value === keyword;
+
+/**
+ * At the top level, or directly under `@graph`: where free-floating values are dropped.
+ *
+ * @internal
+ */
+export const isTopLevel = (activeProperty: ActiveProperty): boolean =>
+  Option.isNone(activeProperty) || activeProperty.value === '@graph';
 
 /** @internal */
 export const getOrInit = (o: JsonObject, k: string, init: () => Json): Json => {
@@ -129,7 +178,7 @@ export const getOrInit = (o: JsonObject, k: string, init: () => Json): Json => {
 };
 
 /** @internal */
-export const isKeyword = (v: Json): boolean => Predicate.isString(v) && KEYWORDS.has(v);
+export const isKeyword = (v: Json): boolean => Predicate.isString(v) && isKeywordString(v);
 
 // Hoisted: a regex literal makes a new `RegExp` each time it is evaluated.
 const KEYWORD_FORM = /^@[a-zA-Z]+$/;
@@ -143,7 +192,7 @@ export const isObject = (v: unknown): v is JsonObject => Predicate.isObject(v);
 
 /** @internal */
 export const isEmptyObject = (v: Json): boolean =>
-  isObject(v) && Arr.isReadonlyArrayEmpty(Object.keys(v));
+  isObject(v) && Arr.isReadonlyArrayEmpty(Record.keys(v));
 
 /** @internal */
 export const isString = (v: unknown): v is string => Predicate.isString(v);
@@ -178,10 +227,9 @@ export const isListObject = (v: Json): boolean => isObject(v) && '@list' in v;
 /** @internal */
 export const isGraphObject = (v: unknown): v is JsonObject => {
   if (!isObject(v) || !('@graph' in v)) return false;
-  for (const k of Object.keys(v)) {
-    if (k !== '@graph' && k !== '@id' && k !== '@index' && k !== '@context') return false;
-  }
-  return true;
+  return Record.keys(v).every(
+    (k) => k === '@graph' || k === '@id' || k === '@index' || k === '@context',
+  );
 };
 
 /** @internal */
@@ -196,16 +244,14 @@ export const isNodeObject = (v: unknown): v is JsonObject =>
 export const deepEqual = (a: Json, b: Json): boolean => {
   if (a === b) return true;
   if (Array.isArray(a)) {
-    if (!Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
-    return true;
+    return Array.isArray(b) && a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
   }
   if (isObject(a)) {
     if (!isObject(b)) return false;
-    const ka = Object.keys(a);
-    if (ka.length !== Object.keys(b).length) return false;
-    for (const k of ka) if (!hasOwn(b, k) || !deepEqual(a[k], b[k])) return false;
-    return true;
+    const ka = Record.keys(a);
+    return (
+      ka.length === Record.keys(b).length && ka.every((k) => hasOwn(b, k) && deepEqual(a[k], b[k]))
+    );
   }
   return false;
 };
@@ -215,22 +261,37 @@ export const compareStrings: Order.Order<string> = Order.String;
 
 /** @internal */
 export const sortedKeys = (o: JsonObject): Array<string> =>
-  Arr.sort(Object.keys(o), compareStrings);
+  Arr.sort(Record.keys(o), compareStrings);
 
 /**
- * Adds a value to an entry of a map. When `asArray` is true the entry is
+ * Appends every item to `target` (one `push` per item: spreading a large
+ * array into `push` can overflow the stack).
+ *
+ * @internal
+ */
+export const pushAll = (target: Array<Json>, items: ReadonlyArray<Json>): void => {
+  items.forEach((item) => target.push(item));
+};
+
+/**
+ * Adds a value to an entry of a map. When `forceArray` is true the entry is
  * always an array.
  *
  * @internal
  */
-export const addValue = (object: JsonObject, key: string, value: Json, asArray: boolean): void => {
+export const addValue = (
+  object: JsonObject,
+  key: string,
+  value: Json,
+  forceArray: boolean,
+): void => {
   if (Array.isArray(value)) {
-    if (Arr.isReadonlyArrayEmpty(value) && asArray && !hasOwn(object, key)) object[key] = [];
-    for (const v of value) addValue(object, key, v, asArray);
+    if (Arr.isReadonlyArrayEmpty(value) && forceArray && !hasOwn(object, key)) object[key] = [];
+    value.forEach((v) => addValue(object, key, v, forceArray));
     return;
   }
   if (!hasOwn(object, key)) {
-    object[key] = asArray ? [value] : value;
+    object[key] = forceArray ? [value] : value;
   } else {
     if (!Array.isArray(object[key])) object[key] = [object[key]];
     object[key].push(value);
@@ -239,8 +300,24 @@ export const addValue = (object: JsonObject, key: string, value: Json, asArray: 
 
 /** @internal */
 export const addUnique = (array: Array<Json>, value: Json): void => {
-  for (const v of array) if (deepEqual(v, value)) return;
-  array.push(value);
+  if (!array.some((v) => deepEqual(v, value))) array.push(value);
+};
+
+/**
+ * Steps a state until `step` returns none, and returns the last state: a
+ * loop as a function, for the scans that walk a structure of unknown length.
+ *
+ * @internal
+ */
+export const loop = <S>(initial: S, step: (state: S) => Option.Option<S>): S => {
+  let state = initial;
+  Arr.unfold(undefined, () =>
+    Option.map(step(state), (next): readonly [undefined, undefined] => {
+      state = next;
+      return [undefined, undefined];
+    }),
+  );
+  return state;
 };
 
 /** @internal */
@@ -256,7 +333,7 @@ export const canonicalJson = (v: Json): string => {
     return stringifyJson(v);
   }
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  const keys = Arr.sort(Object.keys(v), compareStrings);
+  const keys = Arr.sort(Record.keys(v), compareStrings);
   return `{${keys.map((k) => `${stringifyJson(k)}:${canonicalJson(v[k])}`).join(',')}}`;
 };
 
@@ -267,21 +344,24 @@ export const canonicalJson = (v: Json): string => {
  */
 export class IdIssuer {
   #counter = 0;
-  readonly #map = new Map<string, string>();
+  readonly #map = MutableHashMap.empty<string, string>();
   readonly prefix: string;
   constructor(prefix: string = '_:b') {
     this.prefix = prefix;
   }
-  issue(old?: string | null): string {
-    if (old != null) {
-      const existing = this.#map.get(old);
-      if (existing !== undefined) return existing;
-    }
-    const id = `${this.prefix}${this.#counter++}`;
-    if (old != null) this.#map.set(old, id);
-    return id;
+  /** A fresh identifier, or the one already issued for `old`. */
+  issue(old?: string): string {
+    if (old === undefined) return this.#next();
+    return Option.getOrElse(MutableHashMap.get(this.#map, old), () => {
+      const id = this.#next();
+      MutableHashMap.set(this.#map, old, id);
+      return id;
+    });
   }
   has(old: string): boolean {
-    return this.#map.has(old);
+    return MutableHashMap.has(this.#map, old);
+  }
+  #next(): string {
+    return `${this.prefix}${this.#counter++}`;
   }
 }

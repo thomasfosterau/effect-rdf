@@ -4,6 +4,8 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import {
   type Json,
   type JsonObject,
@@ -22,7 +24,31 @@ import {
 } from './util.ts';
 
 /** @internal */
-export type NodeMap = Record<string, Record<string, JsonObject>>;
+export type NodeMap = globalThis.Record<string, globalThis.Record<string, JsonObject>>;
+
+/**
+ * Adds `item` to the active list or, outside a list, to the active property
+ * of the active subject (once, when `unique`).
+ */
+const addToTarget = (
+  graph: globalThis.Record<string, JsonObject>,
+  activeSubject: Option.Option<string | JsonObject>,
+  activeProperty: Option.Option<string>,
+  list: Option.Option<JsonObject>,
+  item: Json,
+  unique: boolean,
+): void => {
+  if (Option.isSome(list)) {
+    list.value['@list'].push(item);
+    return;
+  }
+  if (Option.isNone(activeSubject) || Option.isNone(activeProperty)) return;
+  const subject = activeSubject.value;
+  if (isObject(subject)) return;
+  const values: Array<Json> = getOrInit(graph[subject] ?? {}, activeProperty.value, () => []);
+  if (unique) addUnique(values, item);
+  else values.push(item);
+};
 
 /**
  * Node Map Generation algorithm.
@@ -34,21 +60,19 @@ export const generateNodeMap = (
   nodeMap: NodeMap,
   issuer: IdIssuer,
   activeGraph = '@default',
-  activeSubject: string | JsonObject | null = null,
-  activeProperty: string | null = null,
-  list: JsonObject | null = null,
+  activeSubject: Option.Option<string | JsonObject> = Option.none(),
+  activeProperty: Option.Option<string> = Option.none(),
+  list: Option.Option<JsonObject> = Option.none(),
 ): void => {
   // 1
   if (Array.isArray(element)) {
-    for (const item of element) {
-      generateNodeMap(item, nodeMap, issuer, activeGraph, activeSubject, activeProperty, list);
-    }
+    element.forEach((item) =>
+      generateNodeMap(item, nodeMap, issuer, activeGraph, activeSubject, activeProperty, list),
+    );
     return;
   }
   // 2
-  const graph = getOrInit(nodeMap, activeGraph, () => ({}));
-  const subjectNode =
-    activeSubject === null || isObject(activeSubject) ? null : graph[activeSubject];
+  const graph: globalThis.Record<string, JsonObject> = getOrInit(nodeMap, activeGraph, () => ({}));
   // 3
   if ('@type' in element) {
     const type = element['@type'];
@@ -60,12 +84,7 @@ export const generateNodeMap = (
   }
   // 4
   if (isValueObject(element)) {
-    if (list === null) {
-      const values: Array<Json> = getOrInit(subjectNode, activeProperty!, () => []);
-      addUnique(values, element);
-    } else {
-      list['@list'].push(element);
-    }
+    addToTarget(graph, activeSubject, activeProperty, list, element, true);
     return;
   }
   // 5
@@ -78,13 +97,9 @@ export const generateNodeMap = (
       activeGraph,
       activeSubject,
       activeProperty,
-      result,
+      Option.some(result),
     );
-    if (list === null) {
-      getOrInit(subjectNode, activeProperty!, () => []).push(result);
-    } else {
-      list['@list'].push(result);
-    }
+    addToTarget(graph, activeSubject, activeProperty, list, result, false);
     return;
   }
   // 6
@@ -98,26 +113,23 @@ export const generateNodeMap = (
   } else {
     id = issuer.issue();
   }
-  if (!hasOwn(graph, id)) graph[id] = { '@id': id };
-  const node = graph[id]!;
+  const node: JsonObject = getOrInit(graph, id, () => ({ '@id': id }));
   // 6.5
-  if (isObject(activeSubject)) {
-    const values: Array<Json> = getOrInit(node, activeProperty!, () => []);
-    addUnique(values, activeSubject);
-  } else if (activeProperty !== null) {
-    // 6.6
-    const reference = { '@id': id };
-    if (list === null) {
-      const values: Array<Json> = getOrInit(subjectNode, activeProperty, () => []);
-      addUnique(values, reference);
-    } else {
-      list['@list'].push(reference);
+  if (Option.isSome(activeSubject) && isObject(activeSubject.value)) {
+    if (Option.isSome(activeProperty)) {
+      const values: Array<Json> = getOrInit(node, activeProperty.value, () => []);
+      addUnique(values, activeSubject.value);
     }
+  } else if (Option.isSome(activeProperty)) {
+    // 6.6
+    addToTarget(graph, activeSubject, activeProperty, list, { '@id': id }, true);
   }
   // 6.7
   if ('@type' in element) {
     const types: Array<Json> = getOrInit(node, '@type', () => []);
-    for (const t of asArray(element['@type'])) if (!types.includes(t)) types.push(t);
+    asArray(element['@type']).forEach((t) => {
+      if (!types.includes(t)) types.push(t);
+    });
   }
   // 6.8
   if ('@index' in element) {
@@ -126,13 +138,14 @@ export const generateNodeMap = (
   }
   // 6.9
   if ('@reverse' in element) {
-    const referenced = { '@id': id };
+    const referenced = Option.some({ '@id': id });
     const reverseMap: JsonObject = element['@reverse'];
-    for (const property of Object.keys(reverseMap)) {
-      for (const value of asArray(reverseMap[property])) {
-        generateNodeMap(value, nodeMap, issuer, activeGraph, referenced, property);
-      }
-    }
+    Record.keys(reverseMap).forEach((property) => {
+      const reverseProperty = Option.some(property);
+      asArray(reverseMap[property]).forEach((value) =>
+        generateNodeMap(value, nodeMap, issuer, activeGraph, referenced, reverseProperty),
+      );
+    });
   }
   // 6.10
   if ('@graph' in element) {
@@ -143,7 +156,8 @@ export const generateNodeMap = (
     generateNodeMap(element['@included'], nodeMap, issuer, activeGraph);
   }
   // 6.12
-  for (const key of Arr.sort(Object.keys(element), compareStrings)) {
+  const subject = Option.some(id);
+  Arr.sort(Record.keys(element), compareStrings).forEach((key) => {
     if (
       key === '@id' ||
       key === '@type' ||
@@ -152,13 +166,26 @@ export const generateNodeMap = (
       key === '@graph' ||
       key === '@included'
     ) {
-      continue;
+      return;
     }
-    let property = key;
-    if (isBlankNodeId(property)) property = issuer.issue(property);
+    const property = isBlankNodeId(key) ? issuer.issue(key) : key;
     if (!hasOwn(node, property)) node[property] = [];
-    generateNodeMap(element[key], nodeMap, issuer, activeGraph, id, property);
-  }
+    generateNodeMap(element[key], nodeMap, issuer, activeGraph, subject, Option.some(property));
+  });
+};
+
+/** The nodes of a graph that say more than their `@id`, in key order (sorted when `ordered`). */
+const nodesOf = (
+  graph: globalThis.Record<string, JsonObject>,
+  ordered: boolean,
+): Array<JsonObject> => {
+  const ids = ordered ? Arr.sort(Record.keys(graph), compareStrings) : Record.keys(graph);
+  const nodes: Array<JsonObject> = [];
+  ids.forEach((id) => {
+    const node = graph[id];
+    if (node !== undefined && !isOnlyId(node)) nodes.push(node);
+  });
+  return nodes;
 };
 
 /**
@@ -167,63 +194,50 @@ export const generateNodeMap = (
  * @internal
  */
 export const flattenExpanded = (expanded: Json, ordered: boolean): Array<JsonObject> => {
-  const nodeMap: NodeMap = {};
-  nodeMap['@default'] = {};
+  const defaultGraph: globalThis.Record<string, JsonObject> = {};
+  const nodeMap: NodeMap = { '@default': defaultGraph };
   generateNodeMap(expanded, nodeMap, new IdIssuer());
-  const defaultGraph = nodeMap['@default'];
-  const named = Object.keys(nodeMap).filter((g) => g !== '@default');
+  const named = Record.keys(nodeMap).filter((g) => g !== '@default');
   const graphNames = ordered ? Arr.sort(named, compareStrings) : named;
-  for (const graphName of graphNames) {
-    const graph = nodeMap[graphName]!;
+  graphNames.forEach((graphName) => {
     const entry = getOrInit(defaultGraph, graphName, () => ({ '@id': graphName }));
-    const nodes: Array<JsonObject> = (entry['@graph'] = []);
-    const ids = ordered ? Arr.sort(Object.keys(graph), compareStrings) : Object.keys(graph);
-    for (const id of ids) {
-      const node = graph[id]!;
-      if (!isOnlyId(node)) nodes.push(node);
-    }
-  }
-  const flattened: Array<JsonObject> = [];
-  const ids = ordered
-    ? Arr.sort(Object.keys(defaultGraph), compareStrings)
-    : Object.keys(defaultGraph);
-  for (const id of ids) {
-    const node = defaultGraph[id]!;
-    if (!isOnlyId(node)) flattened.push(node);
-  }
-  return flattened;
+    entry['@graph'] = nodesOf(nodeMap[graphName] ?? {}, ordered);
+  });
+  return nodesOf(defaultGraph, ordered);
 };
 
 const isOnlyId = (node: JsonObject): boolean => {
-  const keys = Object.keys(node);
+  const keys = Record.keys(node);
   return keys.length === 1 && keys[0] === '@id';
 };
 
 /** @internal */
 export const mergeNodeMaps = (graphs: NodeMap) => {
-  const merged: Record<string, JsonObject> = {};
-  for (const graphName of Arr.sort(Object.keys(graphs), compareStrings)) {
-    const graph = graphs[graphName]!;
-    for (const id of Arr.sort(Object.keys(graph), compareStrings)) {
-      const node = graph[id]!;
+  const merged: globalThis.Record<string, JsonObject> = {};
+  Arr.sort(Record.keys(graphs), compareStrings).forEach((graphName) => {
+    const graph = graphs[graphName] ?? {};
+    Arr.sort(Record.keys(graph), compareStrings).forEach((id) => {
+      const node = graph[id] ?? {};
       const mergedNode = getOrInit(merged, id, () => ({ '@id': id }));
-      for (const property of Arr.sort(Object.keys(node), compareStrings)) {
-        if (property === '@id') continue;
-        if (property === '@type' || property.startsWith('@')) {
-          if (property === '@type') {
-            const types: Array<Json> = getOrInit(mergedNode, '@type', () => []);
-            for (const t of node['@type']) if (!types.includes(t)) types.push(t);
-          } else {
-            mergedNode[property] = structuredClone(node[property]);
-          }
-          continue;
+      Arr.sort(Record.keys(node), compareStrings).forEach((property) => {
+        if (property === '@id') return;
+        if (property === '@type') {
+          const types: Array<Json> = getOrInit(mergedNode, '@type', () => []);
+          asArray(node['@type']).forEach((t) => {
+            if (!types.includes(t)) types.push(t);
+          });
+          return;
+        }
+        if (property.startsWith('@')) {
+          mergedNode[property] = structuredClone(node[property]);
+          return;
         }
         const values: Array<Json> = getOrInit(mergedNode, property, () => []);
-        for (const v of node[property]) {
+        asArray(node[property]).forEach((v) => {
           if (!values.some((x) => deepEqual(x, v))) values.push(structuredClone(v));
-        }
-      }
-    }
-  }
+        });
+      });
+    });
+  });
   return merged;
 };

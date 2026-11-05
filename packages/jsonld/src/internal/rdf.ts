@@ -5,7 +5,10 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
-import * as Match from 'effect/Match';
+import * as Iterable from 'effect/Iterable';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { type NodeMap, generateNodeMap } from './flatten.ts';
@@ -40,6 +43,7 @@ import {
   isWellFormedLanguage,
   getOrInit,
   hasOwn,
+  loop,
 } from './util.ts';
 import { parseJson } from './json.ts';
 import * as Option from 'effect/Option';
@@ -51,7 +55,7 @@ export type RdfDirection = 'i18n-datatype' | 'compound-literal';
 /** @internal */
 export interface ToRdfOptions {
   readonly produceGeneralizedRdf: boolean;
-  readonly rdfDirection: RdfDirection | null;
+  readonly rdfDirection: Option.Option<RdfDirection>;
 }
 
 const blankNode = (id: string): Term.BlankNode => Term.blankNode(id.slice(2));
@@ -62,20 +66,21 @@ const blankNode = (id: string): Term.BlankNode => Term.blankNode(id.slice(2));
  * datatype, a node) is validated and made into a node once. `toRdf` runs
  * synchronously, and empties it before and after.
  */
-const iriNodes = new Map<string, Option.Option<Term.NamedNode>>();
+const iriNodes = MutableHashMap.empty<string, Option.Option<Term.NamedNode>>();
 
 /** The node of an IRI, if it is well-formed. */
 const iriNode = (iri: string): Option.Option<Term.NamedNode> => {
-  let node = iriNodes.get(iri);
-  if (node === undefined) {
-    node = isWellFormedIri(iri) ? Option.some(Term.namedNode(iri)) : Option.none();
-    iriNodes.set(iri, node);
-  }
+  const cached = MutableHashMap.get(iriNodes, iri);
+  if (Option.isSome(cached)) return cached.value;
+  const node = isWellFormedIri(iri) ? Option.some(Term.namedNode(iri)) : Option.none();
+  MutableHashMap.set(iriNodes, iri, node);
   return node;
 };
 
-const toResource = (id: string): Term.NamedNode | Term.BlankNode | null =>
-  isBlankNodeId(id) ? blankNode(id) : Option.getOrNull(iriNode(id));
+const toResource = (id: string): Option.Option<Term.NamedNode | Term.BlankNode> =>
+  isBlankNodeId(id) ? Option.some(blankNode(id)) : iriNode(id);
+
+type Triple = readonly [Term.Subject, Term.NamedNode, Term.Object];
 
 /**
  * Converts expanded JSON-LD to quads.
@@ -84,48 +89,45 @@ const toResource = (id: string): Term.NamedNode | Term.BlankNode | null =>
  */
 export const toRdf = (expanded: Json, options: ToRdfOptions): Array<Term.Quad> => {
   const issuer = new IdIssuer();
-  iriNodes.clear();
+  MutableHashMap.clear(iriNodes);
   const rdfType = Term.namedNode(RDF_TYPE);
   const nodeMap: NodeMap = { '@default': {} };
   generateNodeMap(expanded, nodeMap, issuer);
   const quads: Array<Term.Quad> = [];
-  for (const graphName of Arr.sort(Object.keys(nodeMap), compareStrings)) {
-    let graphTerm: Term.Graph;
-    if (graphName === '@default') graphTerm = Term.defaultGraph;
-    else {
-      const g = toResource(graphName);
-      if (g === null) continue;
-      graphTerm = g;
-    }
-    const graph = nodeMap[graphName]!;
-    for (const subject of Arr.sort(Object.keys(graph), compareStrings)) {
+  Arr.sort(Record.keys(nodeMap), compareStrings).forEach((graphName) => {
+    const graphTerm: Option.Option<Term.Graph> =
+      graphName === '@default' ? Option.some(Term.defaultGraph) : toResource(graphName);
+    const graph = nodeMap[graphName];
+    if (Option.isNone(graphTerm) || graph === undefined) return;
+    const g = graphTerm.value;
+    Arr.sort(Record.keys(graph), compareStrings).forEach((subject) => {
       const s = toResource(subject);
-      if (s === null) continue;
-      const node = graph[subject]!;
-      for (const property of Arr.sort(Object.keys(node), compareStrings)) {
+      const node = graph[subject];
+      if (Option.isNone(s) || node === undefined) return;
+      Arr.sort(Record.keys(node), compareStrings).forEach((property) => {
         const values: Array<Json> = node[property];
         if (property === '@type') {
-          for (const type of values) {
+          values.forEach((type) => {
             const o = toResource(type);
-            if (o !== null) quads.push(Term.quad(s, rdfType, o, graphTerm));
-          }
-          continue;
+            if (Option.isSome(o)) quads.push(Term.quad(s.value, rdfType, o.value, g));
+          });
+          return;
         }
-        if (property.startsWith('@')) continue;
+        if (property.startsWith('@')) return;
         // Blank node predicates (generalized RDF) cannot be represented by
         // the core term model, so they are always skipped.
         const p = isBlankNodeId(property) ? Option.none() : iriNode(property);
-        if (Option.isNone(p)) continue;
-        for (const item of values) {
-          const listTriples: Array<[Term.Subject, Term.NamedNode, Term.Object]> = [];
+        if (Option.isNone(p)) return;
+        values.forEach((item) => {
+          const listTriples: Array<Triple> = [];
           const o = objectToRdf(item, listTriples, issuer, options);
-          if (o !== null) quads.push(Term.quad(s, p.value, o, graphTerm));
-          for (const [ls, lp, lo] of listTriples) quads.push(Term.quad(ls, lp, lo, graphTerm));
-        }
-      }
-    }
-  }
-  iriNodes.clear();
+          if (Option.isSome(o)) quads.push(Term.quad(s.value, p.value, o.value, g));
+          listTriples.forEach(([ls, lp, lo]) => quads.push(Term.quad(ls, lp, lo, g)));
+        });
+      });
+    });
+  });
+  MutableHashMap.clear(iriNodes);
   return quads;
 };
 
@@ -133,49 +135,50 @@ const toDoubleString = (n: number): string => n.toExponential(15).replace(/(\d)0
 
 const objectToRdf = (
   item: Json,
-  triples: Array<[Term.Subject, Term.NamedNode, Term.Object]>,
+  triples: Array<Triple>,
   issuer: IdIssuer,
   options: ToRdfOptions,
-): Term.Object | null => {
+): Option.Option<Term.Object> => {
   // 1, 2
   if (!isValueObject(item) && !isListObject(item)) {
     return toResource(item['@id']);
   }
   // 3
-  if (isListObject(item)) return listToRdf(item['@list'], triples, issuer, options);
+  if (isListObject(item)) return Option.some(listToRdf(item['@list'], triples, issuer, options));
   // 4
   let value = item['@value'];
-  let datatype: string | null = item['@type'] ?? null;
+  const type = item['@type'];
+  const typed = type !== undefined && type !== null;
   // 6
-  if (datatype !== null && datatype !== '@json' && Option.isNone(iriNode(datatype))) return null;
+  if (typed && type !== '@json' && Option.isNone(iriNode(type))) return Option.none();
   // 7
-  if ('@language' in item && !isWellFormedLanguage(item['@language'])) return null;
+  if ('@language' in item && !isWellFormedLanguage(item['@language'])) return Option.none();
   // 8
-  if (datatype === '@json') {
+  let datatype: string;
+  if (type === '@json') {
     value = canonicalJson(value);
     datatype = RDF_JSON;
   } else if (Predicate.isBoolean(value)) {
     value = value ? 'true' : 'false';
-    datatype ??= XSD_BOOLEAN;
+    datatype = typed ? type : XSD_BOOLEAN;
   } else if (
     Predicate.isNumber(value) &&
-    (!Number.isInteger(value) || Math.abs(value) >= 1e21 || datatype === XSD_DOUBLE)
+    (!Number.isInteger(value) || Math.abs(value) >= 1e21 || type === XSD_DOUBLE)
   ) {
     value = toDoubleString(value);
-    datatype ??= XSD_DOUBLE;
+    datatype = typed ? type : XSD_DOUBLE;
   } else if (Predicate.isNumber(value)) {
     value = value.toFixed(0);
-    datatype ??= XSD_INTEGER;
-  } else if (datatype === null) {
-    datatype = '@language' in item ? RDF_LANG_STRING : XSD_STRING;
+    datatype = typed ? type : XSD_INTEGER;
+  } else {
+    datatype = typed ? type : '@language' in item ? RDF_LANG_STRING : XSD_STRING;
   }
   // 13
-  if ('@direction' in item && options.rdfDirection !== null) {
+  if ('@direction' in item && Option.isSome(options.rdfDirection)) {
     const language = '@language' in item ? String(item['@language']).toLowerCase() : '';
-    if (options.rdfDirection === 'i18n-datatype') {
-      return Term.literal(
-        String(value),
-        Term.namedNode(`${I18N}${language}_${item['@direction']}`),
+    if (options.rdfDirection.value === 'i18n-datatype') {
+      return Option.some(
+        Term.literal(String(value), Term.namedNode(`${I18N}${language}_${item['@direction']}`)),
       );
     }
     const literal = blankNode(issuer.issue());
@@ -184,35 +187,38 @@ const objectToRdf = (
       triples.push([literal, Term.namedNode(RDF_LANGUAGE), Term.literal(language)]);
     }
     triples.push([literal, Term.namedNode(RDF_DIRECTION), Term.literal(item['@direction'])]);
-    return literal;
+    return Option.some(literal);
   }
   // 14
-  if ('@language' in item) return Term.literal(String(value), String(item['@language']));
-  return Term.literal(
-    String(value),
-    Option.getOrElse(iriNode(datatype), () => Term.namedNode(datatype)),
+  if ('@language' in item) {
+    return Option.some(Term.literal(String(value), String(item['@language'])));
+  }
+  return Option.some(
+    Term.literal(
+      String(value),
+      Option.getOrElse(iriNode(datatype), () => Term.namedNode(datatype)),
+    ),
   );
 };
 
 const listToRdf = (
   list: Array<JsonObject>,
-  triples: Array<[Term.Subject, Term.NamedNode, Term.Object]>,
+  triples: Array<Triple>,
   issuer: IdIssuer,
   options: ToRdfOptions,
 ): Term.Object => {
-  if (Arr.isReadonlyArrayEmpty(list)) return Term.namedNode(RDF_NIL);
+  const nil = Term.namedNode(RDF_NIL);
   const bnodes = list.map(() => blankNode(issuer.issue()));
   const first = Term.namedNode(RDF_FIRST);
   const rest = Term.namedNode(RDF_REST);
-  for (let i = 0; i < list.length; i++) {
-    const subject = bnodes[i]!;
-    const embedded: Array<[Term.Subject, Term.NamedNode, Term.Object]> = [];
-    const o = objectToRdf(list[i]!, embedded, issuer, options);
-    if (o !== null) triples.push([subject, first, o]);
-    triples.push([subject, rest, bnodes[i + 1] ?? Term.namedNode(RDF_NIL)]);
-    triples.push(...embedded);
-  }
-  return bnodes[0]!;
+  bnodes.forEach((subject, i) => {
+    const embedded: Array<Triple> = [];
+    const o = objectToRdf(list[i], embedded, issuer, options);
+    if (Option.isSome(o)) triples.push([subject, first, o.value]);
+    triples.push([subject, rest, bnodes[i + 1] ?? nil]);
+    embedded.forEach((triple) => triples.push(triple));
+  });
+  return bnodes[0] ?? nil;
 };
 
 // -----------------------------------------------------------------------------
@@ -221,20 +227,31 @@ const listToRdf = (
 
 /** @internal */
 export interface FromRdfOptions {
-  readonly rdfDirection: RdfDirection | null;
+  readonly rdfDirection: Option.Option<RdfDirection>;
   readonly useNativeTypes: boolean;
   readonly useRdfType: boolean;
   readonly ordered: boolean;
   readonly processingMode: 'json-ld-1.0' | 'json-ld-1.1';
 }
 
-// Built once: `termId` runs for every term of every quad converted.
-const termId: (t: Term.Term) => string = Match.type<Term.Term>().pipe(
-  Match.tag('BlankNode', (t) => `_:${t.value}`),
-  Match.tag('NamedNode', (t) => t.value),
-  Match.tag('DefaultGraph', () => '@default'),
-  Match.orElse((t) => t.key),
-);
+// A refinement chain: `termId` runs for every term of every quad converted.
+const termId = (t: Term.Term): string =>
+  Term.isBlankNode(t)
+    ? `_:${t.value}`
+    : Term.isNamedNode(t)
+      ? t.value
+      : Term.isDefaultGraph(t)
+        ? '@default'
+        : t.key;
+
+/** A walk up an `rdf:rest` chain from a usage of `rdf:nil` (fromRdf §8.6, step 6.4). */
+interface ListWalk {
+  readonly node: JsonObject;
+  readonly property: string;
+  readonly head: JsonObject;
+  /** The walk reached a node that is not a blank node, and stops there. */
+  readonly done: boolean;
+}
 
 interface Usage {
   readonly node: JsonObject;
@@ -250,35 +267,42 @@ const DOUBLE_RE = /^(\+|-)?([0-9]+(\.[0-9]*)?|\.[0-9]+)([Ee](\+|-)?[0-9]+)?$|^(\
  * @internal
  */
 export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Array<JsonObject> => {
-  const defaultGraph: Record<string, JsonObject> = {};
-  const graphMap: Record<string, Record<string, JsonObject>> = {};
+  const defaultGraph: globalThis.Record<string, JsonObject> = {};
+  const graphMap: globalThis.Record<string, globalThis.Record<string, JsonObject>> = {};
   graphMap['@default'] = defaultGraph;
-  const referencedOnce: Record<string, Usage | false> = {};
-  const compoundLiteralSubjects: Record<string, Set<string>> = {};
-  const nilUsages: Record<string, Array<Usage>> = {};
-  const seen = new Set<string>();
-  for (const q of quads) {
-    if (seen.has(q.key)) continue;
-    seen.add(q.key);
+  const referencedOnce: globalThis.Record<string, Usage | false> = {};
+  const compoundLiteralSubjects: globalThis.Record<
+    string,
+    MutableHashSet.MutableHashSet<string>
+  > = {};
+  const nilUsages: globalThis.Record<string, Array<Usage>> = {};
+  const seen = MutableHashSet.empty<string>();
+  const compoundLiterals =
+    Option.isSome(options.rdfDirection) && options.rdfDirection.value === 'compound-literal';
+  Iterable.forEach(quads, (q) => {
+    // One `add` per quad: a duplicate leaves the size unchanged.
+    const before = MutableHashSet.size(seen);
+    if (MutableHashSet.size(MutableHashSet.add(seen, q.key)) === before) return;
     const name = termId(q.graph);
     const nodeMap = getOrInit(graphMap, name, () => ({}));
-    const compoundMap = getOrInit(compoundLiteralSubjects, name, () => new Set());
+    const compoundMap = getOrInit(compoundLiteralSubjects, name, () => MutableHashSet.empty());
     const usages = getOrInit(nilUsages, name, () => []);
     if (name !== '@default' && !hasOwn(defaultGraph, name)) defaultGraph[name] = { '@id': name };
     const subject = termId(q.subject);
     const predicate = q.predicate.value;
     const object = q.object;
     const node = getOrInit(nodeMap, subject, () => ({ '@id': subject }));
-    if (options.rdfDirection === 'compound-literal' && predicate === RDF_DIRECTION) {
-      compoundMap.add(subject);
+    if (compoundLiterals && predicate === RDF_DIRECTION) {
+      MutableHashSet.add(compoundMap, subject);
     }
-    const isResource = object._tag === 'NamedNode' || object._tag === 'BlankNode';
+    const isBlank = Term.isBlankNode(object);
+    const isResource = isBlank || Term.isNamedNode(object);
     const objectId = isResource ? termId(object) : '';
     if (isResource && !hasOwn(nodeMap, objectId)) nodeMap[objectId] = { '@id': objectId };
     if (predicate === RDF_TYPE && isResource && !options.useRdfType) {
       const types: Array<string> = getOrInit(node, '@type', () => []);
       if (!types.includes(objectId)) types.push(objectId);
-      continue;
+      return;
     }
     const value = rdfToObject(object, options);
     const values: Array<Json> = getOrInit(node, predicate, () => []);
@@ -290,24 +314,26 @@ export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Ar
       usages.push({ node, property: predicate, value: stored });
     } else if (isResource && hasOwn(referencedOnce, objectId)) {
       referencedOnce[objectId] = false;
-    } else if (object._tag === 'BlankNode') {
+    } else if (isBlank) {
       referencedOnce[objectId] = { node, property: predicate, value: stored };
     }
-  }
-  for (const name of Object.keys(graphMap)) {
-    const graphObject = graphMap[name]!;
+  });
+  Record.keys(graphMap).forEach((name) => {
+    const graphObject = graphMap[name];
+    if (graphObject === undefined) return;
     // 6.1
-    for (const cl of compoundLiteralSubjects[name] ?? []) {
+    Iterable.forEach(compoundLiteralSubjects[name] ?? [], (cl) => {
       const clEntry = referencedOnce[cl];
-      if (!clEntry) continue;
+      if (!clEntry) return;
       const { node, property } = clEntry;
       const clNode = graphObject[cl];
       delete graphObject[cl];
-      if (clNode === undefined) continue;
-      // SAFETY: the property of a node object in the node map holds an array of node references
+      if (clNode === undefined) return;
+      // The property of a node object in the node map holds an array of node references
       // (JSON-LD fromRdf §8.6).
-      for (const clReference of node[property] as Array<JsonObject>) {
-        if (clReference['@id'] !== cl) continue;
+      const references: Array<JsonObject> = node[property];
+      references.forEach((clReference) => {
+        if (clReference['@id'] !== cl) return;
         delete clReference['@id'];
         clReference['@value'] = clNode[RDF_VALUE]?.[0]?.['@value'];
         if (RDF_LANGUAGE in clNode) {
@@ -322,56 +348,69 @@ export const fromRdf = (quads: Iterable<Term.Quad>, options: FromRdfOptions): Ar
           if (dir !== 'ltr' && dir !== 'rtl') fail('invalid base direction');
           clReference['@direction'] = dir;
         }
-      }
-    }
+      });
+    });
     // 6.2 - 6.4
-    if (!(RDF_NIL in graphObject)) continue;
-    for (const usage of nilUsages[name] ?? []) {
-      let { node, property, value: head } = usage;
+    if (!(RDF_NIL in graphObject)) return;
+    (nilUsages[name] ?? []).forEach((usage) => {
       const list: Array<Json> = [];
       const listNodes: Array<string> = [];
-      while (property === RDF_REST && isWellFormedListNode(node, referencedOnce)) {
-        list.push(node[RDF_FIRST][0]);
-        listNodes.push(node['@id']);
-        // SAFETY: `isWellFormedListNode` checked that this node is referenced exactly once, so it
-        // has a usage entry.
-        const nodeUsage = referencedOnce[node['@id']] as Usage;
-        node = nodeUsage.node;
-        property = nodeUsage.property;
-        head = nodeUsage.value;
-        if (!isBlankNodeId(node['@id'])) break;
-      }
+      const { head } = loop<ListWalk>(
+        { node: usage.node, property: usage.property, head: usage.value, done: false },
+        (walk) => {
+          const { node } = walk;
+          if (walk.done || walk.property !== RDF_REST) return Option.none();
+          if (!isWellFormedListNode(node, referencedOnce)) return Option.none();
+          // `isWellFormedListNode` checked that this node is referenced exactly once, so it has
+          // a usage entry.
+          const nodeUsage = referencedOnce[node['@id']];
+          if (!nodeUsage) return Option.none();
+          list.push(node[RDF_FIRST][0]);
+          listNodes.push(node['@id']);
+          return Option.some({
+            node: nodeUsage.node,
+            property: nodeUsage.property,
+            head: nodeUsage.value,
+            done: !isBlankNodeId(nodeUsage.node['@id']),
+          });
+        },
+      );
       delete head['@id'];
       list.reverse();
       head['@list'] = list;
-      for (const id of listNodes) delete graphObject[id];
-    }
-  }
+      listNodes.forEach((id) => {
+        delete graphObject[id];
+      });
+    });
+  });
   const result: Array<JsonObject> = [];
   const subjects = options.ordered
-    ? Arr.sort(Object.keys(defaultGraph), compareStrings)
-    : Object.keys(defaultGraph);
-  for (const subject of subjects) {
-    const node = defaultGraph[subject]!;
-    if (hasOwn(graphMap, subject) && subject !== '@default') {
+    ? Arr.sort(Record.keys(defaultGraph), compareStrings)
+    : Record.keys(defaultGraph);
+  subjects.forEach((subject) => {
+    const node = defaultGraph[subject];
+    if (node === undefined) return;
+    const graph = graphMap[subject];
+    if (hasOwn(graphMap, subject) && subject !== '@default' && graph !== undefined) {
       const nodes: Array<JsonObject> = (node['@graph'] = []);
-      const graph = graphMap[subject]!;
       const keys = options.ordered
-        ? Arr.sort(Object.keys(graph), compareStrings)
-        : Object.keys(graph);
-      for (const k of keys) {
-        const n = graph[k]!;
-        if (!(Object.keys(n).length === 1 && '@id' in n)) nodes.push(n);
-      }
+        ? Arr.sort(Record.keys(graph), compareStrings)
+        : Record.keys(graph);
+      keys.forEach((k) => {
+        const n = graph[k];
+        if (n !== undefined && !isOnlyId(n)) nodes.push(n);
+      });
     }
-    if (!(Object.keys(node).length === 1 && '@id' in node)) result.push(node);
-  }
+    if (!isOnlyId(node)) result.push(node);
+  });
   return result;
 };
 
+const isOnlyId = (n: JsonObject): boolean => Record.keys(n).length === 1 && '@id' in n;
+
 const isWellFormedListNode = (
   node: JsonObject,
-  referencedOnce: Record<string, Usage | false>,
+  referencedOnce: globalThis.Record<string, Usage | false>,
 ): boolean => {
   const id = node['@id'];
   if (!isBlankNodeId(id)) return false;
@@ -380,63 +419,63 @@ const isWellFormedListNode = (
   const rest = node[RDF_REST];
   if (!Array.isArray(first) || first.length !== 1) return false;
   if (!Array.isArray(rest) || rest.length !== 1) return false;
-  for (const k of Object.keys(node)) {
-    if (k === '@id' || k === RDF_FIRST || k === RDF_REST) continue;
-    if (k === '@type') {
-      const t = node['@type'];
-      if (Array.isArray(t) && t.length === 1 && t[0] === RDF_LIST) continue;
-    }
-    return false;
-  }
-  return true;
+  return Record.keys(node).every((k) => {
+    if (k === '@id' || k === RDF_FIRST || k === RDF_REST) return true;
+    const t = node['@type'];
+    return k === '@type' && Array.isArray(t) && t.length === 1 && t[0] === RDF_LIST;
+  });
 };
 
 const rdfToObject = (object: Term.Object, options: FromRdfOptions): JsonObject => {
-  if (object._tag === 'NamedNode' || object._tag === 'BlankNode') return { '@id': termId(object) };
-  if (object._tag !== 'Literal') return { '@id': termId(object) };
+  if (!Term.isLiteral(object)) return { '@id': termId(object) };
   const result: JsonObject = {};
   let converted: Json = object.value;
-  let type: string | null = null;
+  let type = Option.none<string>();
   const datatype = object.datatype.value;
-  if (options.processingMode !== 'json-ld-1.0' && datatype === RDF_JSON) {
+  const isJson = options.processingMode !== 'json-ld-1.0' && datatype === RDF_JSON;
+  if (isJson) {
     converted = Result.getOrElse(parseJson(converted), () => fail('invalid JSON literal'));
-    type = '@json';
+    type = Option.some('@json');
   } else if (options.useNativeTypes) {
     if (datatype === XSD_STRING) {
       // keep
     } else if (datatype === XSD_BOOLEAN) {
       if (converted === 'true' || converted === '1') converted = true;
       else if (converted === 'false' || converted === '0') converted = false;
-      else type = datatype;
+      else type = Option.some(datatype);
     } else if (datatype === XSD_INTEGER && /^[+-]?[0-9]+$/.test(converted)) {
       const n = Number(converted);
       if (Number.isSafeInteger(n)) converted = n;
-      else type = datatype;
+      else type = Option.some(datatype);
     } else if (datatype === XSD_DOUBLE && DOUBLE_RE.test(converted)) {
       const n = Number(converted.replace(/INF$/, 'Infinity'));
       if (Number.isFinite(n)) converted = n;
-      else type = datatype;
+      else type = Option.some(datatype);
     } else if (object.language === '') {
-      type = datatype;
+      type = Option.some(datatype);
     }
   }
-  if (type === '@json') {
+  if (isJson) {
     // handled
-  } else if (datatype.startsWith(I18N) && options.rdfDirection === 'i18n-datatype') {
+  } else if (
+    datatype.startsWith(I18N) &&
+    Option.isSome(options.rdfDirection) &&
+    options.rdfDirection.value === 'i18n-datatype'
+  ) {
     const fragment = datatype.slice(I18N.length);
     const i = fragment.indexOf('_');
     const language = i === -1 ? fragment : fragment.slice(0, i);
     if (language !== '') result['@language'] = language;
     if (i !== -1) result['@direction'] = fragment.slice(i + 1);
-    type = null;
+    type = Option.none();
   } else if (object.language !== '') {
     result['@language'] = object.language;
     if (object.direction !== undefined) result['@direction'] = object.direction;
-    type = null;
-  } else if (!options.useNativeTypes && datatype !== XSD_STRING && type === null) {
-    type = datatype;
+    type = Option.none();
+  } else if (!options.useNativeTypes && datatype !== XSD_STRING && Option.isNone(type)) {
+    type = Option.some(datatype);
   }
   result['@value'] = converted;
-  if (type !== null) result['@type'] = type;
+  if (Option.isSome(type)) result['@type'] = type.value;
   return result;
 };
