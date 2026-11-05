@@ -148,6 +148,16 @@ export class LineParser {
 
   private iri(): Term.NamedNode {
     const start = this.pos;
+    // Most IRIs have no escapes or invalid characters: the first `>` ends them. `escapeIri`
+    // returns its argument when it holds none of the characters `isIriChar` rejects, nor `\`.
+    const end = this.input.indexOf('>', start + 1);
+    if (end !== -1) {
+      const plain = this.input.slice(start + 1, end);
+      if (Term.escapeIri(plain) === plain && Lexical.isAbsoluteIri(plain)) {
+        this.pos = end + 1;
+        return new Term.NamedNode(plain);
+      }
+    }
     this.pos++;
     let value = '';
     let chunk = this.pos;
@@ -278,4 +288,7 @@ export class LineParser {
  *
  * @internal
  */
-export const splitLines = (input: string): Array<string> => input.split(/\r\n|\r|\n/);
+export const splitLines = (input: string): Array<string> =>
+  input.includes('\r') ? input.split(LINE_END) : input.split('\n');
+
+const LINE_END = /\r\n|\r|\n/;

@@ -259,13 +259,16 @@ export const isName: (value: string) => boolean = Chars.isName;
  */
 export const isValidText: (value: string) => boolean = Chars.isValidText;
 
+// Hoisted: a regex literal makes a new `RegExp` each time it is evaluated.
+const WHITESPACE = /^[ \t\r\n]*$/;
+
 /**
  * Whether a string consists only of XML white space (`S`).
  *
  * @since 0.1.0
  * @category predicates
  */
-export const isWhitespace = (value: string): boolean => /^[ \t\r\n]*$/.test(value);
+export const isWhitespace = (value: string): boolean => WHITESPACE.test(value);
 
 // -----------------------------------------------------------------------------
 // Parser

@@ -95,12 +95,15 @@ const merge = (base: Parts, ref: string): string => {
   return i === -1 ? ref : base.path.slice(0, i + 1) + ref;
 };
 
+// Hoisted: a regex literal makes a new `RegExp` each time it is evaluated.
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
 /**
  * Whether a string is an absolute IRI (has a scheme).
  *
  * @since 0.1.0
  */
-export const isAbsolute = (iri: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:/.test(iri);
+export const isAbsolute = (iri: string): boolean => SCHEME.test(iri);
 
 const SCHEME_THEN_PATH = /^[A-Za-z][A-Za-z0-9+.-]*:(?!\.)/;
 

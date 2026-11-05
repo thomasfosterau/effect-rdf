@@ -131,8 +131,12 @@ export const getOrInit = (o: JsonObject, k: string, init: () => Json): Json => {
 /** @internal */
 export const isKeyword = (v: Json): boolean => Predicate.isString(v) && KEYWORDS.has(v);
 
+// Hoisted: a regex literal makes a new `RegExp` each time it is evaluated.
+const KEYWORD_FORM = /^@[a-zA-Z]+$/;
+const ABSOLUTE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]*$/;
+
 /** @internal */
-export const hasKeywordForm = (v: string): boolean => /^@[a-zA-Z]+$/.test(v);
+export const hasKeywordForm = (v: string): boolean => KEYWORD_FORM.test(v);
 
 /** @internal */
 export const isObject = (v: unknown): v is JsonObject => Predicate.isObject(v);
@@ -156,7 +160,7 @@ export const isBlankNodeId = (v: unknown): v is string =>
   Predicate.isString(v) && v.startsWith('_:');
 
 /** @internal */
-export const isAbsoluteIri = (v: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:[^\s]*$/.test(v);
+export const isAbsoluteIri = (v: string): boolean => ABSOLUTE_IRI.test(v);
 
 /** @internal */
 export const isWellFormedIri = (v: string): boolean => Iri.isValid(v);
