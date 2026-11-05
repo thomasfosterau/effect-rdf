@@ -861,7 +861,7 @@ export const parseQuads = (
       if (e instanceof ParseFailure) return toParseError(e.message, e.position);
       throw e;
     },
-  }).pipe(Serialization.withParseSpan(trace, input));
+  });
 
 /**
  * Parses a complete RDF/XML document. Namespace declarations on the root
@@ -874,7 +874,7 @@ export const parse = (
   input: string,
   options?: ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
-  Effect.map(parseQuads(input, options), toResult);
+  Effect.map(parseQuads(input, options), toResult).pipe(Serialization.withParseSpan(trace, input));
 
 /**
  * The RDF/XML parser.
