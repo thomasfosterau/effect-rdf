@@ -87,10 +87,11 @@ catalogs:
     # Caret, not `>=`: on 0.x a minor release may break the combinator API
     # the grammars are written against.
     '@thomasfosterau/effect-parse': ^0.4.0
-    # rc.118 removed every `effect/unstable/*` export path (now `effect/http`,
-    # `effect/sql`, ...), which the SPARQL client, server and SQL backend
-    # import: the floor is rc.118, the family's floor.
-    effect: '>=4.0.0-rc.118'
+    # 4.1.0: `effect/http-api`'s `StreamUint8Array` takes a list of content
+    # types (rc.118 – 4.0.x take one), which the SPARQL server's `HttpApi`
+    # definition uses to document every response format (#60). rc.118
+    # already removed `effect/unstable/*` (now `effect/http`, `effect/sql`).
+    effect: '>=4.1.0'
 
 overrides:
   # undici <8.12.2 — GHSA-xjj6-f33q-929c (high): an unhandled error on a

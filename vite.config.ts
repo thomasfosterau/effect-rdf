@@ -352,7 +352,7 @@ export default defineConfig({
         cache: false,
       },
       // Import guard: the built dist of every published package imports no
-      // `effect/unstable/*` (removed in rc.118, the `effect` peer floor).
+      // `effect/unstable/*` (removed in rc.118, before the `effect` peer floor).
       // Reads `dist/`, hence the build edges.
       'check:dist': {
         command: 'node scripts/check-dist-imports.mjs',
