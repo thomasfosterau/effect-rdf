@@ -23,8 +23,6 @@ import type * as Effect from 'effect/Effect';
 import type * as Stream from 'effect/Stream';
 import * as internal from './internal/codec.ts';
 
-const syntax: internal.Syntax = { name: 'N-Quads', quads: true };
-
 /**
  * Options for the N-Quads serializer.
  *
@@ -43,6 +41,13 @@ export const format: Serialization.Format = Serialization.makeFormat({
   extensions: ['nq'],
   datasets: true,
 });
+
+// The span names are `NQuads.parse`, `NQuads.serialize`, …
+const syntax: internal.Syntax = {
+  name: 'N-Quads',
+  quads: true,
+  trace: { module: 'NQuads', format },
+};
 
 /**
  * Parses an N-Quads document. Statements without a graph label are placed

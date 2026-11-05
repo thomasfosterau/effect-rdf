@@ -688,3 +688,85 @@ export const writeFile = (
     }
     return yield* Stream.run(serializeBytes(serializer.value, quads, options), fs.sink(path));
   });
+
+// -----------------------------------------------------------------------------
+// Tracing
+// -----------------------------------------------------------------------------
+
+/**
+ * What a syntax's spans are named after: `<module>.<operation>` (e.g.
+ * `Turtle.parse`), with the format's name and media type as attributes.
+ *
+ * @since 0.1.0
+ * @category tracing
+ */
+export interface SpanTarget {
+  readonly module: string;
+  readonly format: Format;
+}
+
+const formatAttributes = (format: Format) => ({
+  'rdf.format': format.name,
+  'rdf.media_type': format.mediaType,
+});
+
+/**
+ * Wraps a whole-document parse in a span named `<module>.<operation>`
+ * (`operation` defaults to `parse`), with the format, media type and input
+ * length in characters as attributes and the parsed quad count
+ * (`rdf.quads`) on completion. The input text itself is never recorded.
+ * With no target the effect is returned unchanged.
+ *
+ * @since 0.1.0
+ * @category tracing
+ */
+export const withParseSpan =
+  (target: SpanTarget | undefined, input: string, operation: string = 'parse') =>
+  <A extends ParseResult, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    target === undefined
+      ? self
+      : self.pipe(
+          Effect.tap((result) => Effect.annotateCurrentSpan('rdf.quads', result.dataset.size)),
+          Effect.withSpan(`${target.module}.${operation}`, {
+            attributes: { ...formatAttributes(target.format), 'rdf.input.length': input.length },
+          }),
+        );
+
+/**
+ * Wraps a whole-document serialisation in a span named
+ * `<module>.serialize`, with the format and media type as attributes and the
+ * output length in characters (`rdf.output.length`) on completion. With no
+ * target the effect is returned unchanged.
+ *
+ * @since 0.1.0
+ * @category tracing
+ */
+export const withSerializeSpan =
+  (target: SpanTarget | undefined) =>
+  <E, R>(self: Effect.Effect<string, E, R>): Effect.Effect<string, E, R> =>
+    target === undefined
+      ? self
+      : self.pipe(
+          Effect.tap((output) => Effect.annotateCurrentSpan('rdf.output.length', output.length)),
+          Effect.withSpan(`${target.module}.serialize`, {
+            attributes: formatAttributes(target.format),
+          }),
+        );
+
+/**
+ * Wraps a streaming parse or serialisation in a span named
+ * `<module>.<operation>` (e.g. `Turtle.parseStream`) that lasts while the
+ * stream runs, with the format and media type as attributes. Nothing is
+ * recorded per element. With no target the stream is returned unchanged.
+ *
+ * @since 0.1.0
+ * @category tracing
+ */
+export const withStreamSpan =
+  (target: SpanTarget | undefined, operation: 'parseStream' | 'serializeStream') =>
+  <A, E, R>(self: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+    target === undefined
+      ? self
+      : Stream.withSpan(self, `${target.module}.${operation}`, {
+          attributes: formatAttributes(target.format),
+        });

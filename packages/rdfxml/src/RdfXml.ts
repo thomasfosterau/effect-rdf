@@ -47,6 +47,9 @@ export const format: Serialization.Format = Serialization.makeFormat({
   datasets: false,
 });
 
+// Spans are named `RdfXml.parse`, `RdfXml.serialize`.
+const trace: Serialization.SpanTarget = { module: 'RdfXml', format };
+
 // -----------------------------------------------------------------------------
 // Parsing
 // -----------------------------------------------------------------------------
@@ -858,7 +861,7 @@ export const parseQuads = (
       if (e instanceof ParseFailure) return toParseError(e.message, e.position);
       throw e;
     },
-  });
+  }).pipe(Serialization.withParseSpan(trace, input));
 
 /**
  * Parses a complete RDF/XML document. Namespace declarations on the root
@@ -1336,7 +1339,7 @@ export const serialize = (
         throw e;
       },
     });
-  });
+  }).pipe(Serialization.withSerializeSpan(trace));
 
 /**
  * The RDF/XML serializer.

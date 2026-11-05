@@ -43,6 +43,9 @@ export const format: Serialization.Format = Serialization.makeFormat({
   datasets: false,
 });
 
+// Spans are named `Xmp.parse`, `Xmp.serialize`.
+const trace: Serialization.SpanTarget = { module: 'Xmp', format };
+
 // -----------------------------------------------------------------------------
 // Parsing
 // -----------------------------------------------------------------------------
@@ -60,7 +63,9 @@ export const parse = (
   input: string,
   options?: Serialization.ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
-  Effect.suspend(() => Xml.parseRdf(input, options));
+  Effect.suspend(() => Xml.parseRdf(input, options)).pipe(
+    Serialization.withParseSpan(trace, input),
+  );
 
 /**
  * The XMP parser.
@@ -401,7 +406,7 @@ export const serialize = (
       ),
     );
     return yield* serializeMetadata(meta, options);
-  });
+  }).pipe(Serialization.withSerializeSpan(trace));
 
 /**
  * The XMP serializer.

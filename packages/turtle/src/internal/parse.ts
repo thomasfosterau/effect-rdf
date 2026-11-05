@@ -11,6 +11,8 @@ import { SyntaxFailure, TurtleParser } from './parser.ts';
 export interface Syntax {
   readonly name: string;
   readonly trig: boolean;
+  /** The span prefix and format for tracing (`<module>.parse`, …); untraced when absent. */
+  readonly trace?: Serialization.SpanTarget | undefined;
 }
 
 /**
@@ -78,7 +80,7 @@ export const parse = (
     dataset: Dataset.fromIterable(result.quads),
     prefixes: result.prefixes,
     baseIri: result.baseIri,
-  }));
+  })).pipe(Serialization.withParseSpan(syntax.trace, input));
 
 const END: unique symbol = Symbol('end');
 
@@ -114,4 +116,4 @@ export const parseStream =
             }),
         ),
       );
-    });
+    }).pipe(Serialization.withStreamSpan(syntax.trace, 'parseStream'));

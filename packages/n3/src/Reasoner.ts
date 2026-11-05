@@ -479,6 +479,12 @@ export const reason = (
           ? Effect.fail(new ReasonerError({ message: e.message }))
           : Effect.die(e),
     ),
+    Effect.tap((result) => Effect.annotateCurrentSpan('n3.statements', result.closure.size)),
+    Effect.withSpan('Reasoner.reason', {
+      attributes: {
+        'n3.input.statements': (Model.isFormula(formula) ? formula : formula.formula).size,
+      },
+    }),
   );
 
 /**

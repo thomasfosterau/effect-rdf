@@ -55,6 +55,9 @@ export const format: Serialization.Format = Serialization.makeFormat({
   datasets: false,
 });
 
+// Spans are named `N3.parse`, `N3.serialize`.
+const trace: Serialization.SpanTarget = { module: 'N3', format };
+
 /**
  * Options for parsing N3.
  *
@@ -105,11 +108,18 @@ const runParser = (
 export const parse: (
   input: string,
   options?: ParseOptions,
-) => Effect.Effect<Model.Document, Serialization.RdfParseError> = Effect.fnUntraced(function* (
+) => Effect.Effect<Model.Document, Serialization.RdfParseError> = Effect.fn('N3.parse')(function* (
   input: string,
   options?: ParseOptions,
 ) {
-  return yield* runParser(input, options);
+  yield* Effect.annotateCurrentSpan({
+    'rdf.format': format.name,
+    'rdf.media_type': format.mediaType,
+    'rdf.input.length': input.length,
+  });
+  const doc = yield* runParser(input, options);
+  yield* Effect.annotateCurrentSpan('n3.statements', doc.formula.size);
+  return doc;
 });
 
 /**
@@ -137,7 +147,7 @@ export const parseDataset = (
         })),
       );
     }),
-  );
+  ).pipe(Serialization.withParseSpan(trace, input, 'parseDataset'));
 
 /**
  * The N3 `Serialization.Parser`, producing core datasets.
@@ -199,6 +209,7 @@ export const serialize = (
     Effect.mapError(
       (e) => new Serialization.RdfSerializeError({ format: format.name, message: e.message }),
     ),
+    Serialization.withSerializeSpan(trace),
   );
 
 /**

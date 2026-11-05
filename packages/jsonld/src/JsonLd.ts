@@ -558,6 +558,9 @@ export const format: Serialization.Format = Serialization.makeFormat({
   datasets: true,
 });
 
+// Spans are named `JsonLd.parse`, `JsonLd.serialize`.
+const trace: Serialization.SpanTarget = { module: 'JsonLd', format };
+
 /**
  * Options for parsing JSON-LD documents to RDF.
  *
@@ -707,7 +710,7 @@ export const parse = (
       prefixes: prefixesOf(json),
       baseIri: base ?? undefined,
     };
-  });
+  }).pipe(Serialization.withParseSpan(trace, input));
 
 const prefixesOf = (json: Json): PrefixMap.PrefixMap => {
   const entries: Array<[string, string]> = [];
@@ -772,6 +775,7 @@ export const serialize = (
     Effect.mapError(
       (e) => new Serialization.RdfSerializeError({ format: format.name, message: e.message }),
     ),
+    Serialization.withSerializeSpan(trace),
   );
 
 /**

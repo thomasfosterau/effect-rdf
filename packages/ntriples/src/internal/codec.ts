@@ -14,6 +14,8 @@ import { LineParser, splitLines, SyntaxFailure } from './lineParser.ts';
 export interface Syntax {
   readonly name: string;
   readonly quads: boolean;
+  /** The span prefix and format for tracing (`<module>.parse`, …); untraced when absent. */
+  readonly trace?: Serialization.SpanTarget | undefined;
 }
 
 const makeLineParser = (syntax: Syntax, options?: Serialization.ParseOptions): LineParser =>
@@ -73,7 +75,7 @@ export const parse = (
     dataset: Dataset.fromIterable(quads),
     prefixes: PrefixMap.empty,
     baseIri: undefined,
-  }));
+  })).pipe(Serialization.withParseSpan(syntax.trace, input));
 
 /** @internal */
 export const parseStream =
@@ -103,7 +105,7 @@ export const parseStream =
             }),
         ),
       );
-    });
+    }).pipe(Serialization.withStreamSpan(syntax.trace, 'parseStream'));
 
 /**
  * Options for the N-Triples and N-Quads serializers.
@@ -201,7 +203,7 @@ export const serialize = (
     try: () =>
       formatAll(syntax, options?.sort === true ? Arr.sort(quads, Term.compareQuads) : quads),
     catch: toSerializeError(syntax),
-  });
+  }).pipe(Serialization.withSerializeSpan(syntax.trace));
 
 /** @internal */
 export const serializeStream =
@@ -218,6 +220,7 @@ export const serializeStream =
           catch: toSerializeError(syntax),
         }),
       ),
+      Serialization.withStreamSpan(syntax.trace, 'serializeStream'),
     );
 
 /** @internal */
