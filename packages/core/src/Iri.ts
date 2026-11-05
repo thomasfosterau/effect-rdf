@@ -101,6 +101,17 @@ const merge = (base: Parts, ref: string): string => {
  */
 export const isAbsolute = (iri: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:/.test(iri);
 
+const SCHEME_THEN_PATH = /^[A-Za-z][A-Za-z0-9+.-]*:(?!\.)/;
+
+/**
+ * Whether `iri` has a scheme and no `.` or `..` segment anywhere, without
+ * splitting it into its parts: such a reference resolves to itself
+ * (RFC 3986 §5.2.2), and most references in a document are like that. A
+ * `/.` anywhere (even in the query or fragment) or a path starting with `.`
+ * sends the reference down the full algorithm.
+ */
+const isPlainAbsolute = (iri: string): boolean => SCHEME_THEN_PATH.test(iri) && !iri.includes('/.');
+
 /**
  * Resolves a (possibly relative) IRI reference against a base IRI, following
  * RFC 3986 §5.2.
@@ -109,6 +120,7 @@ export const isAbsolute = (iri: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:/.
  */
 export const resolve = (reference: string, base: string | undefined): string => {
   if (base === undefined || base === '') return reference;
+  if (isPlainAbsolute(reference)) return reference;
   const r = parse(reference);
   // An absolute reference without dot segments resolves to itself (§5.2.2:
   // only its path is rewritten, by `removeDotSegments`).

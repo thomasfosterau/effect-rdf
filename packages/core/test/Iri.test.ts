@@ -48,6 +48,10 @@ describe('Iri', () => {
     expect(Iri.resolve('http://x/a/./b/../c', base)).toBe('http://x/a/c');
     expect(Iri.resolve('g:./h', base)).toBe('g:h');
     expect(Iri.resolve('http://x/a/b?c=./..#.', base)).toBe('http://x/a/b?c=./..#.');
+    expect(Iri.resolve('g:.', base)).toBe('g:');
+    expect(Iri.resolve('HTTP+s.x-y://h/p', base)).toBe('HTTP+s.x-y://h/p');
+    expect(Iri.resolve('1g:h', base)).toBe('http://a/b/c/1g:h');
+    expect(Iri.resolve('g', base)).toBe('http://a/b/c/g');
   });
 
   it('resolves against alternating bases', () => {

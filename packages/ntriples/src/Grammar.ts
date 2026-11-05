@@ -123,6 +123,37 @@ export const dottedTail = <E, R>(chars: Parser.Parser<unknown, E, R>): Parser.Pa
     ),
   );
 
+/**
+ * The same language as `dottedTail(alt(oneOf(set), extra))`, written so that
+ * a compiled grammar scans each run of `set` in one tight loop: a name's
+ * characters, with dots allowed between them but not at the end. `extra`
+ * matches the other things a name may contain (`PLX` in `PN_LOCAL`).
+ *
+ * @since 0.1.0
+ * @category combinators
+ * @example
+ * ```ts
+ * import * as Parser from '@thomasfosterau/effect-parse/Parser';
+ * import * as Token from '@thomasfosterau/effect-parse/Token';
+ * import { dottedRun, pnChars } from '@thomasfosterau/effect-ntriples/Grammar';
+ *
+ * const name = Parser.taken(Parser.seq(Token.oneOf(pnChars), dottedRun(pnChars)));
+ * // `a.b.` reads as `a.b`, leaving the final dot
+ * ```
+ */
+export const dottedRun = <E = never, R = never>(
+  set: Token.StringTokenSet,
+  extra?: Parser.Parser<unknown, E, R>,
+): Parser.Parser<void, E, R> => {
+  const one = Token.oneOf(set);
+  const chars: Parser.Parser<unknown, E, R> = extra === undefined ? one : Parser.alt(one, extra);
+  const dots = Parser.seq(Token.takeWhile('.', { min: 1 }), Parser.peek(chars));
+  const run = Token.takeWhile(set, { min: 1 });
+  return Parser.asVoid(
+    Parser.repeat(extra === undefined ? Parser.alt(run, dots) : Parser.alt(run, extra, dots)),
+  );
+};
+
 // -----------------------------------------------------------------------------
 // Escapes
 // -----------------------------------------------------------------------------
@@ -220,7 +251,7 @@ export const iriRef: Parser.Parser<string> = Parser.delimited(
  */
 export const blankNodeLabel: Parser.Parser<string> = Parser.preceded(
   Token.literal('_:'),
-  Parser.taken(Parser.seq(Token.oneOf([pnCharsU, digit]), dottedTail(Token.oneOf(pnChars)))),
+  Parser.taken(Parser.seq(Token.oneOf([pnCharsU, digit]), dottedRun(pnChars))),
 );
 
 // -----------------------------------------------------------------------------
