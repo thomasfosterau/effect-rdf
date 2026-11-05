@@ -37,8 +37,8 @@ catalogs:
       specifier: ^0.9.0
       version: 0.9.0
     '@thomasfosterau/effect-parse':
-      specifier: 0.4.0
-      version: 0.4.0
+      specifier: 0.4.1
+      version: 0.4.1
     '@types/node':
       specifier: ^26.6.5
       version: 26.6.5
@@ -140,7 +140,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -162,7 +162,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -181,7 +181,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -216,7 +216,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -285,7 +285,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -325,7 +325,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -397,7 +397,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -419,7 +419,7 @@ importers:
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
+        version: 0.4.1(effect@4.1.1)
       effect:
         specifier: 4.1.1
         version: 4.1.1
@@ -1083,8 +1083,8 @@ packages:
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
 
-  '@thomasfosterau/effect-parse@0.4.0':
-    resolution: {integrity: sha512-ZopRZizkMRBJV+aCnpgbraIu2/UveSsV33cqdEzWj5BLp5WW1z4EjOCC0eBZkzClZK+8xC8lUhfEgyQPZlpR1w==}
+  '@thomasfosterau/effect-parse@0.4.1':
+    resolution: {integrity: sha512-7/jiPHebeKmJjfUxMdjoWCqW6a1WHLqqFk7lnl23oYAHXO1Dk55fq1MOROARy5rgUTvZegPAuUuSDt51JJXgtw==}
     engines: {node: '>=22', pnpm: '>=11'}
     peerDependencies:
       effect: 4.1.1
@@ -2542,7 +2542,7 @@ snapshots:
     dependencies:
       '@testing-library/dom': 10.4.2
 
-  '@thomasfosterau/effect-parse@0.4.0(effect@4.1.1)':
+  '@thomasfosterau/effect-parse@0.4.1(effect@4.1.1)':
     dependencies:
       effect: 4.1.1
 
