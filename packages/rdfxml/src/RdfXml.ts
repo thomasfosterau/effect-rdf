@@ -844,8 +844,9 @@ const text = (value: string, writer: Writer): string => {
 const sortByPredicateObject = (ts: ReadonlyArray<Term.Triple>) =>
   Arr.sort(
     ts,
-    Order.make<Term.Triple>(
-      (a, b) => Term.compare(a.predicate, b.predicate) || Term.compare(a.object, b.object),
+    Order.combine(
+      Order.mapInput(Term.Order, (t: Term.Triple) => t.predicate),
+      Order.mapInput(Term.Order, (t: Term.Triple) => t.object),
     ),
   );
 
@@ -1051,6 +1052,8 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
 
   const subjects = Arr.sort(
     Arr.map([...graph.bySubject.values()], (e) => e.subject),
+    // Not `Term.Order`, which puts blank nodes first: IRI subjects come first here, so named
+    // descriptions lead the document and unnested blank nodes follow.
     Order.make<Term.Term>((a, b) =>
       a._tag === b._tag ? Term.compare(a, b) : a._tag === 'NamedNode' ? -1 : 1,
     ),

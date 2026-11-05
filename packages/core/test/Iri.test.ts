@@ -1,5 +1,6 @@
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Option from 'effect/Option';
+import * as Schema from 'effect/Schema';
 import { Iri } from '../src/index.ts';
 
 // RFC 3986 §5.4 reference resolution examples.
@@ -93,5 +94,48 @@ describe('Iri', () => {
     expect(Iri.isValid('http://example.org/ä?x#y')).toBe(true);
     expect(Iri.isValid('urn:isbn:123')).toBe(true);
     expect(Iri.isValid('relative')).toBe(false);
+  });
+});
+
+describe('Iri schemas', () => {
+  it('isValidReference accepts IRIs and relative references', () => {
+    const valid = [
+      'http://a/b',
+      'g',
+      './g',
+      '../g?q#f',
+      '//host/p',
+      '/abs',
+      '',
+      '#frag',
+      '?q',
+      'a/b:c',
+      'é/ü',
+    ];
+    const invalid = ['a:b c', 'g h', '1a:b', 'x<y', 'http://a/%zz'];
+    expect(valid.filter((r) => !Iri.isValidReference(r))).toStrictEqual([]);
+    expect(invalid.filter((r) => Iri.isValidReference(r))).toStrictEqual([]);
+  });
+  it('IriSchema accepts only absolute IRIs, with format iri', () => {
+    const decode = Schema.decodeUnknownResult(Iri.IriSchema);
+    expect(decode('http://example.org/a')._tag).toBe('Success');
+    expect(decode('relative')._tag).toBe('Failure');
+    expect(decode('http://exa mple.org/')._tag).toBe('Failure');
+    expect(Schema.toJsonSchemaDocument(Iri.IriSchema).definitions['Iri']).toMatchObject({
+      type: 'string',
+      format: 'iri',
+    });
+  });
+  it('IriReferenceSchema accepts relative references, with format iri-reference', () => {
+    const decode = Schema.decodeUnknownResult(Iri.IriReferenceSchema);
+    expect(decode('../a')._tag).toBe('Success');
+    expect(decode('http://example.org/a')._tag).toBe('Success');
+    expect(decode('a b')._tag).toBe('Failure');
+    expect(
+      Schema.toJsonSchemaDocument(Iri.IriReferenceSchema).definitions['IriReference'],
+    ).toMatchObject({
+      type: 'string',
+      format: 'iri-reference',
+    });
   });
 });
