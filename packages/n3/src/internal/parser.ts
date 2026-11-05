@@ -611,7 +611,13 @@ class Builder {
   private readonly scopes: Array<readonly [depth: number, scope: Map<string, Model.N3Term>]> = [];
   /** How many formulas are open. */
   private depth = 0;
-  private readonly variableNames = new Set<string>();
+  /**
+   * The variables made so far, by name: quick variables (one node per name,
+   * so that the copies of a rule compare by identity when a formula removes
+   * duplicate statements) and those made for `@forAll`, whose names avoid
+   * these.
+   */
+  private readonly variables = new Map<string, Term.Variable>();
   /** The subjects being described, innermost last (`depthOfFrames` of them are in use). */
   private readonly frames: Array<Frame> = [];
   private openFrames = 0;
@@ -708,8 +714,12 @@ class Builder {
   }
 
   variable(name: string): Term.Variable {
-    this.variableNames.add(name);
-    return new Term.Variable(name);
+    let node = this.variables.get(name);
+    if (node === undefined) {
+      node = new Term.Variable(name);
+      this.variables.set(name, node);
+    }
+    return node;
   }
 
   literal(
@@ -854,13 +864,14 @@ class Builder {
   private variableFor(iri: string): Term.Variable {
     const local = /[^#/:]*$/.exec(iri)?.[0] ?? '';
     let name = /^[A-Za-z_][A-Za-z0-9_]*$/.test(local) ? local : 'v';
-    if (this.variableNames.has(name)) {
+    if (this.variables.has(name)) {
       let n = 1;
-      while (this.variableNames.has(`${name}_${n}`)) n++;
+      while (this.variables.has(`${name}_${n}`)) n++;
       name = `${name}_${n}`;
     }
-    this.variableNames.add(name);
-    return new Term.Variable(name);
+    const node = new Term.Variable(name);
+    this.variables.set(name, node);
+    return node;
   }
 }
 
