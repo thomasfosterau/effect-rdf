@@ -5,8 +5,11 @@ import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
+import type * as SchemaIssue from 'effect/SchemaIssue';
+import * as Match from 'effect/Match';
 import {
   Message,
   Path,
@@ -17,10 +20,30 @@ import {
   Vocabulary,
 } from '../src/index.ts';
 import { parseTurtle } from './utils/turtle.ts';
+import { Turtle } from '@thomasfosterau/effect-turtle';
 
 const sorted = (xs: Iterable<string>) => Arr.sort(xs, Order.String);
 
 const { sh } = Vocabulary;
+// The validation issues under the `Encoding` node `Schema.decodeTo` wraps them in, and the
+// annotations each carries.
+const issueList = (issue: SchemaIssue.Issue): ReadonlyArray<SchemaIssue.Issue> =>
+  Match.value(issue).pipe(
+    Match.tag('Encoding', (e) => issueList(e.issue)),
+    Match.tag('Composite', (c) => c.issues),
+    Match.orElse((i) => [i]),
+  );
+const messageOf = (issue: SchemaIssue.Issue): string | undefined =>
+  Match.value(issue).pipe(
+    Match.tag('InvalidValue', (i) => i.annotations?.message),
+    Match.orElse(() => undefined),
+  );
+const resultHas = (issue: SchemaIssue.Issue, key: string): boolean =>
+  Match.value(issue).pipe(
+    Match.tag('InvalidValue', (i) => Predicate.hasProperty(i.annotations?.['result'], key)),
+    Match.orElse(() => false),
+  );
+
 const { rdf, xsd } = Vocab;
 const ex = Namespace.make('http://example.org/');
 
@@ -406,6 +429,55 @@ describe('Validator', () => {
       expect(yield* Schema.decodeEffect(schema)(good)).toBe(good);
       const error = yield* Effect.flip(Schema.decodeEffect(schema)(personData));
       expect(error.message).toContain('MinCountConstraintComponent');
+    }),
+  );
+
+  it.effect('reports one structured issue per failing result, by severity', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(personShapes);
+      // Two violations (bob's class, dave's name) and one warning (bob's age).
+      const violations = yield* Effect.flip(
+        Schema.decodeEffect(Validator.schema(shapes))(personData),
+      );
+      const found = issueList(violations.issue);
+      expect(found).toHaveLength(2);
+      expect(found.every((issue) => resultHas(issue, 'focusNode'))).toBe(true);
+      expect(Arr.map(found, (issue) => messageOf(issue))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(
+            '[Violation] MinCountConstraintComponent on <http://example.org/dave>',
+          ),
+        ]),
+      );
+      const withWarnings = yield* Effect.flip(
+        Schema.decodeEffect(Validator.schema(shapes, { failOn: 'warning' }))(personData),
+      );
+      expect(issueList(withWarnings.issue)).toHaveLength(3);
+      // Only a warning: accepted unless warnings fail.
+      const warned = ttl(`ex:x a ex:Person ; ex:name "X" ; ex:age -5 .`);
+      expect(yield* Schema.decodeEffect(Validator.schema(shapes))(warned)).toBe(warned);
+      const strict = yield* Effect.flip(
+        Schema.decodeEffect(Validator.schema(shapes, { failOn: 'info' }))(warned),
+      );
+      expect(issueList(strict.issue)).toHaveLength(1);
+    }),
+  );
+
+  it.effect('parses and validates in one decode (Turtle codec + Validator.schema)', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(personShapes);
+      const PersonData = Turtle.codec.schema.pipe(Schema.decodeTo(Validator.schema(shapes)));
+      const prefix = '@prefix ex: <http://example.org/> .\n';
+      const ok = yield* Schema.decodeEffect(PersonData)(
+        `${prefix}ex:x a ex:Person ; ex:name "X" .`,
+      );
+      expect(ok.size).toBe(2);
+      const bad = yield* Effect.flip(
+        Schema.decodeEffect(PersonData)(`${prefix}ex:x a ex:Person .`),
+      );
+      expect(bad.message).toContain('MinCountConstraintComponent');
+      const syntax = yield* Effect.flip(Schema.decodeEffect(PersonData)('ex:x'));
+      expect(syntax._tag).toBe('SchemaError');
     }),
   );
 });

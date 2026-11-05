@@ -1,10 +1,34 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Schema from 'effect/Schema';
+import type * as SchemaIssue from 'effect/SchemaIssue';
+import { Turtle } from '@thomasfosterau/effect-turtle';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { SemAct, ShapeMap, ShExC, ShExJ, ShExR, Structure, Validator } from '../src/index.ts';
+
+// The validation issues under the `Encoding` node `Schema.decodeTo` wraps them in, and the
+// annotations each carries.
+const issueList = (issue: SchemaIssue.Issue): ReadonlyArray<SchemaIssue.Issue> =>
+  Match.value(issue).pipe(
+    Match.tag('Encoding', (e) => issueList(e.issue)),
+    Match.tag('Composite', (c) => c.issues),
+    Match.orElse((i) => [i]),
+  );
+const messageOf = (issue: SchemaIssue.Issue): string | undefined =>
+  Match.value(issue).pipe(
+    Match.tag('InvalidValue', (i) => i.annotations?.message),
+    Match.orElse(() => undefined),
+  );
+const resultHas = (issue: SchemaIssue.Issue, key: string): boolean =>
+  Match.value(issue).pipe(
+    Match.tag('InvalidValue', (i) => Predicate.hasProperty(i.annotations?.['result'], key)),
+    Match.orElse(() => false),
+  );
 
 const ex = (l: string) => Term.namedNode(`http://ex.example/${l}`);
 
@@ -179,6 +203,56 @@ describe('Validator', () => {
       ]);
       const start = yield* Validator.validateNode(data, schema, ex('alice'), ShapeMap.start);
       expect(start.status).toBe('conformant');
+    }),
+  );
+
+  it.effect('exposes a Schema with one structured issue per nonconformant association', () =>
+    Effect.gen(function* () {
+      const validator = yield* Validator.make(yield* ShExC.parse(schemaText));
+      const person = 'http://ex.example/Person';
+      const people = Validator.schema(
+        validator,
+        ['alice', 'bob', 'carol', 'dave'].map((n) => ({ node: ex(n), shape: person })),
+      );
+      const error = yield* Effect.flip(Schema.decodeEffect(people)(data));
+      const issues = issueList(error.issue);
+      expect(issues).toHaveLength(2);
+      expect(issues.map((issue) => messageOf(issue))).toEqual([
+        expect.stringMatching(new RegExp(`^${ex('carol').key}@`)),
+        expect.stringMatching(new RegExp(`^${ex('dave').key}@`)),
+      ]);
+      expect(issues.every((issue) => resultHas(issue, 'reason'))).toBe(true);
+      expect(error.message).toContain(`${ex('carol').key}@<${person}>`);
+      // One association; conforming data decodes to itself.
+      const alice = Validator.schema(validator, { node: ex('alice'), shape: person });
+      expect(yield* Schema.decodeEffect(alice)(data)).toBe(data);
+      expect(
+        yield* Schema.decodeEffect(
+          Validator.schema(validator, { node: ex('alice'), shape: ShapeMap.start }),
+        )(data),
+      ).toBe(data);
+      // An undeclared shape fails with one issue.
+      const unknown = yield* Effect.flip(
+        Schema.decodeEffect(
+          Validator.schema(validator, { node: ex('alice'), shape: 'http://nope' }),
+        )(data),
+      );
+      expect(unknown.message).toContain('does not declare shape');
+    }),
+  );
+
+  it.effect('parses and validates in one decode (Turtle codec + Validator.schema)', () =>
+    Effect.gen(function* () {
+      const validator = yield* Validator.make(yield* ShExC.parse(schemaText));
+      const AliceData = Turtle.codec.schema.pipe(
+        Schema.decodeTo(
+          Validator.schema(validator, { node: ex('alice'), shape: 'http://ex.example/Person' }),
+        ),
+      );
+      const text = yield* Turtle.serialize(data);
+      expect((yield* Schema.decodeEffect(AliceData)(text)).size).toBe(data.size);
+      const missing = yield* Effect.flip(Schema.decodeEffect(AliceData)(''));
+      expect(missing.message).toContain(ex('alice').key);
     }),
   );
 

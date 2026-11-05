@@ -107,6 +107,22 @@ const program = Effect.gen(function* () {
 });
 ```
 
+By default only `sh:Violation` results fail decoding; `{ failOn: 'warning' }` also fails on
+`sh:Warning`, and `{ failOn: 'info' }` on any result (the report's own `conforms`, which is false
+whenever there is any result at all). A failure is a `SchemaIssue.Composite` with one
+`InvalidValue` per failing result: its `message` annotation is the one-line
+`ValidationReport.formatResult(result)` and its `result` annotation the `ValidationResult` (focus
+node, path, constraint component, severity, messages).
+
+To parse and validate in one decode, compose it with a syntax codec:
+
+```ts
+import { Turtle } from '@thomasfosterau/effect-turtle';
+
+const PersonDocument = Turtle.codec.schema.pipe(Schema.decodeTo(Validator.schema(shapes)));
+const data = yield * Schema.decodeEffect(PersonDocument)(turtleText); // Dataset, parsed and valid
+```
+
 ## Inspecting a shapes graph
 
 ```ts

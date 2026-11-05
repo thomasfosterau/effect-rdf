@@ -15,7 +15,11 @@ import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
-import type * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
+import * as Schema from 'effect/Schema';
+import type * as SchemaAST from 'effect/SchemaAST';
+import * as SchemaIssue from 'effect/SchemaIssue';
+import * as SchemaTransformation from 'effect/SchemaTransformation';
+import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import { Engine } from './internal/engine.ts';
 import * as SemAct from './SemAct.ts';
@@ -291,3 +295,82 @@ export const validateNode = (
   options: Options = {},
 ): Effect.Effect<ShapeResult, ShExValidationError | ShExImportError | ShExStructureError> =>
   Effect.map(validate(dataset, schema, [{ node, shape }], options), (r) => r.results[0]!);
+
+// -----------------------------------------------------------------------------
+// Schema integration
+// -----------------------------------------------------------------------------
+
+/**
+ * Formats a shape result on one line: `<node>@<shape>` and, when it does
+ * not conform, why.
+ *
+ * @since 0.1.0
+ * @category formatting
+ */
+export const formatResult = (result: ShapeResult): string => {
+  const label = ShapeMap.isStart(result.shape) ? 'START' : `<${result.shape}>`;
+  const association = `${result.node.key}@${label}`;
+  return result.reason === undefined
+    ? `${association}: ${result.status}`
+    : `${association}: ${result.reason}`;
+};
+
+// One `InvalidValue` per nonconformant association, annotated with its message and result.
+const nonconformance = (
+  failing: Arr.NonEmptyReadonlyArray<ShapeResult>,
+  data: Dataset.Dataset,
+  options: SchemaAST.ParseOptions,
+): SchemaIssue.Issue => {
+  const issues = Arr.map(
+    failing,
+    (result) =>
+      new SchemaIssue.InvalidValue({ message: formatResult(result), result }, result, options),
+  );
+  return new SchemaIssue.Composite(Dataset.DatasetSchema.ast, issues, data);
+};
+
+/**
+ * A `Schema` that accepts a `Dataset` only if every association of the
+ * shape map (or the single `{ node, shape }`) conforms, so ShEx validation
+ * fits into `Schema.decode` pipelines. It takes a prepared `Validator`
+ * (`make`), so imports are resolved before the schema is built and decoding
+ * needs no services.
+ *
+ * Decoding fails with a `SchemaIssue.Composite` holding one `InvalidValue`
+ * issue per nonconformant association: its `message` annotation is the
+ * formatted result (`formatResult`) and its `result` annotation the
+ * `ShapeResult`. A shape map naming an undeclared shape fails with one
+ * `InvalidValue`. Encoding is the identity.
+ *
+ * Compose it with a syntax codec to parse and validate in one decode:
+ * `Turtle.codec.schema.pipe(Schema.decodeTo(Validator.schema(validator, map)))`.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export const schema = (
+  validator: Validator,
+  shapeMap: ShapeMap.QueryShapeMap | ShapeMap.Association,
+): Schema.decodeTo<Schema.declare<Dataset.Dataset>, Schema.declare<Dataset.Dataset>> => {
+  const map: ShapeMap.QueryShapeMap = 'node' in shapeMap ? [shapeMap] : shapeMap;
+  return Dataset.DatasetSchema.pipe(
+    Schema.decodeTo(
+      Dataset.DatasetSchema,
+      SchemaTransformation.transformEffect({
+        decode: (data: Dataset.Dataset, options) =>
+          validator.validate(data, map).pipe(
+            Effect.mapError(
+              (e) => new SchemaIssue.InvalidValue({ message: e.message }, data, options),
+            ),
+            Effect.flatMap((report) => {
+              const failing = Arr.filter(report.results, (r) => r.status === 'nonconformant');
+              return Arr.isReadonlyArrayNonEmpty(failing)
+                ? Effect.fail(nonconformance(failing, data, options))
+                : Effect.succeed(data);
+            }),
+          ),
+        encode: (data: Dataset.Dataset) => Effect.succeed(data),
+      }),
+    ),
+  );
+};

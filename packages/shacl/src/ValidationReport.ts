@@ -221,20 +221,32 @@ export const format = (self: ValidationReport): string => {
   if (self.conforms) return 'Conforms';
   const lines = [`Does not conform (${self.results.length} result(s))`];
   const go = (r: ValidationResult, indent: string) => {
-    const severity = sh.localName(r.severity) ?? r.severity.key;
-    const component = Term.isNamedNode(r.sourceConstraintComponent)
-      ? (sh.localName(r.sourceConstraintComponent) ?? r.sourceConstraintComponent.key)
-      : r.sourceConstraintComponent.key;
-    const parts = [`${indent}- [${severity}] ${component} on ${r.focusNode.key}`];
-    if (Option.isSome(r.resultPath)) parts.push(`path ${Path.toSparql(r.resultPath.value)}`);
-    if (Option.isSome(r.value)) parts.push(`value ${r.value.value.key}`);
-    parts.push(`(shape ${r.sourceShape.key})`);
-    const message = r.messages[0];
-    lines.push(parts.join(' ') + (message === undefined ? '' : `: ${message.value}`));
+    lines.push(`${indent}- ${formatResult(r)}`);
     for (const d of r.details) go(d, `${indent}  `);
   };
   for (const r of self.results) go(r, '');
   return lines.join('\n');
+};
+
+/**
+ * Formats one validation result on one line (without its details):
+ * severity, constraint component, focus node, path, value, shape and the
+ * first message.
+ *
+ * @since 0.1.0
+ * @category formatting
+ */
+export const formatResult = (r: ValidationResult): string => {
+  const severity = sh.localName(r.severity) ?? r.severity.key;
+  const component = Term.isNamedNode(r.sourceConstraintComponent)
+    ? (sh.localName(r.sourceConstraintComponent) ?? r.sourceConstraintComponent.key)
+    : r.sourceConstraintComponent.key;
+  const parts = [`[${severity}] ${component} on ${r.focusNode.key}`];
+  if (Option.isSome(r.resultPath)) parts.push(`path ${Path.toSparql(r.resultPath.value)}`);
+  if (Option.isSome(r.value)) parts.push(`value ${r.value.value.key}`);
+  parts.push(`(shape ${r.sourceShape.key})`);
+  const message = r.messages[0];
+  return parts.join(' ') + (message === undefined ? '' : `: ${message.value}`);
 };
 
 // -----------------------------------------------------------------------------
