@@ -29,12 +29,17 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
-import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf } from '@thomasfosterau/effect-rdf/Vocab';
+import * as Guards from './internal/guards.ts';
+import * as Lists from './internal/lists.ts';
+import { loop } from './internal/loop.ts';
 import * as Model from './Model.ts';
 
 /**
@@ -83,36 +88,32 @@ interface Conversion {
   readonly statements: (f: Model.Formula, graph: Term.Graph) => void;
 }
 
-// Built once: `toQuadsUnsafe` runs it for every term it converts.
-const rdfTerm: (
+// Plain refinements rather than `Match`: `toQuadsUnsafe` runs it for every term it converts.
+const rdfTerm = (
   t: Model.N3Term,
   graph: Term.Graph,
   conversion: Conversion,
-) => Term.NamedNode | Term.BlankNode | Term.Literal = Match.fn(
-  (t: Model.N3Term, _graph: Term.Graph, _conversion: Conversion) => t,
-).pipe(
-  Match.withReturnType<Term.NamedNode | Term.BlankNode | Term.Literal>(),
-  Match.tag('Variable', (t) => {
-    throw new Failure(`Variable ${t.key} cannot be represented in RDF`);
-  }),
-  Match.tag('Collection', (t, _t, graph, conversion) => {
-    if (Arr.isReadonlyArrayEmpty(t.items)) return rdf.nil;
-    const nodes = t.items.map(conversion.fresh);
-    t.items.forEach((item, i) => {
-      conversion.out.push(
-        new Term.Quad(nodes[i]!, rdf.first, rdfTerm(item, graph, conversion), graph),
-      );
-      conversion.out.push(new Term.Quad(nodes[i]!, rdf.rest, nodes[i + 1] ?? rdf.nil, graph));
+): Term.NamedNode | Term.BlankNode | Term.Literal => {
+  if (t instanceof Model.Collection) {
+    const items = t.items;
+    if (!Arr.isReadonlyArrayNonEmpty(items)) return rdf.nil;
+    const nodes = Arr.map(items, () => conversion.fresh());
+    const head = nodes[0];
+    items.forEach((item, i) => {
+      const node = nodes[i] ?? head;
+      conversion.out.push(new Term.Quad(node, rdf.first, rdfTerm(item, graph, conversion), graph));
+      conversion.out.push(new Term.Quad(node, rdf.rest, nodes[i + 1] ?? rdf.nil, graph));
     });
-    return nodes[0]!;
-  }),
-  Match.tag('Formula', (t, _t, _graph, conversion) => {
+    return head;
+  }
+  if (t instanceof Model.Formula) {
     const g = conversion.fresh();
     conversion.statements(t, g);
     return g;
-  }),
-  Match.orElse((t) => t),
-);
+  }
+  if (Guards.isVariable(t)) throw new Failure(`Variable ${t.key} cannot be represented in RDF`);
+  return t;
+};
 
 /**
  * Converts a formula (or document) to quads, failing with
@@ -126,30 +127,33 @@ export const toQuadsUnsafe = (
   options?: ToDatasetOptions,
 ): Array<Term.Quad> => {
   const prefix = options?.blankNodePrefix ?? '';
-  const reserved = new Set(Model.blankNodes(self).map((b) => b.value));
+  const reserved = MutableHashSet.fromIterable(Model.blankNodes(self).map((b) => b.value));
   let counter = 0;
+  let label = '';
+  const nextLabel = (): boolean => {
+    label = `${prefix}g${(counter++).toString(36)}`;
+    return MutableHashSet.has(reserved, label);
+  };
   const fresh = (): Term.BlankNode => {
-    for (;;) {
-      const label = `${prefix}g${(counter++).toString(36)}`;
-      if (!reserved.has(label)) return new Term.BlankNode(label);
-    }
+    loop(nextLabel);
+    return new Term.BlankNode(label);
   };
   const out: Array<Term.Quad> = [];
   const conversion: Conversion = { fresh, out, statements: (f, g) => statements(f, g) };
   const term = (t: Model.N3Term, graph: Term.Graph) => rdfTerm(t, graph, conversion);
   const statements = (f: Model.Formula, graph: Term.Graph) => {
-    for (const s of f.statements) {
+    f.statements.forEach((s) => {
       const subject = term(s.subject, graph);
       const predicate = term(s.predicate, graph);
       const object = term(s.object, graph);
-      if (subject._tag === 'Literal') {
+      if (Guards.isLiteral(subject)) {
         throw new Failure(`Literal ${subject.key} cannot be the subject of an RDF triple`);
       }
-      if (predicate._tag !== 'NamedNode') {
+      if (!Guards.isNamedNode(predicate)) {
         throw new Failure(`${predicate.key} cannot be the predicate of an RDF triple`);
       }
       out.push(new Term.Quad(subject, predicate, object, graph));
-    }
+    });
   };
   statements(self, Term.defaultGraph);
   return out;
@@ -188,153 +192,128 @@ export const isRdfCompatible = (self: Model.Formula): boolean => {
 // RDF → N3
 // -----------------------------------------------------------------------------
 
-type Ground = Term.NamedNode | Term.BlankNode | Term.Literal;
+/** The quads of one graph, with its name. */
+interface Graph {
+  readonly name: Term.Graph;
+  readonly quads: Array<Term.Quad>;
+}
 
 /** @internal */
 export const fromQuadsUnsafe = (quads: Iterable<Term.Quad>): Model.Formula => {
   const all = Arr.sort(quads, Term.compareQuads);
-  const graphs = new Map<string, Array<Term.Quad>>();
+  const graphs = MutableHashMap.empty<string, Graph>();
   // Occurrences of blank nodes as subject/object, per graph and in total.
-  const occurrences = new Map<string, Map<string, number>>();
+  const occurrences = MutableHashMap.empty<string, MutableHashMap.MutableHashMap<string, number>>();
   const note = (t: Term.Term, graph: string) => {
-    if (t._tag === 'Triple') {
+    if (Guards.isTriple(t)) {
       throw new Failure(`Triple term ${t.key} cannot be represented in N3`);
     }
-    if (t._tag !== 'BlankNode') return;
-    let m = occurrences.get(t.value);
-    if (m === undefined) occurrences.set(t.value, (m = new Map()));
-    m.set(graph, (m.get(graph) ?? 0) + 1);
+    if (!Guards.isBlankNode(t)) return;
+    let m = occurrences.backing.get(t.value);
+    if (m === undefined) {
+      m = MutableHashMap.empty();
+      MutableHashMap.set(occurrences, t.value, m);
+    }
+    Lists.increment(m, graph);
   };
-  for (const q of all) {
+  all.forEach((q) => {
     const g = q.graph.key;
-    let list = graphs.get(g);
-    if (list === undefined) graphs.set(g, (list = []));
-    list.push(q);
+    const graph = graphs.backing.get(g);
+    if (graph === undefined) MutableHashMap.set(graphs, g, { name: q.graph, quads: [q] });
+    else graph.quads.push(q);
     note(q.subject, g);
     note(q.object, g);
-  }
-  const formulaGraphs = new Set<string>();
-  for (const [key, list] of graphs) {
-    if (key === '') continue;
-    const name = list[0]!.graph;
-    if (name._tag !== 'BlankNode' || !occurrences.has(name.value)) {
+  });
+  const formulaGraphs = MutableHashSet.empty<string>();
+  MutableHashMap.forEach(graphs, ({ name }, key) => {
+    if (key === '') return;
+    if (!Guards.isBlankNode(name) || !MutableHashMap.has(occurrences, name.value)) {
       throw new Failure(
         `Named graph ${name.key} cannot be represented in N3: only graphs named by blank nodes that are used as terms map to formulas`,
       );
     }
-    formulaGraphs.add(name.value);
-  }
+    MutableHashSet.add(formulaGraphs, name.value);
+  });
 
-  const formulas = new Map<string, Model.Formula>();
-  const building = new Set<string>();
+  const formulas = MutableHashMap.empty<string, Model.Formula>();
+  const building = MutableHashSet.empty<string>();
 
   const buildGraph = (key: string): Model.Formula => {
-    const quads = graphs.get(key) ?? [];
-    const lists = foldLists(quads, key);
-    const term = (t: Ground): Model.N3Term => {
-      if (t._tag !== 'BlankNode') return t;
-      const list = lists.heads.get(t.value);
+    const graphQuads = graphs.backing.get(key)?.quads ?? [];
+    const lists = foldLists(graphQuads, key);
+    const term = (t: Term.Subject | Term.Object): Model.N3Term => {
+      // `note` has rejected triple terms
+      if (Guards.isTriple(t)) throw new Failure(`Triple term ${t.key} cannot be represented in N3`);
+      if (!Guards.isBlankNode(t)) return t;
+      const list = lists.heads.backing.get(t.value);
       if (list !== undefined) return new Model.Collection(list.map(term));
-      if (formulaGraphs.has(t.value)) return formulaOf(t.value);
+      if (MutableHashSet.has(formulaGraphs, t.value)) return formulaOf(t.value);
       return t;
     };
-    // SAFETY: the data graph's quads have ground subjects and objects.
     return new Model.Formula(
-      quads
+      graphQuads
         .filter((q) => !lists.consumed.has(q))
-        .map(
-          (q) =>
-            new Model.Statement(term(q.subject as Ground), q.predicate, term(q.object as Ground)),
-        ),
+        .map((q) => new Model.Statement(term(q.subject), q.predicate, term(q.object))),
     );
   };
 
   const formulaOf = (label: string): Model.Formula => {
-    const cached = formulas.get(label);
+    const cached = formulas.backing.get(label);
     if (cached !== undefined) return cached;
-    if (building.has(label)) {
+    if (MutableHashSet.has(building, label)) {
       throw new Failure(`Graph _:${label} contains a reference to itself`);
     }
-    building.add(label);
+    MutableHashSet.add(building, label);
     const f = buildGraph(`_:${label}`);
-    building.delete(label);
-    formulas.set(label, f);
+    MutableHashSet.remove(building, label);
+    MutableHashMap.set(formulas, label, f);
     return f;
   };
 
-  const foldLists = (quads: ReadonlyArray<Term.Quad>, graphKey: string) => {
-    const first = new Map<string, Array<Term.Quad>>();
-    const rest = new Map<string, Array<Term.Quad>>();
-    const other = new Map<string, number>();
-    const asObject = new Map<string, number>();
-    const restTargets = new Set<string>();
-    for (const q of quads) {
-      if (q.subject._tag === 'BlankNode') {
+  const foldLists = (graphQuads: ReadonlyArray<Term.Quad>, graphKey: string) => {
+    const first = MutableHashMap.empty<string, Array<Term.Quad>>();
+    const rest = MutableHashMap.empty<string, Array<Term.Quad>>();
+    const other = MutableHashMap.empty<string, number>();
+    const asObject = MutableHashMap.empty<string, number>();
+    const restTargets = MutableHashSet.empty<string>();
+    graphQuads.forEach((q) => {
+      if (Guards.isBlankNode(q.subject)) {
         const s = q.subject.value;
-        const map =
-          q.predicate.value === rdf.first.value
-            ? first
-            : q.predicate.value === rdf.rest.value
-              ? rest
-              : undefined;
-        if (map === undefined) other.set(s, (other.get(s) ?? 0) + 1);
-        else {
-          let l = map.get(s);
-          if (l === undefined) map.set(s, (l = []));
-          l.push(q);
-        }
+        if (q.predicate.value === rdf.first.value) Lists.append(first, s, q);
+        else if (q.predicate.value === rdf.rest.value) Lists.append(rest, s, q);
+        else Lists.increment(other, s);
       }
-      if (q.object._tag === 'BlankNode') {
-        asObject.set(q.object.value, (asObject.get(q.object.value) ?? 0) + 1);
-        if (q.predicate.value === rdf.rest.value) restTargets.add(q.object.value);
+      if (Guards.isBlankNode(q.object)) {
+        Lists.increment(asObject, q.object.value);
+        if (q.predicate.value === rdf.rest.value) MutableHashSet.add(restTargets, q.object.value);
       }
-    }
+    });
     const local = (label: string) => {
-      const occ = occurrences.get(label)!;
-      return occ.size === 1 && occ.has(graphKey) && !formulaGraphs.has(label);
+      const occ = occurrences.backing.get(label);
+      return (
+        occ !== undefined &&
+        MutableHashMap.size(occ) === 1 &&
+        MutableHashMap.has(occ, graphKey) &&
+        !MutableHashSet.has(formulaGraphs, label)
+      );
     };
-    const isCell = (label: string) =>
-      first.get(label)?.length === 1 && rest.get(label)?.length === 1 && local(label);
-    const heads = new Map<string, Array<Ground>>();
-    const consumed = new Set<Term.Quad>();
-    for (const label of first.keys()) {
-      if (restTargets.has(label) || !isCell(label)) continue;
-      const otherCount = other.get(label) ?? 0;
-      const refs = asObject.get(label) ?? 0;
-      if (!(otherCount === 0 ? refs <= 1 : refs === 0)) continue;
-      const items: Array<Ground> = [];
-      const cells: Array<string> = [];
-      const seen = new Set<string>();
-      let cur: Ground = new Term.BlankNode(label);
-      let ok = true;
-      while (!(cur._tag === 'NamedNode' && cur.value === rdf.nil.value)) {
-        if (cur._tag !== 'BlankNode' || seen.has(cur.value) || !isCell(cur.value)) {
-          ok = false;
-          break;
-        }
-        if (
-          cur.value !== label &&
-          ((other.get(cur.value) ?? 0) > 0 || asObject.get(cur.value) !== 1)
-        ) {
-          ok = false;
-          break;
-        }
-        seen.add(cur.value);
-        cells.push(cur.value);
-        // SAFETY: `isCell` held for this label (checked above): exactly one `rdf:first` and one
-        // `rdf:rest`.
-        items.push(first.get(cur.value)![0]!.object as Ground);
-        // SAFETY: `isCell` held for this label (checked above): exactly one `rdf:first` and one
-        // `rdf:rest`.
-        cur = rest.get(cur.value)![0]!.object as Ground;
-      }
-      if (!ok) continue;
-      heads.set(label, items);
-      for (const c of cells) {
-        consumed.add(first.get(c)![0]!);
-        consumed.add(rest.get(c)![0]!);
-      }
-    }
+    // A cell: one `rdf:first` and one `rdf:rest`, in this graph only; after the head, referenced
+    // only by the list
+    const cellOf = (label: string, isHead: boolean): Option.Option<Lists.Cell<Term.Quad>> =>
+      !local(label) ||
+      (!isHead && (Lists.count(other, label) > 0 || Lists.count(asObject, label) !== 1))
+        ? Option.none()
+        : Option.zipWith(Lists.single(first, label), Lists.single(rest, label), (f, r) => [f, r]);
+    const heads = MutableHashMap.empty<string, Array<Term.Object>>();
+    const consumed = new WeakSet<Term.Quad>();
+    MutableHashMap.forEach(first, (_, label) => {
+      if (MutableHashSet.has(restTargets, label) || Option.isNone(cellOf(label, true))) return;
+      const otherCount = Lists.count(other, label);
+      const refs = Lists.count(asObject, label);
+      if (!(otherCount === 0 ? refs <= 1 : refs === 0)) return;
+      const cells = Lists.followList(label, cellOf);
+      if (Option.isSome(cells)) Lists.record(heads, consumed, label, cells.value);
+    });
     return { heads, consumed };
   };
 

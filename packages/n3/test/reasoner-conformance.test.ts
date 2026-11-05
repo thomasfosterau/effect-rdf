@@ -13,9 +13,11 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vite-plus/test';
+import { assert, describe, expect, it } from 'vite-plus/test';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
@@ -35,9 +37,19 @@ interface Entry {
   readonly id: string;
   readonly action: string;
   readonly result: string;
-  readonly options: ReadonlySet<string>;
+  readonly options: MutableHashSet.MutableHashSet<string>;
   readonly rejected: boolean;
 }
+
+/** The IRI of a manifest term (entries, actions, results and option names are IRIs). */
+const iriOf = (t: Model.N3Term): string =>
+  Term.isNamedNode(t) ? t.value : assert.fail(`Expected an IRI in the manifest, found ${t.key}`);
+
+/** The IRI of the first of the terms. */
+const firstIri = (ts: ReadonlyArray<Model.N3Term>): string => {
+  const [t] = ts;
+  return t === undefined ? assert.fail('Missing manifest value') : iriOf(t);
+};
 
 const parseFile = (iri: string) =>
   Effect.runSync(
@@ -52,21 +64,19 @@ const readManifest = (): ReadonlyArray<Entry> => {
       .filter((t) => t.subject.key === s.key && t.predicate.key === `<${p}>`)
       .map((t) => t.object);
   const entries = objects(new Term.NamedNode(iri), `${MF}entries`)[0];
-  if (entries === undefined || entries._tag !== 'Collection') return [];
+  if (!Model.isCollection(entries)) return [];
   return entries.items.map((e) => {
-    const options = new Set<string>();
-    for (const o of objects(e, `${TEST}options`)) {
-      for (const t of statements.filter((t) => t.subject.key === o.key)) {
-        if (t.object.key.startsWith('"true"'))
-          // SAFETY: the options' predicates are IRIs.
-          options.add((t.predicate as Term.NamedNode).value.slice(TEST.length));
-      }
-    }
-    // SAFETY: test entries, actions and results are IRIs in the reasoner manifests.
+    const options = MutableHashSet.empty<string>();
+    objects(e, `${TEST}options`).forEach((o) => {
+      statements
+        .filter((t) => t.subject.key === o.key && t.object.key.startsWith('"true"'))
+        .forEach((t) => MutableHashSet.add(options, iriOf(t.predicate).slice(TEST.length)));
+    });
+    const id = iriOf(e);
     return {
-      id: (e as Term.NamedNode).value.slice((e as Term.NamedNode).value.lastIndexOf('#') + 1),
-      action: (objects(e, `${MF}action`)[0] as Term.NamedNode).value,
-      result: (objects(e, `${MF}result`)[0] as Term.NamedNode).value,
+      id: id.slice(id.lastIndexOf('#') + 1),
+      action: firstIri(objects(e, `${MF}action`)),
+      result: firstIri(objects(e, `${MF}result`)),
       options,
       rejected: objects(e, `${RDFT}approval`).some((a) => a.key === `<${RDFT}Rejected>`),
     };
@@ -74,40 +84,42 @@ const readManifest = (): ReadonlyArray<Entry> => {
 };
 
 const hasFormula = (t: Model.N3Term | Model.Statement): boolean =>
-  t._tag === 'Formula' ||
-  (t._tag === 'Collection' && t.items.some(hasFormula)) ||
-  (t._tag === 'Statement' &&
+  Model.isFormula(t) ||
+  (Model.isCollection(t) && t.items.some(hasFormula)) ||
+  (Model.isStatement(t) &&
     (hasFormula(t.subject) || hasFormula(t.predicate) || hasFormula(t.object)));
 
 /** Canonicalises numeric literals, so `0.0e0` and `0.0E0` compare equal. */
 const canonical = (f: Model.Formula): Model.Formula =>
-  Model.mapTerms(f, (t) => (t._tag === 'Literal' ? Xsd.canonicalize(t) : t));
+  Model.mapTerms(f, (t) => (Term.isLiteral(t) ? Xsd.canonicalize(t) : t));
 
-/** Runs a reasoner test; returns an error message, or `undefined` when it passes. */
-const run = (entry: Entry): string | undefined =>
+/** Runs a reasoner test; returns an error message, or `None` when it passes. */
+const run = (entry: Entry): Option.Option<string> =>
   Result.match(
     Result.try(() => runUnsafe(entry)),
     {
       onSuccess: (message) => message,
-      onFailure: (e) => String(e),
+      onFailure: (e) => Option.some(String(e)),
     },
   );
 
-const runUnsafe = (entry: Entry): string | undefined => {
+const runUnsafe = (entry: Entry): Option.Option<string> => {
   const input = parseFile(entry.action);
   const exit = Effect.runSyncExit(Reasoner.reason(input.formula, { maxRounds: 200 }));
-  if (!Exit.isSuccess(exit)) return String(exit.cause);
+  if (!Exit.isSuccess(exit)) return Option.some(String(exit.cause));
   // `test:conclusions`: only the inferred statements; otherwise the closure.
   // `test:data`: only plain data (statements without formulas or variables).
-  let closure = entry.options.has('conclusions') ? exit.value.inferred : exit.value.closure;
-  if (entry.options.has('data')) {
+  let closure = MutableHashSet.has(entry.options, 'conclusions')
+    ? exit.value.inferred
+    : exit.value.closure;
+  if (MutableHashSet.has(entry.options, 'data')) {
     closure = Model.formula(closure.statements.filter((s) => Model.isGround(s) && !hasFormula(s)));
   }
   const expected = canonical(parseFile(entry.result).formula);
   closure = canonical(closure);
   return Isomorphism.isomorphic(closure, expected)
-    ? undefined
-    : `Not isomorphic:\n${N3.serializeDocument(closure)}`;
+    ? Option.none()
+    : Option.some(`Not isomorphic:\n${N3.serializeDocument(closure)}`);
 };
 
 /** Test id → why the reasoner does not pass it. */
@@ -136,10 +148,10 @@ const entries = exists ? readManifest() : [];
 
 describe.skipIf(!exists)('N3 reasoner test suite', () => {
   it.each(entries.filter((e) => unsupported[e.id] === undefined))('$id', (entry) => {
-    expect(run(entry)).toBeUndefined();
+    expect(Option.getOrUndefined(run(entry))).toBeUndefined();
   });
 
   it.each(entries.filter((e) => unsupported[e.id] !== undefined))('$id (unsupported)', (entry) => {
-    expect(run(entry)).toBeDefined();
+    expect(Option.isSome(run(entry))).toBe(true);
   });
 });

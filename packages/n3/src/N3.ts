@@ -31,6 +31,8 @@
  * @since 0.1.0
  */
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
+import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Parser from './internal/parser.ts';
@@ -72,7 +74,7 @@ const runParser = (
 ): Effect.Effect<Model.Document, Serialization.RdfParseError> =>
   Effect.sync(() =>
     Parser.parse(input, {
-      baseIri: options?.baseIri,
+      baseIri: Option.fromUndefinedOr(options?.baseIri),
       blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
     }),
   ).pipe(
@@ -185,9 +187,9 @@ export const serializeDocument = (
 ): string => {
   const isFormula = Model.isFormula(self);
   return Writer.write(isFormula ? self : self.formula, {
-    prefixes: options?.prefixes ?? (isFormula ? undefined : self.prefixes),
-    baseIri: options?.baseIri ?? (isFormula ? undefined : self.baseIri),
-    indent: options?.indent,
+    prefixes: options?.prefixes ?? (isFormula ? PrefixMap.empty : self.prefixes),
+    baseIri: Option.fromUndefinedOr(options?.baseIri ?? (isFormula ? undefined : self.baseIri)),
+    indent: options?.indent ?? '    ',
   });
 };
 
