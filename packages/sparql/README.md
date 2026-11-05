@@ -39,7 +39,8 @@ query builder.
   directions; media-type lookup and `Accept` negotiation.
 - **`QueryBuilder`**, **`TermSchema`** — an immutable, typed builder whose
   `SELECT` rows are typed from the projection, and schemas decoding terms to
-  JS values.
+  JS values (`TermSchema` re-exports core's `TermCodec`, so code that only
+  decodes terms can depend on `@thomasfosterau/effect-rdf` alone).
 
 ## Querying
 
