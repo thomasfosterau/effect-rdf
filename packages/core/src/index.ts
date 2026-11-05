@@ -27,6 +27,8 @@ export * as Serialization from './Serialization.ts';
 /** @since 0.1.0 */
 export * as Term from './Term.ts';
 /** @since 0.1.0 */
+export * as TermJson from './TermJson.ts';
+/** @since 0.1.0 */
 export * as Vocab from './Vocab.ts';
 /** @since 0.1.0 */
 export * as Xsd from './Xsd.ts';

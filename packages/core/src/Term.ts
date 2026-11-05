@@ -11,6 +11,7 @@
  *
  * @since 0.1.0
  */
+import * as Effect from 'effect/Effect';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
@@ -18,6 +19,10 @@ import * as Match from 'effect/Match';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty, isString } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
+import * as SchemaIssue from 'effect/SchemaIssue';
+import * as SchemaTransformation from 'effect/SchemaTransformation';
+import type * as SchemaAST from 'effect/SchemaAST';
+import * as TermJson from './TermJson.ts';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
@@ -794,15 +799,230 @@ export const escapeIri = (value: string): string =>
     : value;
 
 // -----------------------------------------------------------------------------
+// JSON
+// -----------------------------------------------------------------------------
+
+const namedNodeToJson = (n: NamedNode): TermJson.NamedNode => ({ type: 'uri', value: n.value });
+
+const blankNodeToJson = (b: BlankNode): TermJson.BlankNode => ({ type: 'bnode', value: b.value });
+
+const resourceToJson: (r: Resource) => TermJson.NamedNode | TermJson.BlankNode =
+  Match.type<Resource>().pipe(
+    Match.tag('NamedNode', namedNodeToJson),
+    Match.tag('BlankNode', blankNodeToJson),
+    Match.exhaustive,
+  );
+
+const literalToJson = (l: Literal): TermJson.Literal => {
+  if (l.language !== '') {
+    return l.direction === undefined
+      ? { type: 'literal', value: l.value, 'xml:lang': l.language }
+      : { type: 'literal', value: l.value, 'xml:lang': l.language, 'its:dir': l.direction };
+  }
+  return l.datatype.value === XSD_STRING
+    ? { type: 'literal', value: l.value }
+    : { type: 'literal', value: l.value, datatype: l.datatype.value };
+};
+
+const tripleToJson = (x: Triple): TermJson.Triple => ({
+  type: 'triple',
+  value: {
+    subject: toJson(x.subject),
+    predicate: namedNodeToJson(x.predicate),
+    object: toJson(x.object),
+  },
+});
+
+const variableToJson = (v: Variable): TermJson.Variable => ({ type: 'variable', value: v.value });
+
+const defaultGraphToJson = (): TermJson.DefaultGraph => ({ type: 'default-graph' });
+
+// Built once: `toJson` runs for every term a JSON codec or SPARQL results writer encodes.
+const groundToJson: (self: GroundTerm) => TermJson.GroundTerm = Match.type<GroundTerm>().pipe(
+  Match.tag('NamedNode', namedNodeToJson),
+  Match.tag('BlankNode', blankNodeToJson),
+  Match.tag('Literal', literalToJson),
+  Match.tag('Triple', tripleToJson),
+  Match.exhaustive,
+);
+
+const termToJson: (self: Term) => TermJson.Term = Match.type<Term>().pipe(
+  Match.tag('Variable', variableToJson),
+  Match.tag('DefaultGraph', defaultGraphToJson),
+  Match.orElse(groundToJson),
+);
+
+/**
+ * Encodes a term as JSON: the SPARQL 1.2 JSON results term for a ground term,
+ * plus the `variable` and `default-graph` extensions (see `TermJson`).
+ *
+ * @since 0.1.0
+ * @category json
+ */
+export function toJson(self: GroundTerm): TermJson.GroundTerm;
+export function toJson(self: Term): TermJson.Term;
+export function toJson(self: Term): TermJson.Term {
+  return termToJson(self);
+}
+
+const literalFromJson = (l: TermJson.Literal): Literal => {
+  const lang = l['xml:lang'];
+  if (lang !== undefined && lang !== '') {
+    const dir = l['its:dir'];
+    return dir === 'ltr' || dir === 'rtl'
+      ? literal(l.value, { language: lang, direction: dir })
+      : literal(l.value, lang);
+  }
+  return l.datatype === undefined ? literal(l.value) : literal(l.value, namedNode(l.datatype));
+};
+
+const tripleFromJson = (x: TermJson.Triple): Triple =>
+  // SAFETY: unchecked, as in SPARQL JSON results; `isWellFormed` (and the JSON codecs) check
+  // that the positions hold a subject, an IRI predicate and an object.
+  new Triple(
+    fromJson(x.value.subject) as Subject,
+    fromJson(x.value.predicate) as Predicate,
+    fromJson(x.value.object),
+  );
+
+const groundFromJson: (json: TermJson.GroundTerm) => GroundTerm =
+  Match.type<TermJson.GroundTerm>().pipe(
+    Match.when({ type: 'uri' }, (u): GroundTerm => namedNode(u.value)),
+    Match.when({ type: 'bnode' }, (b): GroundTerm => blankNode(b.value)),
+    Match.when({ type: Match.is('literal', 'typed-literal') }, literalFromJson),
+    Match.when({ type: 'triple' }, tripleFromJson),
+    Match.exhaustive,
+  );
+
+// Built once: `fromJson` runs for every term of every JSON row it decodes.
+const termFromJson: (json: TermJson.Term) => Term = Match.type<TermJson.Term>().pipe(
+  Match.when({ type: 'variable' }, (v): Term => variable(v.value)),
+  Match.when({ type: 'default-graph' }, (): Term => defaultGraph),
+  Match.orElse(groundFromJson),
+);
+
+/**
+ * Decodes a JSON term (see `TermJson`). Like a SPARQL JSON results reader,
+ * it trusts the positions of a triple term; use `isWellFormed`, or decode
+ * through `Schema.toCodecJson(TermSchema)`, to check them.
+ *
+ * @since 0.1.0
+ * @category json
+ */
+export function fromJson(json: TermJson.GroundTerm): GroundTerm;
+export function fromJson(json: TermJson.Term): Term;
+export function fromJson(json: TermJson.Term): Term {
+  return termFromJson(json);
+}
+
+const subjectToJson: (s: Subject) => TermJson.Quad['subject'] = Match.type<Subject>().pipe(
+  Match.tag('Triple', tripleToJson),
+  Match.orElse(resourceToJson),
+);
+
+/**
+ * Encodes a quad as JSON; `graph` is omitted for the default graph.
+ *
+ * @since 0.1.0
+ * @category json
+ */
+export const quadToJson = (self: Quad): TermJson.Quad => {
+  const subject = subjectToJson(self.subject);
+  const predicate = namedNodeToJson(self.predicate);
+  const object = groundToJson(self.object);
+  return Match.value(self.graph).pipe(
+    Match.tag('DefaultGraph', (): TermJson.Quad => ({ subject, predicate, object })),
+    Match.orElse((graph): TermJson.Quad => ({
+      subject,
+      predicate,
+      object,
+      graph: resourceToJson(graph),
+    })),
+  );
+};
+
+const resourceFromJson = (json: TermJson.NamedNode | TermJson.BlankNode): Resource =>
+  json.type === 'uri' ? namedNode(json.value) : blankNode(json.value);
+
+/**
+ * Decodes a JSON quad; a missing `graph` is the default graph. Triple terms
+ * are trusted as in `fromJson`.
+ *
+ * @since 0.1.0
+ * @category json
+ */
+export const quadFromJson = (json: TermJson.Quad): Quad =>
+  new Quad(
+    json.subject.type === 'triple' ? tripleFromJson(json.subject) : resourceFromJson(json.subject),
+    namedNode(json.predicate.value),
+    groundFromJson(json.object),
+    json.graph === undefined ? defaultGraph : resourceFromJson(json.graph),
+  );
+
+/**
+ * Whether every triple term inside a term or quad, at any depth, has a
+ * subject (IRI, blank node or triple term), an IRI predicate and an object
+ * (anything but a variable or the default graph) — always true for terms
+ * built with `triple` and `quad`.
+ *
+ * @since 0.1.0
+ * @category predicates
+ */
+export const isWellFormed = (self: Term | Quad): boolean => wellFormedCheck(self);
+
+// Built once: the JSON codecs run it on every term and quad they decode.
+const wellFormedCheck: (self: Term | Quad) => boolean = Match.type<Term | Quad>().pipe(
+  Match.tag('Quad', (q) => isWellFormed(q.subject) && isWellFormed(q.object)),
+  Match.tag(
+    'Triple',
+    (x) =>
+      isSubject(x.subject) &&
+      isNamedNode(x.predicate) &&
+      isObject(x.object) &&
+      isWellFormed(x.subject) &&
+      isWellFormed(x.object),
+  ),
+  Match.orElse(() => true),
+);
+
+/**
+ * The `toCodecJson` link of a term declaration: decodes through `fromJson`
+ * and fails unless the result is the declared kind and well formed.
+ */
+const jsonLink =
+  <T extends Term, J extends TermJson.Term>(
+    json: Schema.Codec<J>,
+    is: (term: Term) => term is T,
+    encode: (term: T) => J,
+    expected: string,
+  ) =>
+  (): SchemaAST.Link =>
+    Schema.link<T>()(
+      json,
+      SchemaTransformation.transformEffect<T, J>({
+        decode: (j, options) => {
+          const term = fromJson(j);
+          return is(term) && isWellFormed(term)
+            ? Effect.succeed(term)
+            : Effect.fail(new SchemaIssue.InvalidValue({ expected }, j, options));
+        },
+        encode: (term) => Effect.succeed(encode(term)),
+      }),
+    );
+
+// -----------------------------------------------------------------------------
 // Schemas
 // -----------------------------------------------------------------------------
 
 /**
+ * Schema of an IRI term; its JSON codec is `TermJson.NamedNode`.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const NamedNodeSchema: Schema.declare<NamedNode> = Schema.declare(isNamedNode, {
   identifier: 'NamedNode',
+  toCodecJson: jsonLink(TermJson.NamedNodeSchema, isNamedNode, namedNodeToJson, 'an IRI'),
 });
 
 /**
@@ -814,11 +1034,14 @@ export const NamedNodeSchema: Schema.declare<NamedNode> = Schema.declare(isNamed
 export type NamedNodeSchema = typeof NamedNodeSchema.Type;
 
 /**
+ * Schema of a blank node; its JSON codec is `TermJson.BlankNode`.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const BlankNodeSchema: Schema.declare<BlankNode> = Schema.declare(isBlankNode, {
   identifier: 'BlankNode',
+  toCodecJson: jsonLink(TermJson.BlankNodeSchema, isBlankNode, blankNodeToJson, 'a blank node'),
 });
 
 /**
@@ -830,11 +1053,14 @@ export const BlankNodeSchema: Schema.declare<BlankNode> = Schema.declare(isBlank
 export type BlankNodeSchema = typeof BlankNodeSchema.Type;
 
 /**
+ * Schema of a literal; its JSON codec is `TermJson.Literal`.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const LiteralSchema: Schema.declare<Literal> = Schema.declare(isLiteral, {
   identifier: 'Literal',
+  toCodecJson: jsonLink(TermJson.LiteralSchema, isLiteral, literalToJson, 'a literal'),
 });
 
 /**
@@ -846,11 +1072,14 @@ export const LiteralSchema: Schema.declare<Literal> = Schema.declare(isLiteral, 
 export type LiteralSchema = typeof LiteralSchema.Type;
 
 /**
+ * Schema of a variable; its JSON codec is `TermJson.Variable`.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const VariableSchema: Schema.declare<Variable> = Schema.declare(isVariable, {
   identifier: 'Variable',
+  toCodecJson: jsonLink(TermJson.VariableSchema, isVariable, variableToJson, 'a variable'),
 });
 
 /**
@@ -862,11 +1091,14 @@ export const VariableSchema: Schema.declare<Variable> = Schema.declare(isVariabl
 export type VariableSchema = typeof VariableSchema.Type;
 
 /**
+ * Schema of a triple term; its JSON codec is `TermJson.Triple`, and decoding rejects positions that don't fit RDF.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const TripleSchema: Schema.declare<Triple> = Schema.declare(isTriple, {
   identifier: 'Triple',
+  toCodecJson: jsonLink(TermJson.TripleSchema, isTriple, tripleToJson, 'a well-formed triple term'),
 });
 
 /**
@@ -878,10 +1110,29 @@ export const TripleSchema: Schema.declare<Triple> = Schema.declare(isTriple, {
 export type TripleSchema = typeof TripleSchema.Type;
 
 /**
+ * Schema of a quad; its JSON codec is `TermJson.Quad`, with `graph` omitted for the default graph.
+ *
  * @since 0.1.0
  * @category schemas
  */
-export const QuadSchema: Schema.declare<Quad> = Schema.declare(isQuad, { identifier: 'Quad' });
+export const QuadSchema: Schema.declare<Quad> = Schema.declare(isQuad, {
+  identifier: 'Quad',
+  toCodecJson: () =>
+    Schema.link<Quad>()(
+      TermJson.QuadSchema,
+      SchemaTransformation.transformEffect<Quad, TermJson.Quad>({
+        decode: (j, options) => {
+          const q = quadFromJson(j);
+          return isWellFormed(q)
+            ? Effect.succeed(q)
+            : Effect.fail(
+                new SchemaIssue.InvalidValue({ expected: 'a well-formed quad' }, j, options),
+              );
+        },
+        encode: (q) => Effect.succeed(quadToJson(q)),
+      }),
+    ),
+});
 
 /**
  * The type `QuadSchema` decodes to.
@@ -892,10 +1143,15 @@ export const QuadSchema: Schema.declare<Quad> = Schema.declare(isQuad, { identif
 export type QuadSchema = typeof QuadSchema.Type;
 
 /**
+ * Schema of any term; its JSON codec is `TermJson.Term`.
+ *
  * @since 0.1.0
  * @category schemas
  */
-export const TermSchema: Schema.declare<Term> = Schema.declare(isTerm, { identifier: 'Term' });
+export const TermSchema: Schema.declare<Term> = Schema.declare(isTerm, {
+  identifier: 'Term',
+  toCodecJson: jsonLink(TermJson.TermSchema, isTerm, termToJson, 'a well-formed term'),
+});
 
 /**
  * The type `TermSchema` decodes to.
@@ -906,11 +1162,19 @@ export const TermSchema: Schema.declare<Term> = Schema.declare(isTerm, { identif
 export type TermSchema = typeof TermSchema.Type;
 
 /**
+ * Schema of a ground term (no variables or default graph); its JSON codec is `TermJson.GroundTerm`.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const GroundTermSchema: Schema.declare<GroundTerm> = Schema.declare(isGroundTerm, {
   identifier: 'GroundTerm',
+  toCodecJson: jsonLink(
+    TermJson.GroundTermSchema,
+    isGroundTerm,
+    groundToJson,
+    'a well-formed ground term',
+  ),
 });
 
 /**

@@ -19,6 +19,7 @@ import * as Option from 'effect/Option';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
+import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as Term from './Term.ts';
 import { rdf } from './Vocab.ts';
 
@@ -712,11 +713,20 @@ export const toNQuads = (self: Dataset): string =>
     .join('');
 
 /**
+ * Schema of a dataset; its JSON codec is an array of `TermJson.Quad`s in
+ * `toSortedArray` order, so encoding is deterministic.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const DatasetSchema: Schema.declare<Dataset> = Schema.declare(isDataset, {
   identifier: 'Dataset',
+  // An array of JSON quads in `toSortedArray` order, so encoding is deterministic.
+  toCodecJson: () =>
+    Schema.link<Dataset>()(
+      Schema.Array(Term.QuadSchema),
+      SchemaTransformation.transform({ decode: fromIterable, encode: toSortedArray }),
+    ),
 });
 
 /**

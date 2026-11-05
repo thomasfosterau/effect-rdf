@@ -5,7 +5,9 @@ Effect-idiomatic [Notation3](https://w3c.github.io/N3/spec/) for
 
 - **`Model`** — the N3 data model: core IRIs, blank nodes, literals and
   variables plus N3 `Collection`s (lists) and `Formula`s (graph terms), with
-  statements allowing any term in any position.
+  statements allowing any term in any position. Its schemas carry JSON codecs
+  (`Schema.toCodecJson`): core's JSON terms plus `{ "type": "collection", "items" }`
+  and `{ "type": "formula", "statements" }`.
 - **`N3`** — a conformant parser (`parse` → `Model.Document`), a
   pretty-printing serializer (`serializeDocument`), and the core
   `Serialization` `parser` / `serializer` / `codec` over RDF `Dataset`s.

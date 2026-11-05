@@ -19,6 +19,7 @@ import type * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as TermJson from '@thomasfosterau/effect-rdf/TermJson';
 import * as XmlParser from '@thomasfosterau/effect-rdfxml/Xml';
 import * as B from './Bindings.ts';
 import * as JsonText from './internal/json.ts';
@@ -207,56 +208,22 @@ const ordered = <E>(
 // -----------------------------------------------------------------------------
 
 /**
- * The JSON encoding of an RDF term in SPARQL results.
+ * The JSON encoding of an RDF term in SPARQL results (re-exported from core's
+ * `TermJson.GroundTerm`).
  *
  * @since 0.1.0
  * @category json
  */
-export type JsonTerm =
-  | { readonly type: 'uri'; readonly value: string }
-  | { readonly type: 'bnode'; readonly value: string }
-  | {
-      readonly type: 'literal' | 'typed-literal';
-      readonly value: string;
-      readonly 'xml:lang'?: string | undefined;
-      readonly 'its:dir'?: string | undefined;
-      readonly datatype?: string | undefined;
-    }
-  | {
-      readonly type: 'triple';
-      readonly value: {
-        readonly subject: JsonTerm;
-        readonly predicate: JsonTerm;
-        readonly object: JsonTerm;
-      };
-    };
+export type JsonTerm = TermJson.GroundTerm;
 
 /**
  * Schema of an RDF term in SPARQL JSON results (SPARQL 1.2, including
- * triple terms).
+ * triple terms; core's `TermJson.GroundTermSchema`).
  *
  * @since 0.1.0
  * @category json
  */
-export const JsonTermSchema: Schema.Codec<JsonTerm> = Schema.Union([
-  Schema.Struct({ type: Schema.Literal('uri'), value: Schema.String }),
-  Schema.Struct({ type: Schema.Literal('bnode'), value: Schema.String }),
-  Schema.Struct({
-    type: Schema.Literals(['literal', 'typed-literal']),
-    value: Schema.String,
-    'xml:lang': Schema.optional(Schema.String),
-    'its:dir': Schema.optional(Schema.String),
-    datatype: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('triple'),
-    value: Schema.Struct({
-      subject: Schema.suspend((): Schema.Codec<JsonTerm> => JsonTermSchema),
-      predicate: Schema.suspend((): Schema.Codec<JsonTerm> => JsonTermSchema),
-      object: Schema.suspend((): Schema.Codec<JsonTerm> => JsonTermSchema),
-    }),
-  }),
-]);
+export const JsonTermSchema: Schema.Codec<JsonTerm> = TermJson.GroundTermSchema;
 
 /**
  * The type `JsonTermSchema` decodes to (the same as `JsonTerm`).
@@ -300,71 +267,21 @@ export type JsonResults = typeof JsonResultsSchema.Type;
 export type JsonResultsSchema = typeof JsonResultsSchema.Type;
 
 /**
- * Encodes a term as SPARQL JSON.
+ * Encodes a term as SPARQL JSON (core's `Term.toJson`).
  *
  * @since 0.1.0
  * @category json
  */
-export const termToJson = (t: Term.GroundTerm): JsonTerm => {
-  return Match.value(t).pipe(
-    Match.tag('NamedNode', (n): JsonTerm => ({ type: 'uri', value: n.value })),
-    Match.tag('BlankNode', (b): JsonTerm => ({ type: 'bnode', value: b.value })),
-    Match.tag('Literal', (l): JsonTerm => {
-      if (l.language !== '') {
-        return l.direction !== undefined
-          ? { type: 'literal', value: l.value, 'xml:lang': l.language, 'its:dir': l.direction }
-          : { type: 'literal', value: l.value, 'xml:lang': l.language };
-      }
-      return l.datatype.value === Term.XSD_STRING
-        ? { type: 'literal', value: l.value }
-        : { type: 'literal', value: l.value, datatype: l.datatype.value };
-    }),
-    Match.tag('Triple', (x): JsonTerm => ({
-      type: 'triple',
-      value: {
-        subject: termToJson(x.subject),
-        predicate: termToJson(x.predicate),
-        object: termToJson(x.object),
-      },
-    })),
-    Match.exhaustive,
-  );
-};
+export const termToJson = (t: Term.GroundTerm): JsonTerm => Term.toJson(t);
 
 /**
- * Decodes a SPARQL JSON term.
+ * Decodes a SPARQL JSON term (core's `Term.fromJson`); the positions of a
+ * triple term are trusted.
  *
  * @since 0.1.0
  * @category json
  */
-export const termFromJson = (j: JsonTerm): Term.GroundTerm => {
-  return Match.value(j).pipe(
-    Match.when({ type: 'uri' }, (u): Term.GroundTerm => Term.namedNode(u.value)),
-    Match.when({ type: 'bnode' }, (b) => Term.blankNode(b.value)),
-    Match.when({ type: Match.is('literal', 'typed-literal') }, (l) => {
-      const lang = l['xml:lang'];
-      if (lang !== undefined && lang !== '') {
-        const dir = l['its:dir'];
-        return dir === 'ltr' || dir === 'rtl'
-          ? Term.literal(l.value, { language: lang, direction: dir })
-          : Term.literal(l.value, lang);
-      }
-      return l.datatype !== undefined
-        ? Term.literal(l.value, Term.namedNode(l.datatype))
-        : Term.literal(l.value);
-    }),
-    Match.when({ type: 'triple' }, (x) =>
-      // SAFETY: the JSON results grammar puts a subject, an IRI predicate and an object in a triple
-      // term's three fields.
-      Term.triple(
-        termFromJson(x.value.subject) as Term.Subject,
-        termFromJson(x.value.predicate) as Term.Predicate,
-        termFromJson(x.value.object),
-      ),
-    ),
-    Match.exhaustive,
-  );
-};
+export const termFromJson = (j: JsonTerm): Term.GroundTerm => Term.fromJson(j);
 
 const decodeJsonResults = Schema.decodeUnknownResult(JsonResultsSchema);
 
