@@ -9,7 +9,7 @@ import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import type * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import type * as OpenApi from 'effect/http-api/OpenApi';
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
-import { Bindings, Results } from '@thomasfosterau/effect-sparql';
+import { Bindings, Results } from '../src/index.ts';
 import * as Protocol from '../src/Protocol.ts';
 import * as SparqlApi from '../src/SparqlApi.ts';
 import type * as SparqlApiBuilder from '../src/SparqlApiBuilder.ts';

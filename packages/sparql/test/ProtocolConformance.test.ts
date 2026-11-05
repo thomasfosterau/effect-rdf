@@ -15,11 +15,11 @@ import * as Option from 'effect/Option';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import { Dataset, Isomorphism, Serialization, Term } from '@thomasfosterau/effect-rdf';
 import { NTriples } from '@thomasfosterau/effect-ntriples';
-import { Results } from '@thomasfosterau/effect-sparql';
-import * as Formats from '../src/Formats.ts';
+import { Results } from '../src/index.ts';
+import * as ServerFormats from '../src/ServerFormats.ts';
 import * as SparqlServer from '../src/SparqlServer.ts';
 import * as Testing from '../src/Testing.ts';
-import { withLayer } from '../../sparql/test/support/layer.ts';
+import { withLayer } from './support/layer.ts';
 import {
   type ProtocolTest,
   readManifest,
@@ -35,7 +35,7 @@ const SERVER_OPTIONS = { path: '/sparql', graphStorePath: '/gsp' } as const;
 
 const formatsService = Effect.runSync(
   Effect.scoped(
-    Effect.map(Layer.build(Formats.layer), (context) =>
+    Effect.map(Layer.build(ServerFormats.layer), (context) =>
       Context.get(context, Serialization.Formats),
     ),
   ),

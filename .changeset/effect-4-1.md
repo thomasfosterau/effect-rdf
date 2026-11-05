@@ -1,5 +1,5 @@
 ---
-'@thomasfosterau/effect-sparql-server': patch
+'@thomasfosterau/effect-sparql': patch
 '@thomasfosterau/effect-sparql-sql': patch
 ---
 

@@ -49,13 +49,13 @@
     "packages/jsonld/src/internal/expand.ts:317-324|packages/jsonld/src/internal/expand.ts:329-336",
     "packages/shex/src/internal/shexcParser.ts:724-731|packages/shex/src/internal/shexcParser.ts:848-855",
     "packages/shex/src/internal/shexcParser.ts:761-770|packages/shex/src/internal/shexcParser.ts:885-894",
-    "packages/shex/src/ShExR.ts:403-407|packages/sparql-server/src/ServiceDescription.ts:70-73",
+    "packages/shex/src/ShExR.ts:403-407|packages/sparql/src/ServiceDescription.ts:70-73",
     "packages/sparql/src/internal/parser.ts:1085-1104|packages/sparql/src/internal/parser.ts:636-648",
     "packages/jsonld/src/internal/compact.ts:111-117|packages/jsonld/src/internal/expand.ts:107-113",
     "packages/sparql/src/Store.ts:245-249|packages/sparql/src/Store.ts:250-254",
     "packages/shex/src/internal/shexcParser.ts:138-143|packages/shex/src/internal/shexcParser.ts:610-614",
     "packages/core/src/Term.ts:276-288|packages/core/src/Term.ts:68-80",
-    "packages/sparql-server/src/GraphStore.ts:226-231|packages/sparql-server/src/SparqlServer.ts:223-230",
+    "packages/sparql/src/GraphStore.ts:226-231|packages/sparql/src/SparqlServer.ts:223-230",
     "packages/n3/src/Isomorphism.ts:107-112|packages/n3/src/Mapping.ts:312-317"
   ],
   "clone_fingerprints": [

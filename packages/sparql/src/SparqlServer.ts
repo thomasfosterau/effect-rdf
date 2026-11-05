@@ -2,9 +2,9 @@
  * A SPARQL 1.1 Protocol and Graph Store HTTP Protocol server built on
  * `effect/http`.
  *
- * The server needs the `SparqlEngine` and `QuadStore` services from
- * `@thomasfosterau/effect-sparql` and the core `Serialization.Formats`
- * service (see `Formats.layer` for the defaults). It is available as
+ * The server needs the `SparqlEngine` and `QuadStore` services (`Engine`,
+ * `Store`) and the core `Serialization.Formats`
+ * service (see `ServerFormats.layer` for the defaults). It is available as
  *
  * - `handler(options)`: a plain HTTP app (`Effect` of a response, given the
  *   `HttpServerRequest`) that routes the endpoint paths itself;
@@ -32,13 +32,13 @@ import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import type * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
-import type * as Ast from '@thomasfosterau/effect-sparql/Ast';
-import * as Engine from '@thomasfosterau/effect-sparql/Engine';
-import * as Parser from '@thomasfosterau/effect-sparql/Parser';
-import * as Results from '@thomasfosterau/effect-sparql/Results';
-import * as Store from '@thomasfosterau/effect-sparql/Store';
-import * as Errors from './Errors.ts';
-import * as Formats from './Formats.ts';
+import type * as Ast from './Ast.ts';
+import * as Engine from './Engine.ts';
+import * as Parser from './Parser.ts';
+import * as Results from './Results.ts';
+import * as Store from './Store.ts';
+import * as ProtocolErrors from './ProtocolErrors.ts';
+import * as ServerFormats from './ServerFormats.ts';
 import * as GraphStore from './GraphStore.ts';
 import { prefetch, QueryTimeout } from './internal/prefetch.ts';
 import * as Options from './Options.ts';
@@ -60,13 +60,15 @@ export type Requirements = Engine.SparqlEngine | Store.QuadStore | Serialization
 const formatParseError = (e: Parser.SparqlParseError): string =>
   `Syntax error at line ${e.line}, column ${e.column}: ${e.message}`;
 
-const fromEngineError = (failure: Engine.SparqlError | QueryTimeout): Errors.ProtocolError => {
+const fromEngineError = (
+  failure: Engine.SparqlError | QueryTimeout,
+): ProtocolErrors.ProtocolError => {
   return Match.value(failure).pipe(
-    Match.tag('SparqlParseError', (e) => Errors.badRequest(formatParseError(e))),
-    Match.tag('UpdateError', (e) => Errors.badRequest(e.message)),
-    Match.tag('EvaluationError', (e) => Errors.internal(e.message)),
-    Match.tag('StoreError', (e) => Errors.internal(e.message)),
-    Match.tag('QueryTimeout', () => Errors.timeout('The request exceeded the time limit')),
+    Match.tag('SparqlParseError', (e) => ProtocolErrors.badRequest(formatParseError(e))),
+    Match.tag('UpdateError', (e) => ProtocolErrors.badRequest(e.message)),
+    Match.tag('EvaluationError', (e) => ProtocolErrors.internal(e.message)),
+    Match.tag('StoreError', (e) => ProtocolErrors.internal(e.message)),
+    Match.tag('QueryTimeout', () => ProtocolErrors.timeout('The request exceeded the time limit')),
     Match.exhaustive,
   );
 };
@@ -104,7 +106,7 @@ const runQuery = (
     yield* Effect.logDebug('SPARQL query').pipe(Effect.annotateLogs({ query: operation.query }));
 
     const parsed = yield* Parser.parseQuery(operation.query, { baseIri }).pipe(
-      Effect.mapError((e) => Errors.badRequest(formatParseError(e))),
+      Effect.mapError((e) => ProtocolErrors.badRequest(formatParseError(e))),
     );
     // The protocol dataset overrides FROM / FROM NAMED.
     const query: Ast.Query =
@@ -112,9 +114,12 @@ const runQuery = (
     const requestOptions: Engine.RequestOptions = { baseIri, dataset: operation.dataset };
 
     if (isGraphForm(query)) {
-      const serializer = Formats.negotiateSerializer(formats, accept);
+      const serializer = ServerFormats.negotiateSerializer(formats, accept);
       if (serializer === undefined) {
-        return yield* Errors.notAcceptable(accept ?? '', Formats.serializerMediaTypes(formats));
+        return yield* ProtocolErrors.notAcceptable(
+          accept ?? '',
+          ServerFormats.serializerMediaTypes(formats),
+        );
       }
       const constructed = Effect.flatMap(engine.construct(query, requestOptions), (s) =>
         prefetch(
@@ -136,7 +141,7 @@ const runQuery = (
 
     const codec = Results.negotiate(accept);
     if (Option.isNone(codec)) {
-      return yield* Errors.notAcceptable(
+      return yield* ProtocolErrors.notAcceptable(
         accept ?? '',
         Results.codecs.flatMap((c) => c.format.mediaTypes),
       );
@@ -165,7 +170,7 @@ const runQuery = (
       withTimeout(evaluated, options.queryTimeout),
       fromEngineError,
     );
-    if (result === undefined) return yield* Errors.internal('Unexpected graph result');
+    if (result === undefined) return yield* ProtocolErrors.internal('Unexpected graph result');
     const body = codec.value.serialize(result);
     return HttpServerResponse.stream(Stream.encodeText(body), {
       contentType: charsetUtf8(codec.value.format.mediaType),
@@ -189,13 +194,13 @@ const runUpdate = (
     yield* Effect.annotateCurrentSpan({ 'sparql.update': operation.update });
     yield* Effect.logDebug('SPARQL update').pipe(Effect.annotateLogs({ update: operation.update }));
     if (options.readOnly) {
-      return yield* Errors.forbidden('This endpoint is read-only');
+      return yield* ProtocolErrors.forbidden('This endpoint is read-only');
     }
     const update = yield* Parser.parseUpdate(operation.update, { baseIri }).pipe(
-      Effect.mapError((e) => Errors.badRequest(formatParseError(e))),
+      Effect.mapError((e) => ProtocolErrors.badRequest(formatParseError(e))),
     );
     if (operation.using !== undefined && update.operations.some(declaresDataset)) {
-      return yield* Errors.badRequest(
+      return yield* ProtocolErrors.badRequest(
         'using-graph-uri / using-named-graph-uri cannot be combined with USING, USING NAMED or WITH',
       );
     }
@@ -219,12 +224,15 @@ const serviceDescription = (options: Options.Resolved, url: URL) =>
     const store = yield* Store.QuadStore;
     const formats = yield* Serialization.Formats;
     const accept = request.headers['accept'];
-    const serializer = Formats.negotiateSerializer(formats, accept);
+    const serializer = ServerFormats.negotiateSerializer(formats, accept);
     if (serializer === undefined) {
-      return yield* Errors.notAcceptable(accept ?? '', Formats.serializerMediaTypes(formats));
+      return yield* ProtocolErrors.notAcceptable(
+        accept ?? '',
+        ServerFormats.serializerMediaTypes(formats),
+      );
     }
     const graphs = yield* Stream.runCollect(Stream.take(store.graphs, 1000)).pipe(
-      Effect.mapError((e) => Errors.internal(e.message)),
+      Effect.mapError((e) => ProtocolErrors.internal(e.message)),
     );
     const endpoint = new URL(options.path, url).href;
     const quads = ServiceDescription.describe({
@@ -239,7 +247,7 @@ const serviceDescription = (options: Options.Resolved, url: URL) =>
       .serialize(quads, {
         prefixes: PrefixMap.make({ sd: ServiceDescription.SD, ...options.prefixes }),
       })
-      .pipe(Effect.mapError((e) => Errors.internal(e.message)));
+      .pipe(Effect.mapError((e) => ProtocolErrors.internal(e.message)));
     const contentType = charsetUtf8(serializer.format.mediaType);
     return request.method === 'HEAD'
       ? HttpServerResponse.empty({ status: 200, headers: { 'content-type': contentType } })
@@ -272,7 +280,7 @@ const endpoint = (options: Options.Resolved, kind: Protocol.EndpointKind) =>
       Match.tag('ServiceDescription', () =>
         Effect.gen(function* () {
           if (!options.serviceDescription) {
-            return yield* Errors.badRequest("Missing 'query' parameter");
+            return yield* ProtocolErrors.badRequest("Missing 'query' parameter");
           }
           return yield* serviceDescription(options, url);
         }),
@@ -348,21 +356,21 @@ const withCors =
 // -----------------------------------------------------------------------------
 
 const recover = <R>(
-  app: Effect.Effect<HttpServerResponse.HttpServerResponse, Errors.ProtocolError, R>,
+  app: Effect.Effect<HttpServerResponse.HttpServerResponse, ProtocolErrors.ProtocolError, R>,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, R> =>
   Effect.catchTag(app, 'ProtocolError', (e) =>
     Effect.as(
       e.status >= 500
         ? Effect.logError('SPARQL request failed', e.message)
         : Effect.logDebug('SPARQL request rejected', e.status, e.message),
-      Errors.toResponse(e),
+      ProtocolErrors.toResponse(e),
     ),
   );
 
 const finish =
   (options: Options.Resolved) =>
   <R>(
-    app: Effect.Effect<HttpServerResponse.HttpServerResponse, Errors.ProtocolError, R>,
+    app: Effect.Effect<HttpServerResponse.HttpServerResponse, ProtocolErrors.ProtocolError, R>,
   ): Effect.Effect<
     HttpServerResponse.HttpServerResponse,
     never,
@@ -437,7 +445,7 @@ export const handler = (
     resolved.graphStorePath === undefined
       ? undefined
       : finish(resolved)(GraphStore.handle(resolved, resolved.graphStorePath));
-  const notFound = finish(resolved)(Effect.fail(Errors.notFound('Not found')));
+  const notFound = finish(resolved)(Effect.fail(ProtocolErrors.notFound('Not found')));
   return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) => {
     const path = Options.requestPath(request.url);
     if (path === resolved.path) return query;
@@ -545,7 +553,7 @@ export const layerMemoryServices = (
 ): Layer.Layer<Requirements> =>
   Layer.mergeAll(
     Engine.layer(engineOptions).pipe(Layer.provideMerge(Store.layerMemory(data))),
-    Formats.layer,
+    ServerFormats.layer,
   );
 
 /**

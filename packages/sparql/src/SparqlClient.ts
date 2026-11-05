@@ -27,13 +27,13 @@ import type * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import type * as Ast from '@thomasfosterau/effect-sparql/Ast';
-import * as B from '@thomasfosterau/effect-sparql/Bindings';
-import * as Generator from '@thomasfosterau/effect-sparql/Generator';
-import * as QueryBuilder from '@thomasfosterau/effect-sparql/QueryBuilder';
-import type * as Results from '@thomasfosterau/effect-sparql/Results';
-import * as Errors from './Errors.ts';
-import * as Formats from './Formats.ts';
+import type * as Ast from './Ast.ts';
+import * as B from './Bindings.ts';
+import * as Generator from './Generator.ts';
+import * as QueryBuilder from './QueryBuilder.ts';
+import type * as Results from './Results.ts';
+import * as ClientErrors from './ClientErrors.ts';
+import * as ClientFormats from './ClientFormats.ts';
 import * as ResultsStream from './ResultsStream.ts';
 import * as Predicate from 'effect/Predicate';
 
@@ -76,9 +76,9 @@ export interface Config {
    * Retry policy for transient failures (transport errors, timeouts and the
    * statuses 408, 429, 502, 503 and 504; see `retryWhile`).
    */
-  readonly retry?: Schedule.Schedule<unknown, Errors.SparqlClientError> | undefined;
-  /** Which errors are retried (default `Errors.isTransient`). */
-  readonly retryWhile?: ((error: Errors.SparqlClientError) => boolean) | undefined;
+  readonly retry?: Schedule.Schedule<unknown, ClientErrors.SparqlClientError> | undefined;
+  /** Which errors are retried (default `ClientErrors.isTransient`). */
+  readonly retryWhile?: ((error: ClientErrors.SparqlClientError) => boolean) | undefined;
   /** The `Accept` header of `SELECT` / `ASK` requests. */
   readonly resultsAccept?: string | undefined;
   /** The media type used to upload graphs (default `application/n-triples`). */
@@ -207,94 +207,94 @@ export interface SparqlClientShape {
     <R extends string, O extends string>(
       query: QueryBuilder.Builder<'Select', R, O>,
       options?: QueryOptions,
-    ): Stream.Stream<QueryBuilder.Row<R, O>, Errors.SparqlClientError>;
+    ): Stream.Stream<QueryBuilder.Row<R, O>, ClientErrors.SparqlClientError>;
     (
       query: string | Ast.Query,
       options?: QueryOptions,
-    ): Stream.Stream<Row, Errors.SparqlClientError>;
+    ): Stream.Stream<Row, ClientErrors.SparqlClientError>;
   };
   /** Streams the solutions of a `SELECT` query. */
   readonly selectBindings: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Stream.Stream<B.Bindings, Errors.SparqlClientError>;
+  ) => Stream.Stream<B.Bindings, ClientErrors.SparqlClientError>;
   /** Streams the raw events (variables, solutions, boolean) of a results document. */
   readonly results: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Stream.Stream<ResultsStream.ResultEvent, Errors.SparqlClientError>;
+  ) => Stream.Stream<ResultsStream.ResultEvent, ClientErrors.SparqlClientError>;
   /** Collects a `SELECT` result, with its variables. */
   readonly selectAll: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Effect.Effect<Results.ResultSet, Errors.SparqlClientError>;
+  ) => Effect.Effect<Results.ResultSet, ClientErrors.SparqlClientError>;
   /** Evaluates an `ASK` query. */
   readonly ask: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Effect.Effect<boolean, Errors.SparqlClientError>;
+  ) => Effect.Effect<boolean, ClientErrors.SparqlClientError>;
   /** Streams the triples of a `CONSTRUCT` (or `DESCRIBE`) query. */
   readonly construct: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Stream.Stream<Term.Quad, Errors.SparqlClientError>;
+  ) => Stream.Stream<Term.Quad, ClientErrors.SparqlClientError>;
   /** Streams the triples of a `DESCRIBE` query. */
   readonly describe: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Stream.Stream<Term.Quad, Errors.SparqlClientError>;
+  ) => Stream.Stream<Term.Quad, ClientErrors.SparqlClientError>;
   /** Collects the triples of a `CONSTRUCT` / `DESCRIBE` query. */
   readonly constructDataset: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Effect.Effect<Dataset.Dataset, Errors.SparqlClientError>;
+  ) => Effect.Effect<Dataset.Dataset, ClientErrors.SparqlClientError>;
   /** Evaluates a query of any form, dispatching on the response media type. */
   readonly query: (
     query: QueryInput,
     options?: QueryOptions,
-  ) => Effect.Effect<QueryResult, Errors.SparqlClientError>;
+  ) => Effect.Effect<QueryResult, ClientErrors.SparqlClientError>;
   /** Executes an update request. */
   readonly update: (
     update: UpdateInput,
     options?: UpdateOptions,
-  ) => Effect.Effect<void, Errors.SparqlClientError>;
+  ) => Effect.Effect<void, ClientErrors.SparqlClientError>;
   /** Streams the triples of a graph (Graph Store `GET`). */
   readonly getGraph: (
     graph: GraphTarget,
     options?: RequestOptions,
-  ) => Stream.Stream<Term.Quad, Errors.SparqlClientError>;
+  ) => Stream.Stream<Term.Quad, ClientErrors.SparqlClientError>;
   /** Fetches a graph as a `Dataset` (triples in the default graph). */
   readonly getGraphDataset: (
     graph: GraphTarget,
     options?: RequestOptions,
-  ) => Effect.Effect<Dataset.Dataset, Errors.SparqlClientError>;
+  ) => Effect.Effect<Dataset.Dataset, ClientErrors.SparqlClientError>;
   /** Whether a graph exists (Graph Store `HEAD`). */
   readonly hasGraph: (
     graph: GraphTarget,
     options?: RequestOptions,
-  ) => Effect.Effect<boolean, Errors.SparqlClientError>;
+  ) => Effect.Effect<boolean, ClientErrors.SparqlClientError>;
   /** Replaces a graph (Graph Store `PUT`). */
   readonly putGraph: (
     graph: GraphTarget,
     triples: Iterable<Term.Quad>,
     options?: UploadOptions,
-  ) => Effect.Effect<void, Errors.SparqlClientError>;
+  ) => Effect.Effect<void, ClientErrors.SparqlClientError>;
   /** Adds triples to a graph (Graph Store `POST`). */
   readonly postGraph: (
     graph: GraphTarget,
     triples: Iterable<Term.Quad>,
     options?: UploadOptions,
-  ) => Effect.Effect<void, Errors.SparqlClientError>;
+  ) => Effect.Effect<void, ClientErrors.SparqlClientError>;
   /** Creates a new graph in the graph store and returns its IRI. */
   readonly createGraph: (
     triples: Iterable<Term.Quad>,
     options?: UploadOptions,
-  ) => Effect.Effect<Term.NamedNode, Errors.SparqlClientError>;
+  ) => Effect.Effect<Term.NamedNode, ClientErrors.SparqlClientError>;
   /** Deletes a graph (Graph Store `DELETE`). */
   readonly deleteGraph: (
     graph: GraphTarget,
     options?: RequestOptions,
-  ) => Effect.Effect<void, Errors.SparqlClientError>;
+  ) => Effect.Effect<void, ClientErrors.SparqlClientError>;
 }
 
 /**
@@ -304,7 +304,7 @@ export interface SparqlClientShape {
  * @category services
  */
 export class SparqlClient extends Context.Service<SparqlClient, SparqlClientShape>()(
-  '@thomasfosterau/effect-sparql-client/SparqlClient',
+  '@thomasfosterau/effect-sparql/SparqlClient',
 ) {}
 
 // -----------------------------------------------------------------------------
@@ -340,19 +340,21 @@ const mediaTypeOf = (response: HttpClientResponse.HttpClientResponse): string =>
 
 const MAX_ERROR_BODY = 64 * 1024;
 
-const fromHttpClientError = (e: HttpClientError.HttpClientError): Errors.SparqlClientError => {
+const fromHttpClientError = (
+  e: HttpClientError.HttpClientError,
+): ClientErrors.SparqlClientError => {
   return Match.value(e.reason._tag).pipe(
     Match.when(
       Match.is('DecodeError', 'EmptyBodyError'),
-      () => new Errors.MalformedResponseError({ message: e.message, cause: e }),
+      () => new ClientErrors.MalformedResponseError({ message: e.message, cause: e }),
     ),
-    Match.orElse(() => new Errors.TransportError({ message: e.message, cause: e })),
+    Match.orElse(() => new ClientErrors.TransportError({ message: e.message, cause: e })),
   );
 };
 
 const bodyText = (
   response: HttpClientResponse.HttpClientResponse,
-): Stream.Stream<string, Errors.SparqlClientError> =>
+): Stream.Stream<string, ClientErrors.SparqlClientError> =>
   Stream.decodeText(Stream.mapError(response.stream, fromHttpClientError));
 
 // -----------------------------------------------------------------------------
@@ -377,23 +379,23 @@ export const make = (
     const http = yield* HttpClient.HttpClient;
     const formats = Option.getOrElse(
       yield* Effect.serviceOption(Serialization.Formats),
-      () => Formats.defaults,
+      () => ClientFormats.defaults,
     );
-    const graphAccept = Formats.acceptHeader(formats);
+    const graphAccept = ClientFormats.acceptHeader(formats);
     const resultsAccept = config.resultsAccept ?? DEFAULT_RESULTS_ACCEPT;
     const anyAccept = `${resultsAccept}, ${graphAccept
       .split(', ')
       .map((t) => (t.includes(';q=') ? t : `${t};q=0.9`))
       .join(', ')}`;
     const maxGetLength = config.maxGetLength ?? 2048;
-    const retryWhile = config.retryWhile ?? Errors.isTransient;
+    const retryWhile = config.retryWhile ?? ClientErrors.isTransient;
 
     /** Sends a request: applies headers, timeout and retries, checks the status. */
     const send = (
       request: HttpClientRequest.HttpClientRequest,
       options: RequestOptions | undefined,
       accept: ReadonlyArray<number> = [],
-    ): Effect.Effect<HttpClientResponse.HttpClientResponse, Errors.SparqlClientError> => {
+    ): Effect.Effect<HttpClientResponse.HttpClientResponse, ClientErrors.SparqlClientError> => {
       const withHeaders = HttpClientRequest.setHeaders(request, {
         ...config.headers,
         ...options?.headers,
@@ -404,7 +406,10 @@ export const make = (
         Effect.flatMap(
           (
             response,
-          ): Effect.Effect<HttpClientResponse.HttpClientResponse, Errors.SparqlClientError> => {
+          ): Effect.Effect<
+            HttpClientResponse.HttpClientResponse,
+            ClientErrors.SparqlClientError
+          > => {
             if (
               (response.status >= 200 && response.status < 300) ||
               accept.includes(response.status)
@@ -415,7 +420,7 @@ export const make = (
               Effect.orElseSucceed(() => ''),
               Effect.flatMap((body) =>
                 Effect.fail(
-                  new Errors.HttpStatusError({
+                  new ClientErrors.HttpStatusError({
                     method: withHeaders.method,
                     url: withHeaders.url,
                     status: response.status,
@@ -434,7 +439,7 @@ export const make = (
               duration: timeout,
               orElse: () =>
                 Effect.fail(
-                  new Errors.TimeoutError({
+                  new ClientErrors.TimeoutError({
                     message: `${withHeaders.method} ${withHeaders.url} timed out after ${Duration.format(Duration.fromInputUnsafe(timeout))}`,
                   }),
                 ),
@@ -484,14 +489,14 @@ export const make = (
     const resultEvents = (
       response: HttpClientResponse.HttpClientResponse,
     ): Effect.Effect<
-      Stream.Stream<ResultsStream.ResultEvent, Errors.SparqlClientError>,
-      Errors.SparqlClientError
+      Stream.Stream<ResultsStream.ResultEvent, ClientErrors.SparqlClientError>,
+      ClientErrors.SparqlClientError
     > => {
       const mediaType = mediaTypeOf(response);
       const parsed = ResultsStream.parse(mediaType, bodyText(response));
       if (Option.isNone(parsed)) {
         return Effect.fail(
-          new Errors.UnsupportedMediaTypeError({
+          new ClientErrors.UnsupportedMediaTypeError({
             contentType: mediaType,
             expected: resultsAccept.split(',').map((s) => s.split(';')[0]!.trim()),
           }),
@@ -500,7 +505,7 @@ export const make = (
       return Effect.succeed(
         Stream.mapError(parsed.value, (e) =>
           e._tag === 'ResultsParseError'
-            ? new Errors.MalformedResponseError({
+            ? new ClientErrors.MalformedResponseError({
                 message: `Invalid ${e.format} results: ${e.message}`,
                 contentType: mediaType,
               })
@@ -513,14 +518,14 @@ export const make = (
       response: HttpClientResponse.HttpClientResponse,
       baseIri: string,
     ): Effect.Effect<
-      Stream.Stream<Term.Quad, Errors.SparqlClientError>,
-      Errors.SparqlClientError
+      Stream.Stream<Term.Quad, ClientErrors.SparqlClientError>,
+      ClientErrors.SparqlClientError
     > => {
       const mediaType = mediaTypeOf(response);
       const parser = Serialization.parserFor(formats, mediaType);
       if (Option.isNone(parser)) {
         return Effect.fail(
-          new Errors.UnsupportedMediaTypeError({
+          new ClientErrors.UnsupportedMediaTypeError({
             contentType: mediaType,
             expected: formats.parsers.map((p) => p.format.mediaType),
           }),
@@ -530,7 +535,7 @@ export const make = (
         parser.value.parseStream(bodyText(response), { baseIri }).pipe(
           Stream.mapError((e) =>
             e._tag === 'RdfParseError'
-              ? new Errors.MalformedResponseError({
+              ? new ClientErrors.MalformedResponseError({
                   message: Serialization.formatError(e),
                   contentType: mediaType,
                 })
@@ -557,7 +562,7 @@ export const make = (
           Match.tag('Variables', () => Stream.empty),
           Match.tag('Boolean', () =>
             Stream.fail(
-              new Errors.MalformedResponseError({
+              new ClientErrors.MalformedResponseError({
                 message: 'Expected solutions but received a boolean result',
               }),
             ),
@@ -602,7 +607,7 @@ export const make = (
           Option.isSome(event) && event.value._tag === 'Boolean'
             ? Effect.succeed(event.value.value)
             : Effect.fail(
-                new Errors.MalformedResponseError({ message: 'Expected a boolean result' }),
+                new ClientErrors.MalformedResponseError({ message: 'Expected a boolean result' }),
               ),
       ).pipe(Effect.withSpan('SparqlClient.ask'));
 
@@ -659,7 +664,7 @@ export const make = (
     const graphStore = Effect.suspend(() =>
       config.graphStoreEndpoint === undefined
         ? Effect.fail(
-            new Errors.ConfigurationError({
+            new ClientErrors.ConfigurationError({
               message: 'Graph Store operations need a graphStoreEndpoint',
             }),
           )
@@ -707,7 +712,7 @@ export const make = (
       Effect.gen(function* () {
         const serializer = Serialization.serializerFor(formats, mediaType);
         if (Option.isNone(serializer)) {
-          return yield* new Errors.ConfigurationError({
+          return yield* new ClientErrors.ConfigurationError({
             message: `No serializer for ${mediaType}`,
           });
         }
@@ -720,7 +725,8 @@ export const make = (
           .serialize(quads)
           .pipe(
             Effect.mapError(
-              (e) => new Errors.ConfigurationError({ message: `Cannot serialise: ${e.message}` }),
+              (e) =>
+                new ClientErrors.ConfigurationError({ message: `Cannot serialise: ${e.message}` }),
             ),
           );
       });
@@ -763,7 +769,7 @@ export const make = (
         yield* Effect.mapError(response.arrayBuffer, fromHttpClientError);
         const location = response.headers['location'];
         if (location === undefined) {
-          return yield* new Errors.MalformedResponseError({
+          return yield* new ClientErrors.MalformedResponseError({
             message: 'The graph store did not return a Location header',
           });
         }
@@ -823,11 +829,11 @@ export interface SelectAccessor {
   <R extends string, O extends string>(
     query: QueryBuilder.Builder<'Select', R, O>,
     options?: QueryOptions,
-  ): Stream.Stream<QueryBuilder.Row<R, O>, Errors.SparqlClientError, SparqlClient>;
+  ): Stream.Stream<QueryBuilder.Row<R, O>, ClientErrors.SparqlClientError, SparqlClient>;
   (
     query: string | Ast.Query,
     options?: QueryOptions,
-  ): Stream.Stream<Row, Errors.SparqlClientError, SparqlClient>;
+  ): Stream.Stream<Row, ClientErrors.SparqlClientError, SparqlClient>;
 }
 
 /**
@@ -859,7 +865,7 @@ export const decode = <A, RD>(
   query: QueryInput,
   schema: Schema.Decoder<A, RD>,
   options?: QueryOptions,
-): Stream.Stream<A, Errors.SparqlClientError | Schema.SchemaError, SparqlClient | RD> =>
+): Stream.Stream<A, ClientErrors.SparqlClientError | Schema.SchemaError, SparqlClient | RD> =>
   Stream.mapEffect(
     Stream.unwrap(
       Effect.map(Effect.service(SparqlClient), (c) => c.selectBindings(query, options)),
@@ -876,7 +882,7 @@ export const decode = <A, RD>(
 export const ask = (
   query: QueryInput,
   options?: QueryOptions,
-): Effect.Effect<boolean, Errors.SparqlClientError, SparqlClient> =>
+): Effect.Effect<boolean, ClientErrors.SparqlClientError, SparqlClient> =>
   Effect.flatMap(Effect.service(SparqlClient), (c) => c.ask(query, options));
 
 /**
@@ -889,7 +895,7 @@ export const ask = (
 export const construct = (
   query: QueryInput,
   options?: QueryOptions,
-): Stream.Stream<Term.Quad, Errors.SparqlClientError, SparqlClient> =>
+): Stream.Stream<Term.Quad, ClientErrors.SparqlClientError, SparqlClient> =>
   Stream.unwrap(Effect.map(Effect.service(SparqlClient), (c) => c.construct(query, options)));
 
 /**
@@ -901,5 +907,5 @@ export const construct = (
 export const update = (
   input: UpdateInput,
   options?: UpdateOptions,
-): Effect.Effect<void, Errors.SparqlClientError, SparqlClient> =>
+): Effect.Effect<void, ClientErrors.SparqlClientError, SparqlClient> =>
   Effect.flatMap(Effect.service(SparqlClient), (c) => c.update(input, options));

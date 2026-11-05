@@ -430,7 +430,7 @@
         "count": 1
       }
     },
-    "packages/sparql-client/src/ResultsStream.ts": {
+    "packages/sparql/src/ResultsStream.ts": {
       "complexity_critical": {
         "count": 1
       },
@@ -444,37 +444,37 @@
         "count": 1
       }
     },
-    "packages/sparql-client/test/HttpEvalConformance.test.ts": {
+    "packages/sparql/test/HttpEvalConformance.test.ts": {
       "crap_moderate": {
         "count": 2
       }
     },
-    "packages/sparql-server/src/Cli.ts": {
+    "packages/sparql/src/Cli.ts": {
       "crap_high": {
         "count": 1
       }
     },
-    "packages/sparql-server/src/GraphStore.ts": {
+    "packages/sparql/src/GraphStore.ts": {
       "complexity_high": {
         "count": 1
       }
     },
-    "packages/sparql-server/src/Protocol.ts": {
+    "packages/sparql/src/Protocol.ts": {
       "complexity_moderate": {
         "count": 1
       }
     },
-    "packages/sparql-server/src/ServiceDescription.ts": {
+    "packages/sparql/src/ServiceDescription.ts": {
       "complexity_high": {
         "count": 1
       }
     },
-    "packages/sparql-server/src/SparqlServer.ts": {
+    "packages/sparql/src/SparqlServer.ts": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "packages/sparql-server/test/ProtocolConformance.test.ts": {
+    "packages/sparql/test/ProtocolConformance.test.ts": {
       "complexity_critical": {
         "count": 1
       },
@@ -689,7 +689,7 @@
     "packages/n3/src/Mapping.ts:complexity",
     "packages/sparql-sql/src/SqlStore.ts:complexity",
     "packages/shacl/src/internal/compare.ts:complexity",
-    "packages/sparql-server/src/GraphStore.ts:complexity",
+    "packages/sparql/src/GraphStore.ts:complexity",
     "packages/shex/src/internal/engine.ts:complexity",
     "packages/turtle/src/internal/writer.ts:complexity",
     "packages/sparql/src/Bindings.ts:hidden coupling",
@@ -700,20 +700,20 @@
     "packages/shacl/src/Validator.ts:complexity",
     "packages/sparql-sql/src/Translation.ts:complexity",
     "packages/shex/src/ShExR.ts:complexity",
-    "packages/sparql-client/test/HttpEvalConformance.test.ts:untested risk",
+    "packages/sparql/test/HttpEvalConformance.test.ts:untested risk",
     "packages/shex/src/internal/xpathRegex.ts:complexity",
     "packages/jsonld/src/internal/context.ts:high impact",
     "packages/jsonld/src/internal/rdf.ts:complexity",
     "packages/jsonld/test/support.ts:complexity",
     "packages/shex/src/Structure.ts:high impact",
     "packages/n3/src/Isomorphism.ts:complexity",
-    "packages/sparql-server/test/ProtocolConformance.test.ts:complexity",
+    "packages/sparql/test/ProtocolConformance.test.ts:complexity",
     "packages/jsonld/src/internal/frame.ts:complexity",
     "packages/n3/src/internal/builtins.ts:complexity",
     "packages/rdfxml/src/Xml.ts:complexity",
     "packages/jsonld/src/internal/flatten.ts:high impact",
     "packages/rdfxml/test/support.ts:complexity",
-    "packages/sparql-client/src/ResultsStream.ts:complexity",
+    "packages/sparql/src/ResultsStream.ts:complexity",
     "packages/sparql-sql/test/support/manifest.ts:complexity",
     "packages/core/src/Xsd.ts:complexity",
     "packages/sparql-sql/src/internal/encoding.ts:complexity",

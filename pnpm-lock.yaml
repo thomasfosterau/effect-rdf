@@ -295,96 +295,6 @@ importers:
 
   packages/sparql:
     dependencies:
-      '@thomasfosterau/effect-rdf':
-        specifier: workspace:*
-        version: link:../core
-      '@thomasfosterau/effect-rdfxml':
-        specifier: workspace:*
-        version: link:../rdfxml
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
-      '@thomasfosterau/effect-ntriples':
-        specifier: workspace:*
-        version: link:../ntriples
-      '@thomasfosterau/effect-parse':
-        specifier: 'catalog:'
-        version: 0.4.0(effect@4.1.1)
-      effect:
-        specifier: 4.1.1
-        version: 4.1.1
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
-
-  packages/sparql-ai:
-    dependencies:
-      '@thomasfosterau/effect-rdf':
-        specifier: workspace:*
-        version: link:../core
-      '@thomasfosterau/effect-sparql':
-        specifier: workspace:*
-        version: link:../sparql
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
-      effect:
-        specifier: 4.1.1
-        version: 4.1.1
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
-
-  packages/sparql-client:
-    dependencies:
-      '@thomasfosterau/effect-jsonld':
-        specifier: workspace:*
-        version: link:../jsonld
-      '@thomasfosterau/effect-n3':
-        specifier: workspace:*
-        version: link:../n3
-      '@thomasfosterau/effect-ntriples':
-        specifier: workspace:*
-        version: link:../ntriples
-      '@thomasfosterau/effect-rdf':
-        specifier: workspace:*
-        version: link:../core
-      '@thomasfosterau/effect-rdfjson':
-        specifier: workspace:*
-        version: link:../rdfjson
-      '@thomasfosterau/effect-rdfxml':
-        specifier: workspace:*
-        version: link:../rdfxml
-      '@thomasfosterau/effect-sparql':
-        specifier: workspace:*
-        version: link:../sparql
-      '@thomasfosterau/effect-sparql-server':
-        specifier: workspace:*
-        version: link:../sparql-server
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
-      effect:
-        specifier: 4.1.1
-        version: 4.1.1
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
-
-  packages/sparql-server:
-    dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.1(effect@4.1.1)(redis@6.3.0)
@@ -406,6 +316,28 @@ importers:
       '@thomasfosterau/effect-rdfxml':
         specifier: workspace:*
         version: link:../rdfxml
+      '@thomasfosterau/effect-turtle':
+        specifier: workspace:*
+        version: link:../turtle
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
+      '@thomasfosterau/effect-parse':
+        specifier: 'catalog:'
+        version: 0.4.0(effect@4.1.1)
+      effect:
+        specifier: 4.1.1
+        version: 4.1.1
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.6.5)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
+
+  packages/sparql-ai:
+    dependencies:
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../core
       '@thomasfosterau/effect-sparql':
         specifier: workspace:*
         version: link:../sparql

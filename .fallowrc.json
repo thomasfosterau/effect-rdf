@@ -4,7 +4,7 @@
     "packages/*/src/*.ts",
     "packages/*/test/**/*.test.ts",
     "packages/*/bench/*.ts",
-    "packages/sparql-server/bin/*.mjs",
+    "packages/sparql/bin/*.mjs",
     "**/vite.config.ts",
     "vite.package.ts",
     "scripts/check-dist-imports.mjs"
@@ -89,14 +89,6 @@
         "patterns": ["packages/sparql-ai/**"]
       },
       {
-        "name": "sparql-client",
-        "patterns": ["packages/sparql-client/**"]
-      },
-      {
-        "name": "sparql-server",
-        "patterns": ["packages/sparql-server/**"]
-      },
-      {
         "name": "sparql-sql",
         "patterns": ["packages/sparql-sql/**"]
       },
@@ -148,29 +140,11 @@
       },
       {
         "from": "sparql",
-        "allow": ["core", "ntriples", "rdfxml", "turtle"]
+        "allow": ["core", "jsonld", "n3", "ntriples", "rdfjson", "rdfxml", "turtle"]
       },
       {
         "from": "sparql-ai",
         "allow": ["core", "sparql", "turtle"]
-      },
-      {
-        "from": "sparql-client",
-        "allow": [
-          "core",
-          "jsonld",
-          "n3",
-          "ntriples",
-          "rdfjson",
-          "rdfxml",
-          "sparql",
-          "sparql-server",
-          "turtle"
-        ]
-      },
-      {
-        "from": "sparql-server",
-        "allow": ["core", "jsonld", "n3", "ntriples", "rdfjson", "rdfxml", "sparql", "turtle"]
       },
       {
         "from": "sparql-sql",

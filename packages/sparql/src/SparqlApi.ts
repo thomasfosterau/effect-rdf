@@ -2,8 +2,8 @@
  * The SPARQL 1.1 Protocol and Graph Store HTTP Protocol as an Effect
  * `HttpApi` definition: the endpoints, their parameters, request media types,
  * response media types and error statuses, shared by the server
- * (`SparqlApiBuilder`), the derived client in
- * `@thomasfosterau/effect-sparql-client` and the OpenAPI document
+ * (`SparqlApiBuilder`), the derived client
+ * (`SparqlApiClient`) and the OpenAPI document
  * (`openApi`).
  *
  * The API has two groups:
@@ -23,7 +23,7 @@
  * `query` or `graph`, say) is handed to the protocol handler too, by the
  * `SchemaFallback` middleware, so it gets the protocol's own `400` and
  * message. Error bodies are `text/plain` messages decoded into
- * `Errors.ProtocolError`.
+ * `ProtocolErrors.ProtocolError`.
  *
  * This module only describes the API, so a client can import it without the
  * server. `effect/http-api` is `@stability unstable` in Effect 4, and this
@@ -41,11 +41,11 @@ import * as HttpApiMiddleware from 'effect/http-api/HttpApiMiddleware';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import type * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
-import type * as Engine from '@thomasfosterau/effect-sparql/Engine';
-import * as Results from '@thomasfosterau/effect-sparql/Results';
-import type * as Store from '@thomasfosterau/effect-sparql/Store';
-import * as Errors from './Errors.ts';
-import * as Formats from './Formats.ts';
+import type * as Engine from './Engine.ts';
+import * as Results from './Results.ts';
+import type * as Store from './Store.ts';
+import * as ProtocolErrors from './ProtocolErrors.ts';
+import * as ServerFormats from './ServerFormats.ts';
 import * as Protocol from './Protocol.ts';
 
 // -----------------------------------------------------------------------------
@@ -53,7 +53,7 @@ import * as Protocol from './Protocol.ts';
 // -----------------------------------------------------------------------------
 
 /**
- * The media types of the default RDF formats (`Formats.codecs`), in order of
+ * The media types of the default RDF formats (`ServerFormats.codecs`), in order of
  * preference: Graph Store bodies and `CONSTRUCT` / `DESCRIBE` / service
  * description responses.
  *
@@ -61,7 +61,7 @@ import * as Protocol from './Protocol.ts';
  * @category media types
  */
 export const rdfMediaTypes: ReadonlyArray<string> = Arr.dedupe(
-  Arr.flatMap(Formats.codecs, (codec) => codec.format.mediaTypes),
+  Arr.flatMap(ServerFormats.codecs, (codec) => codec.format.mediaTypes),
 );
 
 /**
@@ -292,7 +292,7 @@ export type GraphParams = typeof GraphParams.Type;
 
 /**
  * The error response of a status: a `text/plain` message, decoded as an
- * `Errors.ProtocolError` with that status.
+ * `ProtocolErrors.ProtocolError` with that status.
  *
  * @since 0.1.0
  * @category schemas
@@ -300,9 +300,9 @@ export type GraphParams = typeof GraphParams.Type;
 export const ProtocolErrorResponse = (status: number) =>
   Schema.String.pipe(
     Schema.decodeTo(
-      Errors.ProtocolError.pipe(
+      ProtocolErrors.ProtocolError.pipe(
         Schema.check(
-          Schema.makeFilter((error: Errors.ProtocolError) => error.status === status, {
+          Schema.makeFilter((error: ProtocolErrors.ProtocolError) => error.status === status, {
             identifier: `ProtocolError${status}`,
             title: `ProtocolError (${status})`,
             description: `A protocol error with status ${status}`,
@@ -347,7 +347,7 @@ const ServiceUnavailable = ProtocolErrorResponse(503);
 export class SchemaFallback extends HttpApiMiddleware.Service<
   SchemaFallback,
   { requires: Engine.SparqlEngine | Store.QuadStore | Serialization.Formats }
->()('@thomasfosterau/effect-sparql-server/SparqlApi/SchemaFallback') {}
+>()('@thomasfosterau/effect-sparql/SparqlApi/SchemaFallback') {}
 
 /**
  * The paths an API is served at.

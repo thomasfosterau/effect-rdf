@@ -16,14 +16,14 @@ import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import type * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { Dataset, Isomorphism, Serialization, Term } from '@thomasfosterau/effect-rdf';
-import { Engine, Results, Store } from '@thomasfosterau/effect-sparql';
+import { Engine, Results, Store } from '../src/index.ts';
 import * as Cli from '../src/Cli.ts';
-import * as Formats from '../src/Formats.ts';
+import * as ServerFormats from '../src/ServerFormats.ts';
 import type * as Options from '../src/Options.ts';
 import * as Protocol from '../src/Protocol.ts';
 import * as SparqlServer from '../src/SparqlServer.ts';
 import * as Testing from '../src/Testing.ts';
-import { withLayer } from '../../sparql/test/support/layer.ts';
+import { withLayer } from './support/layer.ts';
 
 /** The value of an `Option` the test expects to be present. */
 const some = <A>(option: Option.Option<A>, label: string): A =>
@@ -41,7 +41,7 @@ const BASE = 'http://localhost';
 
 const formats = Effect.runSync(
   Effect.scoped(
-    Effect.map(Layer.build(Formats.layer), (context) =>
+    Effect.map(Layer.build(ServerFormats.layer), (context) =>
       Context.get(context, Serialization.Formats),
     ),
   ),
@@ -344,7 +344,10 @@ describe('SPARQL endpoint', () => {
           ),
       })),
     );
-    const services = Layer.mergeAll(Engine.layer().pipe(Layer.provideMerge(slow)), Formats.layer);
+    const services = Layer.mergeAll(
+      Engine.layer().pipe(Layer.provideMerge(slow)),
+      ServerFormats.layer,
+    );
     return withServer(
       (client) =>
         Effect.gen(function* () {
@@ -644,7 +647,7 @@ const fileSystem = FileSystem.layerNoop({
     ),
 });
 
-layer(Layer.mergeAll(Formats.layer, Path.layer, fileSystem))('CLI files', (withFiles) => {
+layer(Layer.mergeAll(ServerFormats.layer, Path.layer, fileSystem))('CLI files', (withFiles) => {
   withFiles.effect('loads files through the FileSystem service, one graph per file', () =>
     Effect.gen(function* () {
       const loaded = yield* Cli.load(['/data/a.ttl', '/data/b.nt'], true);
