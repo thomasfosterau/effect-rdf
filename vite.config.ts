@@ -24,6 +24,7 @@ const packages = [
   'effect-rdfxml',
   'effect-rdfjson',
   'effect-xmp',
+  'effect-csvw',
   'effect-sparql',
   'effect-shacl',
   'effect-shacl-sparql',

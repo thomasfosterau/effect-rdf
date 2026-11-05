@@ -14,6 +14,7 @@ This repo publishes the `@thomasfosterau/effect-rdf` package family: an Effect 4
 | `@thomasfosterau/effect-rdfxml`       | `packages/rdfxml`       | core                                                                          |
 | `@thomasfosterau/effect-rdfjson`      | `packages/rdfjson`      | core                                                                          |
 | `@thomasfosterau/effect-xmp`          | `packages/xmp`          | core, rdfxml                                                                  |
+| `@thomasfosterau/effect-csvw`         | `packages/csvw`         | core                                                                          |
 | `@thomasfosterau/effect-sparql`       | `packages/sparql`       | core and every syntax package (ntriples, turtle, n3, jsonld, rdfxml, rdfjson) |
 | `@thomasfosterau/effect-shacl`        | `packages/shacl`        | core                                                                          |
 | `@thomasfosterau/effect-shacl-sparql` | `packages/shacl-sparql` | core, shacl, sparql                                                           |
