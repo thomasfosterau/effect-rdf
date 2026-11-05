@@ -52,6 +52,29 @@ describe('Dataset', () => {
     expect(Dataset.match(ds, { graph: ex('g') })).toEqual([b]);
   });
 
+  it('builds a dataset made from quads on first use, iterating them in order', () => {
+    const eager = Dataset.mutate(Dataset.empty, (builder) => builder.addAll([a, b, c, a]));
+    const fresh = () => Dataset.fromIterable([a, b, c, a]);
+    expect(fresh().size).toBe(3);
+    // The distinct quads in the order given, before and after the quad set is built
+    expect(Array.from(fresh())).toEqual([a, b, c]);
+    const used = fresh();
+    expect(Dataset.has(used, c)).toBe(true);
+    expect(Array.from(used)).toEqual([a, b, c]);
+    expect(Equal.equals(fresh(), eager)).toBe(true);
+    expect(Equal.equals(eager, fresh())).toBe(true);
+    expect(Dataset.has(fresh(), b)).toBe(true);
+    expect(Dataset.match(fresh(), { predicate: ex('p') })).toHaveLength(2);
+    expect(Dataset.add(fresh(), Term.quad(ex('d'), ex('p'), ex('b'))).size).toBe(4);
+    expect(Dataset.toSortedArray(fresh())).toEqual(Dataset.toSortedArray(eager));
+    expect(fresh().toJSON()).toMatchObject({ size: 3 });
+    // The given array is copied, so changing it later does not change the dataset
+    const input: Array<Term.Quad> = [a, b];
+    const later = Dataset.fromIterable(input);
+    input.push(c);
+    expect(later.size).toBe(2);
+  });
+
   it('has value equality', () => {
     expect(Equal.equals(Dataset.make(a, b), Dataset.make(b, a))).toBe(true);
     expect(Equal.equals(Dataset.make(a, b), Dataset.make(a))).toBe(false);
