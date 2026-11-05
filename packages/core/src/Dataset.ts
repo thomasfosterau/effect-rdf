@@ -12,8 +12,10 @@
 import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
 import * as Equal from 'effect/Equal';
+import * as Graph from 'effect/Graph';
 import * as Hash from 'effect/Hash';
 import * as HashMap from 'effect/HashMap';
+import * as HashSet from 'effect/HashSet';
 import { NodeInspectSymbol, type Inspectable } from 'effect/Inspectable';
 import * as Option from 'effect/Option';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
@@ -817,3 +819,96 @@ export const DatasetSchema: Schema.declare<Dataset> = Schema.declare(isDataset, 
  * @category schemas
  */
 export type DatasetSchema = typeof DatasetSchema.Type;
+
+// -----------------------------------------------------------------------------
+// Graph algorithms
+// -----------------------------------------------------------------------------
+
+/**
+ * Options for `toGraph`.
+ *
+ * @since 0.1.0
+ * @category graphs
+ */
+export interface ToGraphOptions {
+  /** Only these predicates become edges (e.g. `[rdfs.subClassOf]`); all of them when omitted. */
+  readonly predicates?: ReadonlyArray<Term.NamedNode> | undefined;
+  /** Only quads in this graph; every graph when omitted. */
+  readonly graph?: Term.Graph | undefined;
+  /** Whether literal objects become nodes (default `false`: their quads are left out). */
+  readonly literals?: boolean | undefined;
+}
+
+/**
+ * A dataset as an `effect/Graph` directed graph, with the lookup from terms
+ * to node indices that graph algorithms start from.
+ *
+ * @since 0.1.0
+ * @category graphs
+ */
+export interface TermGraph {
+  /** Nodes are the subjects and objects; each quad is an edge labelled with its predicate. */
+  readonly graph: Graph.DirectedGraph<Term.Subject | Term.Object, Term.NamedNode>;
+  /** Each term's node index. */
+  readonly nodes: HashMap.HashMap<Term.Subject | Term.Object, Graph.NodeIndex>;
+}
+
+/**
+ * Converts a dataset to an `effect/Graph` directed graph for graph
+ * algorithms — topological order of a class hierarchy, cycle detection,
+ * shortest paths, reachability, connected components. Every subject and
+ * object becomes one node (equal terms share it) and every quad an edge
+ * from its subject to its object, labelled with its predicate; triple terms
+ * are nodes, not expanded.
+ *
+ * @since 0.1.0
+ * @category graphs
+ */
+export const toGraph = (self: Dataset, options: ToGraphOptions = {}): TermGraph => {
+  const keep =
+    options.predicates === undefined ? undefined : HashSet.fromIterable(options.predicates);
+  const edges = Arr.filter(
+    options.graph === undefined ? Arr.fromIterable(self) : match(self, { graph: options.graph }),
+    (q) =>
+      (keep === undefined || HashSet.has(keep, q.predicate)) &&
+      (options.literals === true || q.object._tag !== 'Literal'),
+  );
+  let nodes = HashMap.empty<Term.Subject | Term.Object, Graph.NodeIndex>();
+  const directed = Graph.directed<Term.Subject | Term.Object, Term.NamedNode>((mutable) => {
+    // Equal terms share a node: `nodes` is keyed by term value.
+    const nodeOf = (term: Term.Subject | Term.Object): Graph.NodeIndex =>
+      Option.getOrElse(HashMap.get(nodes, term), () => {
+        const added = Graph.addNode(mutable, term);
+        nodes = HashMap.set(nodes, term, added);
+        return added;
+      });
+    Arr.forEach(edges, (q) => {
+      Graph.addEdge(mutable, nodeOf(q.subject), nodeOf(q.object), q.predicate);
+    });
+    return undefined;
+  });
+  return { graph: directed, nodes };
+};
+
+/**
+ * Converts a directed graph whose nodes are terms and whose edges are
+ * predicates back to a dataset: each edge becomes a quad in `graphName` (the
+ * default graph when omitted). Edges from a node that cannot be a subject
+ * (a literal) are left out.
+ *
+ * @since 0.1.0
+ * @category graphs
+ */
+export const fromGraph = (
+  source: Graph.DirectedGraph<Term.Subject | Term.Object, Term.NamedNode>,
+  graphName: Term.Graph = Term.defaultGraph,
+): Dataset =>
+  fromIterable(
+    Arr.flatMap(Arr.fromIterable(Graph.edges(source)), ([, edge]) => {
+      const subject = Graph.getNode(source, edge.source);
+      const object = Graph.getNode(source, edge.target);
+      return Option.isSome(subject) && Option.isSome(object) && Term.isSubject(subject.value)
+        ? [Term.quad(subject.value, edge.data, object.value, graphName)]
+        : [];
+    }),
+  );
