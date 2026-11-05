@@ -2,10 +2,12 @@ import { assert, describe, expect, it, layer } from '@effect/vitest';
 import { Dataset, Isomorphism, Namespace, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import { identity } from 'effect/Function';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import type * as SchemaIssue from 'effect/SchemaIssue';
@@ -33,10 +35,10 @@ const issueList = (issue: SchemaIssue.Issue): ReadonlyArray<SchemaIssue.Issue> =
     Match.tag('Composite', (c) => c.issues),
     Match.orElse((i) => [i]),
   );
-const messageOf = (issue: SchemaIssue.Issue): string | undefined =>
+const messageOf = (issue: SchemaIssue.Issue): Option.Option<string> =>
   Match.value(issue).pipe(
-    Match.tag('InvalidValue', (i) => i.annotations?.message),
-    Match.orElse(() => undefined),
+    Match.tag('InvalidValue', (i) => Option.fromNullishOr(i.annotations?.message)),
+    Match.orElse(() => Option.none()),
   );
 const resultHas = (issue: SchemaIssue.Issue, key: string): boolean =>
   Match.value(issue).pipe(
@@ -46,6 +48,13 @@ const resultHas = (issue: SchemaIssue.Issue, key: string): boolean =>
 
 const { rdf, xsd } = Vocab;
 const ex = Namespace.make('http://example.org/');
+
+/** The IRI of a term the test expects to be a named node. */
+const iri = (t: Term.Term): string =>
+  Term.isNamedNode(t) ? t.value : assert.fail(`expected an IRI, got ${t.key}`);
+
+const isPropertyShape = (s: Shapes.Shape): s is Shapes.PropertyShape =>
+  Predicate.isTagged(s, 'PropertyShape');
 
 const prefixes = `
 @prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -143,12 +152,11 @@ describe('Shapes', () => {
         { _tag: 'TargetClass', class: ex('Person'), implicit: false },
       ]);
       expect(person.constraints.map((c) => c._tag)).toEqual(['Property', 'Property', 'Property']);
-      const props = shapes.shapes.filter((s) => s._tag === 'PropertyShape');
+      const props = shapes.shapes.filter(isPropertyShape);
       expect(props).toHaveLength(3);
       const age =
-        props.find(
-          (s) => s._tag === 'PropertyShape' && Path.equals(s.path, Path.predicate(ex('age'))),
-        ) ?? assert.fail('expected the ex:age property shape');
+        props.find((s) => Path.equals(s.path, Path.predicate(ex('age')))) ??
+        assert.fail('expected the ex:age property shape');
       expect(age.severity.value).toBe(sh.Warning.value);
       expect(age.constraints.map((c) => Shapes.componentOf(c).value)).toEqual([
         sh.DatatypeConstraintComponent.value,
@@ -205,11 +213,10 @@ describe('Validator', () => {
     Effect.gen(function* () {
       const report = yield* Validator.validate(personData, personShapes);
       expect(report.conforms).toBe(false);
-      // SAFETY: the test data has IRI focus nodes, and constraint components are IRIs.
       const summary = sorted(
         report.results.map(
           (r) =>
-            `${(r.focusNode as Term.NamedNode).value} ${sh.localName(r.sourceConstraintComponent as Term.NamedNode)} ${sh.localName(r.severity)}`,
+            `${iri(r.focusNode)} ${sh.localName(iri(r.sourceConstraintComponent))} ${sh.localName(r.severity)}`,
         ),
       );
       expect(summary).toEqual([
@@ -306,15 +313,12 @@ describe('Validator', () => {
           ex:same "AB" ; ex:other "q" .
       `);
       const report = yield* Validator.validate(data, shapes);
-      const counts = new Map<string, number>();
-      for (const r of report.results) {
-        // SAFETY: constraint components are IRIs.
-        const name =
-          sh.localName(r.sourceConstraintComponent as Term.NamedNode) ??
-          assert.fail('expected a SHACL constraint component');
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-      }
-      expect(Object.fromEntries(counts)).toEqual({
+      const names = report.results.map(
+        (r) =>
+          sh.localName(iri(r.sourceConstraintComponent)) ??
+          assert.fail('expected a SHACL constraint component'),
+      );
+      expect(Record.map(Arr.groupBy(names, identity), (group) => group.length)).toEqual({
         PatternConstraintComponent: 1, // "a1"
         MaxLengthConstraintComponent: 1, // "abcd"
         LanguageInConstraintComponent: 1, // "z"@fr
@@ -338,11 +342,9 @@ describe('Validator', () => {
       `);
       const data = ttl(`ex:a a ex:T ; ex:p 1 ; ex:q 2 . ex:b ex:p 1 .`);
       const report = yield* Validator.validate(data, shapes, { details: true });
-      // SAFETY: the test data has IRI focus nodes, and constraint components are IRIs.
       const tags = sorted(
         report.results.map(
-          (r) =>
-            `${(r.focusNode as Term.NamedNode).value} ${sh.localName(r.sourceConstraintComponent as Term.NamedNode)}`,
+          (r) => `${iri(r.focusNode)} ${sh.localName(iri(r.sourceConstraintComponent))}`,
         ),
       );
       expect(tags).toEqual([
@@ -447,7 +449,7 @@ describe('Validator', () => {
       const found = issueList(violations.issue);
       expect(found).toHaveLength(2);
       expect(found.every((issue) => resultHas(issue, 'focusNode'))).toBe(true);
-      expect(Arr.map(found, (issue) => messageOf(issue))).toEqual(
+      expect(Arr.getSomes(Arr.map(found, (issue) => messageOf(issue)))).toEqual(
         expect.arrayContaining([
           expect.stringContaining(
             '[Violation] MinCountConstraintComponent on <http://example.org/dave>',
@@ -522,10 +524,10 @@ describe('SHACL-SPARQL extension point', () => {
       Effect.provideService(Sparql.SparqlConstraintEvaluator, {
         evaluateConstraint: (input) =>
           Effect.succeed(
-            // SAFETY: the test data has IRI focus nodes.
-            Dataset.objectsOf(input.dataGraph, input.focusNode as Term.NamedNode, ex('bad')).map(
-              (value) => ({ value }),
-            ),
+            (Term.isSubject(input.focusNode)
+              ? Dataset.objectsOf(input.dataGraph, input.focusNode, ex('bad'))
+              : []
+            ).map((value) => ({ value })),
           ),
         selectTargets: () => Effect.succeed([]),
       }),

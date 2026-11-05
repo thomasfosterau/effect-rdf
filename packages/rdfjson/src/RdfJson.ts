@@ -42,8 +42,13 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import { constVoid } from 'effect/Function';
+import * as Iterable from 'effect/Iterable';
 import * as Match from 'effect/Match';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
@@ -391,15 +396,15 @@ export const toDataset = (document: Document, options?: ToDatasetOptions): Datas
     ),
     Match.exhaustive,
   );
-  return Dataset.mutate(Dataset.empty, (b) => {
-    for (const [s, predicates] of Object.entries(document)) {
+  return Dataset.mutate(Dataset.empty, (b) =>
+    Arr.forEach(Record.toEntries(document), ([s, predicates]) => {
       const subject = subjectTerm(s);
-      for (const [p, objects] of Object.entries(predicates)) {
+      Arr.forEach(Record.toEntries(predicates), ([p, objects]) => {
         const predicate = new Term.NamedNode(p);
-        for (const o of objects) b.add(new Term.Quad(subject, predicate, objectTerm(o), graph));
-      }
-    }
-  });
+        Arr.forEach(objects, (o) => b.add(new Term.Quad(subject, predicate, objectTerm(o), graph)));
+      });
+    }),
+  );
 };
 
 /**
@@ -442,9 +447,7 @@ const failSerialize = (message: string): never => {
 };
 
 const resourceValue = (t: Term.NamedNode | Term.BlankNode): UriValue | BlankNodeValue =>
-  t._tag === 'NamedNode'
-    ? { type: 'uri', value: t.value }
-    : { type: 'bnode', value: `_:${t.value}` };
+  Term.isNamedNode(t) ? { type: 'uri', value: t.value } : { type: 'bnode', value: `_:${t.value}` };
 
 const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions): Document => {
   const extensions = options.extensions ?? false;
@@ -471,7 +474,7 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
         failSerialize(`The triple term ${t.key} requires the RDF/JSON extensions`);
       }
       const subject = t.subject;
-      if (subject._tag === 'Triple') {
+      if (Term.isTriple(subject)) {
         throw new SerializeFailure(`Triple terms cannot have triple terms as subjects: ${t.key}`);
       }
       return {
@@ -486,24 +489,24 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
     Match.exhaustive,
   );
   const merge = options.mergeGraphs ?? false;
-  const seen = new Set<string>();
+  const seen = MutableHashSet.empty<string>();
   const sorted = Arr.sort(quads, quadOrder);
-  const document: Record<string, Record<string, Array<ObjectValue>>> = {};
-  for (const q of sorted) {
-    if (q.graph._tag !== 'DefaultGraph' && !merge) {
+  const document: { [subject: string]: { [predicate: string]: Array<ObjectValue> } } = {};
+  Arr.forEach(sorted, (q) => {
+    if (!Term.isDefaultGraph(q.graph) && !merge) {
       failSerialize(`RDF/JSON cannot represent named graphs (found graph ${q.graph.key})`);
     }
     const tripleKey = `${q.subject.key} ${q.predicate.key} ${q.object.key}`;
-    if (seen.has(tripleKey)) continue;
-    seen.add(tripleKey);
+    if (MutableHashSet.has(seen, tripleKey)) return;
+    MutableHashSet.add(seen, tripleKey);
     const subject = q.subject;
-    if (subject._tag === 'Triple') {
+    if (Term.isTriple(subject)) {
       throw new SerializeFailure('RDF/JSON cannot represent triple terms as subjects');
     }
-    const s = subject._tag === 'NamedNode' ? subject.value : `_:${subject.value}`;
+    const s = Term.isNamedNode(subject) ? subject.value : `_:${subject.value}`;
     const predicates = (document[s] ??= {});
     (predicates[q.predicate.value] ??= []).push(objectValue(q.object));
-  }
+  });
   return document;
 };
 
@@ -602,74 +605,56 @@ export interface ParseOptions extends Serialization.ParseOptions {
 const jsonErrorOffset = (input: string): number => {
   let i = 0;
   const ws = () => {
-    while (i < input.length && ' \t\n\r'.includes(input[i]!)) i++;
+    WHITESPACE.lastIndex = i;
+    i += WHITESPACE.exec(input)?.[0].length ?? 0;
   };
   const fail = (): never => {
     throw i;
   };
   const string = () => {
+    // The longest well-formed prefix of the string; it fails where it stops
+    // unless a closing quote follows.
+    STRING_PREFIX.lastIndex = i;
+    i += STRING_PREFIX.exec(input)?.[0].length ?? 0;
+    if (input[i] !== '"') fail();
     i++;
-    for (;;) {
-      if (i >= input.length) fail();
-      const c = input.charCodeAt(i);
-      if (c === 0x22) {
-        i++;
-        return;
-      }
-      if (c < 0x20) fail();
-      if (c === 0x5c) {
-        const e = input[i + 1];
-        if (e === 'u') {
-          if (!/^[0-9a-fA-F]{4}$/.test(input.slice(i + 2, i + 6))) fail();
-          i += 6;
-        } else if (e !== undefined && '"\\/bfnrt'.includes(e)) i += 2;
-        else fail();
-      } else i++;
-    }
   };
   const NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
+  /** The members of an object or the items of an array, up to the closing `end`. */
+  const elements = (end: string, element: () => void) => {
+    i++;
+    ws();
+    if (input[i] === end) {
+      i++;
+      return;
+    }
+    repeat(() => {
+      element();
+      ws();
+      if (input[i] === ',') {
+        i++;
+        return true;
+      }
+      if (input[i] !== end) fail();
+      i++;
+      return false;
+    });
+  };
+  const member = () => {
+    ws();
+    if (input[i] !== '"') fail();
+    string();
+    ws();
+    if (input[i] !== ':') fail();
+    i++;
+    value();
+  };
   const value = (): void => {
     ws();
     const c = input[i];
-    if (c === '{') {
-      i++;
-      ws();
-      if (input[i] === '}') {
-        i++;
-        return;
-      }
-      for (;;) {
-        ws();
-        if (input[i] !== '"') fail();
-        string();
-        ws();
-        if (input[i] !== ':') fail();
-        i++;
-        value();
-        ws();
-        if (input[i] === ',') i++;
-        else if (input[i] === '}') {
-          i++;
-          return;
-        } else fail();
-      }
-    } else if (c === '[') {
-      i++;
-      ws();
-      if (input[i] === ']') {
-        i++;
-        return;
-      }
-      for (;;) {
-        value();
-        ws();
-        if (input[i] === ',') i++;
-        else if (input[i] === ']') {
-          i++;
-          return;
-        } else fail();
-      }
-    } else if (c === '"') string();
+    if (c === '{') elements('}', member);
+    else if (c === '[') elements(']', value);
+    else if (c === '"') string();
     else if (input.startsWith('true', i)) i += 4;
     else if (input.startsWith('false', i)) i += 5;
     else if (input.startsWith('null', i)) i += 4;
@@ -680,18 +665,32 @@ const jsonErrorOffset = (input: string): number => {
       i += m[0].length;
     }
   };
+  const scan = () => {
+    value();
+    ws();
+    return i;
+  };
   // `fail` throws at the offending offset, which is `i`.
-  return Result.merge(
-    Result.try({
-      try: () => {
-        value();
-        ws();
-        return i;
-      },
-      catch: () => i,
-    }),
-  );
+  return Result.getOrElse(Result.try(scan), () => i);
 };
+
+const WHITESPACE = /[ \t\n\r]*/y;
+
+/**
+ * The longest well-formed prefix of a JSON string, from its opening quote:
+ * any character but `"`, `\` and U+0000–U+001F (the C0 controls; DEL and the
+ * C1 controls are allowed), or an escape.
+ */
+const STRING_PREFIX = /"(?:[^"\\\p{Cc}]|[\x7f-\x9f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*/uy;
+
+/** Runs `step` until it returns `false`. */
+const repeat = (step: () => boolean): void =>
+  Iterable.forEach(
+    Iterable.unfold(true, (again) =>
+      again ? Option.some([undefined, step()] as const) : Option.none(),
+    ),
+    constVoid,
+  );
 
 const jsonErrorPosition = (input: string) => {
   const offset = jsonErrorOffset(input);

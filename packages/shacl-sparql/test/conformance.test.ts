@@ -14,6 +14,8 @@ import { Turtle } from '@thomasfosterau/effect-turtle';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import { existsSync, readFileSync } from 'node:fs';
@@ -37,48 +39,45 @@ interface TestCase {
   readonly node: Term.Subject;
 }
 
-const loaded = new Map<string, Dataset.Dataset>();
-const load = (iri: string): Dataset.Dataset => {
-  const file = fileURLToPath(iri.split('#')[0] ?? iri);
-  let ds = loaded.get(file);
-  if (ds === undefined) {
-    ds = Effect.runSync(
+/** The IRI of a manifest node the suite names with an IRI. */
+const iri = (t: Term.Term): Term.NamedNode =>
+  Term.isNamedNode(t) ? t : assert.fail(`expected an IRI in the manifest, got ${t.key}`);
+
+const loaded = MutableHashMap.empty<string, Dataset.Dataset>();
+const load = (iriText: string): Dataset.Dataset => {
+  const file = fileURLToPath(iriText.split('#')[0] ?? iriText);
+  return Option.getOrElse(MutableHashMap.get(loaded, file), () => {
+    const ds = Effect.runSync(
       Turtle.parse(readFileSync(file, 'utf8'), { baseIri: pathToFileURL(file).href }),
     ).dataset;
-    loaded.set(file, ds);
-  }
-  return ds;
+    MutableHashMap.set(loaded, file, ds);
+    return ds;
+  });
 };
 
-const collect = (manifestIri: string, out: Array<TestCase>) => {
+const collect = (manifestIri: string, out: Array<TestCase>): void => {
   const ds = load(manifestIri);
   const self = Term.namedNode(manifestIri);
-  for (const inc of Dataset.objectsOf(ds, self, mf('include'))) {
-    // SAFETY: W3C manifests name included manifests with IRIs.
-    collect((inc as Term.NamedNode).value, out);
-  }
-  for (const list of Dataset.objectsOf(ds, self, mf('entries'))) {
-    for (const entry of Option.getOrElse(Dataset.list(ds, list), () => [])) {
-      // SAFETY: manifest entries are IRIs (the test suite's own convention), which also makes them
-      // subjects.
-      const name = (entry as Term.NamedNode).value.slice(pathToFileURL(root).href.length + 1);
-      // SAFETY: manifest entries are IRIs, so they can be subjects.
-      out.push({ name, ds, node: entry as Term.Subject });
-    }
-  }
+  Arr.forEach(Dataset.objectsOf(ds, self, mf('include')), (inc) => collect(iri(inc).value, out));
+  Arr.forEach(Dataset.objectsOf(ds, self, mf('entries')), (list) =>
+    Arr.forEach(
+      Option.getOrElse(Dataset.list(ds, list), () => []),
+      (entry) => {
+        const node = iri(entry);
+        const name = node.value.slice(pathToFileURL(root).href.length + 1);
+        out.push({ name, ds, node });
+      },
+    ),
+  );
 };
 
 const cases: Array<TestCase> = [];
 if (exists) collect(pathToFileURL(resolve(root, 'manifest.ttl')).href, cases);
 
-const blankKeys = (ds: Dataset.Dataset): Set<string> => {
-  const out = new Set<string>();
-  for (const q of ds) {
-    if (q.subject._tag === 'BlankNode') out.add(q.subject.key);
-    if (q.object._tag === 'BlankNode') out.add(q.object.key);
-  }
-  return out;
-};
+const blankKeys = (ds: Dataset.Dataset): ReadonlyArray<string> =>
+  Arr.flatMap(Arr.fromIterable(ds), (q) =>
+    Arr.map(Arr.filter([q.subject, q.object], Term.isBlankNode), (b) => b.key),
+  );
 
 const optMatches = <A>(e: Option.Option<A>, a: Option.Option<A>, f: (x: A, y: A) => boolean) =>
   Option.isNone(e) ? Option.isNone(a) : Option.isSome(a) && f(e.value, a.value);
@@ -92,15 +91,15 @@ const describeResults = (rs: ReadonlyArray<ValidationReport.ValidationResult>) =
 
 const runCase = (tc: TestCase) =>
   Effect.gen(function* () {
-    // SAFETY: only called with manifest nodes, which are IRIs or blank nodes.
-    const one = (s: Term.Term, p: Term.NamedNode) =>
-      Dataset.objectsOf(tc.ds, s as Term.Subject, p)[0];
-    const action = one(tc.node, mf('action')) ?? assert.fail('test case has no mf:action');
-    // SAFETY: `sht:dataGraph` is the IRI of the data file in every suite manifest.
-    const data = load((one(action, sht('dataGraph')) as Term.NamedNode).value);
-    // SAFETY: `sht:shapesGraph` is the IRI of the shapes file in every suite manifest.
-    const shapes = load((one(action, sht('shapesGraph')) as Term.NamedNode).value);
-    const expectedNode = one(tc.node, mf('result')) ?? assert.fail('test case has no mf:result');
+    const one = (s: Term.Term, p: Term.NamedNode): Term.Object =>
+      Option.getOrElse(
+        Term.isSubject(s) ? Arr.head(Dataset.objectsOf(tc.ds, s, p)) : Option.none(),
+        () => assert.fail(`${s.key} has no ${p.key}`),
+      );
+    const action = one(tc.node, mf('action'));
+    const data = load(iri(one(action, sht('dataGraph'))).value);
+    const shapes = load(iri(one(action, sht('shapesGraph'))).value);
+    const expectedNode = one(tc.node, mf('result'));
 
     const exit = yield* Effect.exit(
       Validator.validate(data, shapes).pipe(
@@ -114,14 +113,16 @@ const runCase = (tc: TestCase) =>
     if (Exit.isFailure(exit)) assert.fail(`validation failed: ${String(exit.cause)}`);
     const actual = exit.value;
 
-    // SAFETY: a test's `mf:result` is a blank-node validation report in the suite manifests.
-    const expectedResult = ValidationReport.fromDataset(tc.ds, expectedNode as Term.BlankNode);
+    const expectedResult = ValidationReport.fromDataset(
+      tc.ds,
+      Term.isResource(expectedNode) ? expectedNode : assert.fail('mf:result is not a report node'),
+    );
     if (Result.isFailure(expectedResult)) assert.fail(expectedResult.failure.message);
     const expected = expectedResult.success;
 
-    const known = new Set([...blankKeys(data), ...blankKeys(shapes)]);
+    const known = MutableHashSet.fromIterable([...blankKeys(data), ...blankKeys(shapes)]);
     const termMatches = (e: Term.Term, a: Term.Term) =>
-      e._tag === 'BlankNode' && a._tag === 'BlankNode' && !known.has(e.key)
+      Term.isBlankNode(e) && Term.isBlankNode(a) && !MutableHashSet.has(known, e.key)
         ? true
         : e.key === a.key;
     const resultMatches = (
@@ -137,19 +138,19 @@ const runCase = (tc: TestCase) =>
       optMatches(e.resultPath, a.resultPath, Path.equals) &&
       e.messages.every((m) => a.messages.some((n) => n.key === m.key));
 
-    const used = new Set<number>();
-    const match = (i: number): boolean => {
-      const e = expected.results[i];
-      if (e === undefined) return true;
-      for (let j = 0; j < actual.results.length; j++) {
-        const a = actual.results[j];
-        if (a === undefined || used.has(j) || !resultMatches(e, a)) continue;
-        used.add(j);
-        if (match(i + 1)) return true;
-        used.delete(j);
-      }
-      return false;
-    };
+    const used = MutableHashSet.empty<number>();
+    const match = (i: number): boolean =>
+      Option.match(Arr.get(expected.results, i), {
+        onNone: () => true,
+        onSome: (e) =>
+          actual.results.some((a, j) => {
+            if (MutableHashSet.has(used, j) || !resultMatches(e, a)) return false;
+            MutableHashSet.add(used, j);
+            if (match(i + 1)) return true;
+            MutableHashSet.remove(used, j);
+            return false;
+          }),
+      });
     const ok =
       actual.conforms === expected.conforms &&
       actual.results.length === expected.results.length &&
@@ -171,9 +172,9 @@ describe.skipIf(!exists)('SHACL-SPARQL test suite', () => {
   it('finds the SHACL-SPARQL tests', () => {
     expect(sparqlCases.length).toBe(22);
   });
-  for (const tc of sparqlCases) it.effect(tc.name, () => runCase(tc));
+  Arr.forEach(sparqlCases, (tc) => it.effect(tc.name, () => runCase(tc)));
 });
 
 describe.skipIf(!exists)('SHACL Core test suite with the SPARQL evaluator', () => {
-  for (const tc of coreCases) it.effect(tc.name, () => runCase(tc));
+  Arr.forEach(coreCases, (tc) => it.effect(tc.name, () => runCase(tc)));
 });

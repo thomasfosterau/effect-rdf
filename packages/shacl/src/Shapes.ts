@@ -17,16 +17,19 @@
  * @since 0.1.0
  */
 import { Dataset, Rdfs, Term, Vocab, Xsd } from '@thomasfosterau/effect-rdf';
-import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Regex from './internal/regex.ts';
 import * as Path from './Path.ts';
 import { SH, sh } from './Vocabulary.ts';
-import * as Predicate from 'effect/Predicate';
 
 const { rdfs, xsd } = Vocab;
 
@@ -285,11 +288,16 @@ export const targetedShapes = (self: ShapesGraph): ReadonlyArray<Shape> =>
 export const usesSparql = (self: ShapesGraph): boolean =>
   self.shapes.some(
     (s) =>
-      s.targets.some((t) => t._tag === 'SparqlTarget') ||
-      s.constraints.some((c) => c._tag === 'Sparql' || c._tag === 'Component'),
+      s.targets.some(Predicate.isTagged('SparqlTarget')) ||
+      s.constraints.some(
+        (c) => Predicate.isTagged(c, 'Sparql') || Predicate.isTagged(c, 'Component'),
+      ),
   );
 
-const componentNames: Record<Exclude<ConstraintTag, 'Sparql' | 'Component'>, string> = {
+const componentNames: Record.ReadonlyRecord<
+  Exclude<ConstraintTag, 'Sparql' | 'Component'>,
+  string
+> = {
   Class: 'ClassConstraintComponent',
   Datatype: 'DatatypeConstraintComponent',
   NodeKind: 'NodeKindConstraintComponent',
@@ -342,8 +350,8 @@ export const componentOf = (constraint: Constraint): Term.NamedNode | Term.Blank
 
 class ParseFailure {
   readonly message: string;
-  readonly node: Term.Term | undefined;
-  constructor(message: string, node: Term.Term | undefined) {
+  readonly node: Option.Option<Term.Term>;
+  constructor(message: string, node: Option.Option<Term.Term>) {
     this.message = message;
     this.node = node;
   }
@@ -351,10 +359,18 @@ class ParseFailure {
 
 const TRUE = Term.literal('true', xsd.boolean).key;
 
-const nodeKinds: ReadonlyMap<string, NodeKind> = new Map(
-  (
-    ['BlankNode', 'IRI', 'Literal', 'BlankNodeOrIRI', 'BlankNodeOrLiteral', 'IRIOrLiteral'] as const
-  ).map((k) => [SH + k, k]),
+const nodeKinds: Record.ReadonlyRecord<string, NodeKind> = Record.fromEntries(
+  Arr.map(
+    [
+      'BlankNode',
+      'IRI',
+      'Literal',
+      'BlankNodeOrIRI',
+      'BlankNodeOrLiteral',
+      'IRIOrLiteral',
+    ] as const,
+    (k) => [SH + k, k] as const,
+  ),
 );
 
 /** Parameters of the core constraint components (§4). */
@@ -403,13 +419,35 @@ const targetPredicates: ReadonlyArray<Term.NamedNode> = [
   sh.target,
 ];
 
+const rangeParameters = [
+  [sh.minExclusive, 'MinExclusive'],
+  [sh.minInclusive, 'MinInclusive'],
+  [sh.maxExclusive, 'MaxExclusive'],
+  [sh.maxInclusive, 'MaxInclusive'],
+] as const;
+
+const pairParameters = [
+  [sh.equals, 'Equals'],
+  [sh.disjoint, 'Disjoint'],
+  [sh.lessThan, 'LessThan'],
+  [sh.lessThanOrEquals, 'LessThanOrEquals'],
+] as const;
+
+const logicalParameters = [
+  [sh.and, 'And'],
+  [sh.or, 'Or'],
+  [sh.xone, 'Xone'],
+] as const;
+
 interface ComponentDeclaration {
   readonly component: Term.NamedNode | Term.BlankNode;
   readonly mandatory: ReadonlyArray<Term.NamedNode>;
   readonly optional: ReadonlyArray<Term.NamedNode>;
 }
 
-const isShapeId = (t: Term.Term): t is ShapeId => t._tag === 'NamedNode' || t._tag === 'BlankNode';
+type ComponentParameter = ComponentConstraint['parameters'][number];
+
+const isShapeId: (t: Term.Term) => t is ShapeId = Term.isResource;
 
 /**
  * Parses a shapes graph synchronously, returning a `Result`.
@@ -425,7 +463,10 @@ export const parseResult = (
     catch: (e) => {
       if (e instanceof ParseFailure) {
         return new ShapesGraphError(
-          e.node === undefined ? { message: e.message } : { message: e.message, node: e.node.key },
+          Option.match(e.node, {
+            onNone: () => ({ message: e.message }),
+            onSome: (node) => ({ message: e.message, node: node.key }),
+          }),
         );
       }
       throw e;
@@ -447,23 +488,28 @@ export const parse = (dataset: Dataset.Dataset): Effect.Effect<ShapesGraph, Shap
   });
 
 const failShapes = (message: string, node?: Term.Term): never => {
-  throw new ParseFailure(message, node);
+  throw new ParseFailure(message, Option.fromUndefinedOr(node));
 };
 
-const isTrueTerm = (t: Term.Term | undefined) => t !== undefined && t.key === TRUE;
+const isTrue = (t: Term.Term): boolean => t.key === TRUE;
+
+const isTrueOption = (t: Option.Option<Term.Term>): boolean => Option.exists(t, isTrue);
 
 const shapeRef = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): ShapeId =>
   isShapeId(t)
     ? t
     : failShapes(`the value of ${p.key} on ${owner.key} must be an IRI or blank node`, owner);
 
+const resourceOf = (owner: Term.Term, t: Term.Term, message: string): Term.Resource =>
+  Term.isResource(t) ? t : failShapes(message, owner);
+
 const iriOf = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): Term.NamedNode =>
-  t._tag === 'NamedNode'
+  Term.isNamedNode(t)
     ? t
     : failShapes(`the value of ${p.key} on ${owner.key} must be an IRI`, owner);
 
 const nonNegativeInteger = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): number => {
-  if (t._tag === 'Literal' && Xsd.isIntegerDatatype(t.datatype.value) && Xsd.isWellFormed(t)) {
+  if (Term.isLiteral(t) && Xsd.isIntegerDatatype(t.datatype.value) && Xsd.isWellFormed(t)) {
     const n = Number(t.value);
     if (n >= 0) return n;
   }
@@ -473,7 +519,19 @@ const nonNegativeInteger = (owner: Term.Term, p: Term.NamedNode, t: Term.Term): 
   );
 };
 
-const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
+/** Reads values from the shapes graph, failing on ill-formed lists and repeated values. */
+interface Reader {
+  readonly g: Dataset.Dataset;
+  readonly objects: (s: Term.Term, p: Term.NamedNode) => ReadonlyArray<Term.GroundTerm>;
+  readonly list: (
+    owner: Term.Term,
+    head: Term.Term,
+    p: Term.NamedNode,
+  ) => ReadonlyArray<Term.GroundTerm>;
+  readonly single: (s: Term.Term, p: Term.NamedNode) => Option.Option<Term.GroundTerm>;
+}
+
+const makeReader = (g: Dataset.Dataset): Reader => {
   const objects = (s: Term.Term, p: Term.NamedNode): ReadonlyArray<Term.GroundTerm> =>
     isShapeId(s) ? Dataset.objectsOf(g, s, p) : [];
   const list = (
@@ -489,270 +547,367 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
       );
     return items.value;
   };
-  const single = (s: Term.Term, p: Term.NamedNode): Term.GroundTerm | undefined => {
+  const single = (s: Term.Term, p: Term.NamedNode): Option.Option<Term.GroundTerm> => {
     const vs = objects(s, p);
     if (vs.length > 1) failShapes(`${s.key} has more than one value for ${p.key}`, s);
-    return vs[0];
+    return Arr.head(vs);
   };
+  return { g, objects, list, single };
+};
 
-  // --- Custom constraint components -----------------------------------------
-  const components: Array<ComponentDeclaration> = [];
-  for (const c of Rdfs.instancesOf(g, sh.ConstraintComponent)) {
-    if (!isShapeId(c) || (c._tag === 'NamedNode' && c.value.startsWith(SH))) continue;
-    const mandatory: Array<Term.NamedNode> = [];
-    const optional: Array<Term.NamedNode> = [];
-    for (const param of objects(c, sh.parameter)) {
-      const path = single(param, sh.path);
-      if (path === undefined || path._tag !== 'NamedNode')
-        failShapes(`parameter ${param.key} of ${c.key} must have an IRI sh:path`, param);
-      // SAFETY: a non-IRI path failed above.
-      (isTrueTerm(single(param, sh.optional)) ? optional : mandatory).push(path as Term.NamedNode);
-    }
-    if (Arr.isReadonlyArrayNonEmpty(mandatory))
-      components.push({ component: c, mandatory, optional });
-  }
+// --- Custom constraint components -------------------------------------------
 
-  // --- Collect shapes (§2.1) ------------------------------------------------
-  const candidates = new Map<string, ShapeId>();
+const parameterPath = (r: Reader, c: Term.Term, param: Term.GroundTerm): Term.NamedNode =>
+  Option.getOrElse(Option.filter(r.single(param, sh.path), Term.isNamedNode), () =>
+    failShapes(`parameter ${param.key} of ${c.key} must have an IRI sh:path`, param),
+  );
+
+const componentDeclarations = (r: Reader): ReadonlyArray<ComponentDeclaration> =>
+  Arr.flatMap(Rdfs.instancesOf(r.g, sh.ConstraintComponent), (c) => {
+    if (!isShapeId(c) || (Term.isNamedNode(c) && c.value.startsWith(SH))) return [];
+    const parameters = Arr.map(r.objects(c, sh.parameter), (param) => {
+      const path = parameterPath(r, c, param);
+      return { path, optional: isTrueOption(r.single(param, sh.optional)) };
+    });
+    const mandatory = Arr.map(
+      Arr.filter(parameters, (p) => !p.optional),
+      (p) => p.path,
+    );
+    const optional = Arr.map(
+      Arr.filter(parameters, (p) => p.optional),
+      (p) => p.path,
+    );
+    return Arr.isReadonlyArrayNonEmpty(mandatory) ? [{ component: c, mandatory, optional }] : [];
+  });
+
+// --- Collect shapes (§2.1) --------------------------------------------------
+
+const collectCandidates = (
+  r: Reader,
+  components: ReadonlyArray<ComponentDeclaration>,
+): ReadonlyArray<ShapeId> => {
+  const candidates = MutableHashMap.empty<string, ShapeId>();
   const addCandidate = (t: Term.Term, reason: string) => {
     if (!isShapeId(t)) failShapes(`${t.key} cannot be a shape (${reason})`, t);
-    else if (!candidates.has(t.key)) candidates.set(t.key, t);
+    else if (!MutableHashMap.has(candidates, t.key)) MutableHashMap.set(candidates, t.key, t);
   };
-  for (const cls of [sh.NodeShape, sh.PropertyShape]) {
-    for (const s of Rdfs.instancesOf(g, cls)) addCandidate(s, `instance of ${cls.key}`);
-  }
+  Arr.forEach([sh.NodeShape, sh.PropertyShape], (cls) =>
+    Arr.forEach(Rdfs.instancesOf(r.g, cls), (s) => addCandidate(s, `instance of ${cls.key}`)),
+  );
   const subjectTriggers = [
     ...targetPredicates,
     ...coreParameters,
     ...components.flatMap((c) => c.mandatory),
   ];
-  for (const p of subjectTriggers) {
-    for (const q of Dataset.match(g, { predicate: p })) {
-      if (q.subject._tag !== 'Triple') addCandidate(q.subject, `subject of ${p.key}`);
-    }
-  }
-  for (const p of [sh.node, sh.property, sh.qualifiedValueShape, sh.not]) {
-    for (const q of Dataset.match(g, { predicate: p })) addCandidate(q.object, `value of ${p.key}`);
-  }
-  for (const p of [sh.and, sh.or, sh.xone]) {
-    for (const q of Dataset.match(g, { predicate: p })) {
-      for (const member of list(q.subject, q.object, p)) addCandidate(member, `member of ${p.key}`);
-    }
-  }
+  Arr.forEach(subjectTriggers, (p) =>
+    Arr.forEach(Dataset.match(r.g, { predicate: p }), (q) => {
+      if (!Term.isTriple(q.subject)) addCandidate(q.subject, `subject of ${p.key}`);
+    }),
+  );
+  Arr.forEach([sh.node, sh.property, sh.qualifiedValueShape, sh.not], (p) =>
+    Arr.forEach(Dataset.match(r.g, { predicate: p }), (q) =>
+      addCandidate(q.object, `value of ${p.key}`),
+    ),
+  );
+  Arr.forEach([sh.and, sh.or, sh.xone], (p) =>
+    Arr.forEach(Dataset.match(r.g, { predicate: p }), (q) =>
+      Arr.forEach(r.list(q.subject, q.object, p), (member) =>
+        addCandidate(member, `member of ${p.key}`),
+      ),
+    ),
+  );
+  return Arr.sort(MutableHashMap.values(candidates), Term.compare);
+};
 
-  const classInstances = new Set(Rdfs.instancesOf(g, rdfs.Class).map((c) => c.key));
+// --- Parse each shape -------------------------------------------------------
 
-  // --- Parse each shape -----------------------------------------------------
-  const parseShape = (id: ShapeId): Shape => {
-    // Targets
-    const targets: Array<Target> = [];
-    for (const n of objects(id, sh.targetNode)) targets.push({ _tag: 'TargetNode', node: n });
-    for (const c of objects(id, sh.targetClass)) {
-      if (!isShapeId(c)) failShapes(`the value of sh:targetClass on ${id.key} must be an IRI`, id);
-      // SAFETY: `isShapeId` holds (checked above), so it is an IRI or blank node.
-      targets.push({ _tag: 'TargetClass', class: c as Term.Resource, implicit: false });
-    }
-    if (id._tag === 'NamedNode' && classInstances.has(id.key)) {
-      targets.push({ _tag: 'TargetClass', class: id, implicit: true });
-    }
-    for (const p of objects(id, sh.targetSubjectsOf))
-      targets.push({ _tag: 'TargetSubjectsOf', predicate: iriOf(id, sh.targetSubjectsOf, p) });
-    for (const p of objects(id, sh.targetObjectsOf))
-      targets.push({ _tag: 'TargetObjectsOf', predicate: iriOf(id, sh.targetObjectsOf, p) });
-    for (const t of objects(id, sh.target)) targets.push({ _tag: 'SparqlTarget', node: t });
+const parseTargets = (
+  r: Reader,
+  id: ShapeId,
+  classInstances: MutableHashSet.MutableHashSet<string>,
+): ReadonlyArray<Target> => [
+  ...Arr.map(objects(r, id, sh.targetNode), (node): Target => ({ _tag: 'TargetNode', node })),
+  ...Arr.map(objects(r, id, sh.targetClass), (c): Target => ({
+    _tag: 'TargetClass',
+    class: resourceOf(id, c, `the value of sh:targetClass on ${id.key} must be an IRI`),
+    implicit: false,
+  })),
+  ...(Term.isNamedNode(id) && MutableHashSet.has(classInstances, id.key)
+    ? [{ _tag: 'TargetClass', class: id, implicit: true } satisfies Target]
+    : []),
+  ...Arr.map(objects(r, id, sh.targetSubjectsOf), (p): Target => ({
+    _tag: 'TargetSubjectsOf',
+    predicate: iriOf(id, sh.targetSubjectsOf, p),
+  })),
+  ...Arr.map(objects(r, id, sh.targetObjectsOf), (p): Target => ({
+    _tag: 'TargetObjectsOf',
+    predicate: iriOf(id, sh.targetObjectsOf, p),
+  })),
+  ...Arr.map(objects(r, id, sh.target), (node): Target => ({ _tag: 'SparqlTarget', node })),
+];
 
-    // Shape characteristics
-    const severityNode = single(id, sh.severity);
-    const severity =
-      severityNode === undefined ? sh.Violation : iriOf(id, sh.severity, severityNode);
-    const messages = objects(id, sh.message).filter(Term.isLiteral);
-    const deactivated = isTrueTerm(single(id, sh.deactivated));
+const objects = (r: Reader, s: Term.Term, p: Term.NamedNode) => r.objects(s, p);
 
-    // Constraints
-    const constraints: Array<Constraint> = [];
-    const push = (c: Constraint) => constraints.push(c);
+const valueConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> => [
+  ...Arr.map(objects(r, id, sh.class), (c): Constraint => ({
+    _tag: 'Class',
+    class: resourceOf(id, c, `the value of sh:class on ${id.key} must be an IRI`),
+  })),
+  ...Arr.map(objects(r, id, sh.datatype), (d): Constraint => ({
+    _tag: 'Datatype',
+    datatype: iriOf(id, sh.datatype, d),
+  })),
+  ...Arr.map(objects(r, id, sh.nodeKind), (k): Constraint => ({
+    _tag: 'NodeKind',
+    nodeKind: Option.getOrElse(Record.get(nodeKinds, Term.isNamedNode(k) ? k.value : ''), () =>
+      failShapes(`${k.key} is not a valid sh:nodeKind`, id),
+    ),
+  })),
+  ...Arr.map(objects(r, id, sh.minCount), (n): Constraint => ({
+    _tag: 'MinCount',
+    minCount: nonNegativeInteger(id, sh.minCount, n),
+  })),
+  ...Arr.map(objects(r, id, sh.maxCount), (n): Constraint => ({
+    _tag: 'MaxCount',
+    maxCount: nonNegativeInteger(id, sh.maxCount, n),
+  })),
+  ...Arr.flatMap(rangeParameters, ([p, tag]) =>
+    Arr.map(objects(r, id, p), (v): Constraint =>
+      Term.isLiteral(v)
+        ? { _tag: tag, value: v }
+        : failShapes(`the value of ${p.key} on ${id.key} must be a literal`, id),
+    ),
+  ),
+  ...Arr.map(objects(r, id, sh.minLength), (n): Constraint => ({
+    _tag: 'MinLength',
+    minLength: nonNegativeInteger(id, sh.minLength, n),
+  })),
+  ...Arr.map(objects(r, id, sh.maxLength), (n): Constraint => ({
+    _tag: 'MaxLength',
+    maxLength: nonNegativeInteger(id, sh.maxLength, n),
+  })),
+  ...patternConstraints(r, id),
+  ...Arr.map(objects(r, id, sh.languageIn), (l): Constraint => ({
+    _tag: 'LanguageIn',
+    languages: Arr.map(r.list(id, l, sh.languageIn), (t) =>
+      Term.isLiteral(t)
+        ? t.value
+        : failShapes(`sh:languageIn members of ${id.key} must be literals`, id),
+    ),
+  })),
+  ...Arr.flatMap(objects(r, id, sh.uniqueLang), (u): ReadonlyArray<Constraint> =>
+    isTrue(u) ? [{ _tag: 'UniqueLang' }] : [],
+  ),
+  ...Arr.flatMap(pairParameters, ([p, tag]) =>
+    Arr.map(objects(r, id, p), (v): Constraint => ({ _tag: tag, predicate: iriOf(id, p, v) })),
+  ),
+];
 
-    for (const c of objects(id, sh.class)) {
-      if (!isShapeId(c)) failShapes(`the value of sh:class on ${id.key} must be an IRI`, id);
-      // SAFETY: `isShapeId` holds (checked above), so it is an IRI or blank node.
-      push({ _tag: 'Class', class: c as Term.Resource });
-    }
-    for (const d of objects(id, sh.datatype)) {
-      push({ _tag: 'Datatype', datatype: iriOf(id, sh.datatype, d) });
-    }
-    for (const k of objects(id, sh.nodeKind)) {
-      const nodeKind = nodeKinds.get(k._tag === 'NamedNode' ? k.value : '');
-      if (nodeKind === undefined) failShapes(`${k.key} is not a valid sh:nodeKind`, id);
-      push({ _tag: 'NodeKind', nodeKind: nodeKind! });
-    }
-    for (const n of objects(id, sh.minCount))
-      push({ _tag: 'MinCount', minCount: nonNegativeInteger(id, sh.minCount, n) });
-    for (const n of objects(id, sh.maxCount))
-      push({ _tag: 'MaxCount', maxCount: nonNegativeInteger(id, sh.maxCount, n) });
-    for (const [p, tag] of [
-      [sh.minExclusive, 'MinExclusive'],
-      [sh.minInclusive, 'MinInclusive'],
-      [sh.maxExclusive, 'MaxExclusive'],
-      [sh.maxInclusive, 'MaxInclusive'],
-    ] as const) {
-      for (const v of objects(id, p)) {
-        if (v._tag !== 'Literal')
-          failShapes(`the value of ${p.key} on ${id.key} must be a literal`, id);
-        push({ _tag: tag, value: v });
-      }
-    }
-    for (const n of objects(id, sh.minLength))
-      push({ _tag: 'MinLength', minLength: nonNegativeInteger(id, sh.minLength, n) });
-    for (const n of objects(id, sh.maxLength))
-      push({ _tag: 'MaxLength', maxLength: nonNegativeInteger(id, sh.maxLength, n) });
-    const patterns = objects(id, sh.pattern);
-    if (Arr.isReadonlyArrayNonEmpty(patterns)) {
-      const flagsNode = single(id, sh.flags);
-      let flags = '';
-      if (flagsNode !== undefined) {
-        if (flagsNode._tag !== 'Literal')
-          return failShapes(`the value of sh:flags on ${id.key} must be a literal`, id);
-        flags = flagsNode.value;
-      }
-      for (const p of patterns) {
-        if (p._tag !== 'Literal')
-          return failShapes(`the value of sh:pattern on ${id.key} must be a literal`, id);
-        const compiled = Regex.compile(p.value, flags);
-        if ('error' in compiled) failShapes(`${compiled.error} (sh:pattern on ${id.key})`, id);
-        else push({ _tag: 'Pattern', pattern: p.value, flags, regex: compiled.regex });
-      }
-    }
-    for (const l of objects(id, sh.languageIn)) {
-      const languages = list(id, l, sh.languageIn).map((t) =>
-        t._tag === 'Literal'
-          ? t.value
-          : failShapes(`sh:languageIn members of ${id.key} must be literals`, id),
-      );
-      push({ _tag: 'LanguageIn', languages });
-    }
-    for (const u of objects(id, sh.uniqueLang)) if (isTrueTerm(u)) push({ _tag: 'UniqueLang' });
-    for (const [p, tag] of [
-      [sh.equals, 'Equals'],
-      [sh.disjoint, 'Disjoint'],
-      [sh.lessThan, 'LessThan'],
-      [sh.lessThanOrEquals, 'LessThanOrEquals'],
-    ] as const) {
-      for (const v of objects(id, p)) push({ _tag: tag, predicate: iriOf(id, p, v) });
-    }
-    for (const s of objects(id, sh.not)) push({ _tag: 'Not', shape: shapeRef(id, sh.not, s) });
-    for (const [p, tag] of [
-      [sh.and, 'And'],
-      [sh.or, 'Or'],
-      [sh.xone, 'Xone'],
-    ] as const) {
-      for (const l of objects(id, p)) {
-        push({ _tag: tag, shapes: list(id, l, p).map((m) => shapeRef(id, p, m)) });
-      }
-    }
-    for (const s of objects(id, sh.node)) push({ _tag: 'Node', shape: shapeRef(id, sh.node, s) });
-    for (const s of objects(id, sh.property))
-      push({ _tag: 'Property', shape: shapeRef(id, sh.property, s) });
+const patternConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> => {
+  const patterns = objects(r, id, sh.pattern);
+  if (Arr.isReadonlyArrayEmpty(patterns)) return [];
+  const flags = Option.match(r.single(id, sh.flags), {
+    onNone: () => '',
+    onSome: (f) =>
+      Term.isLiteral(f)
+        ? f.value
+        : failShapes(`the value of sh:flags on ${id.key} must be a literal`, id),
+  });
+  return Arr.map(patterns, (p): Constraint => {
+    if (!Term.isLiteral(p))
+      return failShapes(`the value of sh:pattern on ${id.key} must be a literal`, id);
+    return Result.match(Regex.compile(p.value, flags), {
+      onFailure: (error) => failShapes(`${error} (sh:pattern on ${id.key})`, id),
+      onSuccess: (regex) => ({ _tag: 'Pattern', pattern: p.value, flags, regex }),
+    });
+  });
+};
 
-    // Qualified value shapes
-    const qualifiedShapes = objects(id, sh.qualifiedValueShape);
-    if (Arr.isReadonlyArrayNonEmpty(qualifiedShapes)) {
-      const minNode = single(id, sh.qualifiedMinCount);
-      const maxNode = single(id, sh.qualifiedMaxCount);
-      const disjoint = isTrueTerm(single(id, sh.qualifiedValueShapesDisjoint));
-      for (const qNode of qualifiedShapes) {
-        const q = shapeRef(id, sh.qualifiedValueShape, qNode);
-        const siblings = new Map<string, ShapeId>();
-        if (disjoint) {
-          for (const parent of Dataset.subjectsOf(g, sh.property, id)) {
-            for (const sibling of objects(parent, sh.property)) {
-              for (const sq of objects(sibling, sh.qualifiedValueShape)) {
-                if (sq.key !== q.key && isShapeId(sq)) siblings.set(sq.key, sq);
-              }
-            }
-          }
-        }
-        const common = { shape: q, disjoint, siblings: Array.from(siblings.values()) };
-        if (minNode !== undefined)
-          push({
-            _tag: 'QualifiedMinCount',
-            count: nonNegativeInteger(id, sh.qualifiedMinCount, minNode),
-            ...common,
-          });
-        if (maxNode !== undefined)
-          push({
-            _tag: 'QualifiedMaxCount',
-            count: nonNegativeInteger(id, sh.qualifiedMaxCount, maxNode),
-            ...common,
-          });
-      }
-    }
+const shapeConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> => [
+  ...Arr.map(objects(r, id, sh.not), (s): Constraint => ({
+    _tag: 'Not',
+    shape: shapeRef(id, sh.not, s),
+  })),
+  ...Arr.flatMap(logicalParameters, ([p, tag]) =>
+    Arr.map(objects(r, id, p), (l): Constraint => ({
+      _tag: tag,
+      shapes: r.list(id, l, p).map((m) => shapeRef(id, p, m)),
+    })),
+  ),
+  ...Arr.map(objects(r, id, sh.node), (s): Constraint => ({
+    _tag: 'Node',
+    shape: shapeRef(id, sh.node, s),
+  })),
+  ...Arr.map(objects(r, id, sh.property), (s): Constraint => ({
+    _tag: 'Property',
+    shape: shapeRef(id, sh.property, s),
+  })),
+];
 
-    // Closed shapes
-    if (isTrueTerm(single(id, sh.closed))) {
-      const ignoredNode = single(id, sh.ignoredProperties);
-      const ignoredProperties =
-        ignoredNode === undefined
-          ? []
-          : list(id, ignoredNode, sh.ignoredProperties).map((t) =>
-              iriOf(id, sh.ignoredProperties, t),
-            );
-      const allowed = new Map<string, Term.NamedNode>();
-      for (const p of objects(id, sh.property)) {
-        for (const path of objects(p, sh.path))
-          if (path._tag === 'NamedNode') allowed.set(path.key, path);
-      }
-      for (const p of ignoredProperties) allowed.set(p.key, p);
-      push({ _tag: 'Closed', ignoredProperties, allowedProperties: Array.from(allowed.values()) });
-    }
+/** The other qualified value shapes of the property shapes beside `id`. */
+const siblingShapes = (r: Reader, id: ShapeId, q: ShapeId): ReadonlyArray<ShapeId> => {
+  const siblings = MutableHashMap.empty<string, ShapeId>();
+  Arr.forEach(Dataset.subjectsOf(r.g, sh.property, id), (parent) =>
+    Arr.forEach(objects(r, parent, sh.property), (sibling) =>
+      Arr.forEach(objects(r, sibling, sh.qualifiedValueShape), (sq) => {
+        if (sq.key !== q.key && isShapeId(sq)) MutableHashMap.set(siblings, sq.key, sq);
+      }),
+    ),
+  );
+  return Arr.fromIterable(MutableHashMap.values(siblings));
+};
 
-    for (const v of objects(id, sh.hasValue)) push({ _tag: 'HasValue', value: v });
-    for (const l of objects(id, sh.in)) push({ _tag: 'In', values: list(id, l, sh.in) });
+const qualifiedConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> => {
+  const qualifiedShapes = objects(r, id, sh.qualifiedValueShape);
+  if (Arr.isReadonlyArrayEmpty(qualifiedShapes)) return [];
+  const minNode = r.single(id, sh.qualifiedMinCount);
+  const maxNode = r.single(id, sh.qualifiedMaxCount);
+  const disjoint = isTrueOption(r.single(id, sh.qualifiedValueShapesDisjoint));
+  return Arr.flatMap(qualifiedShapes, (qNode) => {
+    const q = shapeRef(id, sh.qualifiedValueShape, qNode);
+    const common = { shape: q, disjoint, siblings: disjoint ? siblingShapes(r, id, q) : [] };
+    return [
+      ...Option.toArray(
+        Option.map(minNode, (n): Constraint => ({
+          _tag: 'QualifiedMinCount',
+          count: nonNegativeInteger(id, sh.qualifiedMinCount, n),
+          ...common,
+        })),
+      ),
+      ...Option.toArray(
+        Option.map(maxNode, (n): Constraint => ({
+          _tag: 'QualifiedMaxCount',
+          count: nonNegativeInteger(id, sh.qualifiedMaxCount, n),
+          ...common,
+        })),
+      ),
+    ];
+  });
+};
 
-    // SHACL-SPARQL
-    for (const s of objects(id, sh.sparql)) {
-      if (!isShapeId(s))
-        failShapes(`the value of sh:sparql on ${id.key} must be an IRI or blank node`, id);
-      else if (!isTrueTerm(single(s, sh.deactivated))) push({ _tag: 'Sparql', node: s });
-    }
-    for (const decl of components) {
-      const bindings = [...decl.mandatory, ...decl.optional].map(
-        (p) => [p, objects(id, p)] as const,
-      );
-      if (decl.mandatory.some((p) => Arr.isReadonlyArrayEmpty(objects(id, p)))) continue;
-      // One constraint per combination of parameter values.
-      let combos: Array<Array<{ path: Term.NamedNode; value: Term.GroundTerm }>> = [[]];
-      for (const [path, values] of bindings) {
-        if (Arr.isReadonlyArrayEmpty(values)) continue;
-        combos = combos.flatMap((combo) =>
-          values.map((value) => Arr.append(combo, { path, value })),
-        );
-      }
-      for (const parameters of combos)
-        push({ _tag: 'Component', component: decl.component, parameters });
-    }
+const closedConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> => {
+  if (!isTrueOption(r.single(id, sh.closed))) return [];
+  const ignoredProperties = Option.match(r.single(id, sh.ignoredProperties), {
+    onNone: (): ReadonlyArray<Term.NamedNode> => [],
+    onSome: (node) =>
+      Arr.map(r.list(id, node, sh.ignoredProperties), (t) => iriOf(id, sh.ignoredProperties, t)),
+  });
+  const allowed = MutableHashMap.empty<string, Term.NamedNode>();
+  Arr.forEach(objects(r, id, sh.property), (p) =>
+    Arr.forEach(objects(r, p, sh.path), (path) => {
+      if (Term.isNamedNode(path)) MutableHashMap.set(allowed, path.key, path);
+    }),
+  );
+  Arr.forEach(ignoredProperties, (p) => {
+    MutableHashMap.set(allowed, p.key, p);
+  });
+  return [
+    {
+      _tag: 'Closed',
+      ignoredProperties,
+      allowedProperties: Arr.fromIterable(MutableHashMap.values(allowed)),
+    },
+  ];
+};
 
-    // Property shape?
-    const pathNode = single(id, sh.path);
-    if (pathNode !== undefined) {
-      const path = Path.fromRdf(g, pathNode);
-      if (Result.isFailure(path))
-        failShapes(`ill-formed sh:path of ${id.key}: ${path.failure.message}`, id);
-      // SAFETY: a failure called `failShapes` above, which throws.
-      return {
-        _tag: 'PropertyShape',
-        id,
-        path: (path as Result.Success<Path.Path, never>).success,
-        targets,
-        constraints,
-        severity,
-        messages,
-        deactivated,
-      };
-    }
-    return { _tag: 'NodeShape', id, targets, constraints, severity, messages, deactivated };
-  };
+const sparqlConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> =>
+  Arr.flatMap(objects(r, id, sh.sparql), (s): ReadonlyArray<Constraint> => {
+    if (!isShapeId(s))
+      return failShapes(`the value of sh:sparql on ${id.key} must be an IRI or blank node`, id);
+    return isTrueOption(r.single(s, sh.deactivated)) ? [] : [{ _tag: 'Sparql', node: s }];
+  });
 
-  const shapes = Arr.map(Arr.sort(candidates.values(), Term.compare), parseShape);
+const noParameters: ReadonlyArray<ReadonlyArray<ComponentParameter>> = [[]];
+
+const componentConstraints = (
+  r: Reader,
+  id: ShapeId,
+  components: ReadonlyArray<ComponentDeclaration>,
+): ReadonlyArray<Constraint> =>
+  Arr.flatMap(components, (decl): ReadonlyArray<Constraint> => {
+    const bindings = Arr.map(
+      [...decl.mandatory, ...decl.optional],
+      (p) => [p, objects(r, id, p)] as const,
+    );
+    if (decl.mandatory.some((p) => Arr.isReadonlyArrayEmpty(objects(r, id, p)))) return [];
+    // One constraint per combination of parameter values.
+    const combos = Arr.reduce(bindings, noParameters, (acc, [path, values]) =>
+      Arr.isReadonlyArrayEmpty(values)
+        ? acc
+        : Arr.flatMap(acc, (combo) => values.map((value) => Arr.append(combo, { path, value }))),
+    );
+    return Arr.map(combos, (parameters): Constraint => ({
+      _tag: 'Component',
+      component: decl.component,
+      parameters,
+    }));
+  });
+
+const parseShape = (
+  r: Reader,
+  components: ReadonlyArray<ComponentDeclaration>,
+  classInstances: MutableHashSet.MutableHashSet<string>,
+  id: ShapeId,
+): Shape => {
+  const targets = parseTargets(r, id, classInstances);
+
+  // Shape characteristics
+  const severity = Option.match(r.single(id, sh.severity), {
+    onNone: () => sh.Violation,
+    onSome: (node) => iriOf(id, sh.severity, node),
+  });
+  const messages = objects(r, id, sh.message).filter(Term.isLiteral);
+  const deactivated = isTrueOption(r.single(id, sh.deactivated));
+
+  const constraints: ReadonlyArray<Constraint> = [
+    ...valueConstraints(r, id),
+    ...shapeConstraints(r, id),
+    ...qualifiedConstraints(r, id),
+    ...closedConstraints(r, id),
+    ...Arr.map(objects(r, id, sh.hasValue), (v): Constraint => ({ _tag: 'HasValue', value: v })),
+    ...Arr.map(objects(r, id, sh.in), (l): Constraint => ({
+      _tag: 'In',
+      values: r.list(id, l, sh.in),
+    })),
+    ...sparqlConstraints(r, id),
+    ...componentConstraints(r, id, components),
+  ];
+
+  // Property shape?
+  return Option.match(r.single(id, sh.path), {
+    onNone: (): Shape => ({
+      _tag: 'NodeShape',
+      id,
+      targets,
+      constraints,
+      severity,
+      messages,
+      deactivated,
+    }),
+    onSome: (pathNode): Shape => ({
+      _tag: 'PropertyShape',
+      id,
+      path: Result.getOrElse(Path.fromRdf(r.g, pathNode), (failure) =>
+        failShapes(`ill-formed sh:path of ${id.key}: ${failure.message}`, id),
+      ),
+      targets,
+      constraints,
+      severity,
+      messages,
+      deactivated,
+    }),
+  });
+};
+
+const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
+  const r = makeReader(g);
+  const components = componentDeclarations(r);
+  const candidates = collectCandidates(r, components);
+  const classInstances = MutableHashSet.fromIterable(
+    Arr.map(Rdfs.instancesOf(g, rdfs.Class), (c) => c.key),
+  );
+  const shapes = Arr.map(candidates, (id) => parseShape(r, components, classInstances, id));
+  // The public `index` is a `ReadonlyMap`.
   const index = new Map(shapes.map((s) => [s.id.key, s]));
   return { _tag: 'ShapesGraph', dataset: g, shapes, index };
 };

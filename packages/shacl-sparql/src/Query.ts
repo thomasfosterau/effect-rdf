@@ -22,9 +22,14 @@
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
 import { Path, Sparql, Vocabulary } from '@thomasfosterau/effect-shacl';
 import { Ast, Parser } from '@thomasfosterau/effect-sparql';
-import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import { pipe } from 'effect/Function';
+import * as Match from 'effect/Match';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 
 const { sh } = Vocabulary;
@@ -46,6 +51,11 @@ const fail = (message: string): Result.Result<never, Sparql.SparqlEvaluationErro
 // Prefixes
 // -----------------------------------------------------------------------------
 
+const noPrefixes: Result.Result<
+  Record.ReadonlyRecord<string, string>,
+  Sparql.SparqlEvaluationError
+> = Result.succeed({});
+
 /**
  * The prefix mappings of a SPARQL executable: the union of the
  * `sh:prefix` / `sh:namespace` pairs reachable via
@@ -59,56 +69,108 @@ const fail = (message: string): Result.Result<never, Sparql.SparqlEvaluationErro
 export const prefixes = (
   shapesGraph: Dataset.Dataset,
   node: Term.NamedNode | Term.BlankNode,
-): Result.Result<Readonly<Record<string, string>>, Sparql.SparqlEvaluationError> => {
-  const out: Record<string, string> = {};
-  const seen = new Set<string>();
-  const stack: Array<Term.GroundTerm> = [...Dataset.objectsOf(shapesGraph, node, sh.prefixes)];
-  while (Arr.isReadonlyArrayNonEmpty(stack)) {
-    const current = stack.pop()!;
-    if (seen.has(current.key) || current._tag === 'Literal' || current._tag === 'Triple') continue;
-    seen.add(current.key);
-    stack.push(...Dataset.objectsOf(shapesGraph, current, owlImports));
-    for (const declaration of Dataset.objectsOf(shapesGraph, current, sh.declare)) {
-      if (declaration._tag === 'Literal' || declaration._tag === 'Triple') {
-        return fail(`sh:declare of ${current.key} must be an IRI or blank node`);
-      }
-      const prefix = Dataset.objectsOf(shapesGraph, declaration, sh.prefix);
-      const namespace = Dataset.objectsOf(shapesGraph, declaration, sh.namespace);
-      if (
-        prefix.length !== 1 ||
-        namespace.length !== 1 ||
-        prefix[0]!._tag !== 'Literal' ||
-        (namespace[0]!._tag !== 'Literal' && namespace[0]!._tag !== 'NamedNode')
-      ) {
-        return fail(
-          `prefix declaration ${declaration.key} needs exactly one literal sh:prefix and sh:namespace`,
-        );
-      }
-      const name = prefix[0]!.value;
-      const iri = namespace[0]!.value;
-      const existing = out[name];
-      if (existing !== undefined && existing !== iri) {
-        return fail(`prefix "${name}" is declared with two namespaces: <${existing}> and <${iri}>`);
-      }
-      out[name] = iri;
-    }
+): Result.Result<Record.ReadonlyRecord<string, string>, Sparql.SparqlEvaluationError> =>
+  Arr.reduce(
+    Arr.flatMap(prefixNodes(shapesGraph, node), (current) =>
+      Arr.map(
+        Dataset.objectsOf(shapesGraph, current, sh.declare),
+        (declaration) => [current, declaration] as const,
+      ),
+    ),
+    noPrefixes,
+    (acc, [current, declaration]) =>
+      Result.flatMap(acc, (declared) => declare(shapesGraph, declared, current, declaration)),
+  );
+
+/**
+ * The nodes reachable via `sh:prefixes/owl:imports*` from `node`, depth
+ * first (the order in which their declarations are read).
+ */
+const prefixNodes = (
+  shapesGraph: Dataset.Dataset,
+  node: Term.NamedNode | Term.BlankNode,
+): ReadonlyArray<Term.Resource> => {
+  const seen = MutableHashSet.empty<string>();
+  const visit = (
+    stack: Arr.NonEmptyReadonlyArray<Term.GroundTerm>,
+  ): readonly [Option.Option<Term.Resource>, ReadonlyArray<Term.GroundTerm>] => {
+    const [rest, current] = Arr.unappend(stack);
+    if (MutableHashSet.has(seen, current.key) || !Term.isResource(current))
+      return [Option.none(), rest];
+    MutableHashSet.add(seen, current.key);
+    return [
+      Option.some(current),
+      [...rest, ...Dataset.objectsOf(shapesGraph, current, owlImports)],
+    ];
+  };
+  return Arr.getSomes(
+    Arr.unfold(Dataset.objectsOf(shapesGraph, node, sh.prefixes), (stack) =>
+      Arr.isReadonlyArrayNonEmpty(stack) ? Option.some(visit(stack)) : Option.none(),
+    ),
+  );
+};
+
+const singleOf = <A extends Term.GroundTerm>(
+  values: ReadonlyArray<Term.GroundTerm>,
+  refinement: (t: Term.GroundTerm) => t is A,
+): Option.Option<A> =>
+  values.length === 1 ? Option.filter(Arr.head(values), refinement) : Option.none();
+
+const isLiteralOrIri = (t: Term.GroundTerm): t is Term.Literal | Term.NamedNode =>
+  Term.isLiteral(t) || Term.isNamedNode(t);
+
+/** Adds one `sh:declare` prefix declaration to those read before it. */
+const declare = (
+  shapesGraph: Dataset.Dataset,
+  declared: Record.ReadonlyRecord<string, string>,
+  current: Term.Resource,
+  declaration: Term.GroundTerm,
+): Result.Result<Record.ReadonlyRecord<string, string>, Sparql.SparqlEvaluationError> => {
+  if (!Term.isResource(declaration))
+    return fail(`sh:declare of ${current.key} must be an IRI or blank node`);
+  const prefix = singleOf(Dataset.objectsOf(shapesGraph, declaration, sh.prefix), Term.isLiteral);
+  const namespace = singleOf(
+    Dataset.objectsOf(shapesGraph, declaration, sh.namespace),
+    isLiteralOrIri,
+  );
+  if (Option.isNone(prefix) || Option.isNone(namespace)) {
+    return fail(
+      `prefix declaration ${declaration.key} needs exactly one literal sh:prefix and sh:namespace`,
+    );
   }
-  return Result.succeed(out);
+  const name = prefix.value.value;
+  const iri = namespace.value.value;
+  const existing = Record.get(declared, name);
+  if (Option.isSome(existing) && existing.value !== iri) {
+    return fail(
+      `prefix "${name}" is declared with two namespaces: <${existing.value}> and <${iri}>`,
+    );
+  }
+  return Result.succeed(Record.set(declared, name, iri));
 };
 
 // -----------------------------------------------------------------------------
 // Walking queries
 // -----------------------------------------------------------------------------
 
+/** A check of a query part: the error it finds, if any. */
+type Check<A extends ReadonlyArray<unknown>> = (...args: A) => Option.Option<string>;
+
 interface Visitor {
-  readonly pattern?: (p: Ast.Pattern) => string | undefined;
-  readonly query?: (q: Ast.Query, nested: boolean) => string | undefined;
-  readonly variable?: (name: string) => string | undefined;
+  readonly pattern: Check<[p: Ast.Pattern]>;
+  readonly query: Check<[q: Ast.Query, nested: boolean]>;
+  readonly variable: Check<[name: string]>;
 }
 
+const noError = (): Option.Option<string> => Option.none();
+
+const visitNothing: Visitor = { pattern: noError, query: noError, variable: noError };
+
+const isSelect = (q: Ast.Query): q is Ast.SelectQuery => Predicate.isTagged(q, 'Select');
+
 const termVariables = (t: Ast.TermPattern | Term.Term, out: (name: string) => void): void => {
-  if (t._tag === 'Variable') out(t.value);
-  else if (t._tag === 'Triple') {
+  if (Predicate.isTagged(t, 'Variable')) out(t.value);
+  else if (Predicate.isTagged(t, 'Triple')) {
     termVariables(t.subject, out);
     termVariables(t.predicate, out);
     termVariables(t.object, out);
@@ -116,12 +178,13 @@ const termVariables = (t: Ast.TermPattern | Term.Term, out: (name: string) => vo
 };
 
 /** Visits every pattern, (sub-)query and variable occurrence; returns the first error. */
-const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
-  let error: string | undefined;
-  const report = (e: string | undefined) => {
-    if (error === undefined && e !== undefined) error = e;
+const walk = (root: Ast.Query, visitor: Partial<Visitor>): Option.Option<string> => {
+  const visit: Visitor = { ...visitNothing, ...visitor };
+  let error = Option.none<string>();
+  const report = (e: Option.Option<string>) => {
+    if (Option.isNone(error)) error = e;
   };
-  const variable = (name: string) => report(visitor.variable?.(name));
+  const variable = (name: string) => report(visit.variable(name));
   const term = (t: Ast.TermPattern | Term.Term) => termVariables(t, variable);
 
   const expression = (expr: Ast.Expression): void => {
@@ -155,15 +218,15 @@ const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
   };
 
   const pattern = (pat: Ast.Pattern): void => {
-    report(visitor.pattern?.(pat));
+    report(visit.pattern(pat));
     return Match.value(pat).pipe(
       Match.tag('Bgp', (p) => {
-        for (const t of p.triples) {
+        Arr.forEach(p.triples, (t) => {
           term(t.subject);
-          if (t._tag === 'TriplePattern') term(t.predicate);
+          if (Predicate.isTagged(t, 'TriplePattern')) term(t.predicate);
           else pathTerms(t.path);
           term(t.object);
-        }
+        });
         return;
       }),
       Match.tag('Group', (p) => {
@@ -205,26 +268,26 @@ const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
   };
 
   const query = (q: Ast.Query, nested: boolean): void => {
-    report(visitor.query?.(q, nested));
-    if (q._tag === 'Select' && q.projection !== '*') {
-      for (const p of q.projection) {
-        if (p._tag === 'Variable') variable(p.value);
+    report(visit.query(q, nested));
+    if (isSelect(q) && q.projection !== '*') {
+      Arr.forEach(q.projection, (p) => {
+        if (Predicate.isTagged(p, 'Variable')) variable(p.value);
         else {
           expression(p.expression);
           variable(p.variable.value);
         }
-      }
+      });
     }
-    if (q._tag === 'Construct')
-      for (const t of q.template) [t.subject, t.predicate, t.object].forEach(term);
-    if (q._tag === 'Describe' && q.terms !== '*') q.terms.forEach(term);
+    if (Predicate.isTagged(q, 'Construct'))
+      Arr.forEach(q.template, (t) => [t.subject, t.predicate, t.object].forEach(term));
+    if (Predicate.isTagged(q, 'Describe') && q.terms !== '*') q.terms.forEach(term);
     pattern(q.where);
-    for (const g of q.groupBy) {
+    Arr.forEach(q.groupBy, (g) => {
       expression(g.expression);
       if (g.variable !== undefined) variable(g.variable.value);
-    }
+    });
     q.having.forEach(expression);
-    for (const o of q.orderBy) expression(o.expression);
+    Arr.forEach(q.orderBy, (o) => expression(o.expression));
     if (q.values !== undefined) pattern(q.values);
   };
 
@@ -246,58 +309,59 @@ export const checkPrebinding = (
   query: Ast.Query,
   prebound: Iterable<string>,
 ): Result.Result<Ast.Query, Sparql.SparqlEvaluationError> => {
-  const potential = new Set(prebound);
-  const rebinds = (v: Term.Variable) =>
-    potential.has(v.value)
-      ? `the pre-bound variable ?${v.value} must not be assigned with AS`
-      : undefined;
+  const ordered = Arr.dedupe(Arr.fromIterable(prebound));
+  const potential = MutableHashSet.fromIterable(ordered);
+  const rebinds = (v: Term.Variable): Option.Option<string> =>
+    MutableHashSet.has(potential, v.value)
+      ? Option.some(`the pre-bound variable ?${v.value} must not be assigned with AS`)
+      : Option.none();
+  const unprojected = (q: Ast.SelectQuery): Option.Option<string> => {
+    const projected = MutableHashSet.fromIterable(Ast.projectedVariables(q));
+    return Option.map(
+      Arr.findFirst(ordered, (v) => !optionalPrebound.has(v) && !MutableHashSet.has(projected, v)),
+      (v) => `sub-queries must project the pre-bound variable ?${v}`,
+    );
+  };
   const error = walk(query, {
     pattern: (pat) => {
       return Match.value(pat).pipe(
-        Match.tag(
-          'Minus',
-          () => 'MINUS is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        Match.withReturnType<Option.Option<string>>(),
+        Match.tag('Minus', () =>
+          Option.some('MINUS is not allowed in SHACL-SPARQL queries with pre-bound variables'),
         ),
-        Match.tag(
-          'Service',
-          () => 'SERVICE is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        Match.tag('Service', () =>
+          Option.some('SERVICE is not allowed in SHACL-SPARQL queries with pre-bound variables'),
         ),
-        Match.tag(
-          'Values',
-          () => 'VALUES is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        Match.tag('Values', () =>
+          Option.some('VALUES is not allowed in SHACL-SPARQL queries with pre-bound variables'),
         ),
         Match.tag('Bind', (p) => rebinds(p.variable)),
-        Match.orElse(() => undefined),
+        Match.orElse(() => Option.none()),
       );
     },
     query: (q, nested) => {
       if (q.values !== undefined)
-        return 'VALUES is not allowed in SHACL-SPARQL queries with pre-bound variables';
-      if (q._tag === 'Select' && q.projection !== '*') {
-        for (const p of q.projection) {
-          if (p._tag === 'Projection') {
-            const e = rebinds(p.variable);
-            if (e !== undefined) return e;
-          }
-        }
-      }
-      for (const g of q.groupBy) {
-        if (g.variable !== undefined) {
-          const e = rebinds(g.variable);
-          if (e !== undefined) return e;
-        }
-      }
-      if (nested && q._tag === 'Select') {
-        const projected = new Set(Ast.projectedVariables(q));
-        for (const v of potential) {
-          if (!optionalPrebound.has(v) && !projected.has(v))
-            return `sub-queries must project the pre-bound variable ?${v}`;
-        }
-      }
-      return undefined;
+        return Option.some(
+          'VALUES is not allowed in SHACL-SPARQL queries with pre-bound variables',
+        );
+      const projections =
+        isSelect(q) && q.projection !== '*'
+          ? Arr.filter(q.projection, (p): p is Ast.Projection =>
+              Predicate.isTagged(p, 'Projection'),
+            )
+          : [];
+      return pipe(
+        Arr.findFirst(projections, (p) => rebinds(p.variable)),
+        Option.orElse(() =>
+          Arr.findFirst(q.groupBy, (g) =>
+            g.variable === undefined ? Option.none() : rebinds(g.variable),
+          ),
+        ),
+        Option.orElse(() => (nested && isSelect(q) ? unprojected(q) : Option.none())),
+      );
     },
   });
-  return error === undefined ? Result.succeed(query) : fail(error);
+  return Option.match(error, { onNone: () => Result.succeed(query), onSome: fail });
 };
 
 // -----------------------------------------------------------------------------
@@ -324,6 +388,8 @@ export const toSparqlPath = (path: Path.Path): Ast.Path => {
 };
 
 const PATH = 'PATH';
+
+const isPathLink = (p: Ast.Path): p is Ast.PathLink => Predicate.isTagged(p, 'PathLink');
 
 const mapGroup = (
   g: Ast.GroupPattern,
@@ -377,11 +443,11 @@ const mapQuery = <Q extends Ast.Query>(
     orderBy: q.orderBy.map((o) => ({ ...o, expression: expression(o.expression) })),
     groupBy: q.groupBy.map((g) => ({ ...g, expression: expression(g.expression) })),
   };
-  if (q._tag !== 'Select' || q.projection === '*') return mapped;
+  if (!isSelect(q) || q.projection === '*') return mapped;
   return {
     ...mapped,
     projection: q.projection.map((p) =>
-      p._tag === 'Projection' ? { ...p, expression: expression(p.expression) } : p,
+      Predicate.isTagged(p, 'Projection') ? { ...p, expression: expression(p.expression) } : p,
     ),
   };
 };
@@ -400,8 +466,10 @@ export const substitutePath = <Q extends Ast.Query>(
 ): Result.Result<Q, Sparql.SparqlEvaluationError> => {
   const sparqlPath = toSparqlPath(path);
   const substituted = mapQuery(query, (t) =>
-    t._tag === 'TriplePattern' && t.predicate._tag === 'Variable' && t.predicate.value === PATH
-      ? sparqlPath._tag === 'PathLink'
+    Predicate.isTagged(t, 'TriplePattern') &&
+    Predicate.isTagged(t.predicate, 'Variable') &&
+    t.predicate.value === PATH
+      ? isPathLink(sparqlPath)
         ? Ast.triplePattern(t.subject, sparqlPath.iri, t.object)
         : Ast.pathPattern(t.subject, sparqlPath, t.object)
       : t,
@@ -409,15 +477,24 @@ export const substitutePath = <Q extends Ast.Query>(
   const error = walk(substituted, {
     variable: (name) =>
       name === PATH
-        ? '$PATH may only be used in the predicate position of triple patterns'
-        : undefined,
+        ? Option.some('$PATH may only be used in the predicate position of triple patterns')
+        : Option.none(),
   });
-  return error === undefined ? Result.succeed(substituted) : fail(error);
+  return Option.match(error, { onNone: () => Result.succeed(substituted), onSome: fail });
 };
 
 // -----------------------------------------------------------------------------
 // Compiling
 // -----------------------------------------------------------------------------
+
+/** The first of `required` that a `SELECT` query does not project. */
+const unprojectedOf = (
+  query: Ast.SelectQuery,
+  required: ReadonlyArray<string>,
+): Option.Option<string> => {
+  const projected = MutableHashSet.fromIterable(Ast.projectedVariables(query));
+  return Arr.findFirst(required, (v) => !MutableHashSet.has(projected, v));
+};
 
 /**
  * How to compile a SHACL-SPARQL query.
@@ -452,11 +529,11 @@ export const compileResult = (
   options: CompileOptions,
 ): Result.Result<Ast.Query, Sparql.SparqlEvaluationError> => {
   const property = options.form === 'select' ? sh.select : sh.ask;
-  const texts = Dataset.objectsOf(shapesGraph, node, property);
-  if (texts.length !== 1 || texts[0]!._tag !== 'Literal') {
+  const literal = singleOf(Dataset.objectsOf(shapesGraph, node, property), Term.isLiteral);
+  if (Option.isNone(literal)) {
     return fail(`${node.key} must have exactly one literal value for ${property.key}`);
   }
-  const text = texts[0]!.value;
+  const text = literal.value.value;
   return Result.flatMap(prefixes(shapesGraph, node), (declared) => {
     const parsed = Parser.parseQueryResult(text, { prefixes: declared });
     if (Result.isFailure(parsed)) {
@@ -469,17 +546,14 @@ export const compileResult = (
     }
     const query = parsed.success;
     const expected = options.form === 'select' ? 'Select' : 'Ask';
-    if (query._tag !== expected) {
+    if (!Predicate.isTagged(query, expected)) {
       return fail(
         `the ${property.key} query of ${node.key} must be a ${expected.toUpperCase()} query`,
       );
     }
-    if (query._tag === 'Select') {
-      const projected = new Set(Ast.projectedVariables(query));
-      for (const v of options.project ?? []) {
-        if (!projected.has(v)) return fail(`the query of ${node.key} must project ?${v}`);
-      }
-    }
+    const missing = isSelect(query) ? unprojectedOf(query, options.project ?? []) : Option.none();
+    if (Option.isSome(missing))
+      return fail(`the query of ${node.key} must project ?${missing.value}`);
     return Result.flatMap(checkPrebinding(query, options.prebound), (checked) =>
       options.path === undefined ? Result.succeed(checked) : substitutePath(checked, options.path),
     );

@@ -53,7 +53,7 @@ export const display = (term: Term.Term): string => {
  * @category queries
  */
 export const variables = (template: string): ReadonlyArray<string> =>
-  Array.from(template.matchAll(placeholder), (m) => m[1]!);
+  Array.from(template.matchAll(placeholder), (m) => m[1] ?? '');
 
 /**
  * Replaces the `{?name}` / `{$name}` placeholders of a template string.

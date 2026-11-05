@@ -27,11 +27,7 @@ const findRdf = (el: Xml.Element): Option.Option<Xml.Element> =>
 
 const FORMAT = 'XMP';
 
-const toParseError = (e: {
-  readonly message: string;
-  readonly line?: number | undefined;
-  readonly column?: number | undefined;
-}) =>
+const toParseError = (e: Xml.XmlParseError | Serialization.RdfParseError) =>
   new Serialization.RdfParseError({
     format: FORMAT,
     message: e.message,
@@ -42,7 +38,7 @@ const toParseError = (e: {
 /** Parses the text of an XMP packet (or a document embedding one) to RDF. */
 export const parseRdf = (
   text: string,
-  options: Serialization.ParseOptions | undefined,
+  options?: Serialization.ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
   Effect.gen(function* () {
     const doc = yield* Xml.parse(text).pipe(Effect.mapError(toParseError));
