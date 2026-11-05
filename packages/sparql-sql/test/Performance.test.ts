@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, layer } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Stream from 'effect/Stream';
 import { Namespace, Term, Xsd } from '@thomasfosterau/effect-rdf';
@@ -26,36 +26,38 @@ const triples = (): Array<Term.Quad> => {
 };
 
 describe('Performance', () => {
-  it.effect(
-    `bulk loads ${N} triples and queries them in SQL`,
-    () =>
-      Effect.gen(function* () {
-        const store = yield* SqlStore.SqlStore;
-        const data = triples();
-        const start = performance.now();
-        yield* store.insert(data);
-        const loaded = performance.now() - start;
-        const count = store.count ?? assert.fail('the SQL store counts quads');
-        expect(yield* count({})).toBe(N);
-        // Loading 100k triples into SQLite takes a few seconds at most.
-        expect(loaded).toBeLessThan(30_000);
+  layer(SqlStore.layerSqlite({ filename: ':memory:' }), { buildPerTest: true })((test) => {
+    test.effect(
+      `bulk loads ${N} triples and queries them in SQL`,
+      () =>
+        Effect.gen(function* () {
+          const store = yield* SqlStore.SqlStore;
+          const data = triples();
+          const start = performance.now();
+          yield* store.insert(data);
+          const loaded = performance.now() - start;
+          const count = store.count ?? assert.fail('the SQL store counts quads');
+          expect(yield* count({})).toBe(N);
+          // Loading 100k triples into SQLite takes a few seconds at most.
+          expect(loaded).toBeLessThan(30_000);
 
-        const engine = Engine.make(store);
-        const queryStart = performance.now();
-        const result = yield* engine.select(`
+          const engine = Engine.make(store);
+          const queryStart = performance.now();
+          const result = yield* engine.select(`
           PREFIX ex: <http://example.org/>
           SELECT (COUNT(*) AS ?n) WHERE {
             ?a ex:knows ?b . ?b ex:type ex:Student . ?a ex:age ?age FILTER(?age >= 18 && ?age < 30)
           }`);
-        const rows = yield* Stream.runCollect(result.bindings);
-        const queried = performance.now() - queryStart;
-        const n = Bindings.getUndefined(rows[0] ?? assert.fail('expected a COUNT row'), 'n');
-        expect(n?._tag === 'Literal' && Number(n.value) > 0).toBe(true);
-        expect(queried).toBeLessThan(10_000);
-        yield* Effect.logInfo(
-          `Loaded ${N} triples in ${loaded.toFixed(0)} ms; join + filter + count in ${queried.toFixed(0)} ms`,
-        );
-      }).pipe(Effect.provide(SqlStore.layerSqlite({ filename: ':memory:' }))),
-    120_000,
-  );
+          const rows = yield* Stream.runCollect(result.bindings);
+          const queried = performance.now() - queryStart;
+          const n = Bindings.getUndefined(rows[0] ?? assert.fail('expected a COUNT row'), 'n');
+          expect(n?._tag === 'Literal' && Number(n.value) > 0).toBe(true);
+          expect(queried).toBeLessThan(10_000);
+          yield* Effect.logInfo(
+            `Loaded ${N} triples in ${loaded.toFixed(0)} ms; join + filter + count in ${queried.toFixed(0)} ms`,
+          );
+        }),
+      120_000,
+    );
+  });
 });

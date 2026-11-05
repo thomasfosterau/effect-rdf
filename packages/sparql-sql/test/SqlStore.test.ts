@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from '@effect/vitest';
+import { assert, expect, layer } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Stream from 'effect/Stream';
@@ -32,8 +32,9 @@ const TestLayer = Engine.layer({ baseIri: 'http://example.org/' }).pipe(
 const lex = (t: Term.GroundTerm | undefined): string | undefined =>
   t === undefined || t._tag === 'Triple' ? undefined : t.value;
 
-describe('SqlStore', () => {
-  it.effect('stores, matches and counts quads', () =>
+// A fresh in-memory database for each test.
+layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
+  test.effect('stores, matches and counts quads', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
       const count = store.count ?? assert.fail('the SQL store counts quads');
@@ -57,10 +58,10 @@ describe('SqlStore', () => {
       expect(yield* store.hasGraph(ex('empty'))).toBe(true);
       yield* store.dropGraph(ex('g1'));
       expect(yield* store.hasGraph(ex('g1'))).toBe(false);
-    }).pipe(Effect.provide(StoreLayer)),
+    }),
   );
 
-  it.effect('rolls back failed transactions', () =>
+  test.effect('rolls back failed transactions', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
       const count = store.count ?? assert.fail('the SQL store counts quads');
@@ -72,10 +73,10 @@ describe('SqlStore', () => {
       );
       expect(result._tag).toBe('Failure');
       expect(yield* count({})).toBe(2);
-    }).pipe(Effect.provide(StoreLayer)),
+    }),
   );
 
-  it.effect('evaluates queries in SQL', () =>
+  test.effect('evaluates queries in SQL', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
       yield* store.insert(data);
@@ -103,6 +104,6 @@ describe('SqlStore', () => {
       );
       const s = yield* Stream.runCollect(since.bindings);
       expect(s.map((b) => lex(Bindings.getUndefined(b, 'y')))).toEqual(['2020']);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 });

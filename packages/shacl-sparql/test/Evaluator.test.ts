@@ -1,6 +1,6 @@
 import { assert, describe, expect, it } from '@effect/vitest';
 import { type Dataset, Namespace, Term } from '@thomasfosterau/effect-rdf';
-import { Path, ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
+import { Path, Sparql, ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
 import { Generator, Parser } from '@thomasfosterau/effect-sparql';
 import { Turtle } from '@thomasfosterau/effect-turtle';
 import * as Arr from 'effect/Array';
@@ -24,7 +24,9 @@ ex: sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/"^^xsd:anyURI
 const ttl = (s: string): Dataset.Dataset => Effect.runSync(Turtle.parse(prefixes + s)).dataset;
 
 const validate = (data: Dataset.Dataset, shapes: Dataset.Dataset = data) =>
-  Validator.validate(data, shapes).pipe(Effect.provide(Evaluator.layer()));
+  Validator.validate(data, shapes).pipe(
+    Effect.provideService(Sparql.SparqlConstraintEvaluator, Evaluator.make()),
+  );
 
 const messages = (report: ValidationReport.ValidationReport) =>
   Arr.sort(

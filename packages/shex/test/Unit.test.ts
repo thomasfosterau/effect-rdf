@@ -276,8 +276,9 @@ describe('Validator', () => {
         Term.namedNode('http://a/s'),
         'http://a/S',
       ).pipe(
-        Effect.provide(
-          Validator.loaderLayer(Validator.loaderFromRecord({ 'http://a/lib': imported })),
+        Effect.provideService(
+          Validator.SchemaLoader,
+          Validator.loaderFromRecord({ 'http://a/lib': imported }),
         ),
       );
       expect(r.status).toBe('conformant');
