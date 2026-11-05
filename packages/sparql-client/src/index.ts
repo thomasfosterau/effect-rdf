@@ -14,4 +14,6 @@ export * as Formats from './Formats.ts';
 /** @since 0.1.0 */
 export * as ResultsStream from './ResultsStream.ts';
 /** @since 0.1.0 */
+export * as SparqlApiClient from './SparqlApiClient.ts';
+/** @since 0.1.0 */
 export * as SparqlClient from './SparqlClient.ts';

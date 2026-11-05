@@ -1,6 +1,7 @@
 /**
  * Runs the W3C SPARQL 1.1 Protocol, Graph Store Protocol and Service
- * Description tests against the server in-process.
+ * Description tests against the server in-process: once against
+ * `SparqlServer.handler` and once against the `SparqlApi` routes.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -8,6 +9,8 @@ import { assert, describe, expect, it } from '@effect/vitest';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import type * as Scope from 'effect/Scope';
+import type * as HttpClient from 'effect/http/HttpClient';
 import * as Option from 'effect/Option';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import { Dataset, Isomorphism, Serialization, Term } from '@thomasfosterau/effect-rdf';
@@ -80,9 +83,20 @@ const toRequest = (spec: RequestSpec, authority: string, vars: Map<string, strin
   return request;
 };
 
-const runTest = (t: ProtocolTest) =>
+type MakeClient = Effect.Effect<
+  HttpClient.HttpClient,
+  never,
+  SparqlServer.Requirements | Scope.Scope
+>;
+
+const servers: ReadonlyArray<readonly [string, MakeClient]> = [
+  ['SparqlServer.handler', Testing.makeClient(SERVER_OPTIONS)],
+  ['SparqlApi', Testing.makeApiClient(SERVER_OPTIONS)],
+];
+
+const runTest = (t: ProtocolTest, makeClient: MakeClient) =>
   Effect.gen(function* () {
-    const client = yield* Testing.makeClient(SERVER_OPTIONS);
+    const client = yield* makeClient;
     const vars = new Map<string, string>();
     yield* Effect.forEach(
       t.requests.entries(),
@@ -148,16 +162,18 @@ const gspTests = exists
   ? readManifest(path.join(sparql11, 'graph-store-protocol', 'manifest.ttl'))
   : [];
 
-describe.skipIf(!exists)('SPARQL 1.1 Protocol', () => {
-  protocolTests.forEach((t) => {
-    it.effect(`${t.id.replace(/.*#/, '')}: ${t.name}`, () => runTest(t));
+servers.forEach(([server, makeClient]) => {
+  describe.skipIf(!exists)(`SPARQL 1.1 Protocol (${server})`, () => {
+    protocolTests.forEach((t) => {
+      it.effect(`${t.id.replace(/.*#/, '')}: ${t.name}`, () => runTest(t, makeClient));
+    });
   });
-});
 
-describe.skipIf(!exists)('SPARQL 1.1 Graph Store Protocol', () => {
-  gspTests.forEach((t) => {
-    const unlisted = t.unlisted ? ' (defined but not listed in mf:entries)' : '';
-    it.effect(`${t.id.replace(/.*#/, '')}: ${t.name}${unlisted}`, () => runTest(t));
+  describe.skipIf(!exists)(`SPARQL 1.1 Graph Store Protocol (${server})`, () => {
+    gspTests.forEach((t) => {
+      const unlisted = t.unlisted ? ' (defined but not listed in mf:entries)' : '';
+      it.effect(`${t.id.replace(/.*#/, '')}: ${t.name}${unlisted}`, () => runTest(t, makeClient));
+    });
   });
 });
 
@@ -168,9 +184,9 @@ describe.skipIf(!exists)('SPARQL 1.1 Graph Store Protocol', () => {
 const SD = 'http://www.w3.org/ns/sparql-service-description#';
 const RDF_TYPE = Term.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type');
 
-const fetchDescription = (accept: string | undefined) =>
+const fetchDescription = (makeClient: MakeClient, accept: string | undefined) =>
   Effect.gen(function* () {
-    const client = yield* Testing.makeClient(SERVER_OPTIONS);
+    const client = yield* makeClient;
     let request = HttpClientRequest.get('http://www.example/sparql');
     if (accept !== undefined) request = HttpClientRequest.setHeader(request, 'accept', accept);
     const response = yield* client.execute(request);
@@ -183,59 +199,63 @@ const fetchDescription = (accept: string | undefined) =>
     return { response, dataset };
   }).pipe(withLayer(SparqlServer.layerMemoryServices()));
 
-describe.skipIf(!exists)('SPARQL 1.1 Service Description', () => {
-  it.effect('returns-rdf: GET on endpoint returns RDF', () =>
-    Effect.gen(function* () {
-      yield* Effect.forEach(
-        [undefined, 'text/turtle', 'application/rdf+xml', 'application/ld+json'],
-        Effect.fnUntraced(function* (accept) {
-          const { response, dataset } = yield* fetchDescription(accept);
-          expect(response.status).toBe(200);
-          expect(dataset.size).toBeGreaterThan(0);
+servers.forEach(([server, makeClient]) => {
+  describe.skipIf(!exists)(`SPARQL 1.1 Service Description (${server})`, () => {
+    it.effect('returns-rdf: GET on endpoint returns RDF', () =>
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          [undefined, 'text/turtle', 'application/rdf+xml', 'application/ld+json'],
+          Effect.fnUntraced(function* (accept) {
+            const { response, dataset } = yield* fetchDescription(makeClient, accept);
+            expect(response.status).toBe(200);
+            expect(dataset.size).toBeGreaterThan(0);
+          }),
+          { concurrency: 1, discard: true },
+        );
+      }),
+    );
+
+    it.effect(
+      'has-endpoint-triple: Service description contains a matching sd:endpoint triple',
+      () =>
+        Effect.gen(function* () {
+          const { dataset } = yield* fetchDescription(makeClient, 'text/turtle');
+          const matches = Dataset.match(dataset, {
+            predicate: Term.namedNode(`${SD}endpoint`),
+            object: Term.namedNode('http://www.example/sparql'),
+          });
+          expect(matches.length).toBeGreaterThan(0);
         }),
-        { concurrency: 1, discard: true },
-      );
-    }),
-  );
+    );
 
-  it.effect('has-endpoint-triple: Service description contains a matching sd:endpoint triple', () =>
-    Effect.gen(function* () {
-      const { dataset } = yield* fetchDescription('text/turtle');
-      const matches = Dataset.match(dataset, {
-        predicate: Term.namedNode(`${SD}endpoint`),
-        object: Term.namedNode('http://www.example/sparql'),
-      });
-      expect(matches.length).toBeGreaterThan(0);
-    }),
-  );
-
-  it.effect('conforms-to-schema: Service description conforms to schema', () =>
-    Effect.gen(function* () {
-      const { dataset } = yield* fetchDescription('text/turtle');
-      const services = Dataset.subjectsOf(dataset, RDF_TYPE, Term.namedNode(`${SD}Service`));
-      expect(services.length).toBeGreaterThan(0);
-      for (const s of services) {
-        // Every service has an endpoint and supported languages from the sd: vocabulary.
-        expect(Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}endpoint`)).length).toBe(1);
-        const languages = Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}supportedLanguage`));
-        expect(languages.length).toBeGreaterThan(0);
-        for (const l of languages) {
-          expect([`${SD}SPARQL10Query`, `${SD}SPARQL11Query`, `${SD}SPARQL11Update`]).toContain(
-            l._tag === 'NamedNode' ? l.value : '',
-          );
+    it.effect('conforms-to-schema: Service description conforms to schema', () =>
+      Effect.gen(function* () {
+        const { dataset } = yield* fetchDescription(makeClient, 'text/turtle');
+        const services = Dataset.subjectsOf(dataset, RDF_TYPE, Term.namedNode(`${SD}Service`));
+        expect(services.length).toBeGreaterThan(0);
+        for (const s of services) {
+          // Every service has an endpoint and supported languages from the sd: vocabulary.
+          expect(Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}endpoint`)).length).toBe(1);
+          const languages = Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}supportedLanguage`));
+          expect(languages.length).toBeGreaterThan(0);
+          for (const l of languages) {
+            expect([`${SD}SPARQL10Query`, `${SD}SPARQL11Query`, `${SD}SPARQL11Update`]).toContain(
+              l._tag === 'NamedNode' ? l.value : '',
+            );
+          }
+          for (const ds of Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}defaultDataset`))) {
+            // SAFETY: an `sd:defaultDataset` value is a node, so it can be a subject.
+            expect(
+              Dataset.has(
+                dataset,
+                Term.quad(ds as Term.Subject, RDF_TYPE, Term.namedNode(`${SD}Dataset`)),
+              ),
+            ).toBe(true);
+          }
         }
-        for (const ds of Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}defaultDataset`))) {
-          // SAFETY: an `sd:defaultDataset` value is a node, so it can be a subject.
-          expect(
-            Dataset.has(
-              dataset,
-              Term.quad(ds as Term.Subject, RDF_TYPE, Term.namedNode(`${SD}Dataset`)),
-            ),
-          ).toBe(true);
-        }
-      }
-    }),
-  );
+      }),
+    );
+  });
 });
 
 /**

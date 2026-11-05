@@ -23,6 +23,8 @@ client for [Effect](https://effect.website), built on the `effect/http`
   `Schedule` (transient failures only, by default).
 - **Federation**: a `SERVICE` handler and a `LOAD` loader for the in-memory
   engine, so that it evaluates `SERVICE <url> { … }` remotely.
+- **A derived client** (`SparqlApiClient`) generated with `HttpApiClient`
+  from the server's `SparqlApi` definition, alongside the hand-written one.
 
 ## Querying
 
@@ -109,6 +111,49 @@ const program = Effect.gen(function* () {
   yield* client.getGraphDataset('default');
 });
 ```
+
+## Derived client
+
+`SparqlApiClient.make(options)` derives a client with `HttpApiClient` from
+the `SparqlApi` definition of
+[`@thomasfosterau/effect-sparql-server`](../sparql-server): one typed method
+per endpoint (`client.sparql.query`, `client.sparql.post`,
+`client.graphStore.get` / `head` / `put` / `post` / `delete`), returning
+response bodies as byte streams and failing with the server's
+`Errors.ProtocolError` (with the status and message) on error statuses. The
+helpers send the common requests and parse the bodies with `ResultsStream`
+and `Formats.defaults`:
+
+```ts
+import { Effect, Stream } from 'effect';
+import { FetchHttpClient } from 'effect/http';
+import { SparqlApiClient } from '@thomasfosterau/effect-sparql-client';
+
+const program = Effect.gen(function* () {
+  const client = yield* SparqlApiClient.SparqlApiClient;
+  // Raw: the generated method, with `responseMode` to see the response.
+  const [body, response] = yield* client.sparql.query({
+    query: { query: 'ASK {}' },
+    headers: { accept: 'application/sparql-results+json' },
+    responseMode: 'decoded-and-response',
+  });
+  // Parsed: SELECT / ASK events, CONSTRUCT graphs, updates, Graph Store.
+  const events = yield* Stream.runCollect(SparqlApiClient.results(client, 'SELECT * { ?s ?p ?o }'));
+  yield* SparqlApiClient.update(client, 'INSERT DATA { <urn:a> <urn:b> <urn:c> }');
+  yield* SparqlApiClient.writeGraph(client, { graph: 'urn:g' }, '<urn:a> <urn:b> "c" .');
+  return yield* SparqlApiClient.readGraph(client, { graph: 'urn:g' });
+}).pipe(
+  Effect.provide(SparqlApiClient.layer({ baseUrl: 'https://example.org' })),
+  Effect.provide(FetchHttpClient.layer),
+);
+```
+
+`options.paths` targets a server at other paths and `transformClient` adds
+retries or authentication. Direct bodies are tagged payloads
+(`{ _tag: 'DirectQuery', query }`, `{ _tag: 'DirectUpdate', update }`),
+forms are plain records, and Graph Store bodies are `{ mediaType, document }`.
+It works against `SparqlServer.handler` too: the definition describes the
+same protocol. `effect/http-api` is `@stability unstable` in Effect 4.
 
 ## Errors
 

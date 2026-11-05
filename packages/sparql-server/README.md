@@ -36,6 +36,10 @@ of the engine of [`@thomasfosterau/effect-sparql`](../sparql).
   (`SparqlServer.query`, `SparqlServer.update`, `SparqlServer.graphStore`).
 - Usable as a plain HTTP app, as `HttpRouter` routes to mount in your own
   server, or as a complete Node server — plus a small CLI.
+- **An `effect/http-api` definition** (`SparqlApi`) of both protocols, served
+  by `SparqlApiBuilder` with the same behaviour, with an OpenAPI document and
+  a derived client in
+  [`@thomasfosterau/effect-sparql-client`](../sparql-client).
 
 ## Serving data
 
@@ -101,6 +105,59 @@ const Main = HttpRouter.serve(Routes).pipe(
 
 `HttpRouter.toWebHandler` turns the same routes into a `fetch`-style handler
 for serverless runtimes.
+
+## HttpApi definition and OpenAPI
+
+`SparqlApi` describes both protocols as an Effect `HttpApi`, so the
+endpoints, their parameters, request and response media types and error
+statuses are typed and documented in one place:
+
+- group `sparql`: `query` (`GET` with `query`, `default-graph-uri`,
+  `named-graph-uri`; without `query` it answers the service description) and
+  `post` (`POST` with an `application/x-www-form-urlencoded`,
+  `application/sparql-query` or `application/sparql-update` body; `200` with
+  results or `204` after an update);
+- group `graphStore`: `get`, `head`, `put`, `post` and `delete` with
+  `graph=<iri>` or `default`, bodies under every RDF media type of
+  `Formats.codecs`;
+- responses are byte streams listing every format
+  (`SparqlApi.queryMediaTypes`, `SparqlApi.rdfMediaTypes`); errors are
+  `text/plain` messages decoded into `Errors.ProtocolError` at `400`, `403`,
+  `404`, `405`, `406`, `415`, `500` and `503`.
+
+`SparqlApi.make({ path, graphStorePath })` builds it at other paths and
+`SparqlApi.openApi(api)` returns its OpenAPI document.
+
+`SparqlApiBuilder.layerRoutes(options)` serves it with `HttpApiBuilder`. Its
+handlers are raw (`handleRaw`) and run the same code as `SparqlServer`:
+`Accept` is negotiated and bodies are read by the protocol internals, so
+statuses, headers and messages are identical. Methods the API does not
+declare (`405` with `Allow`), CORS preflights and graphs identified directly
+by a URL below the graph store go to plain `HttpRouter` fallback routes, and
+the `SparqlApi.SchemaFallback` middleware hands a request whose parameters
+fail the API's schemas (e.g. a repeated `query`) to the protocol handler, so
+it gets the protocol's own `400`. The conformance suites run against both
+servers. `effect/http-api` is `@stability unstable` in Effect 4.
+
+```ts
+import { Layer } from 'effect';
+import { HttpRouter } from 'effect/http';
+import { NodeHttpServer } from '@effect/platform-node';
+import { createServer } from 'node:http';
+import { SparqlApiBuilder, SparqlServer } from '@thomasfosterau/effect-sparql-server';
+
+const Main = HttpRouter.serve(SparqlApiBuilder.layerRoutes({ openapiPath: '/openapi.json' })).pipe(
+  Layer.provide(SparqlServer.layerMemoryServices()),
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 8080 })),
+);
+```
+
+`SparqlApiBuilder.layerServe(options)` is the same with request logging, and
+`layerHandlers` / `layerSchemaFallback` / `layerFallback` are the pieces, for
+mounting the API next to other `HttpApiBuilder` groups. The API takes the
+options of `SparqlServer` except `updatePath` (updates go to the query
+endpoint) and `graphStorePath: false`. `Testing.makeApiClient(options)` is an
+in-process `HttpClient` for the API routes.
 
 ## Options
 
@@ -188,7 +245,8 @@ const program = Effect.gen(function* () {
 The W3C suites in `.test-suites/rdf-tests/sparql/sparql11` (or
 `$RDF_TEST_SUITES`) are run in-process against the server
 (`test/ProtocolConformance.test.ts`), reading the HTTP requests and expected
-responses from the manifests:
+responses from the manifests — once against `SparqlServer.handler` and once
+against the `SparqlApi` routes, with the same results:
 
 - **SPARQL 1.1 Protocol** (`protocol`): 34 / 34.
 - **Graph Store Protocol** (`graph-store-protocol`, direct and indirect

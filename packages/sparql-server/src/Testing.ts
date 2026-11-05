@@ -8,10 +8,15 @@ import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Result from 'effect/Result';
+import * as Scope from 'effect/Scope';
 import * as HttpClient from 'effect/http/HttpClient';
 import type * as HttpClientRequest from 'effect/http/HttpClientRequest';
+import * as HttpRouter from 'effect/http/HttpRouter';
+import * as HttpServer from 'effect/http/HttpServer';
+import * as HttpServerError from 'effect/http/HttpServerError';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
+import * as SparqlApiBuilder from './SparqlApiBuilder.ts';
 import * as SparqlServer from './SparqlServer.ts';
 import type * as Options from './Options.ts';
 
@@ -81,6 +86,34 @@ export const makeClient = (
   Effect.map(Effect.context<SparqlServer.Requirements>(), (context) =>
     fromApp(Effect.provideContext(SparqlServer.handler(options), context)),
   );
+
+/**
+ * Builds an in-process client for the `SparqlApi` routes
+ * (`SparqlApiBuilder.layerRoutes(options)`) using the server's services from
+ * the context. The routes live as long as the surrounding scope.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
+export const makeApiClient = (
+  options?: SparqlApiBuilder.ApiOptions,
+): Effect.Effect<HttpClient.HttpClient, never, SparqlServer.Requirements | Scope.Scope> =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.Scope;
+    const context = yield* Effect.context<SparqlServer.Requirements>();
+    const app = yield* HttpRouter.toHttpEffect(
+      SparqlApiBuilder.layerRoutes(options).pipe(Layer.provide(HttpServer.layerServices)),
+    );
+    return fromApp(
+      app.pipe(
+        Effect.catchCause((cause) =>
+          Effect.map(HttpServerError.causeResponse(cause), ([response]) => response),
+        ),
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provideContext(context),
+      ),
+    );
+  });
 
 /**
  * A layer providing an in-process `HttpClient` talking to a server built
