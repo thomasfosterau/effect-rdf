@@ -70,7 +70,8 @@ const rdf = (local: string) => RDF + local;
 // `rdf` with a literal type, so `Match.when(rdfLiteral('ID'), …)` narrows to that one IRI.
 const rdfLiteral = <L extends string>(local: L): `${typeof RDF}${L}` => `${RDF}${local}`;
 
-const CORE_SYNTAX_TERMS = new Set(
+/** The core syntax terms and the old terms, which are never node, property or attribute names. */
+const RESERVED_TERMS = new Set(
   [
     'RDF',
     'ID',
@@ -82,9 +83,11 @@ const CORE_SYNTAX_TERMS = new Set(
     'nodeID',
     'datatype',
     'version',
+    'aboutEach',
+    'aboutEachPrefix',
+    'bagID',
   ].map(rdf),
 );
-const OLD_TERMS = new Set(['aboutEach', 'aboutEachPrefix', 'bagID'].map(rdf));
 const UNQUALIFIED_RDF_ATTRIBUTES = new Set([
   'ID',
   'about',
@@ -94,15 +97,15 @@ const UNQUALIFIED_RDF_ATTRIBUTES = new Set([
   'version',
 ]);
 
-const isForbiddenNodeElement = (iri: string) =>
-  CORE_SYNTAX_TERMS.has(iri) || OLD_TERMS.has(iri) || iri === rdf('li');
+const RDF_DESCRIPTION = rdf('Description');
+const RDF_LI = rdf('li');
+const RDF_TYPE = rdf('type');
+
+const isForbiddenNodeElement = (iri: string) => RESERVED_TERMS.has(iri) || iri === RDF_LI;
 const isForbiddenPropertyElement = (iri: string) =>
-  CORE_SYNTAX_TERMS.has(iri) || OLD_TERMS.has(iri) || iri === rdf('Description');
+  RESERVED_TERMS.has(iri) || iri === RDF_DESCRIPTION;
 const isForbiddenPropertyAttribute = (iri: string) =>
-  CORE_SYNTAX_TERMS.has(iri) ||
-  OLD_TERMS.has(iri) ||
-  iri === rdf('Description') ||
-  iri === rdf('li');
+  RESERVED_TERMS.has(iri) || iri === RDF_DESCRIPTION || iri === RDF_LI;
 
 class ParseFailure {
   readonly message: string;
@@ -252,6 +255,19 @@ class RdfXmlParser {
     return new Term.BlankNode(`${this.blankNodePrefix}${id}`);
   }
 
+  /** The IRIs of names and datatypes seen so far, which repeat throughout a document. */
+  private readonly names = new Map<string, Term.NamedNode>();
+
+  /** The node for the IRI of an element or attribute name, or of a datatype. */
+  named(iri: string): Term.NamedNode {
+    let node = this.names.get(iri);
+    if (node === undefined) {
+      node = new Term.NamedNode(iri);
+      this.names.set(iri, node);
+    }
+    return node;
+  }
+
   iri(value: string, ctx: Context): Term.NamedNode {
     return new Term.NamedNode(Iri.resolve(value, ctx.base));
   }
@@ -352,7 +368,7 @@ class RdfXmlParser {
 
   nodeElement(el: Xml.Element, parentCtx: Context, given?: Term.Subject): Term.Subject {
     const ctx = given === undefined ? this.context(el, parentCtx) : parentCtx;
-    const iri = given === undefined ? this.elementIri(el) : rdf('Description');
+    const iri = given === undefined ? this.elementIri(el) : RDF_DESCRIPTION;
     if (isForbiddenNodeElement(iri)) this.fail(`<${el.name}> is not allowed as a node element`, el);
     let subject: Term.Subject | undefined = given;
     const attrs: NodeAttributes = { idAttr: undefined, props: [] };
@@ -371,12 +387,12 @@ class RdfXmlParser {
       }
     }
     const s = subject ?? this.fresh();
-    if (iri !== rdf('Description')) this.emit(s, rdfType, new Term.NamedNode(iri));
+    if (iri !== RDF_DESCRIPTION) this.emit(s, rdfType, this.named(iri));
     for (const a of props) {
       this.emit(
         s,
-        new Term.NamedNode(a.iri),
-        a.iri === rdf('type') ? this.iri(a.value, ctx) : this.literal(a.value, ctx),
+        this.named(a.iri),
+        a.iri === RDF_TYPE ? this.iri(a.value, ctx) : this.literal(a.value, ctx),
       );
     }
     this.propertyEltList(el, s, ctx);
@@ -388,7 +404,7 @@ class RdfXmlParser {
     for (const c of el.children) {
       if (c._tag === 'Element') {
         let iri = this.elementIri(c);
-        if (iri === rdf('li')) iri = rdf(`_${li++}`);
+        if (iri === RDF_LI) iri = rdf(`_${li++}`);
         this.propertyElt(c, iri, subject, ctx);
       } else if (c._tag === 'Text' && !Xml.isWhitespace(c.value)) {
         this.fail('Unexpected text where property elements are expected', c);
@@ -401,7 +417,7 @@ class RdfXmlParser {
       this.fail(`<${el.name}> is not allowed as a property element`, el);
     }
     const ctx = this.context(el, parentCtx);
-    const predicate = new Term.NamedNode(iri);
+    const predicate = this.named(iri);
     const attrs: PropertyAttributes = {
       id: undefined,
       annotation: undefined,
@@ -509,7 +525,7 @@ class RdfXmlParser {
       }
       finish(
         datatype !== undefined
-          ? Term.literal(text, this.iri(datatype.value, ctx))
+          ? Term.literal(text, this.named(Iri.resolve(datatype.value, ctx.base)))
           : this.literal(text, ctx),
       );
       return;
@@ -524,7 +540,7 @@ class RdfXmlParser {
       if (other !== undefined) {
         this.fail(`${other.attribute.name} cannot be used with rdf:datatype`, other.attribute);
       }
-      finish(Term.literal('', this.iri(datatype.value, ctx)));
+      finish(Term.literal('', this.named(Iri.resolve(datatype.value, ctx.base))));
       return;
     }
     if (resource === undefined && nodeId === undefined && Arr.isReadonlyArrayEmpty(props)) {
@@ -540,8 +556,8 @@ class RdfXmlParser {
     for (const a of props) {
       this.emit(
         r,
-        new Term.NamedNode(a.iri),
-        a.iri === rdf('type') ? this.iri(a.value, ctx) : this.literal(a.value, ctx),
+        this.named(a.iri),
+        a.iri === RDF_TYPE ? this.iri(a.value, ctx) : this.literal(a.value, ctx),
       );
     }
     finish(r);
@@ -956,7 +972,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   const property = (t: Term.Triple, depth: number, lines: Array<string>) => {
     const pad = indentUnit.repeat(depth);
     const p = t.predicate.value;
-    if (isForbiddenPropertyElement(p) || p === rdf('li')) {
+    if (isForbiddenPropertyElement(p) || p === RDF_LI) {
       writer.fail(`The predicate <${p}> cannot be used as an RDF/XML property element`);
     }
     const name = writer.qname(p, 'predicate');
@@ -1037,7 +1053,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
     const o = t.object;
     if (o._tag === 'BlankNode') {
       const name = writer.qname(t.predicate.value, 'predicate');
-      if (isForbiddenPropertyElement(t.predicate.value) || t.predicate.value === rdf('li')) {
+      if (isForbiddenPropertyElement(t.predicate.value) || t.predicate.value === RDF_LI) {
         writer.fail(
           `The predicate <${t.predicate.value}> cannot be used as an RDF/XML property element`,
         );

@@ -24,6 +24,8 @@ const laughs = (body: string) =>
     (_, i) => `<!ENTITY l${i + 1} "${`&l${i};`.repeat(10)}">`,
   ).join('')}]><a>&l9;</a>`;
 
+const attributes = (n: number) => Array.from({ length: n }, (_, i) => `a${i}="${i}"`).join(' ');
+
 const deep = (n: number) => '<a>'.repeat(n) + '</a>'.repeat(n);
 
 const chain = (n: number, open: string, close: string) =>
@@ -181,6 +183,28 @@ describe('Xml.parse', () => {
     const doc = parseOk(`<!DOCTYPE a [${entities}]><a>${'&e0;'.repeat(20_000)}</a>`);
     expect(doc.root.children).toHaveLength(20_000);
     expect(performance.now() - start).toBeLessThan(5_000);
+  });
+
+  it.each([3, 40])('finds duplicate attributes in a start tag with %i attributes', (n) => {
+    expect(parseOk(`<e ${attributes(n)}/>`).root.attributes).toHaveLength(n);
+    expect(parseErr(`<e ${attributes(n)} a1="x"/>`).message).toContain('Duplicate attribute "a1"');
+    expect(
+      parseErr(`<e xmlns:p="u" xmlns:q="u" ${attributes(n)} p:z="1" q:z="2"/>`).message,
+    ).toContain('Duplicate attribute "{u}z"');
+    const root = parseOk(
+      `<!DOCTYPE e [<!ATTLIST e a1 CDATA "d" b CDATA "d">]><e ${attributes(n)}/>`,
+    ).root;
+    expect(root.attributes.find((a) => a.name === 'a1')?.value).toBe('1');
+    expect(root.attributes.find((a) => a.name === 'b')?.defaulted).toBe(true);
+  });
+
+  it('reports positions on later lines and back on earlier ones', () => {
+    const doc = parseOk(`<a>\n${'<b/>\n'.repeat(30)}<c\n x="1"/></a>`);
+    const children = elements(doc.root);
+    expect(children.at(0)?.position).toEqual({ offset: 4, line: 2, column: 1 });
+    expect(children.at(29)?.position.line).toBe(31);
+    expect(children.at(30)?.attributes.at(0)?.position).toMatchObject({ line: 33, column: 2 });
+    expect(doc.root.position).toEqual({ offset: 0, line: 1, column: 1 });
   });
 
   it('validates names', () => {
