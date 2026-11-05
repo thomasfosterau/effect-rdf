@@ -35,6 +35,30 @@ const expectGraph = (input: string, nt: string, options?: RdfXml.ParseOptions) =
     expect(isomorphic).toBe(true);
   });
 
+describe('RdfXml.parseQuads', () => {
+  it.effect('returns the statements in document order, keeping duplicates', () =>
+    Effect.gen(function* () {
+      const result = yield* RdfXml.parseQuads(
+        doc(
+          '<rdf:Description rdf:about="http://example.org/b"><ex:p>2</ex:p></rdf:Description>' +
+            '<rdf:Description rdf:about="http://example.org/a" ex:p="1"><ex:p>1</ex:p></rdf:Description>',
+          ' xml:base="http://example.org/base"',
+        ),
+        { graph: ex('g') },
+      );
+      expect(result.quads.map((q) => q.toString())).toEqual([
+        '<http://example.org/b> <http://example.org/p> "2" <http://example.org/g> .',
+        '<http://example.org/a> <http://example.org/p> "1" <http://example.org/g> .',
+        '<http://example.org/a> <http://example.org/p> "1" <http://example.org/g> .',
+      ]);
+      expect(result.baseIri).toBe('http://example.org/base');
+      expect(Option.getOrUndefined(PrefixMap.get(result.prefixes, 'ex'))).toBe(
+        'http://example.org/',
+      );
+    }),
+  );
+});
+
 describe('RdfXml.parse', () => {
   describe('converting node elements as they are read', () => {
     const xmlAfterRdfError = doc(
