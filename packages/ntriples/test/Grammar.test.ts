@@ -18,16 +18,22 @@ describe('Grammar', () => {
       [Grammar.digit, Lexical.isDigit],
       [Grammar.hex, Lexical.isHex],
     ];
-    const mismatches: Array<string> = [];
-    for (const [set, predicate] of sets) {
+    // Every BMP code point but the surrogates, then every 97th astral one
+    const codePoints = [
+      ...Array.from({ length: 0x10000 }, (_, c) => c),
+      ...Array.from(
+        { length: Math.floor((0x10ffff - 0x10000) / 97) + 1 },
+        (_, i) => 0x10000 + i * 97,
+      ),
+    ].filter((c) => c < 0xd800 || c > 0xdfff);
+    const mismatches = sets.flatMap(([set, predicate]) => {
       const one = Compiler.jit(Token.oneOf(set));
-      for (let c = 0; c <= 0x10ffff; c += c < 0x10000 ? 1 : 97) {
-        if (c >= 0xd800 && c <= 0xdfff) continue;
-        if (Result.isSuccess(Parser.parse(one, String.fromCodePoint(c))) !== predicate(c)) {
-          mismatches.push(`U+${c.toString(16)}`);
-        }
-      }
-    }
+      return codePoints
+        .filter(
+          (c) => Result.isSuccess(Parser.parse(one, String.fromCodePoint(c))) !== predicate(c),
+        )
+        .map((c) => `U+${c.toString(16)}`);
+    });
     expect(mismatches).toEqual([]);
   });
 

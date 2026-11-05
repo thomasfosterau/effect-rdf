@@ -8,98 +8,185 @@
  */
 import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
-import * as Match from 'effect/Match';
+import * as Iterable from 'effect/Iterable';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
 import * as Dataset from './Dataset.ts';
+import { loop } from './internal/loop.ts';
 import * as Term from './Term.ts';
+
+/** Blank node labels, by blank node label. */
+type Labels = MutableHashMap.MutableHashMap<string, string>;
 
 const fnv = (s: string): string => {
   let h1 = 0x811c9dc5;
   let h2 = 0x01000193;
-  for (let i = 0; i < s.length; i++) {
+  loop((i) => {
+    if (i >= s.length) return false;
     const c = s.charCodeAt(i);
     h1 = Math.imul(h1 ^ c, 0x01000193);
     h2 = Math.imul(h2 ^ c, 0x5bd1e995);
-  }
+    return true;
+  });
   return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
 };
 
-const collectBlankNodes = (t: Term.Term, out: Set<string>) => {
-  if (t._tag === 'BlankNode') out.add(t.value);
-  else if (t._tag === 'Triple') {
+/** Appends the blank nodes of `t` (and of the triple terms inside it) to `out`, each once. */
+const collectBlankNodes = (t: Term.Term, out: Array<string>): void => {
+  if (Term.isBlankNode(t)) {
+    if (!out.includes(t.value)) out.push(t.value);
+  } else if (Term.isTriple(t)) {
     collectBlankNodes(t.subject, out);
     collectBlankNodes(t.object, out);
   }
 };
 
-const quadBlankNodes = (q: Term.Quad): Set<string> => {
-  const out = new Set<string>();
+/** The distinct blank nodes of a quad, in order of first occurrence. */
+const quadBlankNodes = (q: Term.Quad): ReadonlyArray<string> => {
+  const out: Array<string> = [];
   collectBlankNodes(q.subject, out);
   collectBlankNodes(q.object, out);
   collectBlankNodes(q.graph, out);
   return out;
 };
 
-// Built once: `termSig` runs for every term of every quad in each refinement round.
-const termSig: (t: Term.Term, self: string, labels: ReadonlyMap<string, string>) => string =
-  Match.fn((t: Term.Term, _self: string, _labels: ReadonlyMap<string, string>) => t).pipe(
-    Match.withReturnType<string>(),
-    Match.tag('BlankNode', (t, _t, self, labels) =>
-      t.value === self ? '@self' : `@${labels.get(t.value) ?? ''}`,
-    ),
-    Match.tag(
-      'Triple',
-      (t, _t, self, labels) =>
-        `<<${termSig(t.subject, self, labels)} ${t.predicate.key} ${termSig(t.object, self, labels)}>>`,
-    ),
-    Match.orElse((t) => t.key),
-  );
+const labelOf = (labels: Labels, node: string): string =>
+  Option.getOrElse(MutableHashMap.get(labels, node), () => '');
+
+/**
+ * A quad's signature for one of its blank nodes, compiled once: text, and in
+ * between the indexes (into `Partition.nodes`) of the other blank nodes,
+ * whose current labels each refinement round fills in. The node itself is
+ * `@self`.
+ */
+type Template = ReadonlyArray<string | number>;
+
+const compile = (
+  t: Term.Term,
+  self: string,
+  index: MutableHashMap.MutableHashMap<string, number>,
+  out: Array<string | number>,
+): void => {
+  if (Term.isBlankNode(t)) {
+    if (t.value === self) out.push('@self');
+    else out.push(Option.getOrElse(MutableHashMap.get(index, t.value), () => '@'));
+  } else if (Term.isTriple(t)) {
+    out.push('<<');
+    compile(t.subject, self, index, out);
+    out.push(` ${t.predicate.key} `);
+    compile(t.object, self, index, out);
+    out.push('>>');
+  } else out.push(t.key);
+};
+
+const template = (
+  q: Term.Quad,
+  self: string,
+  index: MutableHashMap.MutableHashMap<string, number>,
+): Template => {
+  const out: Array<string | number> = [];
+  compile(q.subject, self, index, out);
+  out.push(` ${q.predicate.key} `);
+  compile(q.object, self, index, out);
+  out.push(' ');
+  compile(q.graph, self, index, out);
+  return out;
+};
+
+/** A template with the blank nodes' labels filled in. */
+const render = (t: Template, labels: ReadonlyArray<string>): string =>
+  t.map((part) => (Predicate.isString(part) ? part : `@${labels[part] ?? ''}`)).join('');
 
 interface Partition {
   readonly nodes: ReadonlyArray<string>;
-  readonly labels: Map<string, string>;
-  readonly byNode: Map<string, Array<Term.Quad>>;
+  readonly labels: Labels;
+  readonly byNode: MutableHashMap.MutableHashMap<string, Array<Term.Quad>>;
 }
 
+/** The quads a blank node occurs in. */
+const quadsOf = (p: Partition, node: string): ReadonlyArray<Term.Quad> =>
+  Option.getOrElse(MutableHashMap.get(p.byNode, node), () => []);
+
 const refine = (quads: ReadonlyArray<Term.Quad>): Partition => {
-  const byNode = new Map<string, Array<Term.Quad>>();
-  for (const q of quads) {
-    for (const b of quadBlankNodes(q)) {
-      let list = byNode.get(b);
-      if (list === undefined) byNode.set(b, (list = []));
-      list.push(q);
-    }
-  }
-  const nodes = Array.from(byNode.keys());
-  let labels = new Map<string, string>(nodes.map((n) => [n, '']));
+  const byNode = MutableHashMap.empty<string, Array<Term.Quad>>();
+  quads.forEach((q) => {
+    quadBlankNodes(q).forEach((b) => {
+      const list = MutableHashMap.get(byNode, b);
+      if (Option.isSome(list)) list.value.push(q);
+      else MutableHashMap.set(byNode, b, [q]);
+    });
+  });
+  const nodes = Arr.fromIterable(MutableHashMap.keys(byNode));
+  const index = MutableHashMap.fromIterable(nodes.map((n, i) => [n, i] as const));
+  const templates = nodes.map((n) =>
+    Option.getOrElse(MutableHashMap.get(byNode, n), () => []).map((q) => template(q, n, index)),
+  );
+  let labels: ReadonlyArray<string> = nodes.map(() => '');
   let classes = 1;
-  for (let round = 0; round <= nodes.length; round++) {
-    const next = new Map<string, string>();
-    for (const n of nodes) {
-      const sigs = Arr.sort(
-        byNode
-          .get(n)!
-          .map(
-            (q) =>
-              `${termSig(q.subject, n, labels)} ${q.predicate.key} ${termSig(q.object, n, labels)} ${termSig(q.graph, n, labels)}`,
-          ),
-        Order.String,
-      );
-      next.set(n, fnv(labels.get(n)! + '|' + sigs.join('\n')));
-    }
-    const nextClasses = new Set(next.values()).size;
+  // Refine until the number of classes stops growing (at most one round per node)
+  loop((round) => {
+    if (round > nodes.length) return false;
+    const current = labels;
+    const next = templates.map((ts, i) =>
+      fnv(
+        `${current[i] ?? ''}|${Arr.sort(
+          ts.map((t) => render(t, current)),
+          Order.String,
+        ).join('\n')}`,
+      ),
+    );
+    const nextClasses = MutableHashSet.size(MutableHashSet.fromIterable(next));
     labels = next;
-    if (nextClasses === classes) break;
+    if (nextClasses === classes) return false;
     classes = nextClasses;
-  }
-  return { nodes, labels, byNode };
+    return true;
+  });
+  const final = labels;
+  return {
+    nodes,
+    labels: MutableHashMap.fromIterable(nodes.map((n, i) => [n, final[i] ?? ''] as const)),
+    byNode,
+  };
 };
 
-const rename = (q: Term.Quad, mapping: ReadonlyMap<string, string>): string =>
+/** `q` with its blank nodes renamed by `mapping` (those it does not map are kept). */
+const renameBlankNodes = (q: Term.Quad, mapping: Labels): Term.Quad =>
   Term.mapTerms(q, (t) =>
-    t._tag === 'BlankNode' ? new Term.BlankNode(mapping.get(t.value) ?? t.value) : t,
-  ).key;
+    Term.isBlankNode(t)
+      ? new Term.BlankNode(Option.getOrElse(MutableHashMap.get(mapping, t.value), () => t.value))
+      : t,
+  );
+
+const rename = (q: Term.Quad, mapping: Labels): string => renameBlankNodes(q, mapping).key;
+
+/** The blank nodes of a partition grouped by label, in order. */
+const groupsOf = (p: Partition): MutableHashMap.MutableHashMap<string, Array<string>> => {
+  const groups = MutableHashMap.empty<string, Array<string>>();
+  p.nodes.forEach((n) => {
+    const l = labelOf(p.labels, n);
+    const group = MutableHashMap.get(groups, l);
+    if (Option.isSome(group)) group.value.push(n);
+    else MutableHashMap.set(groups, l, [n]);
+  });
+  return groups;
+};
+
+/** The class of `node`: the nodes of `groups` with its label in `labels`. */
+const classOf = (
+  groups: MutableHashMap.MutableHashMap<string, ReadonlyArray<string>>,
+  labels: Labels,
+  node: string,
+): ReadonlyArray<string> =>
+  Option.getOrElse(MutableHashMap.get(groups, labelOf(labels, node)), () => []);
+
+/**
+ * The public result of `bijection`: a native `ReadonlyMap`, copied once
+ * from the search's map at the end.
+ */
+const toReadonlyMap = (mapping: Labels): ReadonlyMap<string, string> => new Map(mapping);
 
 /**
  * Finds a blank node bijection from `self` to `that` under which the two
@@ -114,85 +201,83 @@ export const bijection = (
 ): Option.Option<ReadonlyMap<string, string>> => {
   if (self.size !== that.size) return Option.none();
   const aBlank: Array<Term.Quad> = [];
-  const bBlank: Array<Term.Quad> = [];
-  for (const q of self) {
-    if (Term.hasBlankNodes(q)) aBlank.push(q);
-    else if (!Dataset.has(that, q)) return Option.none();
-  }
-  for (const q of that) if (Term.hasBlankNodes(q)) bBlank.push(q);
+  const groundMissing = Iterable.some(self, (q) => {
+    if (!Term.hasBlankNodes(q)) return !Dataset.has(that, q);
+    aBlank.push(q);
+    return false;
+  });
+  if (groundMissing) return Option.none();
+  const bBlank = Arr.filter(Arr.fromIterable(that), (q) => Term.hasBlankNodes(q));
   if (aBlank.length !== bBlank.length) return Option.none();
-  if (Arr.isReadonlyArrayEmpty(aBlank)) return Option.some(new Map());
+  if (Arr.isReadonlyArrayEmpty(aBlank)) return Option.some(toReadonlyMap(MutableHashMap.empty()));
 
   const a = refine(aBlank);
   const b = refine(bBlank);
   if (a.nodes.length !== b.nodes.length) return Option.none();
 
-  const groupsB = new Map<string, Array<string>>();
-  for (const n of b.nodes) {
-    const l = b.labels.get(n)!;
-    let g = groupsB.get(l);
-    if (g === undefined) groupsB.set(l, (g = []));
-    g.push(n);
-  }
-  const groupsA = new Map<string, Array<string>>();
-  for (const n of a.nodes) {
-    const l = a.labels.get(n)!;
-    let g = groupsA.get(l);
-    if (g === undefined) groupsA.set(l, (g = []));
-    g.push(n);
-  }
-  for (const [l, g] of groupsA) if (groupsB.get(l)?.length !== g.length) return Option.none();
+  const groupsB = groupsOf(b);
+  const groupsA = groupsOf(a);
+  const sameClasses = !Iterable.some(
+    groupsA,
+    ([l, g]) => !Option.exists(MutableHashMap.get(groupsB, l), (gb) => gb.length === g.length),
+  );
+  if (!sameClasses) return Option.none();
 
-  const target = new Set(bBlank.map((q) => q.key));
-  const mapping = new Map<string, string>();
-  const used = new Set<string>();
+  const target = MutableHashSet.fromIterable(bBlank.map((q) => q.key));
+  const mapping: Labels = MutableHashMap.empty();
+  const used = MutableHashSet.empty<string>();
   // Assign unambiguous nodes first, then search the rest smallest class first.
   const order = Arr.sort(
     a.nodes,
-    Order.mapInput(Order.Number, (x: string) => groupsA.get(a.labels.get(x)!)!.length),
+    Order.mapInput(Order.Number, (x: string) => classOf(groupsA, a.labels, x).length),
   );
 
-  const consistent = (node: string): boolean => {
-    for (const q of a.byNode.get(node)!) {
-      const bs = quadBlankNodes(q);
-      let complete = true;
-      for (const x of bs) if (!mapping.has(x)) complete = false;
-      if (complete && !target.has(rename(q, mapping))) return false;
-    }
-    return true;
-  };
+  const consistent = (node: string): boolean =>
+    !quadsOf(a, node).some((q) => {
+      const complete = quadBlankNodes(q).every((x) => MutableHashMap.has(mapping, x));
+      return complete && !MutableHashSet.has(target, rename(q, mapping));
+    });
 
   // Iterative depth-first search (graphs can have many thousands of blank nodes).
   const cursors: Array<number> = [0];
-  while (Arr.isReadonlyArrayNonEmpty(cursors)) {
+  let found = false;
+  loop(() => {
     const i = cursors.length - 1;
-    if (i === order.length) return Option.some(mapping);
-    const node = order[i]!;
-    const candidates = groupsB.get(a.labels.get(node)!)!;
-    const previous = mapping.get(node);
-    if (previous !== undefined) {
-      mapping.delete(node);
-      used.delete(previous);
+    const node = order[i];
+    if (i < 0 || node === undefined) {
+      // The search is exhausted, or every node is assigned
+      found = i === order.length;
+      return false;
     }
-    let next = cursors[i]!;
+    const candidates = classOf(groupsB, a.labels, node);
+    const previous = MutableHashMap.get(mapping, node);
+    if (Option.isSome(previous)) {
+      MutableHashMap.remove(mapping, node);
+      MutableHashSet.remove(used, previous.value);
+    }
+    let next = cursors[i] ?? 0;
     let advanced = false;
-    while (next < candidates.length) {
-      const candidate = candidates[next++]!;
-      if (used.has(candidate)) continue;
-      mapping.set(node, candidate);
-      used.add(candidate);
+    loop(() => {
+      const candidate = candidates[next];
+      if (candidate === undefined) return false;
+      next++;
+      if (MutableHashSet.has(used, candidate)) return true;
+      MutableHashMap.set(mapping, node, candidate);
+      MutableHashSet.add(used, candidate);
       if (consistent(node)) {
         advanced = true;
-        break;
+        return false;
       }
-      mapping.delete(node);
-      used.delete(candidate);
-    }
+      MutableHashMap.remove(mapping, node);
+      MutableHashSet.remove(used, candidate);
+      return true;
+    });
     cursors[i] = next;
     if (advanced) cursors.push(0);
     else cursors.pop();
-  }
-  return Option.none();
+    return true;
+  });
+  return found ? Option.some(toReadonlyMap(mapping)) : Option.none();
 };
 
 /**
@@ -225,12 +310,10 @@ export const relabel = (self: Dataset.Dataset, prefix = 'c'): Dataset.Dataset =>
   const { nodes, labels } = refine(blank);
   const sorted = Arr.sort(
     nodes,
-    Order.mapInput(Order.String, (x: string) => labels.get(x)!),
+    Order.mapInput(Order.String, (x: string) => labelOf(labels, x)),
   );
-  const mapping = new Map(sorted.map((n, i) => [n, `${prefix}${i}`]));
-  return Dataset.map(self, (q) =>
-    Term.mapTerms(q, (t) =>
-      t._tag === 'BlankNode' ? new Term.BlankNode(mapping.get(t.value)!) : t,
-    ),
+  const mapping: Labels = MutableHashMap.fromIterable(
+    sorted.map((n, i) => [n, `${prefix}${i}`] as const),
   );
+  return Dataset.map(self, (q) => renameBlankNodes(q, mapping));
 };

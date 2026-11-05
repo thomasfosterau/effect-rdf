@@ -14,7 +14,13 @@
  * @since 0.1.0
  */
 import { NamedNode } from './Term.ts';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
+
+/** Whether `node` is the IRI `iri`, with the IRI's type. */
+const hasIri = <const Iri extends string>(node: NamedNode, iri: Iri): node is NamedNode<Iri> =>
+  node.value === iri;
 
 /**
  * A function that mints IRIs within a namespace.
@@ -37,17 +43,18 @@ export interface Namespace<Base extends string> {
  * @category constructors
  */
 export const make = <const Base extends string>(base: Base): Namespace<Base> => {
-  const cache = new Map<string, NamedNode>();
-  // SAFETY: the function gets its vocabulary members (`contains`, `localName`, …) assigned below
-  // before it is returned.
-  const ns = ((local: string) => {
-    let node = cache.get(local);
-    if (node === undefined) {
-      node = new NamedNode(base + local);
-      cache.set(local, node);
-    }
-    return node;
-  }) as Namespace<Base>;
+  const cache = MutableHashMap.empty<string, NamedNode>();
+  const ns = <const Local extends string>(local: Local): NamedNode<`${Base}${Local}`> => {
+    const iri: `${Base}${Local}` = `${base}${local}`;
+    return Option.getOrElse(
+      Option.filter(MutableHashMap.get(cache, local), (node) => hasIri(node, iri)),
+      () => {
+        const node = new NamedNode(iri);
+        MutableHashMap.set(cache, local, node);
+        return node;
+      },
+    );
+  };
   const contains = (iri: string | NamedNode) =>
     (Predicate.isString(iri) ? iri : iri.value).startsWith(base);
   return Object.assign(ns, {
@@ -85,9 +92,9 @@ export const vocabulary = <const Base extends string, const Terms extends string
   const props: PropertyDescriptorMap = {
     terms: { value: terms, enumerable: false },
   };
-  for (const term of terms) {
+  terms.forEach((term) => {
     props[term] = { value: ns(term), enumerable: true };
-  }
+  });
   // SAFETY: `props` defines one property per term in `Terms`.
   return Object.defineProperties(ns, props) as Vocabulary<Base, Terms>;
 };

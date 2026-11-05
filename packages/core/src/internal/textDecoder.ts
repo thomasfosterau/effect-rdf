@@ -6,6 +6,7 @@
  * order mark is dropped. Other charsets go through a fatal `TextDecoder` too,
  * with failures positioned at the start of the failing chunk.
  */
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 
@@ -26,11 +27,19 @@ export interface Decoder {
 
 const isUtf8 = (charset: string): boolean => /^utf-?8$/i.test(charset.trim());
 
-const isContinuation = (b: number | undefined): boolean => b !== undefined && b >= 0x80 && b < 0xc0;
+/** The byte at `i` from the end of `bytes` (1 is the last), if there is one. */
+const fromEnd = (bytes: Uint8Array, i: number): Option.Option<number> =>
+  Option.fromUndefinedOr(bytes[bytes.length - i]);
+
+const isContinuation = (b: Option.Option<number>): boolean =>
+  Option.exists(b, (byte) => byte >= 0x80 && byte < 0xc0);
 
 // The length of the sequence a lead byte starts (1 for anything that is not a multi-byte lead).
-const sequenceLength = (lead: number | undefined): number =>
-  lead === undefined || lead < 0xc2 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : lead < 0xf5 ? 4 : 1;
+const sequenceLength = (lead: Option.Option<number>): number =>
+  Option.match(lead, {
+    onNone: () => 1,
+    onSome: (l) => (l < 0xc2 ? 1 : l < 0xe0 ? 2 : l < 0xf0 ? 3 : l < 0xf5 ? 4 : 1),
+  });
 
 /**
  * How many trailing bytes start a sequence the chunk does not finish (0–3):
@@ -38,13 +47,12 @@ const sequenceLength = (lead: number | undefined): number =>
  * left to the decoder.
  */
 const incompleteTail = (bytes: Uint8Array): number => {
-  const n = bytes.length;
-  if (sequenceLength(bytes[n - 1]) > 1) return 1;
-  if (sequenceLength(bytes[n - 2]) > 2 && isContinuation(bytes[n - 1])) return 2;
+  if (sequenceLength(fromEnd(bytes, 1)) > 1) return 1;
+  if (sequenceLength(fromEnd(bytes, 2)) > 2 && isContinuation(fromEnd(bytes, 1))) return 2;
   if (
-    sequenceLength(bytes[n - 3]) > 3 &&
-    isContinuation(bytes[n - 2]) &&
-    isContinuation(bytes[n - 1])
+    sequenceLength(fromEnd(bytes, 3)) > 3 &&
+    isContinuation(fromEnd(bytes, 2)) &&
+    isContinuation(fromEnd(bytes, 1))
   )
     return 3;
   return 0;
@@ -138,13 +146,17 @@ const utf8Decoder = (): Decoder => {
 
 const otherDecoder = (charset: string): Decoder => {
   const position = new Position();
-  let text: TextDecoder | undefined;
-  const run = (chunk: Uint8Array | undefined): string | DecodeFailure =>
+  let text: Option.Option<TextDecoder> = Option.none();
+  const run = (chunk: Option.Option<Uint8Array>): string | DecodeFailure =>
     Result.match(
       Result.try({
         try: () => {
-          text ??= new TextDecoder(charset, { fatal: true });
-          return chunk === undefined ? text.decode() : text.decode(chunk, { stream: true });
+          const decoder = Option.getOrElse(text, () => new TextDecoder(charset, { fatal: true }));
+          text = Option.some(decoder);
+          return Option.match(chunk, {
+            onNone: () => decoder.decode(),
+            onSome: (bytes) => decoder.decode(bytes, { stream: true }),
+          });
         },
         catch: (error) =>
           error instanceof RangeError
@@ -159,7 +171,7 @@ const otherDecoder = (charset: string): Decoder => {
         onFailure: (message) => position.fail(message),
       },
     );
-  return { push: (chunk) => run(chunk), end: () => run(undefined) };
+  return { push: (chunk) => run(Option.some(chunk)), end: () => run(Option.none()) };
 };
 
 /** A decoder for `charset` (default UTF-8). */

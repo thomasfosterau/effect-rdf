@@ -7,6 +7,7 @@ import * as Option from 'effect/Option';
 import { NamedNode } from './Term.ts';
 import { commonPrefixes } from './Vocab.ts';
 import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 
 /**
  * @since 0.1.0
@@ -17,20 +18,27 @@ export interface PrefixMap {
 }
 
 /**
- * @since 0.1.0
- * @category constructors
+ * The `prefixes` of a prefix map: a native `ReadonlyMap`, as the public
+ * field is typed; a later entry for a prefix replaces an earlier one.
  */
-export const empty: PrefixMap = { prefixes: new Map() };
+function prefixMap(entries: Iterable<readonly [string, string]>): ReadonlyMap<string, string> {
+  return new Map(entries);
+}
 
 /**
  * @since 0.1.0
  * @category constructors
  */
-// SAFETY: `Symbol.iterator in prefixes` holds, so it is the iterable form.
+export const empty: PrefixMap = { prefixes: prefixMap([]) };
+
+/**
+ * @since 0.1.0
+ * @category constructors
+ */
 export const make = (
-  prefixes: Readonly<Record<string, string>> | Iterable<readonly [string, string]>,
+  prefixes: Record.ReadonlyRecord<string, string> | Iterable<readonly [string, string]>,
 ): PrefixMap => ({
-  prefixes: new Map(Symbol.iterator in prefixes ? prefixes : Object.entries(prefixes)),
+  prefixes: prefixMap(Symbol.iterator in prefixes ? prefixes : Record.toEntries(prefixes)),
 });
 
 /**
@@ -46,9 +54,7 @@ export const common: PrefixMap = make(commonPrefixes);
  * @category combinators
  */
 export const set = (self: PrefixMap, prefix: string, namespace: string): PrefixMap => {
-  const prefixes = new Map(self.prefixes);
-  prefixes.set(prefix, namespace);
-  return { prefixes };
+  return { prefixes: prefixMap([...self.prefixes, [prefix, namespace]]) };
 };
 
 /**
@@ -58,7 +64,7 @@ export const set = (self: PrefixMap, prefix: string, namespace: string): PrefixM
  * @category combinators
  */
 export const merge = (self: PrefixMap, that: PrefixMap): PrefixMap => ({
-  prefixes: new Map([...self.prefixes, ...that.prefixes]),
+  prefixes: prefixMap([...self.prefixes, ...that.prefixes]),
 });
 
 /**
@@ -96,16 +102,16 @@ export const compact = (
   iri: string | NamedNode,
 ): Option.Option<readonly [string, string]> => {
   const value = Predicate.isString(iri) ? iri : iri.value;
-  let best: readonly [string, string] | undefined;
+  let best: Option.Option<readonly [string, string]> = Option.none();
   let bestLength = -1;
-  for (const [prefix, ns] of self.prefixes) {
+  self.prefixes.forEach((ns, prefix) => {
     if (ns.length > bestLength && value.startsWith(ns)) {
       const local = value.slice(ns.length);
       if (local === '' || PN_LOCAL_SIMPLE.test(local)) {
-        best = [prefix, local];
+        best = Option.some([prefix, local]);
         bestLength = ns.length;
       }
     }
-  }
-  return Option.fromNullishOr(best);
+  });
+  return best;
 };

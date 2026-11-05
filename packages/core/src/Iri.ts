@@ -4,29 +4,32 @@
  *
  * @since 0.1.0
  */
+import * as Equal from 'effect/Equal';
 import * as Str from 'effect/String';
 import * as Option from 'effect/Option';
 import * as Schema from 'effect/Schema';
+import { loop } from './internal/loop.ts';
 
 interface Parts {
-  scheme: string | undefined;
-  authority: string | undefined;
-  path: string;
-  query: string | undefined;
-  fragment: string | undefined;
+  readonly scheme: Option.Option<string>;
+  readonly authority: Option.Option<string>;
+  readonly path: string;
+  readonly query: Option.Option<string>;
+  readonly fragment: Option.Option<string>;
 }
 
 const PARTS =
   /^(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/s;
 
 const parse = (iri: string): Parts => {
-  const m = PARTS.exec(iri)!;
+  // Every part of the pattern is optional, so it matches any string
+  const m = PARTS.exec(iri) ?? [];
   return {
-    scheme: m[1],
-    authority: m[2],
+    scheme: Option.fromUndefinedOr(m[1]),
+    authority: Option.fromUndefinedOr(m[2]),
     path: m[3] ?? '',
-    query: m[4],
-    fragment: m[5],
+    query: Option.fromUndefinedOr(m[4]),
+    fragment: Option.fromUndefinedOr(m[5]),
   };
 };
 
@@ -43,15 +46,16 @@ const parseBase = (base: string): Parts => {
   return lastBaseParts;
 };
 
-const recompose = (p: Parts): string => {
-  let out = '';
-  if (p.scheme !== undefined) out += `${p.scheme}:`;
-  if (p.authority !== undefined) out += `//${p.authority}`;
-  out += p.path;
-  if (p.query !== undefined) out += `?${p.query}`;
-  if (p.fragment !== undefined) out += `#${p.fragment}`;
-  return out;
-};
+/** `part` between `before` and `after`, or nothing when it is absent. */
+const affix = (part: Option.Option<string>, before: string, after: string): string =>
+  Option.match(part, { onNone: () => '', onSome: (v) => `${before}${v}${after}` });
+
+const recompose = (p: Parts): string =>
+  affix(p.scheme, '', ':') +
+  affix(p.authority, '//', '') +
+  p.path +
+  affix(p.query, '?', '') +
+  affix(p.fragment, '#', '');
 
 // A `.` or `..` segment: the only thing `removeDotSegments` changes.
 const DOT_SEGMENT = /(?:^|\/)\.\.?(?:\/|$)/;
@@ -66,7 +70,8 @@ export const removeDotSegments = (path: string): string => {
   if (!DOT_SEGMENT.test(path)) return path;
   let input = path;
   const output: Array<string> = [];
-  while (Str.isNonEmpty(input)) {
+  loop(() => {
+    if (!Str.isNonEmpty(input)) return false;
     if (input.startsWith('../')) input = input.slice(3);
     else if (input.startsWith('./')) input = input.slice(2);
     else if (input.startsWith('/./')) input = input.slice(2);
@@ -85,12 +90,13 @@ export const removeDotSegments = (path: string): string => {
       output.push(segment);
       input = next === -1 ? '' : input.slice(next);
     }
-  }
+    return true;
+  });
   return output.join('');
 };
 
 const merge = (base: Parts, ref: string): string => {
-  if (base.authority !== undefined && base.path === '') return `/${ref}`;
+  if (Option.isSome(base.authority) && base.path === '') return `/${ref}`;
   const i = base.path.lastIndexOf('/');
   return i === -1 ? ref : base.path.slice(0, i + 1) + ref;
 };
@@ -128,39 +134,42 @@ export const resolve = (reference: string, base: string | undefined): string => 
   const r = parse(reference);
   // An absolute reference without dot segments resolves to itself (§5.2.2:
   // only its path is rewritten, by `removeDotSegments`).
-  if (r.scheme !== undefined && !DOT_SEGMENT.test(r.path)) return reference;
+  if (Option.isSome(r.scheme) && !DOT_SEGMENT.test(r.path)) return reference;
   const b = parseBase(base);
-  const t: Parts = {
-    scheme: undefined,
-    authority: undefined,
-    path: '',
-    query: undefined,
-    fragment: r.fragment,
-  };
-  if (r.scheme !== undefined) {
-    t.scheme = r.scheme;
-    t.authority = r.authority;
-    t.path = removeDotSegments(r.path);
-    t.query = r.query;
-  } else {
-    if (r.authority !== undefined) {
-      t.authority = r.authority;
-      t.path = removeDotSegments(r.path);
-      t.query = r.query;
-    } else {
-      if (r.path === '') {
-        t.path = b.path;
-        t.query = r.query !== undefined ? r.query : b.query;
-      } else {
-        t.path = r.path.startsWith('/')
-          ? removeDotSegments(r.path)
-          : removeDotSegments(merge(b, r.path));
-        t.query = r.query;
+  const fragment = r.fragment;
+  const t: Parts = Option.isSome(r.scheme)
+    ? {
+        scheme: r.scheme,
+        authority: r.authority,
+        path: removeDotSegments(r.path),
+        query: r.query,
+        fragment,
       }
-      t.authority = b.authority;
-    }
-    t.scheme = b.scheme;
-  }
+    : Option.isSome(r.authority)
+      ? {
+          scheme: b.scheme,
+          authority: r.authority,
+          path: removeDotSegments(r.path),
+          query: r.query,
+          fragment,
+        }
+      : r.path === ''
+        ? {
+            scheme: b.scheme,
+            authority: b.authority,
+            path: b.path,
+            query: Option.orElse(r.query, () => b.query),
+            fragment,
+          }
+        : {
+            scheme: b.scheme,
+            authority: b.authority,
+            path: r.path.startsWith('/')
+              ? removeDotSegments(r.path)
+              : removeDotSegments(merge(b, r.path)),
+            query: r.query,
+            fragment,
+          };
   return recompose(t);
 };
 
@@ -185,50 +194,42 @@ export const relativize = (iri: string, base: string): Option.Option<string> => 
   if (iri === base) return Option.some('');
   const i = parse(iri);
   const b = parse(base);
-  if (i.scheme !== b.scheme || i.authority !== b.authority || i.scheme === undefined) {
+  if (
+    !Equal.equals(i.scheme, b.scheme) ||
+    !Equal.equals(i.authority, b.authority) ||
+    Option.isNone(i.scheme)
+  ) {
     return Option.none();
   }
-  let candidate: string | undefined;
-  if (i.path === b.path) {
-    if (i.query === b.query) {
-      candidate = i.fragment !== undefined ? `#${i.fragment}` : undefined;
-    } else if (i.query !== undefined) {
-      candidate = recompose({
-        scheme: undefined,
-        authority: undefined,
-        path: '',
-        query: i.query,
-        fragment: i.fragment,
-      });
-    }
-  } else {
-    const dir = b.path.slice(0, b.path.lastIndexOf('/') + 1);
-    if (dir !== '' && i.path.startsWith(dir)) {
-      const rest = i.path.slice(dir.length);
-      // Avoid references whose first segment looks like a scheme.
-      if (rest !== '' && !/^[^/]*:/.test(rest)) {
-        candidate = recompose({
-          scheme: undefined,
-          authority: undefined,
-          path: rest,
-          query: i.query,
-          fragment: i.fragment,
-        });
-      }
-    }
-    if (candidate === undefined && i.path.startsWith('/') && !i.path.startsWith('//')) {
-      candidate = recompose({
-        scheme: undefined,
-        authority: undefined,
-        path: i.path,
-        query: i.query,
-        fragment: i.fragment,
-      });
-    }
-  }
-  return candidate !== undefined && resolve(candidate, base) === iri
-    ? Option.some(candidate)
-    : Option.none();
+  // `iri` as a reference with only `path` and its query and fragment
+  const relative = (path: string): string =>
+    recompose({
+      scheme: Option.none(),
+      authority: Option.none(),
+      path,
+      query: i.query,
+      fragment: i.fragment,
+    });
+  const dir = b.path.slice(0, b.path.lastIndexOf('/') + 1);
+  const rest = i.path.slice(dir.length);
+  const candidate: Option.Option<string> =
+    i.path === b.path
+      ? Equal.equals(i.query, b.query)
+        ? Option.map(i.fragment, (f) => `#${f}`)
+        : Option.isSome(i.query)
+          ? Option.some(relative(''))
+          : Option.none()
+      : Option.orElse(
+          // Avoid references whose first segment looks like a scheme.
+          dir !== '' && i.path.startsWith(dir) && rest !== '' && !/^[^/]*:/.test(rest)
+            ? Option.some(relative(rest))
+            : Option.none(),
+          () =>
+            i.path.startsWith('/') && !i.path.startsWith('//')
+              ? Option.some(relative(i.path))
+              : Option.none(),
+        );
+  return Option.filter(candidate, (c) => resolve(c, base) === iri);
 };
 
 // IRI grammar (RFC 3987) character classes, used for validation.

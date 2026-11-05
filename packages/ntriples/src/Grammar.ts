@@ -15,6 +15,7 @@
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Option from 'effect/Option';
 
 // -----------------------------------------------------------------------------
 // Character classes
@@ -311,6 +312,6 @@ export const langDir: Parser.Parser<LangDir> = Parser.seq(
 ).pipe(
   Parser.map(([language, direction]) => ({
     language,
-    direction: direction._tag === 'Some' ? direction.value : undefined,
+    direction: Option.getOrUndefined(direction),
   })),
 );

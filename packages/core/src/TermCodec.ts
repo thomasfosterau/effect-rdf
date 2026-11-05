@@ -78,15 +78,15 @@ export const make = <A>(
     ),
   );
 
-const numericValue = (t: Term.GroundTerm): number | undefined => {
-  if (t._tag !== 'Literal' || !Xsd.isNumericDatatype(t.datatype.value)) return undefined;
-  if (!Xsd.isValidLexical(t.datatype.value, t.value)) return undefined;
+const numericValue = (t: Term.GroundTerm): Option.Option<number> => {
+  if (!Term.isLiteral(t) || !Xsd.isNumericDatatype(t.datatype.value)) return Option.none();
+  if (!Xsd.isValidLexical(t.datatype.value, t.value)) return Option.none();
   const v = Xsd.toValue(t);
   return Match.value(v).pipe(
-    Match.tag('Integer', (i) => Number(i.value)),
-    Match.tag('Decimal', (d) => BigDecimal.toNumberUnsafe(d.value)),
-    Match.tag('Float', 'Double', (f) => f.value),
-    Match.orElse(() => undefined),
+    Match.tag('Integer', (i) => Option.some(Number(i.value))),
+    Match.tag('Decimal', (d) => Option.some(BigDecimal.toNumberUnsafe(d.value))),
+    Match.tag('Float', 'Double', (f) => Option.some(f.value)),
+    Match.orElse(() => Option.none()),
   );
 };
 
@@ -106,7 +106,7 @@ export const term: TermCodec<Term.GroundTerm> = Term.GroundTermSchema;
  */
 export const namedNode: TermCodec<Term.NamedNode> = make(Term.NamedNodeSchema, {
   expected: 'an IRI',
-  decode: (t) => (t._tag === 'NamedNode' ? t : undefined),
+  decode: (t) => (Term.isNamedNode(t) ? t : undefined),
   encode: (n) => n,
 });
 
@@ -118,7 +118,7 @@ export const namedNode: TermCodec<Term.NamedNode> = make(Term.NamedNodeSchema, {
  */
 export const iri: TermCodec<string> = make(Schema.String, {
   expected: 'an IRI',
-  decode: (t) => (t._tag === 'NamedNode' ? t.value : undefined),
+  decode: (t) => (Term.isNamedNode(t) ? t.value : undefined),
   encode: (s) => Term.namedNode(s),
 });
 
@@ -132,7 +132,7 @@ export const resource: TermCodec<Term.Resource> = make(
   Schema.declare((u): u is Term.Resource => Term.isResource(u)),
   {
     expected: 'an IRI or blank node',
-    decode: (t) => (t._tag === 'NamedNode' || t._tag === 'BlankNode' ? t : undefined),
+    decode: (t) => (Term.isResource(t) ? t : undefined),
     encode: (r) => r,
   },
 );
@@ -145,7 +145,7 @@ export const resource: TermCodec<Term.Resource> = make(
  */
 export const literal: TermCodec<Term.Literal> = make(Term.LiteralSchema, {
   expected: 'a literal',
-  decode: (t) => (t._tag === 'Literal' ? t : undefined),
+  decode: (t) => (Term.isLiteral(t) ? t : undefined),
   encode: (l) => l,
 });
 
@@ -159,7 +159,7 @@ export const literal: TermCodec<Term.Literal> = make(Term.LiteralSchema, {
 export const string: TermCodec<string> = make(Schema.String, {
   expected: 'a string literal',
   decode: (t) =>
-    t._tag === 'Literal' && (t.language !== '' || t.datatype.value === Term.XSD_STRING)
+    Term.isLiteral(t) && (t.language !== '' || t.datatype.value === Term.XSD_STRING)
       ? t.value
       : undefined,
   encode: (s) => Term.literal(s),
@@ -173,7 +173,7 @@ export const string: TermCodec<string> = make(Schema.String, {
  */
 export const lexical: TermCodec<string> = make(Schema.String, {
   expected: 'a literal or IRI',
-  decode: (t) => (t._tag === 'Literal' || t._tag === 'NamedNode' ? t.value : undefined),
+  decode: (t) => (Term.isLiteral(t) || Term.isNamedNode(t) ? t.value : undefined),
   encode: (s) => Term.literal(s),
 });
 
@@ -196,7 +196,7 @@ export const langString: TermCodec<{
   {
     expected: 'a language-tagged string',
     decode: (t) =>
-      t._tag === 'Literal' && t.language !== ''
+      Term.isLiteral(t) && t.language !== ''
         ? t.direction !== undefined
           ? { value: t.value, language: t.language, direction: t.direction }
           : { value: t.value, language: t.language }
@@ -214,7 +214,7 @@ export const langString: TermCodec<{
  */
 export const number: TermCodec<number> = make(Schema.Number, {
   expected: 'a numeric literal',
-  decode: numericValue,
+  decode: (t) => Option.getOrUndefined(numericValue(t)),
   encode: (n) => (Number.isInteger(n) ? Xsd.integer(n) : Xsd.double(n)),
 });
 
@@ -228,7 +228,9 @@ export const number: TermCodec<number> = make(Schema.Number, {
 export const integer: TermCodec<number> = make(Schema.Number, {
   expected: 'an integer literal',
   decode: (t) =>
-    t._tag === 'Literal' && Xsd.isIntegerDatatype(t.datatype.value) ? numericValue(t) : undefined,
+    Term.isLiteral(t) && Xsd.isIntegerDatatype(t.datatype.value)
+      ? Option.getOrUndefined(numericValue(t))
+      : undefined,
   encode: (n) => Xsd.integer(n),
 });
 
@@ -241,7 +243,7 @@ export const integer: TermCodec<number> = make(Schema.Number, {
 export const bigint: TermCodec<bigint> = make(Schema.BigInt, {
   expected: 'an integer literal',
   decode: (t) =>
-    t._tag === 'Literal' &&
+    Term.isLiteral(t) &&
     Xsd.isIntegerDatatype(t.datatype.value) &&
     Xsd.isValidLexical(t.datatype.value, t.value)
       ? BigInt(t.value)
@@ -260,11 +262,11 @@ export const decimal: TermCodec<BigDecimal.BigDecimal> = make(
   {
     expected: 'a decimal literal',
     decode: (t) => {
-      if (t._tag !== 'Literal') return undefined;
+      if (!Term.isLiteral(t)) return undefined;
       const v = Xsd.toValue(t);
-      return v._tag === 'Decimal'
+      return Predicate.isTagged(v, 'Decimal')
         ? v.value
-        : v._tag === 'Integer'
+        : Predicate.isTagged(v, 'Integer')
           ? BigDecimal.fromBigInt(v.value)
           : undefined;
     },
@@ -281,9 +283,9 @@ export const decimal: TermCodec<BigDecimal.BigDecimal> = make(
 export const boolean: TermCodec<boolean> = make(Schema.Boolean, {
   expected: 'a boolean literal',
   decode: (t) => {
-    if (t._tag !== 'Literal' || t.datatype.value !== `${XSD}boolean`) return undefined;
+    if (!Term.isLiteral(t) || t.datatype.value !== `${XSD}boolean`) return undefined;
     const v = Xsd.toValue(t);
-    return v._tag === 'Boolean' ? v.value : undefined;
+    return Predicate.isTagged(v, 'Boolean') ? v.value : undefined;
   },
   encode: (b) => Xsd.boolean(b),
 });
@@ -297,10 +299,10 @@ export const boolean: TermCodec<boolean> = make(Schema.Boolean, {
 export const date: TermCodec<Date> = make(Schema.Date, {
   expected: 'an xsd:dateTime or xsd:date literal',
   decode: (t) => {
-    if (t._tag !== 'Literal') return undefined;
+    if (!Term.isLiteral(t)) return undefined;
     const v = Xsd.toValue(t);
     // An instant outside the range of `Date` does not decode.
-    return v._tag === 'DateTime' && (v.kind === 'dateTime' || v.kind === 'date')
+    return Predicate.isTagged(v, 'DateTime') && (v.kind === 'dateTime' || v.kind === 'date')
       ? Option.getOrUndefined(Option.map(DateTime.make(v.epochMillis), DateTime.toDateUtc))
       : undefined;
   },
@@ -319,9 +321,8 @@ export const value: TermCodec<string | number | bigint | boolean | Date> = make(
   {
     expected: 'a literal with a known datatype',
     decode: (t) => {
-      if (t._tag !== 'Literal') return undefined;
-      const v = Xsd.toJs(t);
-      return v._tag === 'Some' ? v.value : undefined;
+      if (!Term.isLiteral(t)) return undefined;
+      return Option.getOrUndefined(Xsd.toJs(t));
     },
     encode: (v) => Xsd.fromJs(v),
   },
@@ -337,7 +338,7 @@ export const typed = (datatype: string | Term.NamedNode): TermCodec<string> => {
   const datatypeIri = Predicate.isString(datatype) ? datatype : datatype.value;
   return make(Schema.String, {
     expected: `a literal of type <${datatypeIri}>`,
-    decode: (t) => (t._tag === 'Literal' && t.datatype.value === datatypeIri ? t.value : undefined),
+    decode: (t) => (Term.isLiteral(t) && t.datatype.value === datatypeIri ? t.value : undefined),
     encode: (s) => Term.literal(s, Term.namedNode(datatypeIri)),
   });
 };
@@ -403,9 +404,7 @@ const floatingCodec = (local: 'double' | 'float') =>
     decode: (t) =>
       Option.getOrUndefined(
         Option.flatMap(withDatatype(t, [`${XSD}${local}`]), (l) =>
-          Xsd.isValidLexical(l.datatype.value, l.value)
-            ? Option.fromUndefinedOr(numericValue(l))
-            : Option.none(),
+          Xsd.isValidLexical(l.datatype.value, l.value) ? numericValue(l) : Option.none(),
         ),
       ),
     encode: (n) => (local === 'double' ? Xsd.double(n) : Xsd.float(n)),

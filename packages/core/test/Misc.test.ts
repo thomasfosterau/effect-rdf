@@ -122,12 +122,13 @@ describe('Serialization', () => {
                 baseIri: undefined,
               }),
       });
-      // SAFETY: the test's serializer only receives quads with IRI subjects.
       const serializer = Serialization.makeSerializer({
         format,
         serialize: (quads) =>
           Effect.succeed(
-            Array.from(quads, (q) => (q.subject as Term.NamedNode).value.slice(19)).join('\n'),
+            Array.from(quads, (q) =>
+              Term.isNamedNode(q.subject) ? q.subject.value.slice(19) : '',
+            ).join('\n'),
           ),
       });
       const codec = Serialization.makeCodec(parser, serializer);

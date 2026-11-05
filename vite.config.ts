@@ -93,7 +93,7 @@ export default defineConfig({
       // template expressions) are fixed; these sit at `warn` with their count
       // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
       // narrowing casts the parsers and evaluators rely on.
-      'typescript/no-unsafe-type-assertion': 'warn', // 180
+      'typescript/no-unsafe-type-assertion': 'warn', // 165
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -122,12 +122,12 @@ export default defineConfig({
       // the issue lists them. A new site is a defect, not headroom. Once a
       // rule's count reaches zero its line is deleted, so it is back at the
       // preset's `error`.
-      'effect/imperative-loops': 'warn', // 600
+      'effect/imperative-loops': 'warn', // 529
       // 631 at adoption; dropping the unnecessary `a!` in `a!._tag` (sparql
       // Functions.ts) made 15 existing checks visible to the rule.
-      'effect/avoid-direct-tag-checks': 'warn', // 461
-      'effect/avoid-non-null-assertion': 'warn', // 332
-      'effect/avoid-native-object-helpers': 'warn', // 431
+      'effect/avoid-direct-tag-checks': 'warn', // 415
+      'effect/avoid-non-null-assertion': 'warn', // 281
+      'effect/avoid-native-object-helpers': 'warn', // 402
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`

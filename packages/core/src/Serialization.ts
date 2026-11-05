@@ -342,7 +342,7 @@ export const layer = (
   });
 
 const normalizeMediaType = (mediaType: string): string =>
-  mediaType.split(';')[0]!.trim().toLowerCase();
+  (mediaType.split(';')[0] ?? '').trim().toLowerCase();
 
 /**
  * Finds a parser for a media type (parameters such as `charset` are ignored).
@@ -423,11 +423,11 @@ export const parseAccept = (header: string): ReadonlyArray<AcceptEntry> =>
       .split(',')
       .map((part, index) => {
         const [type, ...params] = part.split(';').map((s) => s.trim());
-        let q = 1;
-        for (const p of params) {
+        // The last `q` parameter wins
+        const q = Arr.reduce(params, 1, (acc, p) => {
           const [k, v] = p.split('=').map((s) => s.trim());
-          if (k === 'q' && v !== undefined) q = Number(v);
-        }
+          return k === 'q' && v !== undefined ? Number(v) : acc;
+        });
         return { mediaType: (type ?? '').toLowerCase(), q: Number.isNaN(q) ? 0 : q, index };
       })
       .filter((e) => e.mediaType !== '' && e.q > 0),
@@ -460,19 +460,17 @@ export const negotiate = (
   accept: string | undefined,
   available: ReadonlyArray<string>,
 ): Option.Option<string> => {
-  if (Arr.isReadonlyArrayEmpty(available)) return Option.none();
-  if (accept === undefined || accept.trim() === '') return Option.some(available[0]!);
-  for (const entry of parseAccept(accept)) {
-    if (entry.mediaType === '*/*') return Option.some(available[0]!);
+  if (!Arr.isReadonlyArrayNonEmpty(available)) return Option.none();
+  if (accept === undefined || accept.trim() === '') return Option.some(available[0]);
+  // The first entry, by preference, that one of the available types satisfies
+  return Arr.findFirst(parseAccept(accept), (entry): Option.Option<string> => {
+    if (entry.mediaType === '*/*') return Option.some(available[0]);
     if (entry.mediaType.endsWith('/*')) {
       const prefix = entry.mediaType.slice(0, -1);
-      const found = available.find((a) => a.startsWith(prefix));
-      if (found !== undefined) return Option.some(found);
-    } else if (available.includes(entry.mediaType)) {
-      return Option.some(entry.mediaType);
+      return Arr.findFirst(available, (a) => a.startsWith(prefix));
     }
-  }
-  return Option.none();
+    return available.includes(entry.mediaType) ? Option.some(entry.mediaType) : Option.none();
+  });
 };
 
 /**
@@ -606,12 +604,12 @@ export interface WriteFileOptions extends SerializeOptions {
 }
 
 const fromFormats = <A>(
-  explicit: A | undefined,
+  explicit: Option.Option<A>,
   lookup: (formats: Formats['Service']) => Option.Option<A>,
 ): Effect.Effect<Option.Option<A>> =>
-  explicit === undefined
-    ? Effect.map(Effect.serviceOption(Formats), Option.flatMap(lookup))
-    : Effect.succeedSome(explicit);
+  Option.isSome(explicit)
+    ? Effect.succeed(explicit)
+    : Effect.map(Effect.serviceOption(Formats), Option.flatMap(lookup));
 
 /**
  * Reads an RDF file through Effect's platform-agnostic `FileSystem` (the
@@ -635,7 +633,7 @@ export const readFile = (
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
     const mediaType = options?.mediaType;
-    const parser = yield* fromFormats(options?.parser, (formats) =>
+    const parser = yield* fromFormats(Option.fromUndefinedOr(options?.parser), (formats) =>
       mediaType === undefined
         ? parserForExtension(formats, paths.extname(path))
         : parserFor(formats, mediaType),
@@ -676,7 +674,7 @@ export const writeFile = (
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
     const mediaType = options?.mediaType;
-    const serializer = yield* fromFormats(options?.serializer, (formats) =>
+    const serializer = yield* fromFormats(Option.fromUndefinedOr(options?.serializer), (formats) =>
       mediaType === undefined
         ? serializerForExtension(formats, paths.extname(path))
         : serializerFor(formats, mediaType),

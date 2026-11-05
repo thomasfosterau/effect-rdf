@@ -19,7 +19,7 @@ import { NodeInspectSymbol } from 'effect/Inspectable';
 import * as Match from 'effect/Match';
 import * as order from 'effect/Order';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
-import { hasProperty, isString } from 'effect/Predicate';
+import { hasProperty, isString, isTagged } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
@@ -60,12 +60,17 @@ const VARIABLE_SALT = 0x3f;
 abstract class TermBase implements Equal.Equal, Pipeable {
   readonly [TypeId]: TypeId = TypeId;
   abstract readonly _tag: string;
-  #key: string | undefined;
-  #hash: number | undefined;
+  // Computed on first use. `''` stands for "not yet": only the default graph has the empty key,
+  // and computing it again is free. (A flag rather than a `NaN` hash, which would be a boxed
+  // number in every term.)
+  #key = '';
+  #hash = 0;
+  #hashed = false;
 
   /** The canonical N-Triples serialisation of this term. */
   get key(): string {
-    return (this.#key ??= this.computeKey());
+    if (this.#key === '') this.#key = this.computeKey();
+    return this.#key;
   }
 
   protected abstract computeKey(): string;
@@ -85,7 +90,11 @@ abstract class TermBase implements Equal.Equal, Pipeable {
   }
 
   [Hash.symbol](): number {
-    return (this.#hash ??= this.computeHash());
+    if (!this.#hashed) {
+      this.#hash = this.computeHash();
+      this.#hashed = true;
+    }
+    return this.#hash;
   }
 
   /**
@@ -279,8 +288,10 @@ export class Quad<
   implements Equal.Equal, Pipeable
 {
   readonly _tag = 'Quad' as const;
-  #key: string | undefined;
-  #hash: number | undefined;
+  // Computed on first use; `''` stands for "not yet" (no statement has an empty key).
+  #key = '';
+  #hash = 0;
+  #hashed = false;
   readonly subject: S;
   readonly predicate: P;
   readonly object: O;
@@ -294,7 +305,7 @@ export class Quad<
 
   /** The canonical N-Quads statement (without the trailing ` .`). */
   get key(): string {
-    if (this.#key === undefined) {
+    if (this.#key === '') {
       const triple = `${this.subject.key} ${this.predicate.key} ${this.object.key}`;
       this.#key = this.graph._tag === 'DefaultGraph' ? triple : `${triple} ${this.graph.key}`;
     }
@@ -315,7 +326,11 @@ export class Quad<
   }
 
   [Hash.symbol](): number {
-    return (this.#hash ??= Hash.string(this.key));
+    if (!this.#hashed) {
+      this.#hash = Hash.string(this.key);
+      this.#hashed = true;
+    }
+    return this.#hash;
   }
 
   pipe() {
@@ -564,38 +579,38 @@ export const isTerm = (u: unknown): u is Term => hasProperty(u, TypeId);
  * @since 0.1.0
  * @category guards
  */
-export const isNamedNode = (u: unknown): u is NamedNode => isTerm(u) && u._tag === 'NamedNode';
+export const isNamedNode = (u: unknown): u is NamedNode => isTerm(u) && isTagged(u, 'NamedNode');
 
 /**
  * @since 0.1.0
  * @category guards
  */
-export const isBlankNode = (u: unknown): u is BlankNode => isTerm(u) && u._tag === 'BlankNode';
+export const isBlankNode = (u: unknown): u is BlankNode => isTerm(u) && isTagged(u, 'BlankNode');
 
 /**
  * @since 0.1.0
  * @category guards
  */
-export const isLiteral = (u: unknown): u is Literal => isTerm(u) && u._tag === 'Literal';
+export const isLiteral = (u: unknown): u is Literal => isTerm(u) && isTagged(u, 'Literal');
 
 /**
  * @since 0.1.0
  * @category guards
  */
-export const isVariable = (u: unknown): u is Variable => isTerm(u) && u._tag === 'Variable';
+export const isVariable = (u: unknown): u is Variable => isTerm(u) && isTagged(u, 'Variable');
 
 /**
  * @since 0.1.0
  * @category guards
  */
 export const isDefaultGraph = (u: unknown): u is DefaultGraph =>
-  isTerm(u) && u._tag === 'DefaultGraph';
+  isTerm(u) && isTagged(u, 'DefaultGraph');
 
 /**
  * @since 0.1.0
  * @category guards
  */
-export const isTriple = (u: unknown): u is Triple => isTerm(u) && u._tag === 'Triple';
+export const isTriple = (u: unknown): u is Triple => isTerm(u) && isTagged(u, 'Triple');
 
 /**
  * @since 0.1.0
@@ -698,7 +713,9 @@ export const isGround = (self: Term | Quad): boolean => groundCheck(self);
 
 /**
  * Applies `f` to every term in a quad or triple term (recursively through
- * nested triple terms).
+ * nested triple terms). `f` maps each term to one of the same kind; a
+ * result that cannot stand in its position (a literal for a subject, say)
+ * leaves the original term there.
  *
  * @since 0.1.0
  * @category combinators
@@ -711,31 +728,40 @@ export function mapTerms(
   self: Quad | Triple,
   f: (term: NamedNode | BlankNode | Literal | DefaultGraph) => Term,
 ): Quad | Triple {
-  // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
-  // A statement whose terms all map to themselves is returned as it is (with its key, if computed)
-  const go = (term: Subject | Predicate | Object | Graph): Term => {
-    if (term._tag !== 'Triple') return f(term);
-    const s = go(term.subject);
-    const p = go(term.predicate);
-    const o = go(term.object);
+  // `f` is to map each leaf to a term of the same kind; a result that cannot stand in its
+  // position leaves the term there as it was. A statement whose terms all map to themselves is
+  // returned as it is (with its key, if computed).
+  const go = (term: Subject | Predicate | Object | Graph): Term =>
+    isTripleTerm(term) ? goTriple(term) : f(term);
+  const goTriple = (term: Triple): Triple => {
+    const s = subjectOr(go(term.subject), term.subject);
+    const p = predicateOr(go(term.predicate), term.predicate);
+    const o = objectOr(go(term.object), term.object);
     return s === term.subject && p === term.predicate && o === term.object
       ? term
-      : // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
-        new Triple(s as Subject, p as Predicate, o as Object);
+      : new Triple(s, p, o);
   };
-  if (self._tag === 'Triple') {
-    // SAFETY: a triple maps to a triple.
-    return go(self) as Triple;
-  }
-  const s = go(self.subject);
-  const p = go(self.predicate);
-  const o = go(self.object);
-  const g = go(self.graph);
+  if (isTripleTerm(self)) return goTriple(self);
+  const s = subjectOr(go(self.subject), self.subject);
+  const p = predicateOr(go(self.predicate), self.predicate);
+  const o = objectOr(go(self.object), self.object);
+  const g = graphOr(go(self.graph), self.graph);
   return s === self.subject && p === self.predicate && o === self.object && g === self.graph
     ? self
-    : // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
-      new Quad(s as Subject, p as Predicate, o as Object, g as Graph);
+    : new Quad(s, p, o, g);
 }
+
+const isTripleTerm = (t: Term | Quad): t is Triple => isTagged(t, 'Triple');
+const isResourceTerm = (t: Term): t is Resource =>
+  isTagged(t, 'NamedNode') || isTagged(t, 'BlankNode');
+const subjectOr = (t: Term, fallback: Subject): Subject =>
+  isResourceTerm(t) || isTripleTerm(t) ? t : fallback;
+const predicateOr = (t: Term, fallback: Predicate): Predicate =>
+  isTagged(t, 'NamedNode') ? t : fallback;
+const objectOr = (t: Term, fallback: Object): Object =>
+  isResourceTerm(t) || isTripleTerm(t) || isTagged(t, 'Literal') ? t : fallback;
+const graphOr = (t: Term, fallback: Graph): Graph =>
+  isResourceTerm(t) || isTagged(t, 'DefaultGraph') ? t : fallback;
 
 /**
  * A total ordering of terms suitable for deterministic serialisation:
@@ -826,7 +852,7 @@ const escapeChar: (ch: string) => string = Match.type<string>().pipe(
   Match.when('\b', () => '\\b'),
   Match.when('\f', () => '\\f'),
   Match.orElse((ch) => {
-    const code = ch.codePointAt(0)!;
+    const code = ch.codePointAt(0) ?? 0;
     return code < 0x20 || code === 0x7f || code === 0xfffe || code === 0xffff
       ? `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
       : ch;
@@ -843,9 +869,8 @@ const escapeChar: (ch: string) => string = Match.type<string>().pipe(
 export const escapeString = (value: string): string => {
   // eslint-disable-next-line no-control-regex
   if (!/["\\\u0000-\u001f\u007f\ufffe\uffff]/.test(value)) return value;
-  let out = '';
-  for (const ch of value) out += escapeChar(ch);
-  return out;
+  // By code point, as `for … of` iterates a string
+  return value.replace(/[\s\S]/gu, (ch) => escapeChar(ch));
 };
 
 // The characters an IRIREF cannot contain unescaped, hoisted so the hot

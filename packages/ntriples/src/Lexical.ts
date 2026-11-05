@@ -114,11 +114,14 @@ export const isAbsoluteIri = (iri: string): boolean => SCHEME.test(iri);
  * @since 0.1.0
  * @category validation
  */
-export const isWritableIri = (iri: string): boolean => {
-  if (!isAbsoluteIri(iri)) return false;
-  for (let i = 0; i < iri.length; i++) if (!isIriChar(iri.charCodeAt(i))) return false;
-  return true;
-};
+export const isWritableIri = (iri: string): boolean =>
+  // `escapeIri` changes exactly the characters `isIriChar` rejects
+  isAbsoluteIri(iri) && Term.escapeIri(iri) === iri;
+
+/** The code point of a one-code-point string (as `Array.from` splits a string). */
+const codePointOf = (ch: string): number => ch.codePointAt(0) ?? 0;
+
+const HEX_DIGITS = /^[0-9A-Fa-f]*$/;
 
 /**
  * Whether a string is a valid `BLANK_NODE_LABEL` (without the `_:`).
@@ -128,17 +131,12 @@ export const isWritableIri = (iri: string): boolean => {
  */
 export const isBlankNodeLabel = (label: string): boolean => {
   if (label === '') return false;
-  let first = true;
-  let last = 0;
-  for (const ch of label) {
-    const c = ch.codePointAt(0)!;
-    if (first) {
-      if (!isPnCharsU(c) && !isDigit(c)) return false;
-      first = false;
-    } else if (!isPnChars(c) && c !== 0x2e) return false;
-    last = c;
-  }
-  return last !== 0x2e;
+  const codePoints = Array.from(label, codePointOf);
+  return (
+    codePoints.every((c, i) =>
+      i === 0 ? isPnCharsU(c) || isDigit(c) : isPnChars(c) || c === 0x2e,
+    ) && codePoints.at(-1) !== 0x2e
+  );
 };
 
 /**
@@ -164,14 +162,11 @@ export const decodeUchar = (input: string, index: number): DecodedEscape => {
   const kind = input.charCodeAt(index + 1);
   const digits = kind === 0x75 ? 4 : kind === 0x55 ? 8 : 0;
   if (digits === 0) return { _tag: 'Error', message: 'Invalid escape sequence' };
-  let value = 0;
-  for (let k = 0; k < digits; k++) {
-    const c = input.charCodeAt(index + 2 + k);
-    if (Number.isNaN(c) || !isHex(c)) {
-      return { _tag: 'Error', message: 'Invalid numeric escape sequence' };
-    }
-    value = value * 16 + parseInt(String.fromCharCode(c), 16);
+  const hex = input.slice(index + 2, index + 2 + digits);
+  if (hex.length !== digits || !HEX_DIGITS.test(hex)) {
+    return { _tag: 'Error', message: 'Invalid numeric escape sequence' };
   }
+  const value = parseInt(hex, 16);
   if (value > 0x10ffff) {
     return { _tag: 'Error', message: 'Numeric escape is beyond U+10FFFF' };
   }
@@ -229,7 +224,7 @@ export const parseLanguageTag = (text: string): LanguageTag | undefined => {
   if (m === null) return undefined;
   const direction = m[2];
   if (direction !== undefined && direction !== 'ltr' && direction !== 'rtl') return undefined;
-  return { language: m[1]!, direction };
+  return { language: m[1] ?? '', direction };
 };
 
 /**
@@ -267,12 +262,10 @@ export const makeLiteral = (
  */
 export const blankNodeLabel = (label: string): string => {
   if (isBlankNodeLabel(label)) return label;
-  let out = 'x';
-  for (const ch of label) {
-    const c = ch.codePointAt(0)!;
-    out += isPnCharsBase(c) || isDigit(c) ? ch : `_${c.toString(16)}_`;
-  }
-  return out;
+  return `x${Array.from(label, (ch) => {
+    const c = codePointOf(ch);
+    return isPnCharsBase(c) || isDigit(c) ? ch : `_${c.toString(16)}_`;
+  }).join('')}`;
 };
 
 /**

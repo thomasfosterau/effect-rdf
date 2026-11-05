@@ -4,7 +4,9 @@ import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Iterable from 'effect/Iterable';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import * as Lexical from '../Lexical.ts';
@@ -15,7 +17,7 @@ export interface Syntax {
   readonly name: string;
   readonly quads: boolean;
   /** The span prefix and format for tracing (`<module>.parse`, …); untraced when absent. */
-  readonly trace?: Serialization.SpanTarget | undefined;
+  readonly trace?: Serialization.SpanTarget;
 }
 
 const makeLineParser = (syntax: Syntax, options?: Serialization.ParseOptions): LineParser =>
@@ -52,18 +54,19 @@ export const parseQuads = (
   options?: Serialization.ParseOptions,
 ): Effect.Effect<Array<Term.Quad>, Serialization.RdfParseError> =>
   Effect.try({
-    try: () => {
-      const parser = makeLineParser(syntax, options);
-      const out: Array<Term.Quad> = [];
-      const lines = splitLines(input);
-      for (let i = 0; i < lines.length; i++) {
-        const q = parser.parseLine(stripBom(lines[i]!, i + 1), i + 1);
-        if (q !== undefined) out.push(q);
-      }
-      return out;
-    },
+    try: () => parseLines(makeLineParser(syntax, options), input),
     catch: toParseError(syntax),
   });
+
+/** The statements of every line of `input`, in order (throws a `SyntaxFailure`). */
+const parseLines = (parser: LineParser, input: string): Array<Term.Quad> => {
+  const out: Array<Term.Quad> = [];
+  splitLines(input).forEach((line, i) => {
+    const q = parser.parseLine(stripBom(line, i + 1), i + 1);
+    if (Option.isSome(q)) out.push(q.value);
+  });
+  return out;
+};
 
 /** @internal */
 export const parse = (
@@ -94,12 +97,13 @@ export const parseStream =
             Effect.try({
               try: () => {
                 const out: Array<Term.Quad> = [];
-                for (const line of lines) {
-                  lineNumber++;
-                  const q = parser.parseLine(stripBom(line, lineNumber), lineNumber);
-                  if (q !== undefined) out.push(q);
-                }
-                return [lineNumber, out] as const;
+                let n = lineNumber;
+                Arr.forEach(lines, (line) => {
+                  n++;
+                  const q = parser.parseLine(stripBom(line, n), n);
+                  if (Option.isSome(q)) out.push(q.value);
+                });
+                return [n, out] as const;
               },
               catch: toParseError(syntax),
             }),
@@ -153,7 +157,8 @@ const formatGraph = Match.fn(
         `${syntax.name} cannot represent quads in named graphs: ${quad.key}`,
       );
     }
-    return `${triple} ${Lexical.formatTerm(graph)!} .\n`;
+    // An IRI or blank node always has an N-Triples form
+    return `${triple} ${Lexical.formatTerm(graph) ?? ''} .\n`;
   }),
   Match.orElse((_graph, quad) => {
     throw new SerializeFailure(`Invalid graph term in ${quad.key}`);
@@ -165,25 +170,22 @@ const formatQuad = (syntax: Syntax, quad: Term.Quad): string => {
   checkIris(quad.predicate);
   checkIris(quad.object);
   checkIris(quad.graph);
-  if (quad.subject._tag === 'Triple') {
+  if (Predicate.isTagged(quad.subject, 'Triple')) {
     throw new SerializeFailure(
       `Triple terms are not allowed in the subject position in ${syntax.name}: ${quad.key}`,
     );
   }
   const s = Lexical.formatTerm(quad.subject);
   const o = Lexical.formatTerm(quad.object);
-  if (s === undefined || o === undefined || quad.predicate._tag !== 'NamedNode') {
+  if (s === undefined || o === undefined || !Predicate.isTagged(quad.predicate, 'NamedNode')) {
     throw new SerializeFailure(`Cannot serialise non-ground quad ${quad.key}`);
   }
   const triple = `${s} ${Lexical.formatIri(quad.predicate.value)} ${o}`;
   return formatGraph(quad, syntax, triple);
 };
 
-const formatAll = (syntax: Syntax, quads: Iterable<Term.Quad>): string => {
-  let out = '';
-  for (const q of quads) out += formatQuad(syntax, q);
-  return out;
-};
+const formatAll = (syntax: Syntax, quads: Iterable<Term.Quad>): string =>
+  Iterable.reduce(quads, '', (out, q) => out + formatQuad(syntax, q));
 
 const toSerializeError =
   (syntax: Syntax) =>
