@@ -11,11 +11,17 @@ import * as Arr from 'effect/Array';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
+import * as Iterable from 'effect/Iterable';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty } from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as StringMap from './internal/stringMap.ts';
+
+/** Orders `[name, term]` entries by name. */
+const byName = Order.mapInput(Order.String, ([name]: readonly [string, Term.GroundTerm]) => name);
 
 /**
  * @since 0.1.0
@@ -39,7 +45,7 @@ export class Bindings
   implements Iterable<readonly [string, Term.GroundTerm]>, Equal.Equal, Pipeable
 {
   readonly [TypeId]: TypeId = TypeId;
-  #key: string | undefined;
+  #key = Option.none<string>();
   /** @internal */
   readonly map: ReadonlyMap<string, Term.GroundTerm>;
   /**
@@ -61,11 +67,12 @@ export class Bindings
 
   /** A canonical string identifying this solution (used for hashing and DISTINCT). */
   get key(): string {
-    if (this.#key === undefined) {
-      const names = Arr.sort(this.map.keys(), Order.String);
-      this.#key = names.map((n) => `${n}=${this.map.get(n)!.key}`).join('\u0000');
-    }
-    return this.#key;
+    if (Option.isSome(this.#key)) return this.#key.value;
+    const key = Arr.sort(this.map, byName)
+      .map(([n, t]) => `${n}=${t.key}`)
+      .join('\u0000');
+    this.#key = Option.some(key);
+    return key;
   }
 
   [Symbol.iterator](): Iterator<readonly [string, Term.GroundTerm]> {
@@ -85,7 +92,7 @@ export class Bindings
   }
 
   toJSON(): Readonly<Record<string, string>> {
-    return Object.fromEntries(Array.from(this.map, ([k, v]) => [k, v.toString()]));
+    return Record.fromEntries(Array.from(this.map, ([k, v]) => [k, v.toString()]));
   }
 
   toString(): string {
@@ -111,7 +118,7 @@ const isEqualBindings = (that: Equal.Equal): that is Bindings => hasProperty(tha
  * @since 0.1.0
  * @category constructors
  */
-export const empty: Bindings = new Bindings(new Map());
+export const empty: Bindings = new Bindings(StringMap.empty());
 
 /**
  * @since 0.1.0
@@ -120,8 +127,10 @@ export const empty: Bindings = new Bindings(new Map());
 export const fromEntries = (
   entries: Iterable<readonly [string, Term.GroundTerm | undefined]>,
 ): Bindings => {
-  const map = new Map<string, Term.GroundTerm>();
-  for (const [k, v] of entries) if (v !== undefined) map.set(k, v);
+  const map = StringMap.empty<Term.GroundTerm>();
+  Iterable.forEach(entries, ([k, v]) => {
+    if (v !== undefined) map.set(k, v);
+  });
   return new Bindings(map);
 };
 
@@ -133,7 +142,7 @@ export const fromEntries = (
  * @category constructors
  */
 export const make = (record: Readonly<Record<string, Term.GroundTerm | undefined>>): Bindings =>
-  fromEntries(Object.entries(record));
+  fromEntries(Record.toEntries(record));
 
 /**
  * The term bound to a variable, if any.
@@ -174,7 +183,7 @@ export const variables = (self: Bindings): ReadonlyArray<string> => Array.from(s
  * @category combinators
  */
 export const set = (self: Bindings, name: string, term: Term.GroundTerm): Bindings => {
-  const map = new Map(self.map);
+  const map = StringMap.copy(self.map);
   map.set(name, term);
   return new Bindings(map, self.origin ?? self);
 };
@@ -187,7 +196,7 @@ export const set = (self: Bindings, name: string, term: Term.GroundTerm): Bindin
  */
 export const remove = (self: Bindings, name: string): Bindings => {
   if (!self.map.has(name)) return self;
-  const map = new Map(self.map);
+  const map = StringMap.copy(self.map);
   map.delete(name);
   return new Bindings(map);
 };
@@ -201,11 +210,10 @@ export const remove = (self: Bindings, name: string): Bindings => {
  */
 export const compatible = (a: Bindings, b: Bindings): boolean => {
   const [small, large] = a.map.size <= b.map.size ? [a, b] : [b, a];
-  for (const [k, v] of small.map) {
+  return !Iterable.some(small.map, ([k, v]) => {
     const w = large.map.get(k);
-    if (w !== undefined && w.key !== v.key) return false;
-  }
-  return true;
+    return w !== undefined && w.key !== v.key;
+  });
 };
 
 /**
@@ -216,8 +224,7 @@ export const compatible = (a: Bindings, b: Bindings): boolean => {
  */
 export const sharesVariable = (a: Bindings, b: Bindings): boolean => {
   const [small, large] = a.map.size <= b.map.size ? [a, b] : [b, a];
-  for (const k of small.map.keys()) if (large.map.has(k)) return true;
-  return false;
+  return Iterable.some(small.map.keys(), (k) => large.map.has(k));
 };
 
 /**
@@ -229,13 +236,15 @@ export const sharesVariable = (a: Bindings, b: Bindings): boolean => {
 export const merge = (a: Bindings, b: Bindings): Bindings | undefined => {
   if (b.map.size === 0) return a;
   if (a.map.size === 0) return b;
-  const map = new Map(a.map);
-  for (const [k, v] of b.map) {
+  const map = StringMap.copy(a.map);
+  // The first variable bound to different terms, if any (the others are merged in on the way).
+  const clash = Iterable.some(b.map, ([k, v]) => {
     const w = map.get(k);
-    if (w === undefined) map.set(k, v);
-    else if (w.key !== v.key) return undefined;
-  }
-  return new Bindings(map);
+    if (w !== undefined) return w.key !== v.key;
+    map.set(k, v);
+    return false;
+  });
+  return clash ? undefined : new Bindings(map);
 };
 
 /**
@@ -245,11 +254,11 @@ export const merge = (a: Bindings, b: Bindings): Bindings | undefined => {
  * @category combinators
  */
 export const project = (self: Bindings, names: ReadonlyArray<string>): Bindings => {
-  const map = new Map<string, Term.GroundTerm>();
-  for (const n of names) {
+  const map = StringMap.empty<Term.GroundTerm>();
+  names.forEach((n) => {
     const v = self.map.get(n);
     if (v !== undefined) map.set(n, v);
-  }
+  });
   return map.size === self.map.size ? self : new Bindings(map);
 };
 
@@ -260,4 +269,4 @@ export const project = (self: Bindings, names: ReadonlyArray<string>): Bindings 
  * @category conversions
  */
 export const toRecord = (self: Bindings): Readonly<Record<string, Term.GroundTerm>> =>
-  Object.fromEntries(self.map);
+  Record.fromEntries(self.map);

@@ -16,9 +16,13 @@
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
 import type * as Ast from './Ast.ts';
+import { loop } from './internal/loop.ts';
+import * as StringMap from './internal/stringMap.ts';
 import type * as Store from './Store.ts';
 
 /**
@@ -34,56 +38,56 @@ export interface OptimizerContext {
 }
 
 const conjuncts = (e: Algebra.Expression): Array<Algebra.Expression> =>
-  e._tag === 'Operation' && e.operator === '&&' ? e.args.flatMap(conjuncts) : [e];
+  Predicate.isTagged(e, 'Operation') && e.operator === '&&' ? e.args.flatMap(conjuncts) : [e];
 
 const conjunction = (es: ReadonlyArray<Algebra.Expression>): Algebra.Expression =>
   es.reduce((a, b) => ({ _tag: 'Operation', operator: '&&', args: [a, b] }));
 
-const subset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
-  for (const x of a) if (!b.has(x)) return false;
-  return true;
-};
+const subset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean =>
+  Array.from(a).every((x) => b.has(x));
 
-/** Pushes one filter condition as deep as possible; returns undefined if it cannot move. */
-const push = (e: Algebra.Expression, op: Algebra.Operation): Algebra.Operation | undefined => {
+/** Pushes one filter condition as deep as possible; `None` if it cannot move. */
+const push = (e: Algebra.Expression, op: Algebra.Operation): Option.Option<Algebra.Operation> => {
   const vars = Algebra.expressionVariables(e);
   return Match.value(op).pipe(
-    Match.tag('Join', (j) => {
+    Match.tag('Join', (j): Option.Option<Algebra.Operation> => {
       if (subset(vars, Algebra.certainVariables(j.left))) {
-        return { ...j, left: pushOrWrap(e, j.left) };
+        return Option.some({ ...j, left: pushOrWrap(e, j.left) });
       }
       if (subset(vars, Algebra.certainVariables(j.right))) {
-        return { ...j, right: pushOrWrap(e, j.right) };
+        return Option.some({ ...j, right: pushOrWrap(e, j.right) });
       }
-      return undefined;
+      return Option.none();
     }),
     Match.tag('LeftJoin', 'Minus', (o) =>
       subset(vars, Algebra.certainVariables(o.left))
-        ? { ...o, left: pushOrWrap(e, o.left) }
-        : undefined,
+        ? Option.some({ ...o, left: pushOrWrap(e, o.left) })
+        : Option.none(),
     ),
-    Match.tag('Filter', (f) => ({ ...f, input: pushOrWrap(e, f.input) })),
-    Match.orElse(() => undefined),
+    Match.tag('Filter', (f) => Option.some({ ...f, input: pushOrWrap(e, f.input) })),
+    Match.orElse(() => Option.none()),
   );
 };
 
 const pushOrWrap = (e: Algebra.Expression, op: Algebra.Operation): Algebra.Operation =>
-  push(e, op) ?? Algebra.filter(e, op);
+  Option.getOrElse(push(e, op), () => Algebra.filter(e, op));
 
 const pushFilters = (op: Algebra.Operation): Algebra.Operation =>
   Algebra.transform(op, (o) => {
-    if (o._tag !== 'Filter') return o;
+    if (!Predicate.isTagged(o, 'Filter')) return o;
+    // The conditions that stay, and the input with the others pushed in.
     const kept: Array<Algebra.Expression> = [];
-    let input = o.input;
-    for (const c of conjuncts(o.expression)) {
-      if (Algebra.containsExists(c)) {
-        kept.push(c);
-        continue;
-      }
-      const pushed = push(c, input);
-      if (pushed === undefined) kept.push(c);
-      else input = pushed;
-    }
+    const keep = (input: Algebra.Operation, c: Algebra.Expression): Algebra.Operation => {
+      kept.push(c);
+      return input;
+    };
+    const input = conjuncts(o.expression).reduce(
+      (acc, c) =>
+        Algebra.containsExists(c)
+          ? keep(acc, c)
+          : Option.getOrElse(push(c, acc), () => keep(acc, c)),
+      o.input,
+    );
     return Arr.isReadonlyArrayEmpty(kept) ? input : Algebra.filter(conjunction(kept), input);
   });
 
@@ -96,8 +100,8 @@ const positions = (p: Ast.TriplePattern): ReadonlyArray<Ast.TermPattern> => [
 const patternVariables = (p: Ast.TriplePattern): ReadonlyArray<string> => {
   const out: Array<string> = [];
   const go = (t: Ast.TermPattern | Term.Term): void => {
-    if (t._tag === 'Variable') out.push(t.value);
-    else if (t._tag === 'Triple') {
+    if (Term.isVariable(t)) out.push(t.value);
+    else if (Term.isTriple(t)) {
       go(t.subject);
       go(t.predicate);
       go(t.object);
@@ -107,29 +111,26 @@ const patternVariables = (p: Ast.TriplePattern): ReadonlyArray<string> => {
   return out;
 };
 
-const constant = (t: Ast.TermPattern): Term.GroundTerm | undefined =>
-  // SAFETY: neither a variable nor a triple pattern with variables, so the pattern is ground.
-  t._tag === 'Variable' ||
-  (t._tag === 'Triple' &&
-    Arr.isReadonlyArrayNonEmpty(
-      patternVariables({
-        _tag: 'TriplePattern',
-        subject: t.subject,
-        predicate: t.predicate,
-        object: t.object,
-      }),
-    ))
-    ? undefined
-    : (t as Term.GroundTerm);
+/** A pattern term as a constant: `None` for a variable or a triple pattern with variables. */
+const constant = (t: Ast.TermPattern): Option.Option<Term.GroundTerm> => {
+  if (Term.isVariable(t)) return Option.none();
+  if (Term.isTriple(t)) {
+    const vars = patternVariables({
+      _tag: 'TriplePattern',
+      subject: t.subject,
+      predicate: t.predicate,
+      object: t.object,
+    });
+    return Arr.isReadonlyArrayNonEmpty(vars) ? Option.none() : Option.some(t);
+  }
+  return Option.some(t);
+};
 
 /** Static selectivity heuristic when the store gives no estimates. */
-const staticCost = (p: Ast.TriplePattern): number => {
-  let cost = 1;
-  if (constant(p.subject) === undefined) cost *= 100;
-  if (constant(p.object) === undefined) cost *= 10;
-  if (constant(p.predicate) === undefined) cost *= 5;
-  return cost;
-};
+const staticCost = (p: Ast.TriplePattern): number =>
+  (Option.isNone(constant(p.subject)) ? 100 : 1) *
+  (Option.isNone(constant(p.object)) ? 10 : 1) *
+  (Option.isNone(constant(p.predicate)) ? 5 : 1);
 
 const orderBgp = (
   patterns: ReadonlyArray<Ast.TriplePattern>,
@@ -144,40 +145,41 @@ const orderBgp = (
         estimate === undefined
           ? Effect.succeed(staticCost(p))
           : estimate({
-              subject: constant(p.subject),
-              predicate: constant(p.predicate),
-              object: constant(p.object),
-              graph:
-                ctx.graph._tag === 'NamedGraph'
-                  ? ctx.graph.graph
-                  : ctx.dataset.defaultGraph === 'default'
-                    ? Term.defaultGraph
-                    : undefined,
+              subject: Option.getOrUndefined(constant(p.subject)),
+              predicate: Option.getOrUndefined(constant(p.predicate)),
+              object: Option.getOrUndefined(constant(p.object)),
+              graph: Predicate.isTagged(ctx.graph, 'NamedGraph')
+                ? ctx.graph.graph
+                : ctx.dataset.defaultGraph === 'default'
+                  ? Term.defaultGraph
+                  : undefined,
             }),
       { concurrency: 1 },
     );
-    const remaining = patterns.map((p, i) => ({ p, cost: costs[i]!, vars: patternVariables(p) }));
-    const bound = new Set<string>();
+    const remaining = Arr.zip(patterns, costs).map(([p, cost]) => ({
+      p,
+      cost,
+      vars: patternVariables(p),
+    }));
+    const bound = StringMap.emptySet();
     const out: Array<Ast.TriplePattern> = [];
-    while (Arr.isReadonlyArrayNonEmpty(remaining)) {
-      let best = -1;
-      let bestScore = Infinity;
+    // Greedily picks the cheapest pattern, preferring those connected to the bound variables.
+    loop(() => {
+      if (!Arr.isArrayNonEmpty(remaining)) return false;
       const connected = remaining.some((r) => r.vars.some((v) => bound.has(v)));
-      remaining.forEach((r, i) => {
+      const scored = Arr.map(remaining, (r, i) => {
         const isConnected = r.vars.some((v) => bound.has(v));
-        if (connected && !isConnected && bound.size > 0) return;
+        const eligible = !(connected && !isConnected && bound.size > 0);
         const boundCount = r.vars.filter((v) => bound.has(v)).length;
-        const score = r.cost / 10 ** boundCount;
-        if (score < bestScore) {
-          bestScore = score;
-          best = i;
-        }
+        return { r, i, score: eligible ? r.cost / 10 ** boundCount : Infinity };
       });
-      if (best === -1) best = 0;
-      const [chosen] = remaining.splice(best, 1);
-      out.push(chosen!.p);
-      for (const v of chosen!.vars) bound.add(v);
-    }
+      // The first with the lowest score (the first pattern if none is eligible).
+      const best = scored.reduce((a, b) => (b.score < a.score ? b : a));
+      remaining.splice(best.i, 1);
+      out.push(best.r.p);
+      best.r.vars.forEach((v) => bound.set(v, true));
+      return true;
+    });
     return out;
   });
 
@@ -194,7 +196,7 @@ const orderBgps = (
       Effect.map(
         orderBgps(g.input, {
           ...ctx,
-          graph: g.name._tag === 'NamedNode' ? { _tag: 'NamedGraph', graph: g.name } : ctx.graph,
+          graph: Term.isNamedNode(g.name) ? { _tag: 'NamedGraph', graph: g.name } : ctx.graph,
         }),
         (input) => ({ ...g, input }),
       ),
@@ -209,7 +211,7 @@ const orderBgps = (
         Effect.forEach(children, (c) => orderBgps(c, ctx), { concurrency: 1 }),
         (optimized) => {
           let i = 0;
-          return Algebra.mapChildren(o, () => optimized[i++]!);
+          return Algebra.mapChildren(o, (c) => optimized[i++] ?? c);
         },
       );
     }),

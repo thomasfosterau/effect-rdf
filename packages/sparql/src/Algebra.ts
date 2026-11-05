@@ -18,6 +18,7 @@ import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
+import * as StringMap from './internal/stringMap.ts';
 
 // -----------------------------------------------------------------------------
 // Expressions
@@ -463,9 +464,18 @@ export const project = (input: Operation, variables: ReadonlyArray<Term.Variable
  */
 export const isInternalVariable = (name: string): boolean => name.startsWith('@');
 
-const termVariables = (t: Term.Term | Ast.TermPattern, out: Set<string>): void => {
-  if (t._tag === 'Variable') out.add(t.value);
-  else if (t._tag === 'Triple') {
+/** A string set of the type the variable helpers below return. */
+type VariableSet = Map<string, true>;
+
+/**
+ * The public, native `ReadonlySet` of a variable set: the helpers below
+ * return `ReadonlySet` by contract, and only `new Set` makes one.
+ */
+const toReadonlySet = (vars: VariableSet): ReadonlySet<string> => new Set(vars.keys());
+
+const termVariables = (t: Term.Term | Ast.TermPattern, out: VariableSet): void => {
+  if (Term.isVariable(t)) out.set(t.value, true);
+  else if (Term.isTriple(t)) {
     termVariables(t.subject, out);
     termVariables(t.predicate, out);
     termVariables(t.object, out);
@@ -479,21 +489,23 @@ const termVariables = (t: Term.Term | Ast.TermPattern, out: Set<string>): void =
  * @since 0.1.0
  * @category utils
  */
-export const variables = (op: Operation): ReadonlySet<string> => {
-  const out = new Set<string>();
+export const variables = (op: Operation): ReadonlySet<string> => toReadonlySet(variableSet(op));
+
+const variableSet = (op: Operation): VariableSet => {
+  const out = StringMap.emptySet();
   collectVariables(op, out);
   return out;
 };
 
-const collectVariables = (op: Operation, out: Set<string>): void => {
+const collectVariables = (op: Operation, out: VariableSet): void => {
   Match.value(op).pipe(
-    Match.tag('Bgp', (o) => {
-      for (const p of o.patterns) {
+    Match.tag('Bgp', (o) =>
+      o.patterns.forEach((p) => {
         termVariables(p.subject, out);
         termVariables(p.predicate, out);
         termVariables(p.object, out);
-      }
-    }),
+      }),
+    ),
     Match.tag('Path', (o) => {
       termVariables(o.subject, out);
       termVariables(o.object, out);
@@ -512,15 +524,13 @@ const collectVariables = (op: Operation, out: Set<string>): void => {
     }),
     Match.tag('Extend', (o) => {
       collectVariables(o.input, out);
-      out.add(o.variable.value);
+      out.set(o.variable.value, true);
     }),
     Match.tag('Group', (o) => {
-      for (const k of o.keys) out.add(k.variable.value);
-      for (const a of o.aggregates) out.add(a.variable.value);
+      o.keys.forEach((k) => out.set(k.variable.value, true));
+      o.aggregates.forEach((a) => out.set(a.variable.value, true));
     }),
-    Match.tag('Project', 'Values', (o) => {
-      for (const v of o.variables) out.add(v.value);
-    }),
+    Match.tag('Project', 'Values', (o) => o.variables.forEach((v) => out.set(v.value, true))),
     Match.exhaustive,
   );
 };
@@ -532,38 +542,39 @@ const collectVariables = (op: Operation, out: Set<string>): void => {
  * @since 0.1.0
  * @category utils
  */
-export const certainVariables = (op: Operation): ReadonlySet<string> => {
+export const certainVariables = (op: Operation): ReadonlySet<string> =>
+  toReadonlySet(certainSet(op));
+
+const certainSet = (op: Operation): VariableSet => {
   return Match.value(op).pipe(
-    Match.tag('Bgp', 'Path', (o): ReadonlySet<string> => variables(o)),
+    Match.tag('Bgp', 'Path', (o): VariableSet => variableSet(o)),
     Match.tag('Join', (o) => {
-      const out = new Set(certainVariables(o.left));
-      for (const v of certainVariables(o.right)) out.add(v);
+      const out = certainSet(o.left);
+      certainSet(o.right).forEach((_, v) => out.set(v, true));
       return out;
     }),
-    Match.tag('LeftJoin', 'Minus', (o) => certainVariables(o.left)),
+    Match.tag('LeftJoin', 'Minus', (o) => certainSet(o.left)),
     Match.tag('Union', (o) => {
-      const right = certainVariables(o.right);
-      return new Set(Array.from(certainVariables(o.left)).filter((v) => right.has(v)));
+      const right = certainSet(o.right);
+      return StringMap.setOf(Array.from(certainSet(o.left).keys()).filter((v) => right.has(v)));
     }),
     Match.tag('Filter', 'OrderBy', 'Distinct', 'Reduced', 'Slice', 'Extend', (o) =>
-      certainVariables(o.input),
+      certainSet(o.input),
     ),
     Match.tag('Graph', 'Service', (o) => {
-      const out = new Set(certainVariables(o.input));
-      if (o.name._tag === 'Variable') out.add(o.name.value);
+      const out = certainSet(o.input);
+      if (Term.isVariable(o.name)) out.set(o.name.value, true);
       return out;
     }),
-    Match.tag('Group', () => new Set<string>()),
+    Match.tag('Group', () => StringMap.emptySet()),
     Match.tag('Project', (o) => {
-      const inner = certainVariables(o.input);
-      return new Set(o.variables.map((v) => v.value).filter((v) => inner.has(v)));
+      const inner = certainSet(o.input);
+      return StringMap.setOf(o.variables.map((v) => v.value).filter((v) => inner.has(v)));
     }),
-    Match.tag(
-      'Values',
-      (o) =>
-        new Set(
-          o.variables.map((v) => v.value).filter((v) => o.bindings.every((b) => b.map.has(v))),
-        ),
+    Match.tag('Values', (o) =>
+      StringMap.setOf(
+        o.variables.map((v) => v.value).filter((v) => o.bindings.every((b) => b.map.has(v))),
+      ),
     ),
     Match.exhaustive,
   );
@@ -576,7 +587,7 @@ export const certainVariables = (op: Operation): ReadonlySet<string> => {
  * @category utils
  */
 export const expressionVariables = (expression: Expression): ReadonlySet<string> => {
-  const out = new Set<string>();
+  const out = StringMap.emptySet();
   const go = (e: Expression): void => {
     Match.value(e).pipe(
       Match.tag('Variable', 'Triple', (t) => termVariables(t, out)),
@@ -585,7 +596,7 @@ export const expressionVariables = (expression: Expression): ReadonlySet<string>
     );
   };
   go(expression);
-  return out;
+  return toReadonlySet(out);
 };
 
 /**
@@ -645,7 +656,7 @@ export const mapChildren = (op: Operation, f: (op: Operation) => Operation): Ope
 };
 
 const termText = (t: Term.Term | Ast.TermPattern): string =>
-  t._tag === 'Triple'
+  Term.isTriple(t)
     ? `<<( ${termText(t.subject)} ${termText(t.predicate)} ${termText(t.object)} )>>`
     : t.toString();
 
@@ -825,26 +836,22 @@ export const prebind = (op: Operation, bindings: Bindings): Operation => {
     bindings: [bindings],
   };
   const term = (t: Ast.TermPattern): Ast.TermPattern => {
-    if (t._tag === 'Variable') {
-      const v = bindings.map.get(t.value);
-      // SAFETY: a bound value is a ground term, which is also a term pattern.
-      return v === undefined ? t : (v as Ast.TermPattern);
-    }
-    if (t._tag === 'Triple') {
+    if (Term.isVariable(t)) return bindings.map.get(t.value) ?? t;
+    if (Term.isTriple(t)) {
       const s = term(t.subject);
       const p = term(t.predicate);
       const o = term(t.object);
-      // SAFETY: substituting ground terms into a triple pattern keeps each position's kind.
+      // Substituting ground terms into a triple pattern keeps each position's kind.
       return s === t.subject && p === t.predicate && o === t.object
         ? t
-        : Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
+        : Term.triple<any, any, any>(s, p, o);
     }
     return t;
   };
   const predicate = (p: Ast.VarOrIri): Ast.VarOrIri => {
-    if (p._tag !== 'Variable') return p;
+    if (!Term.isVariable(p)) return p;
     const v = bindings.map.get(p.value);
-    return v !== undefined && v._tag === 'NamedNode' ? v : p;
+    return Term.isNamedNode(v) ? v : p;
   };
   const expr = (e: Expression): Expression => mapExpressionPatterns(e, go);
   const go = (o: Operation): Operation => {
@@ -869,11 +876,11 @@ export const prebind = (op: Operation, bindings: Bindings): Operation => {
       ),
       Match.tag('Graph', (g) => {
         const input = go(g.input);
-        const value = g.name._tag === 'Variable' ? bindings.map.get(g.name.value) : undefined;
+        const value = Term.isVariable(g.name) ? bindings.map.get(g.name.value) : undefined;
         if (value === undefined) return { ...g, input };
         return join(
           table,
-          value._tag === 'NamedNode' ? { ...g, name: value, input } : { ...g, input },
+          Term.isNamedNode(value) ? { ...g, name: value, input } : { ...g, input },
         );
       }),
       Match.tag('Filter', (x) => ({ ...x, expression: expr(x.expression), input: go(x.input) })),

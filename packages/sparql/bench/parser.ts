@@ -59,19 +59,17 @@ const bench = (
   inputs: ReadonlyArray<{ text: string; update: boolean; baseIri: string }>,
 ) => {
   const size = inputs.reduce((n, d) => n + d.text.length, 0);
-  const run = () => {
-    for (const d of inputs) {
+  const run = () =>
+    inputs.forEach((d) => {
       if (d.update) Parser.parseUpdateResult(d.text, { baseIri: d.baseIri });
       else Parser.parseQueryResult(d.text, { baseIri: d.baseIri });
-    }
-  };
-  for (let i = 0; i < 3; i++) run();
-  const samples: Array<number> = [];
-  for (let i = 0; i < 11; i++) {
+    });
+  Array.from({ length: 3 }, run);
+  const samples = Array.from({ length: 11 }, () => {
     const t = performance.now();
     run();
-    samples.push(performance.now() - t);
-  }
+    return performance.now() - t;
+  });
   const median = Arr.sort(samples, Order.Number)[Math.floor(samples.length / 2)] ?? 0;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(

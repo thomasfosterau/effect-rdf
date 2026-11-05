@@ -17,6 +17,7 @@
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Predicate from 'effect/Predicate';
 import * as Match from 'effect/Match';
+import * as StringMap from './internal/stringMap.ts';
 
 // -----------------------------------------------------------------------------
 // Terms
@@ -898,8 +899,10 @@ export interface Update {
  * @category guards
  */
 export const isQuery = (u: unknown): u is Query =>
-  Predicate.hasProperty(u, '_tag') &&
-  (u._tag === 'Select' || u._tag === 'Construct' || u._tag === 'Ask' || u._tag === 'Describe');
+  Predicate.isTagged(u, 'Select') ||
+  Predicate.isTagged(u, 'Construct') ||
+  Predicate.isTagged(u, 'Ask') ||
+  Predicate.isTagged(u, 'Describe');
 
 /**
  * @since 0.1.0
@@ -1038,15 +1041,13 @@ export const aggregate = (
   expression: Expression | '*',
   options?: { readonly distinct?: boolean; readonly separator?: string },
 ): AggregateExpression => {
-  const aggregate: AggregateExpression = {
+  const plain: AggregateExpression = {
     _tag: 'Aggregate',
     name,
     expression,
     distinct: options?.distinct ?? false,
   };
-  return options?.separator === undefined
-    ? aggregate
-    : { ...aggregate, separator: options.separator };
+  return options?.separator === undefined ? plain : { ...plain, separator: options.separator };
 };
 
 /**
@@ -1231,9 +1232,12 @@ export const update = (
 // Utilities
 // -----------------------------------------------------------------------------
 
-const addTermVariables = (term: TermPattern | Term.Term, out: Set<string>): void => {
-  if (term._tag === 'Variable') out.add(term.value);
-  else if (term._tag === 'Triple') {
+/** Variable names in order of first appearance, as a string set. */
+type Names = Map<string, true>;
+
+const addTermVariables = (term: TermPattern | Term.Term, out: Names): void => {
+  if (Term.isVariable(term)) out.set(term.value, true);
+  else if (Term.isTriple(term)) {
     addTermVariables(term.subject, out);
     addTermVariables(term.predicate, out);
     addTermVariables(term.object, out);
@@ -1248,23 +1252,21 @@ const addTermVariables = (term: TermPattern | Term.Term, out: Set<string>): void
  * @category utils
  */
 export const inScopeVariables = (pattern: Pattern): ReadonlyArray<string> => {
-  const out = new Set<string>();
+  const out: Names = StringMap.emptySet();
   collectInScope(pattern, out);
-  return Array.from(out);
+  return Array.from(out.keys());
 };
 
-const collectInScope = (pattern: Pattern, out: Set<string>): void => {
+const collectInScope = (pattern: Pattern, out: Names): void => {
   Match.value(pattern).pipe(
-    Match.tag('Bgp', (b) => {
-      for (const t of b.triples) {
+    Match.tag('Bgp', (b) =>
+      b.triples.forEach((t) => {
         addTermVariables(t.subject, out);
-        if (t._tag === 'TriplePattern') addTermVariables(t.predicate, out);
+        if (Predicate.isTagged(t, 'TriplePattern')) addTermVariables(t.predicate, out);
         addTermVariables(t.object, out);
-      }
-    }),
-    Match.tag('Group', 'Union', (g) => {
-      for (const p of g.patterns) collectInScope(p, out);
-    }),
+      }),
+    ),
+    Match.tag('Group', 'Union', (g) => g.patterns.forEach((p) => collectInScope(p, out))),
     Match.tag('Optional', (o) => collectInScope(o.pattern, out)),
     Match.tag('Minus', 'Filter', () => undefined),
     Match.tag('Graph', 'Service', (g) => {
@@ -1272,14 +1274,10 @@ const collectInScope = (pattern: Pattern, out: Set<string>): void => {
       collectInScope(g.pattern, out);
     }),
     Match.tag('Bind', (b) => {
-      out.add(b.variable.value);
+      out.set(b.variable.value, true);
     }),
-    Match.tag('Values', (v) => {
-      for (const x of v.variables) out.add(x.value);
-    }),
-    Match.tag('SubSelect', (s) => {
-      for (const v of projectedVariables(s.query)) out.add(v);
-    }),
+    Match.tag('Values', (v) => v.variables.forEach((x) => out.set(x.value, true))),
+    Match.tag('SubSelect', (s) => projectedVariables(s.query).forEach((v) => out.set(v, true))),
     Match.exhaustive,
   );
 };
@@ -1293,12 +1291,12 @@ const collectInScope = (pattern: Pattern, out: Set<string>): void => {
  */
 export const projectedVariables = (query: SelectQuery): ReadonlyArray<string> => {
   if (query.projection === '*') {
-    const out = new Set<string>();
+    const out: Names = StringMap.emptySet();
     collectInScope(query.where, out);
-    if (query.values !== undefined) for (const v of query.values.variables) out.add(v.value);
-    return Array.from(out);
+    query.values?.variables.forEach((v) => out.set(v.value, true));
+    return Array.from(out.keys());
   }
-  return query.projection.map((p) => (p._tag === 'Variable' ? p.value : p.variable.value));
+  return query.projection.map((p) => (Term.isVariable(p) ? p.value : p.variable.value));
 };
 
 /**
@@ -1312,7 +1310,7 @@ export const expressionVariables = (
   expression: Expression,
   deep = false,
 ): ReadonlyArray<string> => {
-  const out = new Set<string>();
+  const out: Names = StringMap.emptySet();
   const go = (e: Expression): void => {
     Match.value(e).pipe(
       Match.tag('Variable', 'Triple', (t) => addTermVariables(t, out)),
@@ -1327,7 +1325,7 @@ export const expressionVariables = (
     );
   };
   go(expression);
-  return Array.from(out);
+  return Array.from(out.keys());
 };
 
 /**

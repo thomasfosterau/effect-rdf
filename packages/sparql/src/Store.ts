@@ -19,6 +19,7 @@
  */
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as Iterable from 'effect/Iterable';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Ref from 'effect/Ref';
@@ -28,6 +29,7 @@ import * as Stream from 'effect/Stream';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Algebra from './Algebra.ts';
+import * as StringMap from './internal/stringMap.ts';
 import type { Bindings } from './Bindings.ts';
 
 // -----------------------------------------------------------------------------
@@ -191,20 +193,13 @@ const InTransaction = Context.Reference<boolean>(
   },
 );
 
-const toDatasetPattern = (pattern: QuadPattern): Dataset.Pattern | undefined => {
-  if (pattern.predicate !== undefined && pattern.predicate._tag !== 'NamedNode') return undefined;
-  if (pattern.subject !== undefined && pattern.subject._tag === 'Literal') return undefined;
-  if (
-    pattern.graph !== undefined &&
-    pattern.graph._tag !== 'NamedNode' &&
-    pattern.graph._tag !== 'BlankNode' &&
-    pattern.graph._tag !== 'DefaultGraph'
-  ) {
-    return undefined;
-  }
-  // SAFETY: the guards above rejected a non-IRI predicate, a literal subject and a non-graph graph
-  // term, which is exactly what `Dataset.Pattern` excludes.
-  return pattern as Dataset.Pattern;
+/** The dataset pattern of a quad pattern; `None` if no quad can match it (a literal subject, …). */
+const toDatasetPattern = (pattern: QuadPattern): Option.Option<Dataset.Pattern> => {
+  const { subject, predicate, object, graph } = pattern;
+  if (predicate !== undefined && !Term.isNamedNode(predicate)) return Option.none();
+  if (subject !== undefined && Term.isLiteral(subject)) return Option.none();
+  if (graph !== undefined && !Term.isGraph(graph)) return Option.none();
+  return Option.some({ subject, predicate, object, graph });
 };
 
 /**
@@ -217,7 +212,7 @@ export const makeMemory = (
   initial: Dataset.Dataset = Dataset.empty,
 ): Effect.Effect<QuadStoreShape & { readonly snapshot: Effect.Effect<Dataset.Dataset> }> =>
   Effect.gen(function* () {
-    const state = yield* Ref.make<MemoryState>({ dataset: initial, graphs: new Map() });
+    const state = yield* Ref.make<MemoryState>({ dataset: initial, graphs: StringMap.empty() });
     const lock = Semaphore.makeUnsafe(1);
 
     const write = <A>(f: (s: MemoryState) => readonly [A, MemoryState]) =>
@@ -227,33 +222,32 @@ export const makeMemory = (
       });
 
     const namedGraphs = (s: MemoryState): ReadonlyArray<Term.NamedNode | Term.BlankNode> => {
-      const out = new Map(s.graphs);
-      for (const g of Dataset.graphs(s.dataset)) {
-        if (g._tag !== 'DefaultGraph' && !out.has(g.key)) out.set(g.key, g);
-      }
+      const out = StringMap.copy(s.graphs);
+      Iterable.forEach(Dataset.graphs(s.dataset), (g) => {
+        if (!Term.isDefaultGraph(g) && !out.has(g.key)) out.set(g.key, g);
+      });
       return Array.from(out.values());
     };
+
+    /** The exact count, which is cheap for the indexed dataset (so it is the estimate too). */
+    const count = (pattern: QuadPattern) =>
+      Effect.map(Ref.get(state), (s) => {
+        const p = toDatasetPattern(pattern);
+        return Option.isNone(p) ? 0 : Dataset.count(s.dataset, p.value);
+      });
 
     const store: QuadStoreShape & { readonly snapshot: Effect.Effect<Dataset.Dataset> } = {
       snapshot: Effect.map(Ref.get(state), (s) => s.dataset),
       match: (pattern) =>
         Stream.suspend(() => {
           const p = toDatasetPattern(pattern);
-          if (p === undefined) return Stream.empty;
+          if (Option.isNone(p)) return Stream.empty;
           return Stream.fromIterableEffect(
-            Effect.map(Ref.get(state), (s) => Dataset.match(s.dataset, p)),
+            Effect.map(Ref.get(state), (s) => Dataset.match(s.dataset, p.value)),
           );
         }),
-      estimate: (pattern) =>
-        Effect.map(Ref.get(state), (s) => {
-          const p = toDatasetPattern(pattern);
-          return p === undefined ? 0 : Dataset.count(s.dataset, p);
-        }),
-      count: (pattern) =>
-        Effect.map(Ref.get(state), (s) => {
-          const p = toDatasetPattern(pattern);
-          return p === undefined ? 0 : Dataset.count(s.dataset, p);
-        }),
+      estimate: count,
+      count,
       graphs: Stream.fromIterableEffect(Effect.map(Ref.get(state), namedGraphs)),
       hasGraph: (graph) =>
         Effect.map(Ref.get(state), (s) => namedGraphs(s).some((g) => g.key === graph.key)),
@@ -264,20 +258,18 @@ export const makeMemory = (
           undefined,
           {
             ...s,
-            dataset: Dataset.mutate(s.dataset, (b) => {
-              for (const q of quads) b.remove(q);
-            }),
+            dataset: Dataset.mutate(s.dataset, (b) => Iterable.forEach(quads, (q) => b.remove(q))),
           },
         ]),
       createGraph: (graph) =>
         write((s) => {
-          const graphs = new Map(s.graphs);
+          const graphs = StringMap.copy(s.graphs);
           graphs.set(graph.key, graph);
           return [undefined, { ...s, graphs }];
         }),
       dropGraph: (graph) =>
         write((s) => {
-          const graphs = new Map(s.graphs);
+          const graphs = StringMap.copy(s.graphs);
           graphs.delete(graph.key);
           return [undefined, { graphs, dataset: Dataset.removeMatches(s.dataset, { graph }) }];
         }),

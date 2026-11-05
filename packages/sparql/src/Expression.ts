@@ -9,12 +9,16 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as DateTime from 'effect/DateTime';
-import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Random from 'effect/Random';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Algebra from './Algebra.ts';
+import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
 import * as Functions from './Functions.ts';
 import * as V from './internal/values.ts';
@@ -48,7 +52,7 @@ export const makeContext = (options?: {
   readonly functions?: Functions.Registry | undefined;
   readonly random?: (() => number) | undefined;
 }): Context => {
-  const scopes = new WeakMap<Bindings, Map<string, Term.BlankNode>>();
+  const scopes = new WeakMap<Bindings, MutableHashMap.MutableHashMap<string, Term.BlankNode>>();
   let counter = 0;
   // A plain constructor, outside any Effect: the defaults are the default
   // `Random` service (`Math.random`) and the current time.
@@ -57,73 +61,82 @@ export const makeContext = (options?: {
   return {
     now: options?.now ?? DateTime.toDateUtc(DateTime.nowUnsafe()),
     baseIri: options?.baseIri,
-    functions: options?.functions ?? new Map(),
+    functions: options?.functions ?? Functions.registry({}),
     random: options?.random ?? (() => defaultRandom.nextDoubleUnsafe()),
     blankNode: (label, solution) => {
       if (label === undefined) return Term.blankNode(`${prefix}${counter++}`);
       const row = solution.origin ?? solution;
       let scope = scopes.get(row);
-      if (scope === undefined) scopes.set(row, (scope = new Map()));
-      let node = scope.get(label);
-      if (node === undefined) scope.set(label, (node = Term.blankNode(`${prefix}${counter++}`)));
+      if (scope === undefined) scopes.set(row, (scope = MutableHashMap.empty()));
+      const existing = MutableHashMap.get(scope, label);
+      if (Option.isSome(existing)) return existing.value;
+      const node = Term.blankNode(`${prefix}${counter++}`);
+      MutableHashMap.set(scope, label, node);
       return node;
     },
   };
 };
 
-const substitute: (t: Term.Term, solution: Bindings) => Term.GroundTerm = Match.fn(
-  (t: Term.Term, _solution: Bindings) => t,
-).pipe(
-  Match.tag(
-    'Variable',
-    (v, _t, solution): Term.GroundTerm =>
-      solution.map.get(v.value) ?? V.fail(`Unbound variable ?${v.value}`),
-  ),
-  Match.tag('Triple', (x, _t, solution) =>
-    // SAFETY: substituting bound ground terms keeps each triple position's kind.
-    Term.triple(
-      substitute(x.subject, solution) as Term.Subject,
-      substitute(x.predicate, solution) as Term.Predicate,
-      substitute(x.object, solution),
-    ),
-  ),
-  Match.tag('DefaultGraph', () => V.fail('Invalid term')),
-  Match.orElse((x) => x),
-);
+/**
+ * A term with its variables replaced by their bindings. Plain branches rather
+ * than `Match`: it runs for every variable of every evaluated expression.
+ */
+const substitute = (t: Term.Term, solution: Bindings): Term.GroundTerm => {
+  if (Term.isVariable(t))
+    return solution.map.get(t.value) ?? V.fail(`Unbound variable ?${t.value}`);
+  if (Term.isTriple(t)) {
+    // Substitution keeps each position's kind for the ground terms a pattern can be bound to;
+    // like the triple patterns it comes from, the result is not checked again.
+    return Term.triple<any, any, any>(
+      substitute(t.subject, solution),
+      substitute(t.predicate, solution),
+      substitute(t.object, solution),
+    );
+  }
+  if (Term.isDefaultGraph(t)) return V.fail('Invalid term');
+  return t;
+};
 
 /**
- * Evaluates an expression; throws `EvalFailure` on errors.
+ * Evaluates an expression; throws `EvalFailure` on errors. Plain branches
+ * rather than `Match`: it runs once per expression node per solution.
  *
  * @internal
  */
-export const evaluateUnsafe: (
+export const evaluateUnsafe = (
   e: Algebra.Expression,
   solution: Bindings,
   ctx: Context,
-) => Term.GroundTerm = Match.fn(
-  (e: Algebra.Expression, _solution: Bindings, _ctx: Context) => e,
-).pipe(
-  Match.tag('Variable', 'Triple', (t, _e, solution): Term.GroundTerm => substitute(t, solution)),
-  Match.tag('NamedNode', 'Literal', 'BlankNode', (t) => t),
-  Match.tag('Exists', (x, _e, solution, ctx) => {
+): Term.GroundTerm => {
+  if (Predicate.isTagged(e, 'Operation')) return operation(e, solution, ctx);
+  if (Term.isVariable(e) || Term.isTriple(e)) return substitute(e, solution);
+  if (Predicate.isTagged(e, 'FunctionCall')) return functionCall(e, solution, ctx);
+  if (Predicate.isTagged(e, 'Exists')) {
     if (ctx.exists === undefined) return V.fail('EXISTS is not supported here');
-    const r = ctx.exists(x, solution);
-    return V.bool(x.negated ? !r : r);
-  }),
-  Match.tag('FunctionCall', (call, _e, solution, ctx) => {
-    const iri = call.function.value;
-    const args = call.args.map((a) => evaluateUnsafe(a, solution, ctx));
-    const f = ctx.functions.get(iri);
-    if (f !== undefined) return f(args, ctx);
-    if (Functions.isCast(iri)) {
-      if (args.length !== 1) return V.fail('Casts take one argument');
-      return Functions.cast(iri, args[0]!);
+    const r = ctx.exists(e, solution);
+    return V.bool(e.negated ? !r : r);
+  }
+  return e;
+};
+
+const functionCall = (
+  call: Algebra.FunctionCallExpression,
+  solution: Bindings,
+  ctx: Context,
+): Term.GroundTerm => {
+  const iri = call.function.value;
+  const args = call.args.map((a) => evaluateUnsafe(a, solution, ctx));
+  const f = ctx.functions.get(iri);
+  if (f !== undefined) return f(args, ctx);
+  if (Functions.isCast(iri)) {
+    const [arg, ...rest] = args;
+    if (arg === undefined || Arr.isReadonlyArrayNonEmpty(rest)) {
+      return V.fail('Casts take one argument');
     }
-    return V.fail(`Unknown function <${iri}>`);
-  }),
-  Match.tag('Operation', (o, _e, solution, ctx) => operation(o, solution, ctx)),
-  Match.exhaustive,
-);
+    return Functions.cast(iri, arg);
+  }
+  return V.fail(`Unknown function <${iri}>`);
+};
 
 const ebvOf = (e: Algebra.Expression, solution: Bindings, ctx: Context): boolean =>
   V.ebv(evaluateUnsafe(e, solution, ctx));
@@ -133,102 +146,133 @@ const toError = (failure: V.EvalFailure): Functions.ExpressionError =>
 
 const attempt = <A>(f: () => A): A | V.EvalFailure => Result.merge(V.catchEvalFailure(f));
 
+/** Argument `i` of an operation (the parser checked each operator's arity). */
+const argAt = (e: Algebra.OperationExpression, i: number): Algebra.Expression =>
+  e.args[i] ?? V.fail(`${e.operator} is missing argument ${i + 1}`);
+
+/** Evaluates argument `i` of an operation. */
+const argOf = (e: Algebra.OperationExpression, i: number, solution: Bindings, ctx: Context) =>
+  evaluateUnsafe(argAt(e, i), solution, ctx);
+
+const or = (e: Algebra.OperationExpression, solution: Bindings, ctx: Context): Term.GroundTerm => {
+  const a = attempt(() => ebvOf(argAt(e, 0), solution, ctx));
+  if (a === true) return V.TRUE;
+  const b = ebvOf(argAt(e, 1), solution, ctx);
+  if (b) return V.TRUE;
+  if (a instanceof V.EvalFailure) throw a;
+  return V.FALSE;
+};
+
+const and = (e: Algebra.OperationExpression, solution: Bindings, ctx: Context): Term.GroundTerm => {
+  const a = attempt(() => ebvOf(argAt(e, 0), solution, ctx));
+  if (a === false) return V.FALSE;
+  const b = ebvOf(argAt(e, 1), solution, ctx);
+  if (!b) return V.FALSE;
+  if (a instanceof V.EvalFailure) throw a;
+  return V.TRUE;
+};
+
+const order = (
+  op: '<' | '>' | '<=' | '>=',
+  e: Algebra.OperationExpression,
+  solution: Bindings,
+  ctx: Context,
+): Term.GroundTerm => {
+  const a = argOf(e, 0, solution, ctx);
+  const b = argOf(e, 1, solution, ctx);
+  if (!Term.isLiteral(a) || !Term.isLiteral(b)) return V.fail('Cannot order non-literals');
+  const c = V.compareLiterals(a, b);
+  if (Number.isNaN(c)) return V.FALSE;
+  return V.bool(op === '<' ? c < 0 : op === '>' ? c > 0 : op === '<=' ? c <= 0 : c >= 0);
+};
+
+const isIn = (
+  e: Algebra.OperationExpression,
+  solution: Bindings,
+  ctx: Context,
+  negated: boolean,
+): Term.GroundTerm => {
+  const value = argOf(e, 0, solution, ctx);
+  let failure = Option.none<V.EvalFailure>();
+  const found = e.args.some((x, i) => {
+    if (i === 0) return false;
+    const r = attempt(() => V.equals(value, evaluateUnsafe(x, solution, ctx)));
+    if (r instanceof V.EvalFailure) failure = Option.some(r);
+    return r === true;
+  });
+  if (found) return V.bool(!negated);
+  if (Option.isSome(failure)) throw failure.value;
+  return V.bool(negated);
+};
+
+const coalesce = (
+  e: Algebra.OperationExpression,
+  solution: Bindings,
+  ctx: Context,
+): Term.GroundTerm => {
+  let value = Option.none<Term.GroundTerm>();
+  e.args.some((x) => {
+    const r = attempt(() => evaluateUnsafe(x, solution, ctx));
+    if (r instanceof V.EvalFailure) return false;
+    value = Option.some(r);
+    return true;
+  });
+  return Option.isSome(value) ? value.value : V.fail('COALESCE: no argument could be evaluated');
+};
+
+const builtIn = (
+  op: Ast.BuiltInName,
+  e: Algebra.OperationExpression,
+  solution: Bindings,
+  ctx: Context,
+): Term.GroundTerm => {
+  const f = Functions.builtIns[op];
+  if (f === undefined) return V.fail(`Unsupported operator ${op}`);
+  const values = e.args.map((a) => evaluateUnsafe(a, solution, ctx));
+  // SAFETY: `BuiltInArgs` types the first three slots as present; each built-in checks its own
+  // arity before reading them.
+  return f(values as unknown as Functions.BuiltInArgs, ctx, solution);
+};
+
+/**
+ * Evaluates an operation, by operator. Plain branches rather than `Match`:
+ * it runs once per operation per solution.
+ */
 const operation = (
   e: Algebra.OperationExpression,
   solution: Bindings,
   ctx: Context,
-): Term.GroundTerm => operatorOf(e.operator, e, solution, ctx);
-
-/** Evaluates argument `i` of an operation. */
-const argOf = (e: Algebra.OperationExpression, i: number, solution: Bindings, ctx: Context) =>
-  evaluateUnsafe(e.args[i]!, solution, ctx);
-
-const operatorOf: (
-  operator: Algebra.OperationExpression['operator'],
-  e: Algebra.OperationExpression,
-  solution: Bindings,
-  ctx: Context,
-) => Term.GroundTerm = Match.fn(
-  (
-    operator: Algebra.OperationExpression['operator'],
-    _e: Algebra.OperationExpression,
-    _solution: Bindings,
-    _ctx: Context,
-  ) => operator,
-).pipe(
-  Match.when('||', (_op, _o, e, solution, ctx): Term.GroundTerm => {
-    const a = attempt(() => ebvOf(e.args[0]!, solution, ctx));
-    if (a === true) return V.TRUE;
-    const b = ebvOf(e.args[1]!, solution, ctx);
-    if (b) return V.TRUE;
-    if (a instanceof V.EvalFailure) throw a;
-    return V.FALSE;
-  }),
-  Match.when('&&', (_op, _o, e, solution, ctx) => {
-    const a = attempt(() => ebvOf(e.args[0]!, solution, ctx));
-    if (a === false) return V.FALSE;
-    const b = ebvOf(e.args[1]!, solution, ctx);
-    if (!b) return V.FALSE;
-    if (a instanceof V.EvalFailure) throw a;
-    return V.TRUE;
-  }),
-  Match.when('!', (_op, _o, e, solution, ctx) => V.bool(!ebvOf(e.args[0]!, solution, ctx))),
-  Match.when('=', (_op, _o, e, solution, ctx) =>
-    V.bool(V.equals(argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx))),
-  ),
-  Match.when('!=', (_op, _o, e, solution, ctx) =>
-    V.bool(!V.equals(argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx))),
-  ),
-  Match.when(Match.is('<', '>', '<=', '>='), (op, _o, e, solution, ctx) => {
-    const a = argOf(e, 0, solution, ctx);
-    const b = argOf(e, 1, solution, ctx);
-    if (a._tag !== 'Literal' || b._tag !== 'Literal') return V.fail('Cannot order non-literals');
-    const c = V.compareLiterals(a, b);
-    if (Number.isNaN(c)) return V.FALSE;
-    return V.bool(op === '<' ? c < 0 : op === '>' ? c > 0 : op === '<=' ? c <= 0 : c >= 0);
-  }),
-  Match.when(Match.is('+', '-', '*', '/'), (op, _o, e, solution, ctx) =>
-    V.arithmetic(op, argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx)),
-  ),
-  Match.when('UPLUS', (_op, _o, e, solution, ctx) => {
+): Term.GroundTerm => {
+  const op = e.operator;
+  if (op === '||') return or(e, solution, ctx);
+  if (op === '&&') return and(e, solution, ctx);
+  if (op === '=') return V.bool(V.equals(argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx)));
+  if (op === '!=') {
+    return V.bool(!V.equals(argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx)));
+  }
+  if (op === '<' || op === '>' || op === '<=' || op === '>=') return order(op, e, solution, ctx);
+  if (op === '!') return V.bool(!ebvOf(argAt(e, 0), solution, ctx));
+  if (op === '+' || op === '-' || op === '*' || op === '/') {
+    return V.arithmetic(op, argOf(e, 0, solution, ctx), argOf(e, 1, solution, ctx));
+  }
+  if (op === 'UPLUS') {
     const a = argOf(e, 0, solution, ctx);
     return V.isNumeric(a) ? a : V.fail('Unary plus of a non-numeric');
-  }),
-  Match.when('UMINUS', (_op, _o, e, solution, ctx) => V.negate(argOf(e, 0, solution, ctx))),
-  Match.when(Match.is('IN', 'NOT IN'), (op, _o, e, solution, ctx) => {
-    const value = argOf(e, 0, solution, ctx);
-    let failure: V.EvalFailure | undefined;
-    for (let i = 1; i < e.args.length; i++) {
-      const r = attempt(() => V.equals(value, argOf(e, i, solution, ctx)));
-      if (r === true) return V.bool(op === 'IN');
-      if (r instanceof V.EvalFailure) failure = r;
-    }
-    if (failure !== undefined) throw failure;
-    return V.bool(op !== 'IN');
-  }),
-  Match.when('BOUND', (_op, _o, e, solution) => {
-    const v = e.args[0]!;
-    return V.bool(v._tag === 'Variable' && solution.map.has(v.value));
-  }),
-  Match.when('IF', (_op, _o, e, solution, ctx) =>
-    ebvOf(e.args[0]!, solution, ctx) ? argOf(e, 1, solution, ctx) : argOf(e, 2, solution, ctx),
-  ),
-  Match.when('COALESCE', (_op, _o, e, solution, ctx) => {
-    for (let i = 0; i < e.args.length; i++) {
-      const r = attempt(() => argOf(e, i, solution, ctx));
-      if (!(r instanceof V.EvalFailure)) return r;
-    }
-    return V.fail('COALESCE: no argument could be evaluated');
-  }),
-  Match.orElse((op, _o, e, solution, ctx) => {
-    const f = Functions.builtIns[op];
-    if (f === undefined) return V.fail(`Unsupported operator ${op}`);
-    const values = e.args.map((a) => evaluateUnsafe(a, solution, ctx));
-    // SAFETY: `BuiltInArgs` types the first three slots as present; each built-in checks its own
-    // arity before reading them.
-    return f(values as unknown as Functions.BuiltInArgs, ctx, solution);
-  }),
-);
+  }
+  if (op === 'UMINUS') return V.negate(argOf(e, 0, solution, ctx));
+  if (op === 'IN' || op === 'NOT IN') return isIn(e, solution, ctx, op === 'NOT IN');
+  if (op === 'BOUND') {
+    const v = e.args[0];
+    return V.bool(Term.isVariable(v) && solution.map.has(v.value));
+  }
+  if (op === 'IF') {
+    return ebvOf(argAt(e, 0), solution, ctx)
+      ? argOf(e, 1, solution, ctx)
+      : argOf(e, 2, solution, ctx);
+  }
+  if (op === 'COALESCE') return coalesce(e, solution, ctx);
+  return builtIn(op, e, solution, ctx);
+};
 
 /**
  * Evaluates an expression against a solution.
@@ -313,4 +357,4 @@ export const equals = (
  * @category ordering
  */
 export const compare = (a: Term.GroundTerm | undefined, b: Term.GroundTerm | undefined): number =>
-  V.orderCompare(a, b);
+  V.orderCompare(Option.fromUndefinedOr(a), Option.fromUndefinedOr(b));

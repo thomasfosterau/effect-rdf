@@ -11,6 +11,8 @@ import * as Order from 'effect/Order';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as B from '../src/Bindings.ts';
 import * as Results from '../src/Results.ts';
@@ -27,13 +29,21 @@ const walk = (dir: string): Array<string> =>
       })
     : [];
 
-const sets: Array<Results.ResultSet> = [];
-for (const file of walk(path.join(suites, 'rdf-tests/sparql'))) {
-  const codec = file.endsWith('.srx') ? Results.Xml : file.endsWith('.srj') ? Results.Json : null;
-  if (codec === null) continue;
-  const parsed = Effect.runSync(Effect.result(codec.parse(fs.readFileSync(file, 'utf8'))));
-  if (parsed._tag === 'Success' && parsed.success._tag === 'ResultSet') sets.push(parsed.success);
-}
+const sets: Array<Results.ResultSet> = walk(path.join(suites, 'rdf-tests/sparql')).flatMap(
+  (file) => {
+    const codec = file.endsWith('.srx')
+      ? [Results.Xml]
+      : file.endsWith('.srj')
+        ? [Results.Json]
+        : [];
+    return codec.flatMap((c) => {
+      const parsed = Effect.runSync(Effect.result(c.parse(fs.readFileSync(file, 'utf8'))));
+      return Result.isSuccess(parsed) && Predicate.isTagged(parsed.success, 'ResultSet')
+        ? [parsed.success]
+        : [];
+    });
+  },
+);
 
 const terms: Array<Term.GroundTerm> = [
   Term.namedNode('http://example.org/resource/item'),
@@ -66,16 +76,13 @@ const corpus = (codec: Results.ResultsCodec) => sets.map((s) => codec.serializeS
 const bench = (name: string, codec: Results.ResultsCodec) => {
   const docs = corpus(codec);
   const bytes = docs.reduce((n, d) => n + d.length, 0);
-  const run = () => {
-    for (const d of docs) Effect.runSync(codec.parse(d));
-  };
-  for (let i = 0; i < 5; i++) run();
-  const samples: Array<number> = [];
-  for (let i = 0; i < 15; i++) {
+  const run = () => docs.forEach((d) => Effect.runSync(codec.parse(d)));
+  Array.from({ length: 5 }, run);
+  const samples = Array.from({ length: 15 }, () => {
     const t = performance.now();
     run();
-    samples.push(performance.now() - t);
-  }
+    return performance.now() - t;
+  });
   const median = Arr.sort(samples, Order.Number)[Math.floor(samples.length / 2)] ?? 0;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(

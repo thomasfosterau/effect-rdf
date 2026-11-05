@@ -8,13 +8,15 @@
  *
  * @internal
  */
-import * as Str from 'effect/String';
 import * as BigDecimal from 'effect/BigDecimal';
-import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
+import * as Str from 'effect/String';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
+import { loop } from './loop.ts';
+import * as StringMap from './stringMap.ts';
 
 export const XSD = 'http://www.w3.org/2001/XMLSchema#';
 export const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
@@ -65,15 +67,15 @@ export const bool = (b: boolean): Term.Literal => (b ? TRUE : FALSE);
 // Literal kinds
 // -----------------------------------------------------------------------------
 
-export const isLiteral = (t: Term.Term): t is Term.Literal => t._tag === 'Literal';
+export const isLiteral = (t: Term.Term): t is Term.Literal => Term.isLiteral(t);
 
 /** A simple literal or `xsd:string` (no language tag). */
 export const isSimpleString = (t: Term.Term): t is Term.Literal =>
-  t._tag === 'Literal' && t.language === '' && t.datatype.value === Term.XSD_STRING;
+  Term.isLiteral(t) && t.language === '' && t.datatype.value === Term.XSD_STRING;
 
 /** A string literal: simple, `xsd:string` or language-tagged. */
 export const isStringLiteral = (t: Term.Term): t is Term.Literal =>
-  t._tag === 'Literal' && (t.language !== '' || t.datatype.value === Term.XSD_STRING);
+  Term.isLiteral(t) && (t.language !== '' || t.datatype.value === Term.XSD_STRING);
 
 export const stringLike = (value: string, like: Term.Literal): Term.Literal =>
   like.language === ''
@@ -99,31 +101,35 @@ export const DECIMAL = 1;
 export const FLOAT = 2;
 export const DOUBLE = 3;
 
-const numCache = new WeakMap<Term.Literal, Num | null>();
+/** The numeric value of each literal met, `None` for a non-numeric one. */
+const numCache = new WeakMap<Term.Literal, Option.Option<Num>>();
 
-const numOfValue = Match.type<Xsd.Value>().pipe(
-  Match.tag('Integer', (v): Num => ({ kind: 0, v: v.value })),
-  Match.tag('Decimal', (v): Num => ({ kind: 1, v: v.value })),
-  Match.tag('Float', (v): Num => ({ kind: 2, v: v.value })),
-  Match.tag('Double', (v): Num => ({ kind: 3, v: v.value })),
-  Match.orElse(() => undefined),
-);
+const numOfValue = (v: Xsd.Value): Option.Option<Num> =>
+  Predicate.isTagged(v, 'Integer')
+    ? Option.some({ kind: 0, v: v.value })
+    : Predicate.isTagged(v, 'Decimal')
+      ? Option.some({ kind: 1, v: v.value })
+      : Predicate.isTagged(v, 'Float')
+        ? Option.some({ kind: 2, v: v.value })
+        : Predicate.isTagged(v, 'Double')
+          ? Option.some({ kind: 3, v: v.value })
+          : Option.none();
 
-/** The numeric value of a literal, or `undefined` if it is not a valid numeric literal. */
-export const numeric = (t: Term.Term): Num | undefined => {
-  if (t._tag !== 'Literal' || t.language !== '') return undefined;
+/** The numeric value of a literal, `None` if it is not a valid numeric literal. */
+export const numeric = (t: Term.Term): Option.Option<Num> => {
+  if (!Term.isLiteral(t) || t.language !== '') return Option.none();
   const cached = numCache.get(t);
-  if (cached !== undefined) return cached ?? undefined;
-  let result: Num | undefined;
+  if (cached !== undefined) return cached;
   const d = t.datatype.value;
-  if (Xsd.isNumericDatatype(d) && Xsd.isValidLexical(d, t.value)) {
-    result = numOfValue(Xsd.toValue(t));
-  }
-  numCache.set(t, result ?? null);
+  const result =
+    Xsd.isNumericDatatype(d) && Xsd.isValidLexical(d, t.value)
+      ? numOfValue(Xsd.toValue(t))
+      : Option.none();
+  numCache.set(t, result);
   return result;
 };
 
-export const isNumeric = (t: Term.Term): boolean => numeric(t) !== undefined;
+export const isNumeric = (t: Term.Term): boolean => Option.isSome(numeric(t));
 
 export const toNumber = (n: Num): number =>
   n.kind === 0 ? Number(n.v) : n.kind === 1 ? BigDecimal.toNumberUnsafe(n.v) : n.v;
@@ -134,68 +140,60 @@ export const toDecimal = (n: Num): BigDecimal.BigDecimal =>
 /** Promotes a numeric value to (at least) the given kind. */
 export const promote = (n: Num, kind: number): Num => {
   if (n.kind >= kind) return n;
-  return promoteTo(kind, n);
+  return kind === DECIMAL
+    ? { kind: 1, v: toDecimal(n) }
+    : kind === FLOAT
+      ? { kind: 2, v: Math.fround(toNumber(n)) }
+      : { kind: 3, v: toNumber(n) };
 };
 
-const promoteTo: (kind: number, n: Num) => Num = Match.fn((kind: number, _n: Num) => kind).pipe(
-  Match.when(DECIMAL, (_kind, _k, n): Num => ({ kind: 1, v: toDecimal(n) })),
-  Match.when(FLOAT, (_kind, _k, n): Num => ({ kind: 2, v: Math.fround(toNumber(n)) })),
-  Match.orElse((_kind, _k, n): Num => ({ kind: 3, v: toNumber(n) })),
-);
+export const numLiteral = (n: Num): Term.Literal =>
+  n.kind === 0
+    ? new Term.Literal(n.v.toString(), dt.integer)
+    : n.kind === 1
+      ? new Term.Literal(Xsd.canonicalDecimal(n.v), dt.decimal)
+      : n.kind === 2
+        ? new Term.Literal(Xsd.canonicalDouble(Math.fround(n.v)), dt.float)
+        : new Term.Literal(Xsd.canonicalDouble(n.v), dt.double);
 
-export const numLiteral: (n: Num) => Term.Literal = Match.type<Num>().pipe(
-  Match.when({ kind: 0 }, (n) => new Term.Literal(n.v.toString(), dt.integer)),
-  Match.when({ kind: 1 }, (n) => new Term.Literal(Xsd.canonicalDecimal(n.v), dt.decimal)),
-  Match.when({ kind: 2 }, (n) => new Term.Literal(Xsd.canonicalDouble(Math.fround(n.v)), dt.float)),
-  Match.when({ kind: 3 }, (n) => new Term.Literal(Xsd.canonicalDouble(n.v), dt.double)),
-  Match.exhaustive,
-);
-
-const requireNum = (t: Term.Term): Num => numeric(t) ?? fail('Expected a numeric literal');
+/** The numeric value of a literal; an evaluation error if it has none. */
+export const requireNum = (t: Term.Term): Num => {
+  const n = numeric(t);
+  return Option.isSome(n) ? n.value : fail('Expected a numeric literal');
+};
 
 const DIVISION_SCALE = 18;
 
 /** `op` on two values already promoted to the common `kind`. */
-const arithmeticAt: (kind: number, op: '+' | '-' | '*' | '/', px: Num, py: Num) => Term.Literal =
-  Match.fn((kind: number, _op: '+' | '-' | '*' | '/', _px: Num, _py: Num) => kind).pipe(
-    Match.when(INTEGER, (_kind, _k, op, px, py) => {
-      // SAFETY: `kind === INTEGER` means both operands were promoted to the integer representation
-      // (`bigint`).
-      const u = px.v as bigint;
-      // SAFETY: `kind === INTEGER` means both operands were promoted to the integer representation
-      // (`bigint`).
-      const v = py.v as bigint;
-      return numLiteral({ kind: 0, v: op === '+' ? u + v : op === '-' ? u - v : u * v });
-    }),
-    Match.when(DECIMAL, (_kind, _k, op, px, py) => {
-      // SAFETY: `kind === DECIMAL` means both operands were promoted to `BigDecimal`.
-      const u = px.v as BigDecimal.BigDecimal;
-      // SAFETY: `kind === DECIMAL` means both operands were promoted to `BigDecimal`.
-      const v = py.v as BigDecimal.BigDecimal;
-      if (op === '/') {
-        if (BigDecimal.isZero(v)) return fail('Division by zero');
-        return numLiteral({ kind: 1, v: divideDecimal(u, v) });
-      }
-      return numLiteral({
-        kind: 1,
-        v:
-          op === '+'
-            ? BigDecimal.sum(u, v)
-            : op === '-'
-              ? BigDecimal.subtract(u, v)
-              : BigDecimal.multiply(u, v),
-      });
-    }),
-    Match.orElse((kind, _k, op, px, py) => {
-      // SAFETY: the remaining kinds (float, double) carry a JS `number`.
-      const u = px.v as number;
-      // SAFETY: the remaining kinds (float, double) carry a JS `number`.
-      const v = py.v as number;
-      const r = op === '+' ? u + v : op === '-' ? u - v : op === '*' ? u * v : u / v;
-      // SAFETY: integer and decimal were matched above, so `kind` is float (2) or double (3).
-      return numLiteral({ kind: kind as 2 | 3, v: kind === FLOAT ? Math.fround(r) : r });
-    }),
-  );
+const arithmeticAt = (kind: number, op: '+' | '-' | '*' | '/', px: Num, py: Num): Term.Literal => {
+  if (px.kind === 0 && py.kind === 0) {
+    const u = px.v;
+    const v = py.v;
+    return numLiteral({ kind: 0, v: op === '+' ? u + v : op === '-' ? u - v : u * v });
+  }
+  if (px.kind === 1 && py.kind === 1) {
+    const u = px.v;
+    const v = py.v;
+    if (op === '/') {
+      if (BigDecimal.isZero(v)) return fail('Division by zero');
+      return numLiteral({ kind: 1, v: divideDecimal(u, v) });
+    }
+    return numLiteral({
+      kind: 1,
+      v:
+        op === '+'
+          ? BigDecimal.sum(u, v)
+          : op === '-'
+            ? BigDecimal.subtract(u, v)
+            : BigDecimal.multiply(u, v),
+    });
+  }
+  // The remaining kinds (float, double) carry a JS `number`.
+  const u = toNumber(px);
+  const v = toNumber(py);
+  const r = op === '+' ? u + v : op === '-' ? u - v : op === '*' ? u * v : u / v;
+  return numLiteral(kind === FLOAT ? { kind: 2, v: Math.fround(r) } : { kind: 3, v: r });
+};
 
 export const arithmetic = (op: '+' | '-' | '*' | '/', a: Term.Term, b: Term.Term): Term.Literal => {
   const x = requireNum(a);
@@ -227,23 +225,24 @@ export const negate = (a: Term.Term): Term.Literal => {
   return negateNum(requireNum(a));
 };
 
-const negateNum: (x: Num) => Term.Literal = Match.type<Num>().pipe(
-  Match.when({ kind: 0 }, (x) => numLiteral({ kind: 0, v: -x.v })),
-  Match.when({ kind: 1 }, (x) => numLiteral({ kind: 1, v: BigDecimal.negate(x.v) })),
-  Match.when({ kind: 2 }, (x) => numLiteral({ kind: 2, v: -x.v })),
-  Match.when({ kind: 3 }, (x) => numLiteral({ kind: 3, v: -x.v })),
-  Match.exhaustive,
-);
+const negateNum = (x: Num): Term.Literal =>
+  numLiteral(
+    x.kind === 0
+      ? { kind: 0, v: -x.v }
+      : x.kind === 1
+        ? { kind: 1, v: BigDecimal.negate(x.v) }
+        : x.kind === 2
+          ? { kind: 2, v: -x.v }
+          : { kind: 3, v: -x.v },
+  );
 
 /** Compares two numerics; returns NaN when unordered (NaN operands). */
 export const compareNum = (x: Num, y: Num): number => {
   const kind = Math.max(x.kind, y.kind);
   if (kind <= DECIMAL) {
-    if (kind === INTEGER) {
-      // SAFETY: `kind === INTEGER` means both values are `bigint`.
-      const u = x.v as bigint;
-      // SAFETY: `kind === INTEGER` means both values are `bigint`.
-      const v = y.v as bigint;
+    if (x.kind === 0 && y.kind === 0) {
+      const u = x.v;
+      const v = y.v;
       return u < v ? -1 : u > v ? 1 : 0;
     }
     const u = toDecimal(x);
@@ -260,7 +259,7 @@ export const compareNum = (x: Num, y: Num): number => {
 // Date/time and durations
 // -----------------------------------------------------------------------------
 
-const DATE_KINDS = new Set([
+const DATE_KINDS: ReadonlyMap<string, true> = StringMap.setOf([
   'dateTime',
   'dateTimeStamp',
   'date',
@@ -275,33 +274,40 @@ const DATE_KINDS = new Set([
 interface DateValue {
   readonly kind: string;
   readonly millis: number;
-  readonly timezone: number | undefined;
+  /** Whether the value has a timezone. */
+  readonly zoned: boolean;
 }
 
-export const dateValue = (t: Term.Term): DateValue | undefined => {
-  if (t._tag !== 'Literal' || !t.datatype.value.startsWith(XSD)) return undefined;
+export const dateValue = (t: Term.Term): Option.Option<DateValue> => {
+  if (!Term.isLiteral(t) || !t.datatype.value.startsWith(XSD)) return Option.none();
   const local = t.datatype.value.slice(XSD.length);
-  if (!DATE_KINDS.has(local) || !Xsd.isValidLexical(t.datatype.value, t.value)) return undefined;
+  if (!DATE_KINDS.has(local) || !Xsd.isValidLexical(t.datatype.value, t.value)) {
+    return Option.none();
+  }
   const v = Xsd.toValue(t);
-  if (v._tag !== 'DateTime') return undefined;
-  return {
+  if (!Predicate.isTagged(v, 'DateTime')) return Option.none();
+  return Option.some({
     kind: local === 'dateTimeStamp' ? 'dateTime' : local,
     millis: v.epochMillis,
-    timezone: v.timezone,
-  };
+    zoned: v.timezone !== undefined,
+  });
 };
 
 const FOURTEEN_HOURS = 14 * 3600 * 1000;
 
-/** Compares two date/time values of the same kind; undefined if indeterminate. */
-export const compareDates = (a: DateValue, b: DateValue): number | undefined => {
-  if (a.kind !== b.kind) return undefined;
-  if ((a.timezone === undefined) !== (b.timezone === undefined)) {
+const BEFORE = Option.some(-1);
+const SAME = Option.some(0);
+const AFTER = Option.some(1);
+
+/** Compares two date/time values of the same kind; `None` if indeterminate. */
+export const compareDates = (a: DateValue, b: DateValue): Option.Option<number> => {
+  if (a.kind !== b.kind) return Option.none();
+  if (a.zoned !== b.zoned) {
     const diff = a.millis - b.millis;
-    if (Math.abs(diff) <= FOURTEEN_HOURS) return undefined;
-    return diff < 0 ? -1 : 1;
+    if (Math.abs(diff) <= FOURTEEN_HOURS) return Option.none();
+    return diff < 0 ? BEFORE : AFTER;
   }
-  return a.millis < b.millis ? -1 : a.millis > b.millis ? 1 : 0;
+  return a.millis < b.millis ? BEFORE : a.millis > b.millis ? AFTER : SAME;
 };
 
 interface DurationValue {
@@ -310,17 +316,17 @@ interface DurationValue {
   readonly seconds: number;
 }
 
-export const durationValue = (t: Term.Term): DurationValue | undefined => {
-  if (t._tag !== 'Literal') return undefined;
+export const durationValue = (t: Term.Term): Option.Option<DurationValue> => {
+  if (!Term.isLiteral(t)) return Option.none();
   const d = t.datatype.value;
   if (d !== `${XSD}duration` && d !== `${XSD}dayTimeDuration` && d !== `${XSD}yearMonthDuration`) {
-    return undefined;
+    return Option.none();
   }
-  if (!Xsd.isValidLexical(d, t.value)) return undefined;
+  if (!Xsd.isValidLexical(d, t.value)) return Option.none();
   const v = Xsd.toValue(t);
-  return v._tag === 'Duration'
-    ? { kind: d.slice(XSD.length), months: v.months, seconds: v.seconds }
-    : undefined;
+  return Predicate.isTagged(v, 'Duration')
+    ? Option.some({ kind: d.slice(XSD.length), months: v.months, seconds: v.seconds })
+    : Option.none();
 };
 
 // -----------------------------------------------------------------------------
@@ -331,15 +337,20 @@ export const durationValue = (t: Term.Term): DurationValue | undefined => {
 export const compareCodepoints = (a: string, b: string): number => {
   if (a === b) return 0;
   const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
+  // The first offset where the strings differ (`n` if one is a prefix of the other).
+  let i = 0;
+  loop(() => {
+    if (i >= n || a.charCodeAt(i) !== b.charCodeAt(i)) return false;
+    i++;
+    return true;
+  });
+  if (i < n) {
     const x = a.charCodeAt(i);
     const y = b.charCodeAt(i);
-    if (x !== y) {
-      const xs = x >= 0xd800 && x <= 0xdfff;
-      const ys = y >= 0xd800 && y <= 0xdfff;
-      if (xs !== ys) return xs ? 1 : -1;
-      return x < y ? -1 : 1;
-    }
+    const xs = x >= 0xd800 && x <= 0xdfff;
+    const ys = y >= 0xd800 && y <= 0xdfff;
+    if (xs !== ys) return xs ? 1 : -1;
+    return x < y ? -1 : 1;
   }
   return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
 };
@@ -349,7 +360,7 @@ export const compareCodepoints = (a: string, b: string): number => {
 // -----------------------------------------------------------------------------
 
 const isBooleanLiteral = (t: Term.Term): t is Term.Literal =>
-  t._tag === 'Literal' &&
+  Term.isLiteral(t) &&
   t.datatype.value === `${XSD}boolean` &&
   Xsd.isValidLexical(t.datatype.value, t.value);
 
@@ -362,11 +373,11 @@ const booleanValue = (t: Term.Literal): boolean => t.value === 'true' || t.value
 export const compareLiterals = (a: Term.Term, b: Term.Term): number => {
   const x = numeric(a);
   const y = numeric(b);
-  if (x !== undefined && y !== undefined) return compareNum(x, y);
+  if (Option.isSome(x) && Option.isSome(y)) return compareNum(x.value, y.value);
   if (isSimpleString(a) && isSimpleString(b)) return compareCodepoints(a.value, b.value);
   if (
-    a._tag === 'Literal' &&
-    b._tag === 'Literal' &&
+    Term.isLiteral(a) &&
+    Term.isLiteral(b) &&
     a.language !== '' &&
     a.language === b.language &&
     a.direction === b.direction
@@ -378,16 +389,18 @@ export const compareLiterals = (a: Term.Term, b: Term.Term): number => {
   }
   const da = dateValue(a);
   const db = dateValue(b);
-  if (da !== undefined && db !== undefined) {
-    const c = compareDates(da, db);
-    if (c !== undefined) return c;
+  if (Option.isSome(da) && Option.isSome(db)) {
+    const c = compareDates(da.value, db.value);
+    if (Option.isSome(c)) return c.value;
     return fail('Indeterminate date comparison');
   }
   const ua = durationValue(a);
   const ub = durationValue(b);
-  if (ua !== undefined && ub !== undefined) {
-    if (ua.months === ub.months) return Math.sign(ua.seconds - ub.seconds);
-    if (ua.seconds === ub.seconds) return Math.sign(ua.months - ub.months);
+  if (Option.isSome(ua) && Option.isSome(ub)) {
+    const u = ua.value;
+    const v = ub.value;
+    if (u.months === v.months) return Math.sign(u.seconds - v.seconds);
+    if (u.seconds === v.seconds) return Math.sign(u.months - v.months);
     return fail('Indeterminate duration comparison');
   }
   return fail('Incomparable values');
@@ -398,31 +411,33 @@ const isKnownLiteral = (t: Term.Literal): boolean =>
 
 /** RDF term equality with value semantics (`=`). Throws on type errors. */
 export const equals = (a: Term.Term, b: Term.Term): boolean => {
-  if (a._tag === 'Triple' || b._tag === 'Triple') {
-    if (a._tag !== 'Triple' || b._tag !== 'Triple') return false;
+  const ta = Term.isTriple(a);
+  const tb = Term.isTriple(b);
+  if (ta || tb) {
+    if (!ta || !tb) return false;
     return (
       equals(a.subject, b.subject) && equals(a.predicate, b.predicate) && equals(a.object, b.object)
     );
   }
-  if (a._tag !== 'Literal' || b._tag !== 'Literal') return a.key === b.key;
+  if (!Term.isLiteral(a) || !Term.isLiteral(b)) return a.key === b.key;
   const x = numeric(a);
   const y = numeric(b);
-  if (x !== undefined && y !== undefined) return compareNum(x, y) === 0;
+  if (Option.isSome(x) && Option.isSome(y)) return compareNum(x.value, y.value) === 0;
   if (a.key === b.key) return true;
   if (isSimpleString(a) && isSimpleString(b)) return a.value === b.value;
   if (isBooleanLiteral(a) && isBooleanLiteral(b)) return booleanValue(a) === booleanValue(b);
   const da = dateValue(a);
   const db = dateValue(b);
-  if (da !== undefined && db !== undefined) {
-    if (da.kind !== db.kind) return false;
-    const c = compareDates(da, db);
-    if (c === undefined) return fail('Indeterminate date comparison');
-    return c === 0;
+  if (Option.isSome(da) && Option.isSome(db)) {
+    if (da.value.kind !== db.value.kind) return false;
+    const c = compareDates(da.value, db.value);
+    if (Option.isNone(c)) return fail('Indeterminate date comparison');
+    return c.value === 0;
   }
   const ua = durationValue(a);
   const ub = durationValue(b);
-  if (ua !== undefined && ub !== undefined) {
-    return ua.months === ub.months && ua.seconds === ub.seconds;
+  if (Option.isSome(ua) && Option.isSome(ub)) {
+    return ua.value.months === ub.value.months && ua.value.seconds === ub.value.seconds;
   }
   if (a.language !== '' || b.language !== '') {
     // Language-tagged strings are equal only when they are the same term.
@@ -443,14 +458,15 @@ export const equals = (a: Term.Term, b: Term.Term): boolean => {
 };
 
 /** Effective boolean value. */
-const numEbv: (n: Num) => boolean = Match.type<Num>().pipe(
-  Match.when({ kind: 0 }, (n) => n.v !== 0n),
-  Match.when({ kind: 1 }, (n) => !BigDecimal.isZero(n.v)),
-  Match.orElse((n) => !(n.v === 0 || Number.isNaN(n.v))),
-);
+const numEbv = (n: Num): boolean =>
+  n.kind === 0
+    ? n.v !== 0n
+    : n.kind === 1
+      ? !BigDecimal.isZero(n.v)
+      : !(n.v === 0 || Number.isNaN(n.v));
 
 export const ebv = (t: Term.Term): boolean => {
-  if (t._tag !== 'Literal') return fail('EBV of a non-literal');
+  if (!Term.isLiteral(t)) return fail('EBV of a non-literal');
   const d = t.datatype.value;
   if (d === `${XSD}boolean`) {
     if (!Xsd.isValidLexical(d, t.value)) return fail('Invalid boolean');
@@ -459,77 +475,76 @@ export const ebv = (t: Term.Term): boolean => {
   if (t.language === '' && d === Term.XSD_STRING) return Str.isNonEmpty(t.value);
   if (Xsd.isNumericDatatype(d)) {
     const n = numeric(t);
-    if (n === undefined) return false;
-    return numEbv(n);
+    return Option.isSome(n) && numEbv(n.value);
   }
   return fail('EBV is not defined for this literal');
 };
 
-const rank = (t: Term.Term | undefined): number => {
-  if (t === undefined) return 0;
-  return termRank(t);
+/** The `ORDER BY` rank of a bound term: blank nodes < IRIs < literals < triple terms. */
+const termRank = (t: Term.Term): number =>
+  Term.isBlankNode(t)
+    ? 1
+    : Term.isNamedNode(t)
+      ? 2
+      : Term.isLiteral(t)
+        ? 3
+        : Term.isTriple(t)
+          ? 4
+          : 5;
+
+/** Orders two literals: by value where comparable, else syntactically. */
+const compareLiteralOrder = (a: Term.Literal, l: Term.Literal): number => {
+  // Where the values cannot be compared, fall through to the syntactic
+  // ordering.
+  const compared = Result.try(() => compareLiterals(a, l));
+  if (Result.isSuccess(compared)) {
+    const c = compared.success;
+    if (!Number.isNaN(c) && c !== 0) return c;
+    if (c === 0 && a.key === l.key) return 0;
+  }
+  // Simple literals before language-tagged before other typed literals.
+  const ka = a.language !== '' ? 1 : a.datatype.value === Term.XSD_STRING ? 0 : 2;
+  const kb = l.language !== '' ? 1 : l.datatype.value === Term.XSD_STRING ? 0 : 2;
+  if (ka !== kb) return ka - kb;
+  return (
+    compareCodepoints(a.datatype.value, l.datatype.value) ||
+    compareCodepoints(a.language, l.language) ||
+    compareCodepoints(a.value, l.value)
+  );
 };
 
-const termRank: (t: Term.Term) => number = Match.type<Term.Term>().pipe(
-  Match.tag('BlankNode', () => 1),
-  Match.tag('NamedNode', () => 2),
-  Match.tag('Literal', () => 3),
-  Match.tag('Triple', () => 4),
-  Match.orElse(() => 5),
-);
-
-/** Orders two terms of the same rank. */
-const compareSameRank: (a: Term.Term, b: Term.Term) => number = Match.fn(
-  (a: Term.Term, _b: Term.Term) => a,
-).pipe(
-  Match.tag('BlankNode', 'NamedNode', (a, _a, b) =>
-    // SAFETY: `rank` gave both terms the same rank, and blank nodes and IRIs share this case, so
-    // `b` has a `value` too.
-    compareCodepoints(a.value, (b as Term.NamedNode).value),
-  ),
-  Match.tag('Triple', (a, _a, b) => {
-    // SAFETY: `rank` gave both terms the same rank, and only triple terms have this one, so `b`
-    // is a triple term too.
-    const t = b as Term.Triple;
-    return (
-      orderCompare(a.subject, t.subject) ||
-      orderCompare(a.predicate, t.predicate) ||
-      orderCompare(a.object, t.object)
-    );
-  }),
-  Match.tag('Literal', (a, _a, b) => {
-    // SAFETY: `rank` gave both terms the same rank, and only literals have this one, so `b` is a
-    // literal too.
-    const l = b as Term.Literal;
-    // Where the values cannot be compared, fall through to the syntactic
-    // ordering.
-    const c = Result.getOrUndefined(Result.try(() => compareLiterals(a, l)));
-    if (c !== undefined) {
-      if (!Number.isNaN(c) && c !== 0) return c;
-      if (c === 0 && a.key === l.key) return 0;
-    }
-    // Simple literals before language-tagged before other typed literals.
-    const ka = a.language !== '' ? 1 : a.datatype.value === Term.XSD_STRING ? 0 : 2;
-    const kb = l.language !== '' ? 1 : l.datatype.value === Term.XSD_STRING ? 0 : 2;
-    if (ka !== kb) return ka - kb;
-    return (
-      compareCodepoints(a.datatype.value, l.datatype.value) ||
-      compareCodepoints(a.language, l.language) ||
-      compareCodepoints(a.value, l.value)
-    );
-  }),
-  Match.orElse(() => 0),
-);
-
 /**
- * The total ordering used by `ORDER BY`: unbound < blank nodes < IRIs <
+ * The total ordering used by `ORDER BY` on bound terms: blank nodes < IRIs <
  * literals < triple terms; literals are ordered by value where comparable
  * and otherwise by datatype, language and lexical form.
  */
-export const orderCompare = (a: Term.Term | undefined, b: Term.Term | undefined): number => {
-  const ra = rank(a);
-  const rb = rank(b);
+export const compareTerms = (a: Term.Term, b: Term.Term): number => {
+  const ra = termRank(a);
+  const rb = termRank(b);
   if (ra !== rb) return ra - rb;
-  if (a === undefined || b === undefined) return 0;
-  return compareSameRank(a, b);
+  if (Term.isLiteral(a) && Term.isLiteral(b)) return compareLiteralOrder(a, b);
+  if (Term.isTriple(a) && Term.isTriple(b)) {
+    return (
+      compareTerms(a.subject, b.subject) ||
+      compareTerms(a.predicate, b.predicate) ||
+      compareTerms(a.object, b.object)
+    );
+  }
+  if (
+    (Term.isBlankNode(a) || Term.isNamedNode(a)) &&
+    (Term.isBlankNode(b) || Term.isNamedNode(b))
+  ) {
+    return compareCodepoints(a.value, b.value);
+  }
+  return 0;
 };
+
+/** `compareTerms` on possibly unbound terms (`None`), with unbound first. */
+export const orderCompare = (a: Option.Option<Term.Term>, b: Option.Option<Term.Term>): number =>
+  Option.isNone(a)
+    ? Option.isNone(b)
+      ? 0
+      : -1
+    : Option.isNone(b)
+      ? 1
+      : compareTerms(a.value, b.value);

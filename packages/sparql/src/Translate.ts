@@ -11,12 +11,17 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
-import * as Match from 'effect/Match';
 import * as Cause from 'effect/Cause';
+import * as Match from 'effect/Match';
+import * as Predicate from 'effect/Predicate';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
 import * as Ast from './Ast.ts';
 import * as Bindings from './Bindings.ts';
+import * as StringMap from './internal/stringMap.ts';
+
+/** Variable names, as a string set. */
+type Names = ReadonlyMap<string, true>;
 
 class Translator {
   private counter = 0;
@@ -48,30 +53,31 @@ class Translator {
     const filters: Array<Ast.Expression> = [];
     // Merge adjacent triple blocks (filters do not separate BGPs).
     const elements: Array<Ast.Pattern> = [];
-    for (const p of g.patterns) {
-      if (p._tag === 'Filter') {
+    g.patterns.forEach((p) => {
+      if (Predicate.isTagged(p, 'Filter')) {
         filters.push(p.expression);
-        continue;
+        return;
       }
       const last = elements[elements.length - 1];
-      if (p._tag === 'Bgp' && last !== undefined && last._tag === 'Bgp') {
+      if (Predicate.isTagged(p, 'Bgp') && Predicate.isTagged(last, 'Bgp')) {
         elements[elements.length - 1] = Ast.bgp([...last.triples, ...p.triples]);
       } else elements.push(p);
-    }
-    let result: Algebra.Operation = Algebra.unit;
-    for (const e of elements) {
-      result = Match.value(e).pipe(
-        Match.tag('Optional', (o): Algebra.Operation => {
-          const a = this.group(o.pattern);
-          return a._tag === 'Filter'
-            ? Algebra.leftJoin(result, a.input, a.expression)
-            : Algebra.leftJoin(result, a);
-        }),
-        Match.tag('Minus', (m) => Algebra.minus(result, this.group(m.pattern))),
-        Match.tag('Bind', (b) => Algebra.extend(result, b.variable, this.expression(b.expression))),
-        Match.orElse((p) => Algebra.join(result, this.pattern(p))),
-      );
-    }
+    });
+    let result = elements.reduce<Algebra.Operation>(
+      (acc, e) =>
+        Match.value(e).pipe(
+          Match.tag('Optional', (o): Algebra.Operation => {
+            const a = this.group(o.pattern);
+            return Predicate.isTagged(a, 'Filter')
+              ? Algebra.leftJoin(acc, a.input, a.expression)
+              : Algebra.leftJoin(acc, a);
+          }),
+          Match.tag('Minus', (m) => Algebra.minus(acc, this.group(m.pattern))),
+          Match.tag('Bind', (b) => Algebra.extend(acc, b.variable, this.expression(b.expression))),
+          Match.orElse((p) => Algebra.join(acc, this.pattern(p))),
+        ),
+      Algebra.unit,
+    );
     if (Arr.isReadonlyArrayNonEmpty(filters)) {
       const conjunction = filters
         .map((f) => this.expression(f))
@@ -127,7 +133,7 @@ class Translator {
           return true;
         }),
         Match.tag('PathInverse', (inv) => {
-          if (inv.path._tag !== 'PathLink') return false;
+          if (!Predicate.isTagged(inv.path, 'PathLink')) return false;
           current.push(Ast.triplePattern(o, inv.path.iri, s));
           return true;
         }),
@@ -146,12 +152,13 @@ class Translator {
       flush();
       parts.push({ _tag: 'Path', subject: s, path, object: o });
     };
-    for (const t of triples) {
+    triples.forEach((t) => {
       const s = this.termPattern(t.subject);
       const o = this.termPattern(t.object);
-      if (t._tag === 'TriplePattern') current.push(Ast.triplePattern(s, t.predicate, o));
+      if (Predicate.isTagged(t, 'TriplePattern'))
+        current.push(Ast.triplePattern(s, t.predicate, o));
       else emitPath(s, t.path, o);
-    }
+    });
     flush();
     if (Arr.isReadonlyArrayEmpty(parts)) return Algebra.unit;
     return parts.reduce((a, b) => Algebra.join(a, b));
@@ -203,9 +210,10 @@ class Translator {
 
   query(q: Ast.Query): Algebra.Query {
     let op = this.group(q.where);
-    const projection = q._tag === 'Select' && q.projection !== '*' ? q.projection : ([] as const);
-    const selectExpressions = projection.filter(
-      (p): p is Ast.Projection => p._tag === 'Projection',
+    const projection =
+      Predicate.isTagged(q, 'Select') && q.projection !== '*' ? q.projection : ([] as const);
+    const selectExpressions = projection.filter((p): p is Ast.Projection =>
+      Predicate.isTagged(p, 'Projection'),
     );
     const grouped =
       Arr.isReadonlyArrayNonEmpty(q.groupBy) ||
@@ -213,16 +221,15 @@ class Translator {
       q.having.some(Ast.containsAggregate) ||
       q.orderBy.some((o) => Ast.containsAggregate(o.expression));
 
-    let translateLevel: (e: Ast.Expression, aliases: ReadonlySet<string>) => Algebra.Expression = (
-      e,
-    ) => this.expression(e);
+    let translateLevel: (e: Ast.Expression, aliases: Names) => Algebra.Expression = (e) =>
+      this.expression(e);
 
     if (grouped) {
       const keys: Array<Algebra.GroupKey> = q.groupBy.map((g) => ({
         expression: this.expression(g.expression),
-        variable: g.variable ?? (g.expression._tag === 'Variable' ? g.expression : this.fresh('g')),
+        variable: g.variable ?? (Term.isVariable(g.expression) ? g.expression : this.fresh('g')),
       }));
-      const keyNames = new Set([
+      const keyNames = StringMap.setOf([
         ...keys.map((k) => k.variable.value),
         ...(q.values?.variables.map((v) => v.value) ?? []),
       ]);
@@ -240,7 +247,7 @@ class Translator {
         return variable;
       };
       // Variables outside aggregates that are not group keys are sampled.
-      const sampleVariables = (e: Ast.Expression, aliases: ReadonlySet<string>): Ast.Expression => {
+      const sampleVariables = (e: Ast.Expression, aliases: Names): Ast.Expression => {
         return Match.value(e).pipe(
           Match.tag('Variable', (v): Ast.Expression =>
             keyNames.has(v.value) || aliases.has(v.value) ? v : Ast.aggregate('SAMPLE', v),
@@ -262,29 +269,37 @@ class Translator {
         this.expression(sampleVariables(e, aliases), aggregateVariable);
       // Translate expressions now so that the aggregates are collected before
       // the Group node is built.
-      const having = q.having.map((h) => translateLevel(h, new Set()));
-      const aliases = new Set<string>();
+      const having = q.having.map((h) => translateLevel(h, StringMap.emptySet()));
+      const aliases = StringMap.emptySet();
       const extensions = selectExpressions.map((p) => {
         const e = translateLevel(p.expression, aliases);
-        aliases.add(p.variable.value);
+        aliases.set(p.variable.value, true);
         return { variable: p.variable, expression: e };
       });
       const order = q.orderBy.map((o) => ({
         expression: translateLevel(o.expression, aliases),
         descending: o.descending,
       }));
-      op = { _tag: 'Group', input: op, keys, aggregates };
-      for (const h of having) op = Algebra.filter(h, op);
+      const group: Algebra.Operation = { _tag: 'Group', input: op, keys, aggregates };
+      op = having.reduce<Algebra.Operation>((acc, h) => Algebra.filter(h, acc), group);
       if (q.values !== undefined) op = Algebra.join(op, values(q.values));
-      for (const x of extensions) op = Algebra.extend(op, x.variable, x.expression);
+      op = extensions.reduce<Algebra.Operation>(
+        (acc, x) => Algebra.extend(acc, x.variable, x.expression),
+        op,
+      );
       if (Arr.isReadonlyArrayNonEmpty(order))
         op = { _tag: 'OrderBy', input: op, conditions: order };
     } else {
-      for (const h of q.having) op = Algebra.filter(this.expression(h), op);
+      op = q.having.reduce<Algebra.Operation>(
+        (acc, h) => Algebra.filter(this.expression(h), acc),
+        op,
+      );
       if (q.values !== undefined) op = Algebra.join(op, values(q.values));
-      for (const p of selectExpressions) {
-        op = Algebra.extend(op, p.variable, translateLevel(p.expression, new Set()));
-      }
+      op = selectExpressions.reduce<Algebra.Operation>(
+        (acc, p) =>
+          Algebra.extend(acc, p.variable, translateLevel(p.expression, StringMap.emptySet())),
+        op,
+      );
       if (Arr.isReadonlyArrayNonEmpty(q.orderBy)) {
         op = {
           _tag: 'OrderBy',
@@ -321,7 +336,7 @@ class Translator {
       Match.tag('Describe', (d): Algebra.Query => {
         const terms =
           d.terms === '*' ? Ast.inScopeVariables(d.where).map((v) => Term.variable(v)) : d.terms;
-        const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
+        const vars = terms.filter(Term.isVariable);
         return {
           _tag: 'Describe',
           input: slice(Algebra.project(op, vars)),
@@ -343,7 +358,7 @@ const values = (p: Ast.ValuesPattern): Algebra.Values => ({
 });
 
 const isUnit = (op: Algebra.Operation): boolean =>
-  op._tag === 'Bgp' && Arr.isReadonlyArrayEmpty(op.patterns);
+  Predicate.isTagged(op, 'Bgp') && Arr.isReadonlyArrayEmpty(op.patterns);
 
 /**
  * Removes joins with the empty BGP (`Join(Z, A)` → `A`).
@@ -353,7 +368,7 @@ const isUnit = (op: Algebra.Operation): boolean =>
  */
 export const simplify = (op: Algebra.Operation): Algebra.Operation =>
   Algebra.transform(op, (o) => {
-    if (o._tag === 'Join') {
+    if (Predicate.isTagged(o, 'Join')) {
       if (isUnit(o.left)) return o.right;
       if (isUnit(o.right)) return o.left;
     }

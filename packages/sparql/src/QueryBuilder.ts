@@ -26,6 +26,7 @@ import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
+import * as Record from 'effect/Record';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 import type { Simplify } from 'effect/Types';
@@ -88,6 +89,12 @@ const isJsValue = (
 
 const isTerm = <T extends Term.Term>(u: T | JsValue): u is T => Term.isTerm(u);
 
+const isAlias = (u: ExpressionInput | Alias<string, boolean>): u is Alias<string, boolean> =>
+  !isJsValue(u) && Predicate.isTagged(u, 'Alias');
+
+const isOrderCondition = (u: ExpressionInput | Ast.OrderCondition): u is Ast.OrderCondition =>
+  !isJsValue(u) && 'descending' in u;
+
 /**
  * Converts a JS value to a literal (terms and expressions are returned
  * unchanged).
@@ -145,7 +152,7 @@ export const vars = <const N extends ReadonlyArray<string>>(
   ...names: N
 ): { readonly [K in N[number]]: Term.Variable<K> } =>
   // SAFETY: one entry per name in `names`, each the variable of that name.
-  Object.fromEntries(names.map((n) => [n, Term.variable(n)])) as {
+  Record.fromEntries(names.map((n) => [n, Term.variable(n)])) as {
     readonly [K in N[number]]: Term.Variable<K>;
   };
 
@@ -290,22 +297,28 @@ export const path = {
 
 const toPath = (p: Ast.Path | Term.NamedNode): Ast.Path => (Ast.isPath(p) ? p : Ast.link(p));
 
+/** Whether a pattern input is the list form (`Array.isArray` cannot narrow a `ReadonlyArray`). */
+const isPatternList = (input: PatternInput): input is ReadonlyArray<PatternInput> =>
+  Array.isArray(input);
+
+const isTriplePattern = (
+  p: Ast.TriplePattern | Ast.PathPattern | Ast.Pattern,
+): p is Ast.TriplePattern | Ast.PathPattern =>
+  Predicate.isTagged(p, 'TriplePattern') || Predicate.isTagged(p, 'PathPattern');
+
 const flatten = (inputs: ReadonlyArray<PatternInput>): Array<Ast.Pattern> => {
   const out: Array<Ast.Pattern> = [];
   const go = (input: PatternInput): void => {
-    if (Array.isArray(input)) {
-      // SAFETY: `Array.isArray` holds, and the array form of `PatternInput` is a list of inputs.
-      (input as ReadonlyArray<PatternInput>).forEach(go);
+    if (isPatternList(input)) {
+      input.forEach(go);
       return;
     }
-    // SAFETY: not an array, so it is a single pattern of one of these kinds.
-    const p = input as Ast.TriplePattern | Ast.PathPattern | Ast.Pattern;
-    if (p._tag === 'TriplePattern' || p._tag === 'PathPattern') {
+    if (isTriplePattern(input)) {
       const last = out[out.length - 1];
-      if (last !== undefined && last._tag === 'Bgp') {
-        out[out.length - 1] = Ast.bgp([...last.triples, p]);
-      } else out.push(Ast.bgp([p]));
-    } else out.push(p);
+      if (Predicate.isTagged(last, 'Bgp')) {
+        out[out.length - 1] = Ast.bgp([...last.triples, input]);
+      } else out.push(Ast.bgp([input]));
+    } else out.push(input);
   };
   inputs.forEach(go);
   return out;
@@ -386,7 +399,7 @@ export const bind = (expression: ExpressionInput, name: string | Term.Variable):
 export const values = (
   rows: ReadonlyArray<Readonly<Record<string, Term.GroundTerm | JsValue | undefined>>>,
 ): Ast.ValuesPattern => {
-  const names = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
+  const names = Arr.dedupe(rows.flatMap((r) => Record.keys(r)));
   return Ast.values(
     names.map((n) => Term.variable(n)),
     rows.map((r) =>
@@ -711,14 +724,13 @@ export class Builder<
   groupBy(
     ...conditions: ReadonlyArray<ExpressionInput | Alias<string, boolean>>
   ): Builder<K, R, O> {
-    // SAFETY: not an alias, so it is an expression input.
     return this.with({
       groupBy: [
         ...this.query.groupBy,
         ...conditions.map((c): Ast.GroupCondition =>
-          !isJsValue(c) && c._tag === 'Alias'
+          isAlias(c)
             ? { expression: c.expression, variable: Term.variable(c.name) }
-            : { expression: toExpression(c as ExpressionInput) },
+            : { expression: toExpression(c) },
         ),
       ],
     });
@@ -731,13 +743,10 @@ export class Builder<
 
   /** Adds `ORDER BY` conditions (ascending unless wrapped with `desc`). */
   orderBy(...conditions: ReadonlyArray<ExpressionInput | Ast.OrderCondition>): Builder<K, R, O> {
-    // SAFETY: not an order condition, so it is an expression input.
     return this.with({
       orderBy: [
         ...this.query.orderBy,
-        ...conditions.map((c) =>
-          !isJsValue(c) && 'descending' in c ? c : asc(c as ExpressionInput),
-        ),
+        ...conditions.map((c) => (isOrderCondition(c) ? c : asc(c))),
       ],
     });
   }
@@ -804,7 +813,7 @@ const empty = Ast.group([]);
 const projectionItem = (item: SelectItem): Term.Variable | Ast.Projection => {
   if (Predicate.isString(item)) return Term.variable(item);
   return Match.value(item).pipe(
-    Match.tag('Variable', (v): Term.Variable | Ast.Projection => v),
+    Match.tag('Variable', (x): Term.Variable | Ast.Projection => x),
     Match.tag('Maybe', (m) => Term.variable(m.name)),
     Match.tag('Alias', (a) => Ast.projection(a.expression, Term.variable(a.name))),
     Match.exhaustive,
@@ -848,7 +857,9 @@ export const construct = (
   new Builder(
     Ast.construct({
       where: empty,
-      template: template.filter((t): t is Ast.TriplePattern => t._tag === 'TriplePattern'),
+      template: template.filter((t): t is Ast.TriplePattern =>
+        Predicate.isTagged(t, 'TriplePattern'),
+      ),
     }),
   );
 

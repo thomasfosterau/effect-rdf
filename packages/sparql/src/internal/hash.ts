@@ -7,29 +7,36 @@
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 
-const hex = (bytes: ArrayLike<number>): string => {
-  let out = '';
-  for (let i = 0; i < bytes.length; i++) out += (bytes[i]! & 0xff).toString(16).padStart(2, '0');
-  return out;
-};
+const hex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+
+/** `0 … n - 1`. */
+const range = (n: number): ReadonlyArray<number> => Array.from({ length: n }, (_, i) => i);
+
+/** The offsets of the `blockSize`-byte blocks of a padded message. */
+const blocks = (m: Uint8Array, blockSize: number): ReadonlyArray<number> =>
+  range(m.length / blockSize).map((b) => b * blockSize);
 
 const pad = (msg: Uint8Array, blockSize: number, lengthBytes: number, littleEndian: boolean) => {
   const bitLen = BigInt(msg.length) * 8n;
-  let total = msg.length + 1 + lengthBytes;
-  total = Math.ceil(total / blockSize) * blockSize;
+  const total = Math.ceil((msg.length + 1 + lengthBytes) / blockSize) * blockSize;
   const out = new Uint8Array(total);
   out.set(msg);
   out[msg.length] = 0x80;
-  for (let i = 0; i < lengthBytes; i++) {
+  range(lengthBytes).forEach((i) => {
     const byte = Number((bitLen >> BigInt(8 * i)) & 0xffn);
-    if (littleEndian) out[msg.length + 1 + (total - msg.length - 1 - lengthBytes) + i] = byte;
+    if (littleEndian) out[total - lengthBytes + i] = byte;
     else out[total - 1 - i] = byte;
-  }
+  });
   return out;
 };
 
 const rotl = (x: number, n: number) => (x << n) | (x >>> (32 - n));
 const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n));
+
+/** Big-endian 32-bit words of a digest, as hex. */
+const hexWords = (words: ReadonlyArray<number>): string =>
+  words.map((x) => (x >>> 0).toString(16).padStart(8, '0')).join('');
 
 // --- MD5 ---------------------------------------------------------------------
 
@@ -38,10 +45,21 @@ const MD5_S = [
   20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6,
   10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
-const MD5_K = Array.from(
-  { length: 64 },
-  (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) | 0,
-);
+
+/** One MD5 step: its index, constant, shift and message word. */
+interface Md5Step {
+  readonly i: number;
+  readonly k: number;
+  readonly s: number;
+  readonly g: number;
+}
+
+const MD5_STEPS: ReadonlyArray<Md5Step> = MD5_S.map((s, i) => ({
+  i,
+  k: Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) | 0,
+  s,
+  g: i < 16 ? i : i < 32 ? (5 * i + 1) % 16 : i < 48 ? (3 * i + 5) % 16 : (7 * i) % 16,
+}));
 
 export const md5 = (input: string): string => {
   const m = pad(utf8(input), 64, 8, true);
@@ -50,39 +68,31 @@ export const md5 = (input: string): string => {
   let c0 = 0x98badcfe | 0;
   let d0 = 0x10325476;
   const view = new DataView(m.buffer);
-  for (let off = 0; off < m.length; off += 64) {
-    const w = Array.from({ length: 16 }, (_, i) => view.getUint32(off + i * 4, true) | 0);
+  blocks(m, 64).forEach((off) => {
     let a = a0;
     let b = b0;
     let c = c0;
     let d = d0;
-    for (let i = 0; i < 64; i++) {
-      let f: number;
-      let g: number;
-      if (i < 16) {
-        f = (b & c) | (~b & d);
-        g = i;
-      } else if (i < 32) {
-        f = (d & b) | (~d & c);
-        g = (5 * i + 1) % 16;
-      } else if (i < 48) {
-        f = b ^ c ^ d;
-        g = (3 * i + 5) % 16;
-      } else {
-        f = c ^ (b | ~d);
-        g = (7 * i) % 16;
-      }
+    MD5_STEPS.forEach(({ i, k, s, g }) => {
+      const f =
+        i < 16
+          ? (b & c) | (~b & d)
+          : i < 32
+            ? (d & b) | (~d & c)
+            : i < 48
+              ? b ^ c ^ d
+              : c ^ (b | ~d);
       const tmp = d;
       d = c;
       c = b;
-      b = (b + rotl((a + f + MD5_K[i]! + w[g]!) | 0, MD5_S[i]!)) | 0;
+      b = (b + rotl((a + f + k + (view.getUint32(off + g * 4, true) | 0)) | 0, s)) | 0;
       a = tmp;
-    }
+    });
     a0 = (a0 + a) | 0;
     b0 = (b0 + b) | 0;
     c0 = (c0 + c) | 0;
     d0 = (d0 + d) | 0;
-  }
+  });
   const out = new DataView(new ArrayBuffer(16));
   [a0, b0, c0, d0].forEach((x, i) => out.setUint32(i * 4, x >>> 0, true));
   return hex(new Uint8Array(out.buffer));
@@ -90,46 +100,57 @@ export const md5 = (input: string): string => {
 
 // --- SHA-1 -------------------------------------------------------------------
 
+const ROUNDS_16 = range(16);
+const SCHEDULE_80 = range(80).slice(16);
+const SCHEDULE_64 = range(64).slice(16);
+const SHA1_ROUNDS = range(80);
+
 export const sha1 = (input: string): string => {
   const m = pad(utf8(input), 64, 8, false);
-  const h = [0x67452301, 0xefcdab89 | 0, 0x98badcfe | 0, 0x10325476, 0xc3d2e1f0 | 0];
+  let h0 = 0x67452301;
+  let h1 = 0xefcdab89 | 0;
+  let h2 = 0x98badcfe | 0;
+  let h3 = 0x10325476;
+  let h4 = 0xc3d2e1f0 | 0;
   const view = new DataView(m.buffer);
-  const w = Array.from({ length: 80 }, () => 0);
-  for (let off = 0; off < m.length; off += 64) {
-    for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4) | 0;
-    for (let i = 16; i < 80; i++) w[i] = rotl(w[i - 3]! ^ w[i - 8]! ^ w[i - 14]! ^ w[i - 16]!, 1);
-    // SAFETY: `h` holds the five SHA-1 state words.
-    let [a, b, c, d, e] = h as [number, number, number, number, number];
-    for (let i = 0; i < 80; i++) {
-      let f: number;
-      let k: number;
-      if (i < 20) {
-        f = (b & c) | (~b & d);
-        k = 0x5a827999;
-      } else if (i < 40) {
-        f = b ^ c ^ d;
-        k = 0x6ed9eba1;
-      } else if (i < 60) {
-        f = (b & c) | (b & d) | (c & d);
-        k = 0x8f1bbcdc | 0;
-      } else {
-        f = b ^ c ^ d;
-        k = 0xca62c1d6 | 0;
-      }
-      const t = (rotl(a, 5) + f + e + k + w[i]!) | 0;
+  // The message schedule, 80 words.
+  const w = new DataView(new ArrayBuffer(80 * 4));
+  const word = (i: number) => w.getInt32(i * 4);
+  blocks(m, 64).forEach((off) => {
+    ROUNDS_16.forEach((i) => w.setInt32(i * 4, view.getUint32(off + i * 4) | 0));
+    SCHEDULE_80.forEach((i) =>
+      w.setInt32(i * 4, rotl(word(i - 3) ^ word(i - 8) ^ word(i - 14) ^ word(i - 16), 1)),
+    );
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    SHA1_ROUNDS.forEach((i) => {
+      const f =
+        i < 20
+          ? (b & c) | (~b & d)
+          : i < 40
+            ? b ^ c ^ d
+            : i < 60
+              ? (b & c) | (b & d) | (c & d)
+              : b ^ c ^ d;
+      const k =
+        i < 20 ? 0x5a827999 : i < 40 ? 0x6ed9eba1 : i < 60 ? 0x8f1bbcdc | 0 : 0xca62c1d6 | 0;
+      const t = (rotl(a, 5) + f + e + k + word(i)) | 0;
       e = d;
       d = c;
       c = rotl(b, 30);
       b = a;
       a = t;
-    }
-    h[0] = (h[0]! + a) | 0;
-    h[1] = (h[1]! + b) | 0;
-    h[2] = (h[2]! + c) | 0;
-    h[3] = (h[3]! + d) | 0;
-    h[4] = (h[4]! + e) | 0;
-  }
-  return h.map((x) => (x >>> 0).toString(16).padStart(8, '0')).join('');
+    });
+    h0 = (h0 + a) | 0;
+    h1 = (h1 + b) | 0;
+    h2 = (h2 + c) | 0;
+    h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0;
+  });
+  return hexWords([h0, h1, h2, h3, h4]);
 };
 
 // --- SHA-256 -----------------------------------------------------------------
@@ -147,33 +168,39 @@ const K256 = [
 
 export const sha256 = (input: string): string => {
   const m = pad(utf8(input), 64, 8, false);
-  const h = [
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-  ].map((x) => x | 0);
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85 | 0;
+  let h2 = 0x3c6ef372;
+  let h3 = 0xa54ff53a | 0;
+  let h4 = 0x510e527f;
+  let h5 = 0x9b05688c | 0;
+  let h6 = 0x1f83d9ab;
+  let h7 = 0x5be0cd19;
   const view = new DataView(m.buffer);
-  const w = Array.from({ length: 64 }, () => 0);
-  for (let off = 0; off < m.length; off += 64) {
-    for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4) | 0;
-    for (let i = 16; i < 64; i++) {
-      const s0 = rotr(w[i - 15]!, 7) ^ rotr(w[i - 15]!, 18) ^ (w[i - 15]! >>> 3);
-      const s1 = rotr(w[i - 2]!, 17) ^ rotr(w[i - 2]!, 19) ^ (w[i - 2]! >>> 10);
-      w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) | 0;
-    }
-    // SAFETY: `h` holds the eight SHA-256 state words.
-    let [a, b, c, d, e, f, g, hh] = h as [
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-    ];
-    for (let i = 0; i < 64; i++) {
+  // The message schedule, 64 words.
+  const w = new DataView(new ArrayBuffer(64 * 4));
+  const word = (i: number) => w.getInt32(i * 4);
+  blocks(m, 64).forEach((off) => {
+    ROUNDS_16.forEach((i) => w.setInt32(i * 4, view.getUint32(off + i * 4) | 0));
+    SCHEDULE_64.forEach((i) => {
+      const x = word(i - 15);
+      const y = word(i - 2);
+      const s0 = rotr(x, 7) ^ rotr(x, 18) ^ (x >>> 3);
+      const s1 = rotr(y, 17) ^ rotr(y, 19) ^ (y >>> 10);
+      w.setInt32(i * 4, (word(i - 16) + s0 + word(i - 7) + s1) | 0);
+    });
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let hh = h7;
+    K256.forEach((k, i) => {
       const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
       const ch = (e & f) ^ (~e & g);
-      const t1 = (hh + S1 + ch + K256[i]! + w[i]!) | 0;
+      const t1 = (hh + S1 + ch + k + word(i)) | 0;
       const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
       const maj = (a & b) ^ (a & c) ^ (b & c);
       const t2 = (S0 + maj) | 0;
@@ -185,10 +212,17 @@ export const sha256 = (input: string): string => {
       c = b;
       b = a;
       a = (t1 + t2) | 0;
-    }
-    [a, b, c, d, e, f, g, hh].forEach((x, i) => (h[i] = (h[i]! + x) | 0));
-  }
-  return h.map((x) => (x >>> 0).toString(16).padStart(8, '0')).join('');
+    });
+    h0 = (h0 + a) | 0;
+    h1 = (h1 + b) | 0;
+    h2 = (h2 + c) | 0;
+    h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0;
+    h5 = (h5 + f) | 0;
+    h6 = (h6 + g) | 0;
+    h7 = (h7 + hh) | 0;
+  });
+  return hexWords([h0, h1, h2, h3, h4, h5, h6, h7]);
 };
 
 // --- SHA-512 / SHA-384 (BigInt based) -------------------------------------------
@@ -279,35 +313,32 @@ const K512 = [
 const MASK64 = (1n << 64n) - 1n;
 const rotr64 = (x: bigint, n: bigint) => ((x >> n) | (x << (64n - n))) & MASK64;
 
-const sha512core = (input: string, init: ReadonlyArray<string>, outWords: number): string => {
+const SCHEDULE_512 = range(80).slice(16);
+
+/** The eight 64-bit words of a SHA-512 state. */
+type State512 = readonly [bigint, bigint, bigint, bigint, bigint, bigint, bigint, bigint];
+
+const sha512core = (input: string, init: State512, outWords: number): string => {
   const m = pad(utf8(input), 128, 16, false);
-  const h = init.map((x) => BigInt(`0x${x}`));
+  let h = init;
   const view = new DataView(m.buffer);
-  const w = Array.from({ length: 80 }, () => 0n);
-  for (let off = 0; off < m.length; off += 128) {
-    for (let i = 0; i < 16; i++) w[i] = view.getBigUint64(off + i * 8);
-    for (let i = 16; i < 80; i++) {
-      const x = w[i - 15]!;
-      const y = w[i - 2]!;
+  // The message schedule, 80 words.
+  const w = new DataView(new ArrayBuffer(80 * 8));
+  const word = (i: number) => w.getBigUint64(i * 8);
+  blocks(m, 128).forEach((off) => {
+    ROUNDS_16.forEach((i) => w.setBigUint64(i * 8, view.getBigUint64(off + i * 8)));
+    SCHEDULE_512.forEach((i) => {
+      const x = word(i - 15);
+      const y = word(i - 2);
       const s0 = rotr64(x, 1n) ^ rotr64(x, 8n) ^ (x >> 7n);
       const s1 = rotr64(y, 19n) ^ rotr64(y, 61n) ^ (y >> 6n);
-      w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) & MASK64;
-    }
-    // SAFETY: `h` holds the eight SHA-512 state words.
-    let [a, b, c, d, e, f, g, hh] = h as [
-      bigint,
-      bigint,
-      bigint,
-      bigint,
-      bigint,
-      bigint,
-      bigint,
-      bigint,
-    ];
-    for (let i = 0; i < 80; i++) {
+      w.setBigUint64(i * 8, (word(i - 16) + s0 + word(i - 7) + s1) & MASK64);
+    });
+    let [a, b, c, d, e, f, g, hh] = h;
+    K512.forEach((k, i) => {
       const S1 = rotr64(e, 14n) ^ rotr64(e, 18n) ^ rotr64(e, 41n);
       const ch = (e & f) ^ (~e & MASK64 & g);
-      const t1 = (hh + S1 + ch + K512[i]! + w[i]!) & MASK64;
+      const t1 = (hh + S1 + ch + k + word(i)) & MASK64;
       const S0 = rotr64(a, 28n) ^ rotr64(a, 34n) ^ rotr64(a, 39n);
       const maj = (a & b) ^ (a & c) ^ (b & c);
       const t2 = (S0 + maj) & MASK64;
@@ -319,19 +350,45 @@ const sha512core = (input: string, init: ReadonlyArray<string>, outWords: number
       c = b;
       b = a;
       a = (t1 + t2) & MASK64;
-    }
-    [a, b, c, d, e, f, g, hh].forEach((x, i) => (h[i] = (h[i]! + x) & MASK64));
-  }
+    });
+    const [h0, h1, h2, h3, h4, h5, h6, h7] = h;
+    h = [
+      (h0 + a) & MASK64,
+      (h1 + b) & MASK64,
+      (h2 + c) & MASK64,
+      (h3 + d) & MASK64,
+      (h4 + e) & MASK64,
+      (h5 + f) & MASK64,
+      (h6 + g) & MASK64,
+      (h7 + hh) & MASK64,
+    ];
+  });
   return h
     .slice(0, outWords)
     .map((x) => x.toString(16).padStart(16, '0'))
     .join('');
 };
 
+const big = (x: string): bigint => BigInt(`0x${x}`);
+
+/** A SHA-512 initial state, from its hex words. */
+const state512 = (
+  ...[a, b, c, d, e, f, g, h]: readonly [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ]
+): State512 => [big(a), big(b), big(c), big(d), big(e), big(f), big(g), big(h)];
+
 export const sha512 = (input: string): string =>
   sha512core(
     input,
-    [
+    state512(
       '6a09e667f3bcc908',
       'bb67ae8584caa73b',
       '3c6ef372fe94f82b',
@@ -340,14 +397,14 @@ export const sha512 = (input: string): string =>
       '9b05688c2b3e6c1f',
       '1f83d9abfb41bd6b',
       '5be0cd19137e2179',
-    ],
+    ),
     8,
   );
 
 export const sha384 = (input: string): string =>
   sha512core(
     input,
-    [
+    state512(
       'cbbb9d5dc1059ed8',
       '629a292a367cd507',
       '9159015a3070dd17',
@@ -356,6 +413,6 @@ export const sha384 = (input: string): string =>
       '8eb44a8768581511',
       'db0c2e0d64f98fa7',
       '47b5481dbefa4fa4',
-    ],
+    ),
     6,
   );

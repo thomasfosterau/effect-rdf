@@ -10,8 +10,9 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
-import * as Match from 'effect/Match';
 import * as BigDecimal from 'effect/BigDecimal';
+import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -20,6 +21,7 @@ import * as Xsd from '@thomasfosterau/effect-rdf/Xsd';
 import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
 import * as Hash from './internal/hash.ts';
+import * as StringMap from './internal/stringMap.ts';
 import * as V from './internal/values.ts';
 
 /**
@@ -84,14 +86,14 @@ export type Registry = ReadonlyMap<string, ExtensionFunction>;
  * @category constructors
  */
 export const registry = (functions: Readonly<Record<string, ExtensionFunction>>): Registry =>
-  new Map(Object.entries(functions));
+  StringMap.fromEntries(Record.toEntries(functions));
 
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 
 const literalArg = (t: Term.Term): Term.Literal =>
-  t._tag === 'Literal' ? t : V.fail('Expected a literal');
+  Term.isLiteral(t) ? t : V.fail('Expected a literal');
 
 const stringArg = (t: Term.Term): Term.Literal =>
   V.isStringLiteral(t) ? t : V.fail('Expected a string literal');
@@ -108,7 +110,7 @@ const codepoints = (s: string): Array<string> => Array.from(s);
 const intLiteral = (n: number | bigint): Term.Literal =>
   new Term.Literal(BigInt(n).toString(), V.dt.integer);
 
-const numArg = (t: Term.Term): V.Num => V.numeric(t) ?? V.fail('Expected a numeric literal');
+const numArg = V.requireNum;
 
 const roundNum = (
   t: Term.Term,
@@ -116,14 +118,14 @@ const roundNum = (
   fn: (x: number) => number,
 ): Term.Literal => {
   const n = numArg(t);
-  return Match.value(n).pipe(
-    Match.when({ kind: 0 }, (i) => V.numLiteral(i)),
-    Match.when({ kind: 1 }, (d) =>
-      V.numLiteral({ kind: 1, v: BigDecimal.round(d.v, { scale: 0, mode }) }),
-    ),
-    Match.when({ kind: 2 }, (f) => V.numLiteral({ kind: 2, v: fn(f.v) })),
-    Match.when({ kind: 3 }, (f) => V.numLiteral({ kind: 3, v: fn(f.v) })),
-    Match.exhaustive,
+  return V.numLiteral(
+    n.kind === 0
+      ? n
+      : n.kind === 1
+        ? { kind: 1, v: BigDecimal.round(n.v, { scale: 0, mode }) }
+        : n.kind === 2
+          ? { kind: 2, v: fn(n.v) }
+          : { kind: 3, v: fn(n.v) },
   );
 };
 
@@ -133,7 +135,8 @@ const xpathRound = (x: number): number => {
   return r === 0 && x < 0 ? -0 : r;
 };
 
-const regexCache = new Map<string, RegExp>();
+/** Compiled regular expressions by flags and pattern (read on every `REGEX` / `REPLACE` call). */
+const regexCache = StringMap.empty<RegExp>();
 
 /** Compiles an XPath regular expression with XPath flags to a JS RegExp. */
 export const compileRegex = (pattern: string, flags: string, global = false): RegExp => {
@@ -142,20 +145,13 @@ export const compileRegex = (pattern: string, flags: string, global = false): Re
   if (cached !== undefined) return cached;
   let source = pattern;
   let jsFlags = global ? 'g' : '';
-  for (const f of flags) {
-    Match.value(f).pipe(
-      Match.when(Match.is('i', 's', 'm'), (flag) => {
-        if (!jsFlags.includes(flag)) jsFlags += flag;
-      }),
-      Match.when('x', () => {
-        source = source.replace(/[\t\n\r ]/g, '');
-      }),
-      Match.when('q', () => {
-        source = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      }),
-      Match.orElse((flag) => V.fail(`Invalid regex flag '${flag}'`)),
-    );
-  }
+  Array.from(flags).forEach((flag) => {
+    if (flag === 'i' || flag === 's' || flag === 'm') {
+      if (!jsFlags.includes(flag)) jsFlags += flag;
+    } else if (flag === 'x') source = source.replace(/[\t\n\r ]/g, '');
+    else if (flag === 'q') source = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    else V.fail(`Invalid regex flag '${flag}'`);
+  });
   // Unicode mode first; patterns it rejects may still compile without it.
   const compiled = Result.try(() => new RegExp(source, `${jsFlags}u`)).pipe(
     Result.orElse(() => Result.try(() => new RegExp(source, jsFlags))),
@@ -167,8 +163,11 @@ export const compileRegex = (pattern: string, flags: string, global = false): Re
   return re;
 };
 
-const regexFlags = (t: Term.Term | undefined): string =>
-  t === undefined ? '' : simpleArg(t).value;
+/** The flags argument of `REGEX` / `REPLACE`, absent beyond the arguments given. */
+const regexFlags = (args: BuiltInArgs, i: number): string => {
+  const t = Option.fromUndefinedOr(args[i]);
+  return Option.isSome(t) ? simpleArg(t.value).value : '';
+};
 
 const parseDateParts = (t: Term.Term) => {
   const lit = literalArg(t);
@@ -216,9 +215,11 @@ const encodeForUri = (s: string): string =>
   );
 
 const uuid = (random: () => number): string => {
-  const bytes = Array.from({ length: 16 }, () => Math.floor(random() * 256));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  // Version 4 (byte 6) and the RFC 4122 variant (byte 8).
+  const bytes = Array.from({ length: 16 }, (_, i) => {
+    const b = Math.floor(random() * 256);
+    return i === 6 ? (b & 0x0f) | 0x40 : i === 8 ? (b & 0x3f) | 0x80 : b;
+  });
   const h = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 };
@@ -255,6 +256,32 @@ export type BuiltIn = (
   solution: Bindings,
 ) => Term.GroundTerm;
 
+/** The two string arguments of a string function, which must be compatible (§17.4.3.1.2). */
+const compatibleStrings = ([a, b]: BuiltInArgs): readonly [Term.Literal, Term.Literal] => {
+  const x = stringArg(a);
+  const y = stringArg(b);
+  return compatible(x, y) ? [x, y] : V.fail('Incompatible arguments');
+};
+
+/**
+ * `STRBEFORE` / `STRAFTER`: `part` of the first string around the first
+ * occurrence of the second, or the empty simple literal if there is none.
+ */
+const around = (
+  args: BuiltInArgs,
+  part: (value: string, search: string, index: number) => string,
+): Term.Literal => {
+  const [x, y] = compatibleStrings(args);
+  const i = x.value.indexOf(y.value);
+  return i === -1 ? V.simple('') : V.stringLike(part(x.value, y.value, i), x);
+};
+
+const iriFn: BuiltIn = ([a], ctx) => {
+  if (Term.isNamedNode(a)) return a;
+  const s = simpleArg(a).value;
+  return Term.namedNode(ctx.baseIri !== undefined ? Iri.resolve(s, ctx.baseIri) : s);
+};
+
 const hashFn =
   (f: (s: string) => string): BuiltIn =>
   ([a]) =>
@@ -269,12 +296,10 @@ const hashFn =
  * @category built-ins
  */
 export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
-  STR: ([a]) => {
-    return Match.value(a).pipe(
-      Match.tag('NamedNode', 'Literal', (t) => V.simple(t.value)),
-      Match.orElse(() => V.fail('STR of a blank node or triple term')),
-    );
-  },
+  STR: ([a]) =>
+    Term.isNamedNode(a) || Term.isLiteral(a)
+      ? V.simple(a.value)
+      : V.fail('STR of a blank node or triple term'),
   LANG: ([a]) => V.simple(literalArg(a).language),
   LANGDIR: ([a]) => V.simple(literalArg(a).direction ?? ''),
   LANGMATCHES: ([tag, range]) => {
@@ -284,23 +309,21 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     return V.bool(t === r || t.startsWith(`${r}-`));
   },
   DATATYPE: ([a]) => literalArg(a).datatype,
-  IRI: ([a], ctx) => {
-    if (a._tag === 'NamedNode') return a;
-    const s = simpleArg(a).value;
-    return Term.namedNode(ctx.baseIri !== undefined ? Iri.resolve(s, ctx.baseIri) : s);
-  },
-  URI: (args, ctx, sol) => builtIns.IRI!(args, ctx, sol),
+  IRI: iriFn,
+  URI: iriFn,
   BNODE: (args, ctx, sol) =>
     ctx.blankNode(Arr.isReadonlyArrayEmpty(args) ? undefined : simpleArg(args[0]).value, sol),
   RAND: (_, ctx) => V.numLiteral({ kind: 3, v: ctx.random() }),
   ABS: ([a]) => {
     const n = numArg(a);
-    return Match.value(n).pipe(
-      Match.when({ kind: 0 }, (i) => V.numLiteral({ kind: 0, v: i.v < 0n ? -i.v : i.v })),
-      Match.when({ kind: 1 }, (d) => V.numLiteral({ kind: 1, v: BigDecimal.abs(d.v) })),
-      Match.when({ kind: 2 }, (f) => V.numLiteral({ kind: 2, v: Math.abs(f.v) })),
-      Match.when({ kind: 3 }, (f) => V.numLiteral({ kind: 3, v: Math.abs(f.v) })),
-      Match.exhaustive,
+    return V.numLiteral(
+      n.kind === 0
+        ? { kind: 0, v: n.v < 0n ? -n.v : n.v }
+        : n.kind === 1
+          ? { kind: 1, v: BigDecimal.abs(n.v) }
+          : n.kind === 2
+            ? { kind: 2, v: Math.abs(n.v) }
+            : { kind: 3, v: Math.abs(n.v) },
     );
   },
   CEIL: ([a]) => roundNum(a, 'ceil', Math.ceil),
@@ -328,9 +351,10 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     return V.stringLike(out, str);
   },
   STRLEN: ([a]) => intLiteral(codepoints(stringArg(a).value).length),
-  REPLACE: ([s, pattern, replacement, flags]) => {
+  REPLACE: (args) => {
+    const [s, pattern, replacement] = args;
     const str = stringArg(s);
-    const re = compileRegex(simpleArg(pattern).value, regexFlags(flags), true);
+    const re = compileRegex(simpleArg(pattern).value, regexFlags(args, 3), true);
     if (re.test('')) {
       re.lastIndex = 0;
       return V.fail('REPLACE pattern matches the empty string');
@@ -350,40 +374,20 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     return V.stringLike(s.value.toLowerCase(), s);
   },
   ENCODE_FOR_URI: ([a]) => V.simple(encodeForUri(stringArg(a).value)),
-  CONTAINS: ([a, b]) => {
-    const x = stringArg(a);
-    const y = stringArg(b);
-    if (!compatible(x, y)) return V.fail('Incompatible arguments');
+  CONTAINS: (args) => {
+    const [x, y] = compatibleStrings(args);
     return V.bool(x.value.includes(y.value));
   },
-  STRSTARTS: ([a, b]) => {
-    const x = stringArg(a);
-    const y = stringArg(b);
-    if (!compatible(x, y)) return V.fail('Incompatible arguments');
+  STRSTARTS: (args) => {
+    const [x, y] = compatibleStrings(args);
     return V.bool(x.value.startsWith(y.value));
   },
-  STRENDS: ([a, b]) => {
-    const x = stringArg(a);
-    const y = stringArg(b);
-    if (!compatible(x, y)) return V.fail('Incompatible arguments');
+  STRENDS: (args) => {
+    const [x, y] = compatibleStrings(args);
     return V.bool(x.value.endsWith(y.value));
   },
-  STRBEFORE: ([a, b]) => {
-    const x = stringArg(a);
-    const y = stringArg(b);
-    if (!compatible(x, y)) return V.fail('Incompatible arguments');
-    const i = x.value.indexOf(y.value);
-    if (i === -1) return V.simple('');
-    return V.stringLike(x.value.slice(0, i), x);
-  },
-  STRAFTER: ([a, b]) => {
-    const x = stringArg(a);
-    const y = stringArg(b);
-    if (!compatible(x, y)) return V.fail('Incompatible arguments');
-    const i = x.value.indexOf(y.value);
-    if (i === -1) return V.simple('');
-    return V.stringLike(x.value.slice(i + y.value.length), x);
-  },
+  STRBEFORE: (args) => around(args, (x, _y, i) => x.slice(0, i)),
+  STRAFTER: (args) => around(args, (x, y, i) => x.slice(i + y.length)),
   YEAR: ([a]) => {
     const p = parseDateParts(a);
     return p.year !== undefined ? intLiteral(BigInt(p.year)) : V.fail('No year');
@@ -439,59 +443,59 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   },
   STRDT: ([s, datatype]) => {
     const lex = simpleArg(s).value;
-    if (datatype._tag !== 'NamedNode') return V.fail('STRDT requires an IRI');
+    if (!Term.isNamedNode(datatype)) return V.fail('STRDT requires an IRI');
     if (datatype.value === V.dt.langString.value || datatype.value === V.dt.dirLangString.value) {
       return V.fail('STRDT cannot create language-tagged strings');
     }
     return new Term.Literal(lex, datatype);
   },
   SAMETERM: ([a, b]) => V.bool(a.key === b.key),
-  ISIRI: ([a]) => V.bool(a._tag === 'NamedNode'),
-  ISURI: ([a]) => V.bool(a._tag === 'NamedNode'),
-  ISBLANK: ([a]) => V.bool(a._tag === 'BlankNode'),
-  ISLITERAL: ([a]) => V.bool(a._tag === 'Literal'),
+  ISIRI: ([a]) => V.bool(Term.isNamedNode(a)),
+  ISURI: ([a]) => V.bool(Term.isNamedNode(a)),
+  ISBLANK: ([a]) => V.bool(Term.isBlankNode(a)),
+  ISLITERAL: ([a]) => V.bool(Term.isLiteral(a)),
   ISNUMERIC: ([a]) => V.bool(V.isNumeric(a)),
-  HASLANG: ([a]) => V.bool(a._tag === 'Literal' && a.language !== ''),
-  HASLANGDIR: ([a]) => V.bool(a._tag === 'Literal' && a.direction !== undefined),
-  REGEX: ([s, pattern, flags]) => {
+  HASLANG: ([a]) => V.bool(Term.isLiteral(a) && a.language !== ''),
+  HASLANGDIR: ([a]) => V.bool(Term.isLiteral(a) && a.direction !== undefined),
+  REGEX: (args) => {
+    const [s, pattern] = args;
     const str = stringArg(s);
-    const re = compileRegex(simpleArg(pattern).value, regexFlags(flags));
+    const re = compileRegex(simpleArg(pattern).value, regexFlags(args, 2));
     return V.bool(re.test(str.value));
   },
-  ISTRIPLE: ([a]) => V.bool(a._tag === 'Triple'),
+  ISTRIPLE: ([a]) => V.bool(Term.isTriple(a)),
   TRIPLE: ([s, p, o]) => {
-    if (s._tag !== 'NamedNode' && s._tag !== 'BlankNode') {
+    if (!Term.isNamedNode(s) && !Term.isBlankNode(s)) {
       return V.fail('TRIPLE subject must be an IRI or blank node');
     }
-    if (p._tag !== 'NamedNode') return V.fail('TRIPLE predicate must be an IRI');
+    if (!Term.isNamedNode(p)) return V.fail('TRIPLE predicate must be an IRI');
     return Term.triple(s, p, o);
   },
-  SUBJECT: ([a]) => (a._tag === 'Triple' ? a.subject : V.fail('Not a triple term')),
-  PREDICATE: ([a]) => (a._tag === 'Triple' ? a.predicate : V.fail('Not a triple term')),
-  OBJECT: ([a]) => (a._tag === 'Triple' ? a.object : V.fail('Not a triple term')),
+  SUBJECT: ([a]) => (Term.isTriple(a) ? a.subject : V.fail('Not a triple term')),
+  PREDICATE: ([a]) => (Term.isTriple(a) ? a.predicate : V.fail('Not a triple term')),
+  OBJECT: ([a]) => (Term.isTriple(a) ? a.object : V.fail('Not a triple term')),
 };
 
 // -----------------------------------------------------------------------------
 // Casts
 // -----------------------------------------------------------------------------
 
-const XSD_INTEGER_TYPES = new Set(
-  [
-    'integer',
-    'long',
-    'int',
-    'short',
-    'byte',
-    'nonNegativeInteger',
-    'positiveInteger',
-    'nonPositiveInteger',
-    'negativeInteger',
-    'unsignedLong',
-    'unsignedInt',
-    'unsignedShort',
-    'unsignedByte',
-  ].map((t) => V.XSD + t),
-);
+const XSD_INTEGER_TYPE_NAMES: ReadonlyArray<string> = [
+  'integer',
+  'long',
+  'int',
+  'short',
+  'byte',
+  'nonNegativeInteger',
+  'positiveInteger',
+  'nonPositiveInteger',
+  'negativeInteger',
+  'unsignedLong',
+  'unsignedInt',
+  'unsignedShort',
+  'unsignedByte',
+].map((t) => V.XSD + t);
+const XSD_INTEGER_TYPES = StringMap.setOf(XSD_INTEGER_TYPE_NAMES);
 
 /** The XPath string form of a float/double (`fn:string`). */
 const xpathDoubleString = (v: number): string => {
@@ -504,10 +508,11 @@ const xpathDoubleString = (v: number): string => {
 };
 
 const castString = (a: Term.Term): string => {
-  if (a._tag === 'NamedNode') return a.value;
+  if (Term.isNamedNode(a)) return a.value;
   const l = literalArg(a);
-  const n = V.numeric(l);
-  if (n !== undefined) {
+  const numeric = V.numeric(l);
+  if (Option.isSome(numeric)) {
+    const n = numeric.value;
     if (n.kind === 0) return n.v.toString();
     if (n.kind === 1) {
       const s = Xsd.canonicalDecimal(n.v);
@@ -521,89 +526,135 @@ const castString = (a: Term.Term): string => {
   return l.value;
 };
 
-const castTo = (target: string, a: Term.Term): Term.Literal => {
-  const dtNode = Term.namedNode(target);
-  if (target === Term.XSD_STRING) {
-    if (a._tag === 'Literal' && a.language !== '')
-      return V.fail('Cannot cast a language-tagged string');
-    return V.simple(castString(a));
-  }
-  const l = literalArg(a);
-  if (l.language !== '') return V.fail('Cannot cast a language-tagged string');
-  const n = V.numeric(l);
-  const isBool =
-    l.datatype.value === V.dt.boolean.value && Xsd.isValidLexical(l.datatype.value, l.value);
-  const boolValue = isBool && (l.value === 'true' || l.value === '1');
-  const fromString = V.isSimpleString(l);
-  const lexical = l.value.trim();
+/** A literal being cast, with the readings of it the casts share. */
+interface CastSource {
+  readonly target: string;
+  readonly dtNode: Term.NamedNode;
+  readonly l: Term.Literal;
+  readonly numeric: Option.Option<V.Num>;
+  /** Whether it is a valid `xsd:boolean`, and if so its value. */
+  readonly isBool: boolean;
+  readonly boolValue: boolean;
+  /** Whether it is a simple literal, and its trimmed lexical form. */
+  readonly fromString: boolean;
+  readonly lexical: string;
+}
 
-  if (target === V.dt.boolean.value) {
-    if (isBool) return V.bool(boolValue);
-    if (n !== undefined) return V.bool(V.ebv(l));
-    if (fromString && /^(true|false|1|0)$/.test(lexical)) {
-      return V.bool(lexical === 'true' || lexical === '1');
-    }
-    return V.fail('Invalid boolean cast');
+const castBoolean = ({ l, numeric, isBool, boolValue, fromString, lexical }: CastSource) => {
+  if (isBool) return V.bool(boolValue);
+  if (Option.isSome(numeric)) return V.bool(V.ebv(l));
+  if (fromString && /^(true|false|1|0)$/.test(lexical)) {
+    return V.bool(lexical === 'true' || lexical === '1');
   }
-  if (XSD_INTEGER_TYPES.has(target)) {
-    let value: bigint;
-    if (isBool) value = boolValue ? 1n : 0n;
-    else if (n !== undefined) {
-      if (n.kind === 0) value = n.v;
-      else if (n.kind === 1)
-        value = BigInt(BigDecimal.format(BigDecimal.truncate(n.v)).split('.')[0]!);
-      else {
-        if (!Number.isFinite(n.v)) return V.fail('Cannot cast NaN/INF to integer');
-        value = BigInt(Math.trunc(n.v));
-      }
-    } else if (fromString && /^[+-]?\d+$/.test(lexical)) value = BigInt(lexical);
-    else return V.fail('Invalid integer cast');
-    const lit = new Term.Literal(value.toString(), dtNode);
-    return Xsd.isValidLexical(target, lit.value) ? lit : V.fail('Integer out of range');
+  return V.fail('Invalid boolean cast');
+};
+
+const integerOf = (n: V.Num): bigint => {
+  if (n.kind === 0) return n.v;
+  if (n.kind === 1) return BigInt(BigDecimal.format(BigDecimal.truncate(n.v)).split('.')[0] ?? '0');
+  if (!Number.isFinite(n.v)) return V.fail('Cannot cast NaN/INF to integer');
+  return BigInt(Math.trunc(n.v));
+};
+
+const castInteger = (source: CastSource): Term.Literal => {
+  const { target, dtNode, numeric, isBool, boolValue, fromString, lexical } = source;
+  const value: bigint = isBool
+    ? boolValue
+      ? 1n
+      : 0n
+    : Option.isSome(numeric)
+      ? integerOf(numeric.value)
+      : fromString && /^[+-]?\d+$/.test(lexical)
+        ? BigInt(lexical)
+        : V.fail('Invalid integer cast');
+  const lit = new Term.Literal(value.toString(), dtNode);
+  return Xsd.isValidLexical(target, lit.value) ? lit : V.fail('Integer out of range');
+};
+
+const castDecimal = ({ numeric, isBool, boolValue, fromString, lexical }: CastSource) => {
+  if (isBool) return V.numLiteral({ kind: 1, v: BigDecimal.fromBigInt(boolValue ? 1n : 0n) });
+  if (Option.isSome(numeric)) {
+    const n = numeric.value;
+    if (n.kind === 0 || n.kind === 1) return V.numLiteral({ kind: 1, v: V.toDecimal(n) });
+    if (!Number.isFinite(n.v)) return V.fail('Cannot cast NaN/INF to decimal');
+    return V.numLiteral({ kind: 1, v: BigDecimal.fromNumberUnsafe(n.v) });
   }
-  if (target === V.dt.decimal.value) {
-    if (isBool) return V.numLiteral({ kind: 1, v: BigDecimal.fromBigInt(boolValue ? 1n : 0n) });
-    if (n !== undefined) {
-      if (n.kind === 0 || n.kind === 1) return V.numLiteral({ kind: 1, v: V.toDecimal(n) });
-      if (!Number.isFinite(n.v)) return V.fail('Cannot cast NaN/INF to decimal');
-      return V.numLiteral({ kind: 1, v: BigDecimal.fromNumberUnsafe(n.v) });
-    }
-    if (fromString && /^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(lexical)) {
-      return V.numLiteral({ kind: 1, v: BigDecimal.fromStringUnsafe(lexical.replace(/\.$/, '')) });
-    }
-    return V.fail('Invalid decimal cast');
+  if (fromString && /^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(lexical)) {
+    return V.numLiteral({ kind: 1, v: BigDecimal.fromStringUnsafe(lexical.replace(/\.$/, '')) });
   }
-  if (target === V.dt.double.value || target === V.dt.float.value) {
-    const kind = target === V.dt.double.value ? 3 : 2;
-    let value: number;
-    if (isBool) value = boolValue ? 1 : 0;
-    else if (n !== undefined) value = V.toNumber(n);
-    else if (fromString && Xsd.isValidLexical(target, lexical)) {
-      value =
-        lexical === 'INF' || lexical === '+INF'
-          ? Infinity
-          : lexical === '-INF'
-            ? -Infinity
-            : Number(lexical);
-    } else return V.fail('Invalid floating point cast');
-    return V.numLiteral({ kind, v: kind === 2 ? Math.fround(value) : value });
+  return V.fail('Invalid decimal cast');
+};
+
+const floatingOf = (lexical: string): number =>
+  lexical === 'INF' || lexical === '+INF'
+    ? Infinity
+    : lexical === '-INF'
+      ? -Infinity
+      : Number(lexical);
+
+const castFloating = (source: CastSource): Term.Literal => {
+  const { target, numeric, isBool, boolValue, fromString, lexical } = source;
+  const kind = target === V.dt.double.value ? 3 : 2;
+  const value = isBool
+    ? boolValue
+      ? 1
+      : 0
+    : Option.isSome(numeric)
+      ? V.toNumber(numeric.value)
+      : fromString && Xsd.isValidLexical(target, lexical)
+        ? floatingOf(lexical)
+        : V.fail('Invalid floating point cast');
+  return V.numLiteral({ kind, v: kind === 2 ? Math.fround(value) : value });
+};
+
+const castDateTime = ({ target, dtNode, l, fromString, lexical }: CastSource): Term.Literal => {
+  if (l.datatype.value === target && Xsd.isValidLexical(target, l.value)) return l;
+  if (l.datatype.value === `${V.XSD}date` && Xsd.isValidLexical(l.datatype.value, l.value)) {
+    // A valid `xsd:date` always matches.
+    const m = /^(-?\d+-\d\d-\d\d)(.*)$/.exec(l.value);
+    if (m === null) return V.fail('Invalid date');
+    return new Term.Literal(`${m[1]}T00:00:00${m[2]}`, dtNode);
   }
-  if (target === V.dt.dateTime.value) {
-    if (l.datatype.value === target && Xsd.isValidLexical(target, l.value)) return l;
-    if (l.datatype.value === `${V.XSD}date` && Xsd.isValidLexical(l.datatype.value, l.value)) {
-      const m = /^(-?\d+-\d\d-\d\d)(.*)$/.exec(l.value)!;
-      return new Term.Literal(`${m[1]}T00:00:00${m[2]}`, dtNode);
-    }
-    if (fromString && Xsd.isValidLexical(target, lexical)) return new Term.Literal(lexical, dtNode);
-    return V.fail('Invalid dateTime cast');
-  }
-  // Other XSD types: from strings with a valid lexical form, or same type.
+  if (fromString && Xsd.isValidLexical(target, lexical)) return new Term.Literal(lexical, dtNode);
+  return V.fail('Invalid dateTime cast');
+};
+
+/** Other XSD types: from strings with a valid lexical form, or the same type. */
+const castOther = ({ target, dtNode, l, fromString, lexical }: CastSource): Term.Literal => {
   if (l.datatype.value === target) return l;
   if (fromString && Xsd.isValidLexical(target, lexical)) return new Term.Literal(lexical, dtNode);
   return V.fail(`Invalid cast to ${target}`);
 };
 
-const CASTABLE = new Set([
+const castTo = (target: string, a: Term.Term): Term.Literal => {
+  if (target === Term.XSD_STRING) {
+    if (Term.isLiteral(a) && a.language !== '')
+      return V.fail('Cannot cast a language-tagged string');
+    return V.simple(castString(a));
+  }
+  const l = literalArg(a);
+  if (l.language !== '') return V.fail('Cannot cast a language-tagged string');
+  const isBool =
+    l.datatype.value === V.dt.boolean.value && Xsd.isValidLexical(l.datatype.value, l.value);
+  const source: CastSource = {
+    target,
+    dtNode: Term.namedNode(target),
+    l,
+    numeric: V.numeric(l),
+    isBool,
+    boolValue: isBool && (l.value === 'true' || l.value === '1'),
+    fromString: V.isSimpleString(l),
+    lexical: l.value.trim(),
+  };
+  if (target === V.dt.boolean.value) return castBoolean(source);
+  if (XSD_INTEGER_TYPES.has(target)) return castInteger(source);
+  if (target === V.dt.decimal.value) return castDecimal(source);
+  if (target === V.dt.double.value || target === V.dt.float.value) return castFloating(source);
+  if (target === V.dt.dateTime.value) return castDateTime(source);
+  return castOther(source);
+};
+
+const CASTABLE: ReadonlyMap<string, true> = StringMap.setOf([
   Term.XSD_STRING,
   `${V.XSD}boolean`,
   `${V.XSD}decimal`,
@@ -612,7 +663,7 @@ const CASTABLE = new Set([
   `${V.XSD}dateTime`,
   `${V.XSD}date`,
   `${V.XSD}time`,
-  ...XSD_INTEGER_TYPES,
+  ...XSD_INTEGER_TYPE_NAMES,
 ]);
 
 /**
@@ -632,8 +683,7 @@ export const isCast = (iri: string): boolean => CASTABLE.has(iri);
  * @category casts
  */
 export const cast = (datatype: string, term: Term.GroundTerm): Term.Literal => {
-  if (term._tag === 'BlankNode' || term._tag === 'Triple') return V.fail('Cannot cast');
-  if (term._tag === 'NamedNode' && datatype !== Term.XSD_STRING)
-    return V.fail('Cannot cast an IRI');
+  if (Term.isBlankNode(term) || Term.isTriple(term)) return V.fail('Cannot cast');
+  if (Term.isNamedNode(term) && datatype !== Term.XSD_STRING) return V.fail('Cannot cast an IRI');
   return castTo(datatype, term);
 };

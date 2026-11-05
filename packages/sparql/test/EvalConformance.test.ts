@@ -6,7 +6,11 @@ import * as Arr from 'effect/Array';
 import * as Str from 'effect/String';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Stream from 'effect/Stream';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
 import * as Ast from '../src/Ast.ts';
@@ -40,58 +44,57 @@ const SKIPPED_DIRECTORIES = {
   'sparql11/service-description': 'Service descriptions belong to the HTTP server package',
 } satisfies Readonly<Record<string, string>>;
 
-const EVAL_TYPES = new Set(['QueryEvaluationTest', 'UpdateEvaluationTest', 'CSVResultFormatTest']);
+const EVAL_TYPES = MutableHashSet.make(
+  'QueryEvaluationTest',
+  'UpdateEvaluationTest',
+  'CSVResultFormatTest',
+);
 
 const manifests = ['sparql10/manifest.ttl', 'sparql11/manifest-all.ttl', 'sparql12/manifest.ttl'];
 
 const loadTests = (): Array<TestCase> => {
   if (!exists) return [];
-  const seen = new Set<string>();
-  const out: Array<TestCase> = [];
-  for (const m of manifests) {
-    for (const t of readManifest(path.join(sparqlDir, m))) {
-      if (!EVAL_TYPES.has(t.type) || seen.has(t.id)) continue;
-      seen.add(t.id);
-      out.push(t);
-    }
-  }
-  return out;
+  const seen = MutableHashSet.empty<string>();
+  return manifests
+    .flatMap((m) => readManifest(path.join(sparqlDir, m)))
+    .filter((t) => {
+      if (!MutableHashSet.has(EVAL_TYPES, t.type) || MutableHashSet.has(seen, t.id)) return false;
+      MutableHashSet.add(seen, t.id);
+      return true;
+    });
 };
 
-const skipReason = (t: TestCase): string | undefined => {
+const skipReason = (t: TestCase): Option.Option<string> => {
   const rel = path.relative(sparqlDir, t.manifest);
-  for (const [dir, reason] of Object.entries(SKIPPED_DIRECTORIES)) {
-    if (rel.startsWith(`${dir}/`)) return reason;
-  }
-  return skipped[t.id];
+  return Option.orElse(
+    Option.map(
+      Arr.findFirst(Record.toEntries(SKIPPED_DIRECTORIES), ([dir]) => rel.startsWith(`${dir}/`)),
+      ([, reason]) => reason,
+    ),
+    () => Record.get(skipped, t.id),
+  );
 };
 
 const loadDataset = (t: TestCase, update: boolean): Dataset.Dataset => {
-  const quads: Array<Term.Quad> = [];
-  for (const file of t.data) quads.push(...parseFile(file));
-  for (const g of t.graphData) {
-    const name = g.name !== '' ? g.name : pathToFileURL(g.file).href;
-    void update;
-    quads.push(...parseFile(g.file, Term.namedNode(name)));
-  }
-  return Dataset.fromIterable(quads);
+  void update;
+  return Dataset.fromIterable([
+    ...t.data.flatMap((file) => parseFile(file)),
+    ...t.graphData.flatMap((g) =>
+      parseFile(g.file, Term.namedNode(g.name !== '' ? g.name : pathToFileURL(g.file).href)),
+    ),
+  ]);
 };
 
 /** Loads the graphs named in FROM / FROM NAMED clauses from files. */
-const datasetClauseQuads = (query: Ast.Query, loaded: Dataset.Dataset): Array<Term.Quad> => {
-  const out: Array<Term.Quad> = [];
-  const graphs = [...(query.dataset?.default ?? []), ...(query.dataset?.named ?? [])];
-  for (const g of graphs) {
-    if (
-      !g.value.startsWith('file:') ||
-      Arr.isReadonlyArrayNonEmpty(Dataset.match(loaded, { graph: g }))
+const datasetClauseQuads = (query: Ast.Query, loaded: Dataset.Dataset): Array<Term.Quad> =>
+  [...(query.dataset?.default ?? []), ...(query.dataset?.named ?? [])]
+    .filter(
+      (g) =>
+        g.value.startsWith('file:') &&
+        Arr.isReadonlyArrayEmpty(Dataset.match(loaded, { graph: g })) &&
+        fs.existsSync(fileURLToPath(g.value)),
     )
-      continue;
-    const file = fileURLToPath(g.value);
-    if (fs.existsSync(file)) out.push(...parseFile(file, g));
-  }
-  return out;
-};
+    .flatMap((g) => parseFile(fileURLToPath(g.value), g));
 
 const readExpected = (file: string): Results.ParsedResult | Dataset.Dataset => {
   const ext = file.slice(file.lastIndexOf('.') + 1);
@@ -102,17 +105,17 @@ const readExpected = (file: string): Results.ParsedResult | Dataset.Dataset => {
   return fromRdf(quads) ?? Dataset.fromIterable(quads);
 };
 
-// SAFETY: every order key was checked to be a variable just above.
+/** The `ORDER BY` variables, when every order key is a variable. */
 const orderVariables = (query: Ast.Query): ReadonlyArray<string> =>
-  query.orderBy.every((o) => o.expression._tag === 'Variable')
-    ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
+  query.orderBy.every((o) => Term.isVariable(o.expression))
+    ? query.orderBy.flatMap((o) => (Term.isVariable(o.expression) ? [o.expression.value] : []))
     : [];
 
 const orderKey = (b: Bindings, vars: ReadonlyArray<string>): string =>
   vars
     .map((v) => {
       const t = b.map.get(v);
-      return t === undefined ? '' : t._tag === 'BlankNode' ? '_' : normalize(t).key;
+      return t === undefined ? '' : Term.isBlankNode(t) ? '_' : normalize(t).key;
     })
     .join('|');
 
@@ -169,21 +172,24 @@ const runQueryTest = (t: TestCase, optimize = true) =>
       Match.tag('Graph', (graph) =>
         Effect.map(Stream.runCollect(graph.quads), (quads) => {
           const actual = Dataset.fromIterable(quads);
-          // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
-          expectIsomorphic(actual, expected as Dataset.Dataset);
+          // A CONSTRUCT or DESCRIBE test's expected result is loaded as a dataset.
+          assert(Dataset.isDataset(expected), 'expected a graph result');
+          expectIsomorphic(actual, expected);
         }),
       ),
       Match.tag('Select', (select) =>
         Effect.gen(function* () {
           const set = yield* Results.collect(select);
           let actual = set.bindings;
-          // SAFETY: a SELECT test's expected result was loaded as a result set.
-          let exp = (expected as Results.ResultSet).bindings;
+          // A SELECT test's expected result is loaded as a result set.
+          assert(Predicate.isTagged(expected, 'ResultSet'), 'expected a result set');
+          let exp = expected.bindings;
           if (t.type === 'CSVResultFormatTest' || expectedResultFile(t).endsWith('.csv')) {
             // Round-trip our results through CSV, as CSV is lossy.
             const csv = Results.Csv.serializeString(set);
-            // SAFETY: the CSV serialization of a result set parses back to a result set.
-            actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
+            const back = yield* Results.Csv.parse(csv);
+            assert(Predicate.isTagged(back, 'ResultSet'), 'CSV results parse to a result set');
+            actual = back.bindings;
           }
           if (expectedResultFile(t).endsWith('.tsv') || expectedResultFile(t).endsWith('.csv')) {
             exp = exp.map((b) => b);
@@ -213,10 +219,10 @@ const runUpdateTest = (t: TestCase) =>
   Effect.gen(function* () {
     const { store, engine } = yield* updateEngine(t);
     yield* engine.update(fs.readFileSync(queryFile(t), 'utf8'));
-    const quads: Array<Term.Quad> = [];
-    for (const file of t.resultData) quads.push(...parseFile(file));
-    for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
-    const expected = Dataset.fromIterable(quads);
+    const expected = Dataset.fromIterable([
+      ...t.resultData.flatMap((file) => parseFile(file)),
+      ...t.resultGraphData.flatMap((g) => parseFile(g.file, Term.namedNode(g.name))),
+    ]);
     expectIsomorphic(yield* store.snapshot, expected);
   });
 
@@ -225,11 +231,11 @@ const tests = loadTests();
 const label = (t: TestCase) => `${path.relative(sparqlDir, path.dirname(t.manifest))}: ${t.name}`;
 
 describe.skipIf(!exists)('SPARQL evaluation conformance', () => {
-  const runnable = tests.filter((t) => skipReason(t) === undefined);
+  const runnable = tests.filter((t) => Option.isNone(skipReason(t)));
   it('documents every skipped test', () => {
-    const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
+    const skippedTests = tests.filter((t) => Option.isSome(skipReason(t)));
     // Skipped: SERVICE federation, entailment regimes and protocol tests.
-    expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t) ?? ''))).toBe(true);
+    expect(skippedTests.every((t) => Option.exists(skipReason(t), Str.isNonEmpty))).toBe(true);
   });
   it.each(
     runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),

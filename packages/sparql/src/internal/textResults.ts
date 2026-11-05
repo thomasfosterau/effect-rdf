@@ -10,6 +10,7 @@ import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Option from 'effect/Option';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 const xsdInteger = Term.namedNode(`${XSD}integer`);
@@ -116,11 +117,11 @@ const literal = Parser.seq(
   Parser.opt(Parser.alt(langTag, datatype)),
 ).pipe(
   Parser.map(([lex, suffix]): Term.Literal => {
-    if (suffix._tag === 'None') return Term.literal(lex);
+    if (Option.isNone(suffix)) return Term.literal(lex);
     const s = suffix.value;
     if (Array.isArray(s)) {
       const [language, direction] = s;
-      return direction._tag === 'Some'
+      return Option.isSome(direction)
         ? Term.literal(lex, { language, direction: direction.value })
         : Term.literal(lex, language);
     }
@@ -167,9 +168,9 @@ const tripleTerm: Parser.Parser<Term.Triple> = Parser.preceded(
     ),
   ),
 ).pipe(
-  // SAFETY: the three parts come from `term`, and the triple term's grammar puts a subject, an
-  // IRI predicate and an object there.
-  Parser.map(([s, p, o]) => Term.triple(s as Term.Subject, p as Term.Predicate, o)),
+  // The three parts come from `term`; like the other results formats, a triple term's parts are
+  // not checked again.
+  Parser.map(([s, p, o]) => Term.triple<any, any, any>(s, p, o)),
 );
 
 const term: Parser.Parser<Term.GroundTerm> = Parser.preceded(

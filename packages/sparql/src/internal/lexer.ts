@@ -17,9 +17,9 @@ import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
-import * as Result from 'effect/Result';
-import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
+import { loop } from './loop.ts';
 
 /** The kinds of SPARQL tokens. */
 export type TokenType =
@@ -34,7 +34,8 @@ export type TokenType =
   | 'DOUBLE'
   | 'WORD'
   | 'PUNCT'
-  | 'ERROR';
+  | 'ERROR'
+  | 'END';
 
 /** A SPARQL token. Every token has every field, so that all have the same shape. */
 export interface Tok {
@@ -43,6 +44,8 @@ export interface Tok {
    * The decoded value: the IRI (resolved by `resolve`), the local name, the
    * label, the variable name, the string value, the word, the punctuation,
    * the number's lexical form; for ERROR, why no token could be read.
+   * END is never lexed: it is what the parser's hooks see past the last
+   * token.
    */
   value: string;
   /** PNAME: the prefix; STRING: `long` for a long string. */
@@ -55,7 +58,7 @@ export interface Tok {
   readonly start: number;
   readonly end: number;
   /** PNAME: why the name could not be expanded (an undefined prefix). */
-  error: string | undefined;
+  error: Option.Option<string>;
 }
 
 interface Partial {
@@ -80,7 +83,7 @@ const make = (t: Partial, start: number, end: number): Tok => ({
         : t.type,
   start: t.at ?? start,
   end,
-  error: undefined,
+  error: Option.none(),
 });
 
 /** A token that ends the stream, with the reason. */
@@ -95,11 +98,11 @@ const hex4 = Token.takeWhile(TurtleGrammar.hex, 4);
 const hex8 = Token.takeWhile(TurtleGrammar.hex, 8);
 
 /** Decodes a `UCHAR`, rejecting surrogates and code points beyond U+10FFFF. */
-const decodeUchar = (hex: string): string | undefined => {
+const decodeUchar = (hex: string): Option.Option<string> => {
   const code = parseInt(hex, 16);
   return (code >= 0xd800 && code <= 0xdfff) || code > 0x10ffff
-    ? undefined
-    : String.fromCodePoint(code);
+    ? Option.none()
+    : Option.some(String.fromCodePoint(code));
 };
 
 // eslint-disable-next-line no-control-regex
@@ -121,14 +124,17 @@ const iri: Parser.Parser<Partial> = Parser.delimited(
 ).pipe(
   Parser.map((raw): Partial => {
     if (raw.indexOf('\\') === -1) return { type: 'IRI', value: raw };
-    let bad: string | undefined;
+    let bad = Option.none<string>();
     const value = raw.replace(/\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})/g, (_, a, b) => {
       const hex = a ?? b;
       const c = decodeUchar(hex);
-      if (c === undefined) bad ??= `Invalid code point escape \\u${hex}`;
-      return c ?? '';
+      if (Option.isNone(c)) {
+        if (Option.isNone(bad)) bad = Option.some(`Invalid code point escape \\u${hex}`);
+        return '';
+      }
+      return c.value;
     });
-    if (bad !== undefined) return errorToken(bad);
+    if (Option.isSome(bad)) return errorToken(bad.value);
     return forbiddenInIri.test(value)
       ? errorToken('Invalid character in IRI')
       : { type: 'IRI', value };
@@ -173,6 +179,25 @@ const ECHAR: EscapeTable = {
 const HEX = /^[0-9A-Fa-f]+$/;
 
 /**
+ * The runs of characters a string takes as they are: all but its quote and
+ * `\` (and, in a short string, line breaks).
+ */
+const SHORT_RUN_DOUBLE = /[^"\\\n\r]*/y;
+const SHORT_RUN_SINGLE = /[^'\\\n\r]*/y;
+const LONG_RUN_DOUBLE = /[^"\\]*/y;
+const LONG_RUN_SINGLE = /[^'\\]*/y;
+/** Up to two quotes before a long string's closing delimiter. */
+const EXTRA_DOUBLE = /"{0,2}/y;
+const EXTRA_SINGLE = /'{0,2}/y;
+
+/** The end of the run `re` matches at `pos`. */
+const runEnd = (re: RegExp, input: string, pos: number): number => {
+  re.lastIndex = pos;
+  re.test(input);
+  return re.lastIndex;
+};
+
+/**
  * A string literal. Long strings may end with up to two quotes before the
  * closing delimiter (`"""a""""` is `a"`). Written as plain code: it is a
  * leaf, and its error reporting follows the reference lexer.
@@ -181,55 +206,72 @@ const string: Parser.Parser<Partial> = Parser.make<Partial>((state) => {
   // SAFETY: the lexer runs on string input (`Parser.run` over a `string`), never bytes.
   const input = state.input;
   const start = state.pos;
-  const quote = input[start]!;
+  const quote = input.charAt(start);
   const long = input.startsWith(quote.repeat(3), start);
+  const double = quote === '"';
+  const run = long
+    ? double
+      ? LONG_RUN_DOUBLE
+      : LONG_RUN_SINGLE
+    : double
+      ? SHORT_RUN_DOUBLE
+      : SHORT_RUN_SINGLE;
   let i = start + (long ? 3 : 1);
   let out = '';
-  const error = (message: string, at?: number): Partial => {
+  let token: Partial = errorToken('Unterminated string literal');
+  const error = (message: string, at?: number): false => {
     state.pos = input.length;
-    return errorToken(message, at);
+    token = errorToken(message, at);
+    return false;
   };
-  for (;;) {
+  /** Reads the next run and the character after it; `false` once the literal ends. */
+  const step = (): boolean => {
+    const runTo = runEnd(run, input, i);
+    out += input.slice(i, runTo);
+    i = runTo;
     if (i >= input.length) return error('Unterminated string literal');
-    const c = input[i]!;
+    const c = input.charAt(i);
     if (c === '\\') {
-      const e = input[i + 1];
+      const e = input.charAt(i + 1);
       if (e === 'u' || e === 'U') {
         const len = e === 'u' ? 4 : 8;
         const hex = input.slice(i + 2, i + 2 + len);
         if (hex.length !== len || !HEX.test(hex)) return error('Invalid \\u escape', i);
         const decoded = decodeUchar(hex);
-        if (decoded === undefined) return error(`Invalid code point escape \\u${hex}`, i);
-        out += decoded;
+        if (Option.isNone(decoded)) return error(`Invalid code point escape \\u${hex}`, i);
+        out += decoded.value;
         i += 2 + len;
-        continue;
+        return true;
       }
-      const decoded = e === undefined ? undefined : ECHAR[e];
+      const decoded = e === '' ? undefined : ECHAR[e];
       if (decoded === undefined) return error('Invalid escape sequence in string', i);
       out += decoded;
       i += 2;
-      continue;
+      return true;
     }
     if (long) {
       if (input.startsWith(quote.repeat(3), i)) {
-        let j = i;
-        while (input[j + 3] === quote && j - i < 2) j++;
+        const j = runEnd(double ? EXTRA_DOUBLE : EXTRA_SINGLE, input, i + 3) - 3;
         out += input.slice(i, j);
         state.pos = j + 3;
-        return { type: 'STRING', value: out, extra: 'long' };
+        token = { type: 'STRING', value: out, extra: 'long' };
+        return false;
       }
+      // A quote that does not close the string.
       out += c;
       i++;
-    } else {
-      if (c === quote) {
-        state.pos = i + 1;
-        return { type: 'STRING', value: out };
-      }
-      if (c === '\n' || c === '\r') return error('Newline in string literal', i);
-      out += c;
-      i++;
+      return true;
     }
-  }
+    if (c === quote) {
+      state.pos = i + 1;
+      token = { type: 'STRING', value: out };
+      return false;
+    }
+    // A line break (the run stops only at the quote, `\` and line breaks).
+    return error('Newline in string literal', i);
+  };
+  loop(step);
+  return token;
 });
 
 const digits0 = Token.takeWhile(TurtleGrammar.digit);
@@ -371,7 +413,7 @@ interface PrefixTable {
 
 /** The base IRI and prefixes after resolving the tokens. */
 export interface Resolved {
-  readonly base: string | undefined;
+  readonly base: Option.Option<string>;
   readonly prefixes: Record<string, string>;
 }
 
@@ -383,18 +425,19 @@ export interface Resolved {
  */
 export const resolve = (
   tokens: Array<Tok>,
-  baseIri: string | undefined,
-  initialPrefixes: Readonly<Record<string, string>> | undefined,
+  baseIri: Option.Option<string>,
+  initialPrefixes: Readonly<Record<string, string>>,
 ): Resolved => {
-  const state: ResolveState = {
-    base: Option.fromUndefinedOr(baseIri),
-    prefixes: { ...initialPrefixes },
-  };
-  for (let i = 0; i < tokens.length; i++) {
+  const state: ResolveState = { base: baseIri, prefixes: { ...initialPrefixes } };
+  let i = 0;
+  loop(() => {
+    const t = tokens[i];
+    if (t === undefined) return false;
     // Skips the tokens a directive consumed.
-    i += resolveToken(tokens[i]!, tokens, i, state);
-  }
-  return { base: Option.getOrUndefined(state.base), prefixes: state.prefixes };
+    i += resolveToken(t, tokens, i, state) + 1;
+    return true;
+  });
+  return { base: state.base, prefixes: state.prefixes };
 };
 
 /** The base and prefixes in effect at a point of the token stream. */
@@ -403,41 +446,43 @@ interface ResolveState {
   readonly prefixes: PrefixTable;
 }
 
-const resolveIri = (state: ResolveState, iri: string) =>
-  Option.match(state.base, { onNone: () => iri, onSome: (base) => Iri.resolve(iri, base) });
+const resolveIri = (state: ResolveState, ref: string) =>
+  Option.match(state.base, { onNone: () => ref, onSome: (base) => Iri.resolve(ref, base) });
+
+/** Resolves a `BASE` or `PREFIX` directive's IRI; how many tokens it consumed. */
+const resolveDirective = (t: Tok, tokens: Array<Tok>, i: number, state: ResolveState): number => {
+  const next = tokens[i + 1];
+  if (t.kind === 'BASE' && next?.type === 'IRI') {
+    next.value = resolveIri(state, next.value);
+    state.base = Option.some(next.value);
+    return 1;
+  }
+  if (t.kind === 'PREFIX' && next?.type === 'PNAME' && next.value === '') {
+    const value = tokens[i + 2];
+    if (value?.type === 'IRI') {
+      value.value = resolveIri(state, value.value);
+      state.prefixes[next.extra] = value.value;
+      return 2;
+    }
+  }
+  return 0;
+};
 
 /**
  * Resolves one token in place and returns how many of the following tokens
- * it consumed (a `BASE` or `PREFIX` directive's IRI and name).
+ * it consumed (a `BASE` or `PREFIX` directive's IRI and name). A plain
+ * branch per type: it runs once per token.
  */
-const resolveToken: (t: Tok, tokens: Array<Tok>, i: number, state: ResolveState) => number =
-  Match.fn((t: Tok, _tokens: Array<Tok>, _i: number, _state: ResolveState) => t.type).pipe(
-    Match.when('IRI', (_type, t, _tokens, _i, state) => {
-      t.value = resolveIri(state, t.value);
-      return 0;
-    }),
-    Match.when('PNAME', (_type, t, _tokens, _i, state) => {
-      const ns = state.prefixes[t.extra];
-      if (ns === undefined) t.error = `Undefined prefix '${t.extra}:'`;
-      else t.value = ns + t.value;
-      return 0;
-    }),
-    Match.when('WORD', (_type, t, tokens, i, state) => {
-      const next = tokens[i + 1];
-      if (t.kind === 'BASE' && next?.type === 'IRI') {
-        next.value = resolveIri(state, next.value);
-        state.base = Option.some(next.value);
-        return 1;
-      }
-      if (t.kind === 'PREFIX' && next?.type === 'PNAME' && next.value === '') {
-        const value = tokens[i + 2];
-        if (value?.type === 'IRI') {
-          value.value = resolveIri(state, value.value);
-          state.prefixes[next.extra] = value.value;
-          return 2;
-        }
-      }
-      return 0;
-    }),
-    Match.orElse(() => 0),
-  );
+const resolveToken = (t: Tok, tokens: Array<Tok>, i: number, state: ResolveState): number => {
+  if (t.type === 'IRI') {
+    t.value = resolveIri(state, t.value);
+    return 0;
+  }
+  if (t.type === 'PNAME') {
+    const ns = state.prefixes[t.extra];
+    if (ns === undefined) t.error = Option.some(`Undefined prefix '${t.extra}:'`);
+    else t.value = ns + t.value;
+    return 0;
+  }
+  return t.type === 'WORD' ? resolveDirective(t, tokens, i, state) : 0;
+};

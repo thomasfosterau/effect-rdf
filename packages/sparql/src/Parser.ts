@@ -13,6 +13,7 @@
  * @since 0.1.0
  */
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import type * as Ast from './Ast.ts';
@@ -54,16 +55,18 @@ export interface ParseOptions {
 // -----------------------------------------------------------------------------
 
 const position = (input: string, offset: number) => {
-  let line = 1;
-  let lineStart = 0;
-  for (let i = 0; i < offset && i < input.length; i++) {
-    if (input[i] === '\n') {
-      line++;
-      lineStart = i + 1;
-    }
-  }
-  return { line, column: offset - lineStart + 1 };
+  const before = input.slice(0, Math.max(0, Math.min(offset, input.length)));
+  const lineStart = before.lastIndexOf('\n') + 1;
+  return { line: before.split('\n').length, column: offset - lineStart + 1 };
 };
+
+/** The base IRI and prefixes of `options`, as the internal parser takes them. */
+const internalOptions = (
+  options?: ParseOptions,
+): readonly [Option.Option<string>, Readonly<Record<string, string>>] => [
+  Option.fromUndefinedOr(options?.baseIri),
+  options?.prefixes ?? {},
+];
 
 const toError =
   (input: string) =>
@@ -87,7 +90,7 @@ export const parseQueryResult = (
   input: string,
   options?: ParseOptions,
 ): Result.Result<Ast.Query, SparqlParseError> =>
-  Result.mapError(Internal.parseQuery(input, options?.baseIri, options?.prefixes), toError(input));
+  Result.mapError(Internal.parseQuery(input, ...internalOptions(options)), toError(input));
 
 /**
  * Parses a SPARQL update request, returning a `Result`.
@@ -99,7 +102,7 @@ export const parseUpdateResult = (
   input: string,
   options?: ParseOptions,
 ): Result.Result<Ast.Update, SparqlParseError> =>
-  Result.mapError(Internal.parseUpdate(input, options?.baseIri, options?.prefixes), toError(input));
+  Result.mapError(Internal.parseUpdate(input, ...internalOptions(options)), toError(input));
 
 /**
  * Parses a SPARQL query.
