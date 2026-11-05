@@ -168,7 +168,13 @@ const atKeyword = (word: string): P<string> => atWord.pipe(Parser.filter((w) => 
 /** A `PN_PREFIX` not followed by `:` (a bare word such as `a`, `is`, `true`). */
 const bareWord: P<string> = Parser.terminated(TurtleGrammar.pnPrefix, Parser.not(lit(':')));
 
-const word = (w: string): P<string> => bareWord.pipe(Parser.filter((x) => x === w));
+/**
+ * The bare word `w`, checked by its first character before the word is
+ * read, so that the names tried as keywords on the way to a path are not
+ * each scanned as a word first.
+ */
+const word = (w: string): P<string> =>
+  Parser.preceded(Parser.peek(lit(w.slice(0, 1))), bareWord.pipe(Parser.filter((x) => x === w)));
 
 // eslint-disable-next-line no-control-regex
 const forbiddenInIri = /[\u0000- <>"{}|^`\\]/u;
@@ -406,7 +412,9 @@ const fixedVerb: P<Model.N3Term> = rule(
     lit('=>').pipe(Parser.as<Model.N3Term>(log.implies)),
     lit('=').pipe(Parser.as<Model.N3Term>(sameAs)),
     // `<=` unless the `<` starts an IRI reference.
-    Parser.preceded(Parser.not(iriRef), lit('<=')).pipe(Parser.as<Model.N3Term>(log.isImpliedBy)),
+    Parser.preceded(Parser.seq(Parser.peek(lit('<=')), Parser.not(iriRef)), lit('<=')).pipe(
+      Parser.as<Model.N3Term>(log.isImpliedBy),
+    ),
     Parser.alt(word('a'), atKeyword('@a')).pipe(Parser.as<Model.N3Term>(rdf.type)),
   ),
 );
@@ -418,7 +426,10 @@ const verb: P<void> = Parser.preceded(
     Parser.alt(
       Parser.tap(fixedVerb, (predicate) => b.verb(predicate, false)),
       Parser.tap(
-        Parser.preceded(Parser.seq(Parser.not(iriRef), lit('<-')), Parser.cut(path)),
+        Parser.preceded(
+          Parser.seq(Parser.peek(lit('<-')), Parser.not(iriRef), lit('<-')),
+          Parser.cut(path),
+        ),
         (predicate) => b.verb(predicate, true),
       ),
       Parser.tap(
