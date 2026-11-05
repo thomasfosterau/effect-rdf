@@ -4,6 +4,8 @@ import * as Equal from 'effect/Equal';
 import * as HashSet from 'effect/HashSet';
 import { Term } from '../src/index.ts';
 
+const ex = (name: string) => Term.namedNode(`http://example.org/${name}`);
+
 describe('Term', () => {
   it('equality and hashing', () => {
     const a = Term.namedNode('http://example.org/a');
@@ -18,6 +20,19 @@ describe('Term', () => {
     expect(Term.literal('\u0000\b\u007f￾￿').key).toBe('"\\u0000\\b\\u007F\\uFFFE\\uFFFF"');
     expect(Term.literal('hi', { language: 'ar', direction: 'rtl' }).key).toBe('"hi"@ar--rtl');
   });
+  it('mapTerms keeps a statement whose terms all map to themselves', () => {
+    const inner = Term.triple(Term.blankNode('b'), ex('p'), ex('o'));
+    const quad = Term.quad(ex('s'), ex('p'), inner, ex('g'));
+    expect(Term.mapTerms(quad, (t) => t)).toBe(quad);
+    expect(Term.mapTerms(inner, (t) => t)).toBe(inner);
+    const renamed = Term.mapTerms(quad, (t) => (Term.isBlankNode(t) ? Term.blankNode('c') : t));
+    expect(renamed).not.toBe(quad);
+    expect(renamed.key).toBe(
+      '<http://example.org/s> <http://example.org/p> <<( _:c <http://example.org/p> <http://example.org/o> )>> <http://example.org/g>',
+    );
+    expect(renamed.subject).toBe(quad.subject);
+  });
+
   it('triple terms', () => {
     const t = Term.triple(Term.namedNode('s'), Term.namedNode('p'), Term.literal('o'));
     expect(t.key).toBe('<<( <s> <p> "o" )>>');
