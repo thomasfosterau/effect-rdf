@@ -8,10 +8,11 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
-import * as Match from 'effect/Match';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -188,9 +189,9 @@ export interface ResultsCodec {
 }
 
 const toSelect = (result: ParsedResult | AskResult): SelectResult | AskResult =>
-  result._tag === 'ResultSet'
+  Predicate.isTagged(result, 'ResultSet')
     ? fromResultSet(result)
-    : result._tag === 'Boolean'
+    : Predicate.isTagged(result, 'Boolean')
       ? { _tag: 'Ask', value: result.value }
       : result;
 
@@ -297,7 +298,7 @@ const jsonFormat: ResultsFormat = {
 };
 
 const serializeJson = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
-  if (result._tag === 'Ask') {
+  if (Predicate.isTagged(result, 'Ask')) {
     return Stream.succeed(`{"head":{},"boolean":${result.value}}\n`);
   }
   const vars = result.variables.map((v) => v.value);
@@ -307,10 +308,10 @@ const serializeJson = <E>(result: SelectResult<E> | AskResult): Stream.Stream<st
       Stream.succeed(head),
       ordered(result, (b, i) => {
         const row: Record<string, JsonTerm> = {};
-        for (const v of vars) {
+        vars.forEach((v) => {
           const t = b.map.get(v);
           if (t !== undefined) row[v] = termToJson(t);
-        }
+        });
         // Variables bound but not projected are not serialised.
         return `${i > 0 ? ',' : ''}\n${encodeJsonText(row)}`;
       }),
@@ -335,7 +336,7 @@ const parseJson = (input: string): Effect.Effect<ParsedResult, ResultsParseError
       _tag: 'ResultSet',
       variables: doc.head.vars ?? [],
       bindings: doc.results.bindings.map((row) =>
-        B.fromEntries(Object.entries(row).map(([k, v]) => [k, termFromJson(v)] as const)),
+        B.fromEntries(Record.toEntries(row).map(([k, v]) => [k, termFromJson(v)] as const)),
       ),
     } as const);
   });
@@ -360,32 +361,27 @@ export const Json: ResultsCodec = {
 const SRX = 'http://www.w3.org/2005/sparql-results#';
 const ITS = 'http://www.w3.org/2005/11/its';
 
+const xmlLiteral = (l: Term.Literal): string => {
+  const attrs =
+    l.language !== ''
+      ? ` xml:lang="${XmlParser.escapeAttribute(l.language)}"${l.direction !== undefined ? ` its:dir="${l.direction}"` : ''}`
+      : l.datatype.value !== Term.XSD_STRING
+        ? ` datatype="${XmlParser.escapeAttribute(l.datatype.value)}"`
+        : '';
+  return `<literal${attrs}>${XmlParser.escapeText(l.value)}</literal>`;
+};
+
+/** A term as an XML results element. Plain branches: it runs for every term of every row. */
 const xmlTerm = (t: Term.GroundTerm): string => {
-  return Match.value(t).pipe(
-    Match.tag('NamedNode', (n) => `<uri>${XmlParser.escapeText(n.value)}</uri>`),
-    Match.tag('BlankNode', (b) => `<bnode>${XmlParser.escapeText(b.value)}</bnode>`),
-    Match.tag('Literal', (l) => {
-      let attrs = '';
-      if (l.language !== '') {
-        attrs += ` xml:lang="${XmlParser.escapeAttribute(l.language)}"`;
-        if (l.direction !== undefined) attrs += ` its:dir="${l.direction}"`;
-      } else if (l.datatype.value !== Term.XSD_STRING) {
-        attrs += ` datatype="${XmlParser.escapeAttribute(l.datatype.value)}"`;
-      }
-      return `<literal${attrs}>${XmlParser.escapeText(l.value)}</literal>`;
-    }),
-    Match.tag(
-      'Triple',
-      (x) =>
-        `<triple><subject>${xmlTerm(x.subject)}</subject><predicate>${xmlTerm(x.predicate)}</predicate><object>${xmlTerm(x.object)}</object></triple>`,
-    ),
-    Match.exhaustive,
-  );
+  if (Term.isLiteral(t)) return xmlLiteral(t);
+  if (Term.isNamedNode(t)) return `<uri>${XmlParser.escapeText(t.value)}</uri>`;
+  if (Term.isBlankNode(t)) return `<bnode>${XmlParser.escapeText(t.value)}</bnode>`;
+  return `<triple><subject>${xmlTerm(t.subject)}</subject><predicate>${xmlTerm(t.predicate)}</predicate><object>${xmlTerm(t.object)}</object></triple>`;
 };
 
 const serializeXml = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
   const open = `<?xml version="1.0"?>\n<sparql xmlns="${SRX}" xmlns:its="${ITS}">\n`;
-  if (result._tag === 'Ask') {
+  if (Predicate.isTagged(result, 'Ask')) {
     return Stream.succeed(`${open}<head/>\n<boolean>${result.value}</boolean>\n</sparql>\n`);
   }
   const vars = result.variables.map((v) => v.value);
@@ -394,13 +390,13 @@ const serializeXml = <E>(result: SelectResult<E> | AskResult): Stream.Stream<str
     Stream.concat(
       Stream.succeed(head),
       ordered(result, (b) => {
-        let out = '<result>';
-        for (const v of vars) {
+        const cells = vars.map((v) => {
           const t = b.map.get(v);
-          if (t !== undefined)
-            out += `<binding name="${XmlParser.escapeAttribute(v)}">${xmlTerm(t)}</binding>`;
-        }
-        return `${out}</result>\n`;
+          return t === undefined
+            ? ''
+            : `<binding name="${XmlParser.escapeAttribute(v)}">${xmlTerm(t)}</binding>`;
+        });
+        return `<result>${cells.join('')}</result>\n`;
       }),
     ),
     Stream.succeed('</results>\n</sparql>\n'),
@@ -408,14 +404,20 @@ const serializeXml = <E>(result: SelectResult<E> | AskResult): Stream.Stream<str
 };
 
 const elements = (e: XmlParser.Element): Array<XmlParser.Element> =>
-  e.children.filter((c): c is XmlParser.Element => c._tag === 'Element');
+  e.children.filter((c): c is XmlParser.Element => Predicate.isTagged(c, 'Element'));
 
 const textOf = (e: XmlParser.Element): string =>
-  e.children.map((c) => (c._tag === 'Text' ? c.value : '')).join('');
+  e.children.map((c) => (Predicate.isTagged(c, 'Text') ? c.value : '')).join('');
 
-const attribute = (e: XmlParser.Element, local: string, ns?: string): string | undefined =>
-  e.attributes.find((a) => a.localName === local && (ns === undefined || a.namespace === ns))
-    ?.value;
+/** An attribute's value, by local name (and namespace, when given). */
+const attribute = (e: XmlParser.Element, local: string, ns?: string): Option.Option<string> =>
+  Option.map(
+    Arr.findFirst(
+      e.attributes,
+      (a) => a.localName === local && (ns === undefined || a.namespace === ns),
+    ),
+    (a) => a.value,
+  );
 
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 
@@ -433,27 +435,27 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
     Match.when('uri', (): Term.GroundTerm => Term.namedNode(textOf(e))),
     Match.when('bnode', () => Term.blankNode(textOf(e))),
     Match.when('literal', () => {
-      const lang = attribute(e, 'lang', XML_NS);
-      const dir = attribute(e, 'dir', ITS) ?? attribute(e, 'dir');
+      const lang = Option.getOrElse(attribute(e, 'lang', XML_NS), () => '');
+      const dir = Option.orElse(attribute(e, 'dir', ITS), () => attribute(e, 'dir'));
       const datatype = attribute(e, 'datatype');
-      if (lang !== undefined && lang !== '') {
-        return dir === 'ltr' || dir === 'rtl'
-          ? Term.literal(textOf(e), { language: lang, direction: dir })
+      if (lang !== '') {
+        return Option.isSome(dir) && (dir.value === 'ltr' || dir.value === 'rtl')
+          ? Term.literal(textOf(e), { language: lang, direction: dir.value })
           : Term.literal(textOf(e), lang);
       }
-      return datatype !== undefined
-        ? Term.literal(textOf(e), Term.namedNode(datatype))
+      return Option.isSome(datatype)
+        ? Term.literal(textOf(e), Term.namedNode(datatype.value))
         : Term.literal(textOf(e));
     }),
-    Match.when('triple', () => {
-      // SAFETY: the XML results grammar puts a subject, an IRI predicate and an object in a triple
-      // term's three parts.
-      return Term.triple(
-        xmlTriplePart(e, 'subject') as Term.Subject,
-        xmlTriplePart(e, 'predicate') as Term.Predicate,
+    // The XML results grammar puts a subject, an IRI predicate and an object in a triple
+    // term's three parts; like the other formats, the parts are not checked again.
+    Match.when('triple', () =>
+      Term.triple<any, any, any>(
+        xmlTriplePart(e, 'subject'),
+        xmlTriplePart(e, 'predicate'),
         xmlTriplePart(e, 'object'),
-      );
-    }),
+      ),
+    ),
     Match.orElse((name) => {
       throw new ResultsParseError({
         format: 'xml',
@@ -478,7 +480,7 @@ const parseXml = (input: string): Effect.Effect<ParsedResult, ResultsParseError>
             ? []
             : elements(head)
                 .filter((c) => c.localName === 'variable')
-                .map((c) => attribute(c, 'name') ?? '');
+                .map((c) => Option.getOrElse(attribute(c, 'name'), () => ''));
         const boolean = elements(root).find((c) => c.localName === 'boolean');
         if (boolean !== undefined) {
           return { _tag: 'Boolean', value: textOf(boolean).trim() === 'true' } as const;
@@ -488,7 +490,22 @@ const parseXml = (input: string): Effect.Effect<ParsedResult, ResultsParseError>
           B.fromEntries(
             elements(r)
               .filter((c) => c.localName === 'binding')
-              .map((c) => [attribute(c, 'name') ?? '', xmlToTerm(elements(c)[0]!)] as const),
+              .map(
+                (c) =>
+                  [
+                    Option.getOrElse(attribute(c, 'name'), () => ''),
+                    xmlToTerm(
+                      Option.getOrThrowWith(
+                        Arr.head(elements(c)),
+                        () =>
+                          new ResultsParseError({
+                            format: 'xml',
+                            message: 'Missing term in binding',
+                          }),
+                      ),
+                    ),
+                  ] as const,
+              ),
           ),
         );
         return { _tag: 'ResultSet', variables: vars, bindings } as const;
@@ -533,7 +550,7 @@ const XSD = 'http://www.w3.org/2001/XMLSchema#';
  * @category tsv
  */
 export const termToTsv = (t: Term.GroundTerm): string => {
-  if (t._tag === 'Literal' && t.language === '') {
+  if (Term.isLiteral(t) && t.language === '') {
     const dt = t.datatype.value;
     if (dt === `${XSD}integer` && /^[+-]?\d+$/.test(t.value)) return t.value;
     if (dt === `${XSD}decimal` && /^[+-]?\d*\.\d+$/.test(t.value)) return t.value;
@@ -541,7 +558,7 @@ export const termToTsv = (t: Term.GroundTerm): string => {
       return t.value;
     if (dt === `${XSD}boolean` && (t.value === 'true' || t.value === 'false')) return t.value;
   }
-  if (t._tag === 'Triple') {
+  if (Term.isTriple(t)) {
     return `<<( ${termToTsv(t.subject)} ${termToTsv(t.predicate)} ${termToTsv(t.object)} )>>`;
   }
   return t.key.replace(/\t/g, '\\t');
@@ -558,20 +575,38 @@ export const termToTsv = (t: Term.GroundTerm): string => {
 export const parseTerm = (text: string): Option.Option<Term.GroundTerm> =>
   Result.getSuccess(Parser.parse(TextResults.groundTerm, text));
 
-const serializeTsv = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
-  if (result._tag === 'Ask') return Stream.succeed(`${result.value}\n`);
-  const vars = result.variables.map((v) => v.value);
-  return Stream.concat(
-    Stream.succeed(`${vars.map((v) => `?${v}`).join('\t')}\n`),
-    ordered(result, (b) => {
-      const cells = vars.map((v) => {
-        const t = b.map.get(v);
-        return t === undefined ? '' : termToTsv(t);
-      });
-      return `${cells.join('\t')}\n`;
-    }),
-  );
-};
+/** The layout of a delimited (TSV / CSV) results document. */
+interface Delimited {
+  readonly separator: string;
+  readonly newline: string;
+  readonly header: (variable: string) => string;
+  readonly cell: (t: Term.GroundTerm) => string;
+}
+
+const serializeDelimited =
+  (layout: Delimited) =>
+  <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
+    if (Predicate.isTagged(result, 'Ask'))
+      return Stream.succeed(`${result.value}${layout.newline}`);
+    const vars = result.variables.map((v) => v.value);
+    return Stream.concat(
+      Stream.succeed(`${vars.map(layout.header).join(layout.separator)}${layout.newline}`),
+      ordered(result, (b) => {
+        const cells = vars.map((v) => {
+          const t = b.map.get(v);
+          return t === undefined ? '' : layout.cell(t);
+        });
+        return `${cells.join(layout.separator)}${layout.newline}`;
+      }),
+    );
+  };
+
+const serializeTsv = serializeDelimited({
+  separator: '\t',
+  newline: '\n',
+  header: (v) => `?${v}`,
+  cell: termToTsv,
+});
 
 const splitLines = (input: string): Array<string> => {
   const lines = input.split(/\r?\n/);
@@ -581,42 +616,63 @@ const splitLines = (input: string): Array<string> => {
 
 const parseTsv = (input: string): Effect.Effect<ParsedResult, ResultsParseError> =>
   Effect.suspend((): Effect.Effect<ParsedResult, ResultsParseError> => {
-    const lines = splitLines(input);
-    if (Arr.isReadonlyArrayEmpty(lines)) {
+    const [header, ...rows] = splitLines(input);
+    if (header === undefined) {
       return Effect.fail(new ResultsParseError({ format: 'tsv', message: 'Empty document' }));
     }
-    const first = lines[0]!.trim();
+    const first = header.trim();
     if (first === 'true' || first === 'false') {
       return Effect.succeed({ _tag: 'Boolean', value: first === 'true' } as const);
     }
-    const vars = lines[0]!.split('\t').map((v) => v.trim().replace(/^[?$]/, ''));
+    const vars = header.split('\t').map((v) => v.trim().replace(/^[?$]/, ''));
     const bindings: Array<Bindings> = [];
-    for (let row = 1; row < lines.length; row++) {
-      const cells = lines[row]!.split('\t');
-      const entries: Array<readonly [string, Term.GroundTerm | undefined]> = [];
-      let offset = 0;
-      for (let i = 0; i < vars.length; i++) {
-        const cell = cells[i] ?? '';
-        const start = offset;
-        offset += cell.length + 1;
-        if (cell.trim() === '') continue;
-        const t = Parser.parse(TextResults.groundTerm, cell);
-        if (Result.isFailure(t)) {
-          return Effect.fail(
-            new ResultsParseError({
-              format: 'tsv',
-              message: `Invalid term: ${cell.trim()}: ${parseErrorSummary(t.failure)}`,
-              line: row + 1,
-              column: start + t.failure.position.column,
-            }),
-          );
-        }
-        entries.push([vars[i]!, t.success]);
-      }
-      bindings.push(B.fromEntries(entries));
-    }
-    return Effect.succeed({ _tag: 'ResultSet', variables: vars, bindings } as const);
+    // The first invalid cell, if any (the rows before it are parsed on the way).
+    const failure = Arr.findFirst(rows, (line, index) =>
+      Result.match(tsvRow(vars, line, index + 2), {
+        onFailure: Option.some,
+        onSuccess: (b) => {
+          bindings.push(b);
+          return Option.none();
+        },
+      }),
+    );
+    return Option.isSome(failure)
+      ? Effect.fail(failure.value)
+      : Effect.succeed({ _tag: 'ResultSet', variables: vars, bindings } as const);
   });
+
+/** A TSV row (on 1-based line `line`) as a solution, or the error at its first invalid cell. */
+const tsvRow = (
+  vars: ReadonlyArray<string>,
+  line: string,
+  lineNumber: number,
+): Result.Result<Bindings, ResultsParseError> => {
+  const cells = line.split('\t');
+  const entries: Array<readonly [string, Term.GroundTerm]> = [];
+  let offset = 0;
+  const failure = Arr.findFirst(vars, (v, i) => {
+    const cell = cells[i] ?? '';
+    const start = offset;
+    offset += cell.length + 1;
+    if (cell.trim() === '') return Option.none();
+    const t = Parser.parse(TextResults.groundTerm, cell);
+    if (Result.isFailure(t)) {
+      return Option.some(
+        new ResultsParseError({
+          format: 'tsv',
+          message: `Invalid term: ${cell.trim()}: ${parseErrorSummary(t.failure)}`,
+          line: lineNumber,
+          column: start + t.failure.position.column,
+        }),
+      );
+    }
+    entries.push([v, t.success]);
+    return Option.none();
+  });
+  return Option.isSome(failure)
+    ? Result.fail(failure.value)
+    : Result.succeed(B.fromEntries(entries));
+};
 
 /**
  * SPARQL 1.1 Query Results TSV Format.
@@ -643,32 +699,19 @@ export const Tsv: ResultsCodec = {
 
 const csvField = (s: string): string => (/[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 
+/** A term as a CSV cell. Plain branches: it runs for every term of every row. */
 const csvTerm = (t: Term.GroundTerm): string => {
-  return Match.value(t).pipe(
-    Match.tag('NamedNode', 'Literal', (x) => x.value),
-    Match.tag('BlankNode', (b) => `_:${b.value}`),
-    Match.tag(
-      'Triple',
-      (x) => `<<( ${termToTsv(x.subject)} ${termToTsv(x.predicate)} ${termToTsv(x.object)} )>>`,
-    ),
-    Match.exhaustive,
-  );
+  if (Term.isNamedNode(t) || Term.isLiteral(t)) return t.value;
+  if (Term.isBlankNode(t)) return `_:${t.value}`;
+  return `<<( ${termToTsv(t.subject)} ${termToTsv(t.predicate)} ${termToTsv(t.object)} )>>`;
 };
 
-const serializeCsv = <E>(result: SelectResult<E> | AskResult): Stream.Stream<string, E> => {
-  if (result._tag === 'Ask') return Stream.succeed(`${result.value}\r\n`);
-  const vars = result.variables.map((v) => v.value);
-  return Stream.concat(
-    Stream.succeed(`${vars.map(csvField).join(',')}\r\n`),
-    ordered(result, (b) => {
-      const cells = vars.map((v) => {
-        const t = b.map.get(v);
-        return t === undefined ? '' : csvField(csvTerm(t));
-      });
-      return `${cells.join(',')}\r\n`;
-    }),
-  );
-};
+const serializeCsv = serializeDelimited({
+  separator: ',',
+  newline: '\r\n',
+  header: csvField,
+  cell: (t) => csvField(csvTerm(t)),
+});
 
 /**
  * Interprets a CSV cell. The CSV format is lossy: blank nodes are recognised
@@ -702,16 +745,20 @@ const parseCsv = (input: string): Effect.Effect<ParsedResult, ResultsParseError>
         }),
       );
     }
-    const rows = parsed.success;
-    if (Arr.isReadonlyArrayEmpty(rows)) {
+    const [first, ...rows] = parsed.success;
+    if (first === undefined) {
       return Effect.fail(new ResultsParseError({ format: 'csv', message: 'Empty document' }));
     }
-    const first = rows[0]!;
-    if (first.length === 1 && (first[0]!.value === 'true' || first[0]!.value === 'false')) {
-      return Effect.succeed({ _tag: 'Boolean', value: first[0]!.value === 'true' } as const);
+    const [only, ...others] = first;
+    if (
+      only !== undefined &&
+      Arr.isReadonlyArrayEmpty(others) &&
+      (only.value === 'true' || only.value === 'false')
+    ) {
+      return Effect.succeed({ _tag: 'Boolean', value: only.value === 'true' } as const);
     }
     const vars = first.map((c) => c.value);
-    const bindings = rows.slice(1).map((r) =>
+    const bindings = rows.map((r) =>
       B.fromEntries(
         vars.map((v, i) => {
           const cell = r[i];
@@ -766,7 +813,7 @@ export const codecs: ReadonlyArray<ResultsCodec> = [Json, Xml, Csv, Tsv];
  * @category formats
  */
 export const codecFor = (mediaType: string): Option.Option<ResultsCodec> => {
-  const mt = mediaType.split(';')[0]!.trim().toLowerCase();
+  const mt = (mediaType.split(';')[0] ?? '').trim().toLowerCase();
   return Option.fromNullishOr(codecs.find((c) => c.format.mediaTypes.includes(mt)));
 };
 

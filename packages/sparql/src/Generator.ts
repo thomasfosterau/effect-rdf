@@ -12,6 +12,8 @@
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Ast from './Ast.ts';
@@ -90,7 +92,7 @@ class Printer {
   }
 
   verb(t: Term.Term): string {
-    return t._tag === 'NamedNode' && t.value === RDF_TYPE ? 'a' : this.term(t);
+    return Term.isNamedNode(t) && t.value === RDF_TYPE ? 'a' : this.term(t);
   }
 
   path(p: Ast.Path): string {
@@ -164,14 +166,14 @@ class Printer {
   }
 
   triple(t: Ast.TriplePattern | Ast.PathPattern | Ast.QuadPattern): string {
-    const p = t._tag === 'PathPattern' ? this.path(t.path) : this.verb(t.predicate);
+    const p = Predicate.isTagged(t, 'PathPattern') ? this.path(t.path) : this.verb(t.predicate);
     return `${this.term(t.subject)} ${p} ${this.term(t.object)} .`;
   }
 
   group(g: Ast.GroupPattern, level: number): string {
-    if (Arr.isReadonlyArrayEmpty(g.patterns)) return '{}';
-    const only = g.patterns[0]!;
-    if (g.patterns.length === 1 && only._tag === 'SubSelect') {
+    const [only, ...rest] = g.patterns;
+    if (only === undefined) return '{}';
+    if (Arr.isReadonlyArrayEmpty(rest) && Predicate.isTagged(only, 'SubSelect')) {
       return `{\n${this.pad(level + 1)}${this.select(only.query, level + 1)}\n${this.pad(level)}}`;
     }
     const lines = g.patterns.flatMap((p) => this.pattern(p, level + 1));
@@ -211,12 +213,16 @@ class Printer {
 
   // --- queries --------------------------------------------------------------
 
-  dataset(d: Ast.DatasetClause | undefined, keyword: 'FROM' | 'USING'): string {
-    if (d === undefined) return '';
-    return [
-      ...d.default.map((g) => `${keyword} ${this.iri(g)}\n`),
-      ...d.named.map((g) => `${keyword} NAMED ${this.iri(g)}\n`),
-    ].join('');
+  /** A dataset clause (`FROM` / `USING`), if the query or update has one. */
+  dataset(clause: Option.Option<Ast.DatasetClause>, keyword: 'FROM' | 'USING'): string {
+    return Option.match(clause, {
+      onNone: () => '',
+      onSome: (d) =>
+        [
+          ...d.default.map((g) => `${keyword} ${this.iri(g)}\n`),
+          ...d.named.map((g) => `${keyword} NAMED ${this.iri(g)}\n`),
+        ].join(''),
+    });
   }
 
   modifiers(q: Ast.QueryBase): string {
@@ -251,14 +257,14 @@ class Printer {
         ? '*'
         : q.projection
             .map((p) =>
-              p._tag === 'Variable'
+              Term.isVariable(p)
                 ? this.term(p)
                 : `(${this.expression(p.expression)} AS ${this.term(p.variable)})`,
             )
             .join(' ');
     const head = `SELECT ${q.distinct ? 'DISTINCT ' : q.reduced ? 'REDUCED ' : ''}${projection}`;
     const values = q.values !== undefined ? `\n${this.values(q.values)}` : '';
-    return `${head}\n${this.dataset(q.dataset, 'FROM')}WHERE ${this.group(q.where, level)}${this.modifiers(q)}${values}`;
+    return `${head}\n${this.dataset(Option.fromUndefinedOr(q.dataset), 'FROM')}WHERE ${this.group(q.where, level)}${this.modifiers(q)}${values}`;
   }
 
   query(q: Ast.Query): string {
@@ -268,15 +274,15 @@ class Printer {
       Match.tag(
         'Ask',
         (a) =>
-          `ASK\n${this.dataset(a.dataset, 'FROM')}WHERE ${this.group(a.where, 0)}${this.modifiers(a)}${values}`,
+          `ASK\n${this.dataset(Option.fromUndefinedOr(a.dataset), 'FROM')}WHERE ${this.group(a.where, 0)}${this.modifiers(a)}${values}`,
       ),
       Match.tag('Construct', (c) => {
         const template = c.template.map((t) => `${this.unit}${this.triple(t)}`).join('\n');
-        return `CONSTRUCT {\n${template}${template === '' ? '' : '\n'}}\n${this.dataset(c.dataset, 'FROM')}WHERE ${this.group(c.where, 0)}${this.modifiers(c)}${values}`;
+        return `CONSTRUCT {\n${template}${template === '' ? '' : '\n'}}\n${this.dataset(Option.fromUndefinedOr(c.dataset), 'FROM')}WHERE ${this.group(c.where, 0)}${this.modifiers(c)}${values}`;
       }),
       Match.tag('Describe', (d) => {
         const terms = d.terms === '*' ? '*' : d.terms.map((t) => this.term(t)).join(' ');
-        return `DESCRIBE ${terms}\n${this.dataset(d.dataset, 'FROM')}WHERE ${this.group(d.where, 0)}${this.modifiers(d)}${values}`;
+        return `DESCRIBE ${terms}\n${this.dataset(Option.fromUndefinedOr(d.dataset), 'FROM')}WHERE ${this.group(d.where, 0)}${this.modifiers(d)}${values}`;
       }),
       Match.exhaustive,
     );
@@ -285,31 +291,36 @@ class Printer {
   // --- updates --------------------------------------------------------------
 
   quads(quads: ReadonlyArray<Ast.QuadPattern | Term.Quad>): string {
-    const lines: Array<string> = [];
-    let i = 0;
-    while (i < quads.length) {
-      const g = quads[i]!.graph;
-      const run: Array<Ast.QuadPattern | Term.Quad> = [];
-      while (i < quads.length && quads[i]!.graph.key === g.key) run.push(quads[i++]!);
+    // The runs of consecutive quads in the same graph.
+    const runs: Array<{
+      readonly graph: Ast.QuadPattern['graph'] | Term.Graph;
+      readonly quads: Array<Ast.QuadPattern | Term.Quad>;
+    }> = [];
+    quads.forEach((q) => {
+      const last = runs[runs.length - 1];
+      if (last !== undefined && last.graph.key === q.graph.key) last.quads.push(q);
+      else runs.push({ graph: q.graph, quads: [q] });
+    });
+    const lines = runs.flatMap(({ graph: g, quads: run }) => {
       const triples = run.map(
         (q) => `${this.term(q.subject)} ${this.verb(q.predicate)} ${this.term(q.object)} .`,
       );
-      if (g._tag === 'DefaultGraph') lines.push(...triples.map((t) => this.unit + t));
-      else {
-        lines.push(`${this.unit}GRAPH ${this.term(g)} {`);
-        lines.push(...triples.map((t) => this.unit + this.unit + t));
-        lines.push(`${this.unit}}`);
-      }
-    }
+      return Term.isDefaultGraph(g)
+        ? triples.map((t) => this.unit + t)
+        : [`${this.unit}GRAPH ${this.term(g)} {`].concat(
+            triples.map((t) => this.unit + this.unit + t),
+            [`${this.unit}}`],
+          );
+    });
     return Arr.isReadonlyArrayEmpty(lines) ? '{}' : `{\n${lines.join('\n')}\n}`;
   }
 
   graphTarget(t: Ast.GraphTarget): string {
-    return t._tag === 'NamedNode' ? `GRAPH ${this.iri(t)}` : t._tag.toUpperCase();
+    return Term.isNamedNode(t) ? `GRAPH ${this.iri(t)}` : t._tag.toUpperCase();
   }
 
   graphOrDefault(g: Ast.GraphOrDefault): string {
-    return g._tag === 'DefaultGraph' ? 'DEFAULT' : `GRAPH ${this.iri(g)}`;
+    return Term.isDefaultGraph(g) ? 'DEFAULT' : `GRAPH ${this.iri(g)}`;
   }
 
   operationText(op: Ast.UpdateOperation): string {
@@ -323,7 +334,7 @@ class Printer {
           out += `DELETE ${this.quads(o.delete)}\n`;
         }
         if (Arr.isReadonlyArrayNonEmpty(o.insert)) out += `INSERT ${this.quads(o.insert)}\n`;
-        out += this.dataset(o.using, 'USING');
+        out += this.dataset(Option.fromUndefinedOr(o.using), 'USING');
         return `${out}WHERE ${this.group(o.where, 0)}`;
       }),
       Match.tag(
@@ -349,15 +360,14 @@ class Printer {
   }
 }
 
-const prologueText = (prologue: Ast.Prologue): string => {
-  let out = '';
-  if (prologue.version !== undefined) out += `VERSION "${Term.escapeString(prologue.version)}"\n`;
-  if (prologue.base !== undefined) out += `BASE <${Term.escapeIri(prologue.base)}>\n`;
-  for (const [prefix, ns] of Object.entries(prologue.prefixes)) {
-    out += `PREFIX ${prefix}: <${Term.escapeIri(ns)}>\n`;
-  }
-  return out;
-};
+const prologueText = (prologue: Ast.Prologue): string =>
+  [
+    prologue.version !== undefined ? `VERSION "${Term.escapeString(prologue.version)}"\n` : '',
+    prologue.base !== undefined ? `BASE <${Term.escapeIri(prologue.base)}>\n` : '',
+    ...Record.toEntries(prologue.prefixes).map(
+      ([prefix, ns]) => `PREFIX ${prefix}: <${Term.escapeIri(ns)}>\n`,
+    ),
+  ].join('');
 
 /**
  * Generates SPARQL text for a query or update.
@@ -376,7 +386,7 @@ export const print = (ast: Ast.Query | Ast.Update, options?: GenerateOptions): s
             ? { ...ast.prologue, prefixes: options.prefixes }
             : ast.prologue,
         );
-  if (ast._tag === 'Update') {
+  if (Predicate.isTagged(ast, 'Update')) {
     return prologue + ast.operations.map((op) => printer.operationText(op)).join(' ;\n');
   }
   return prologue + printer.query(ast);

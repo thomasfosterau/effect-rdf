@@ -10,11 +10,12 @@
  * @since 0.1.0
  */
 import * as Arr from 'effect/Array';
-import * as Match from 'effect/Match';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
 import * as Stream from 'effect/Stream';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Algebra from './Algebra.ts';
@@ -24,6 +25,7 @@ import { EvaluationError, UpdateError } from './Errors.ts';
 import * as Expression from './Expression.ts';
 import type * as Functions from './Functions.ts';
 import * as Evaluator from './internal/evaluator.ts';
+import * as StringMap from './internal/stringMap.ts';
 import * as Optimizer from './Optimizer.ts';
 import * as Parser from './Parser.ts';
 import type * as Results from './Results.ts';
@@ -173,67 +175,92 @@ export class SparqlEngine extends Context.Service<SparqlEngine, SparqlEngineShap
 // Implementation
 // -----------------------------------------------------------------------------
 
+/**
+ * A template term instantiated for a solution; `None` where a variable is
+ * unbound or a triple term would be ill-formed. Plain branches rather than
+ * `Match`: it runs for every template term per solution.
+ */
 const groundTemplateTerm = (
   t: Ast.TermPattern,
   b: B.Bindings,
   bnodes: Map<string, Term.BlankNode>,
-): Term.Term | undefined => {
-  return Match.value(t).pipe(
-    Match.tag('Variable', (v) => b.map.get(v.value)),
-    Match.tag('BlankNode', (blank) => {
-      let n = bnodes.get(blank.value);
-      if (n === undefined) bnodes.set(blank.value, (n = Term.blankNode()));
-      return n;
-    }),
-    Match.tag('Triple', (x) => {
-      const s = groundTemplateTerm(x.subject, b, bnodes);
-      const p = groundTemplateTerm(x.predicate, b, bnodes);
-      const o = groundTemplateTerm(x.object, b, bnodes);
-      if (s === undefined || p === undefined || o === undefined) return undefined;
-      if (!isValidTriple(s, p, o)) return undefined;
-      // SAFETY: `isValidTriple` checked the subject, predicate and object positions.
-      return Term.triple(s as Term.Subject, p as Term.Predicate, o as Term.Object);
-    }),
-    Match.orElse((x) => x),
-  );
+): Option.Option<Term.Term> => {
+  if (Term.isVariable(t)) return Option.fromUndefinedOr(b.map.get(t.value));
+  if (Term.isBlankNode(t)) {
+    const existing = bnodes.get(t.value);
+    if (existing !== undefined) return Option.some(existing);
+    const n = Term.blankNode();
+    bnodes.set(t.value, n);
+    return Option.some(n);
+  }
+  if (Term.isTriple(t)) {
+    return Option.map(groundTriple(t.subject, t.predicate, t.object, b, bnodes), ([s, p, o]) =>
+      Term.triple(s, p, o),
+    );
+  }
+  return Option.some(t);
 };
 
-const isValidTriple = (s: Term.Term, p: Term.Term, o: Term.Term): boolean =>
-  (s._tag === 'NamedNode' || s._tag === 'BlankNode' || s._tag === 'Triple') &&
-  p._tag === 'NamedNode' &&
-  (o._tag === 'NamedNode' || o._tag === 'BlankNode' || o._tag === 'Literal' || o._tag === 'Triple');
+/** The instantiated subject, predicate and object, if they form a well-formed triple. */
+const groundTriple = (
+  subject: Ast.TermPattern,
+  predicate: Ast.TermPattern,
+  object: Ast.TermPattern,
+  b: B.Bindings,
+  bnodes: Map<string, Term.BlankNode>,
+): Option.Option<readonly [Term.Subject, Term.Predicate, Term.Object]> => {
+  const s = groundTemplateTerm(subject, b, bnodes);
+  const p = groundTemplateTerm(predicate, b, bnodes);
+  const o = groundTemplateTerm(object, b, bnodes);
+  if (Option.isNone(s) || Option.isNone(p) || Option.isNone(o)) return Option.none();
+  const [sv, pv, ov] = [s.value, p.value, o.value];
+  return Term.isSubject(sv) && Term.isNamedNode(pv) && Term.isObject(ov)
+    ? Option.some([sv, pv, ov] as const)
+    : Option.none();
+};
+
+/** The graph of a template quad for a solution: an IRI or the default graph. */
+const groundGraph = (
+  t: Ast.QuadPattern,
+  b: B.Bindings,
+  bnodes: Map<string, Term.BlankNode>,
+  defaultGraph: Term.Graph,
+): Option.Option<Term.Graph> => {
+  if (Term.isDefaultGraph(t.graph)) return Option.some(defaultGraph);
+  const g = groundTemplateTerm(t.graph, b, bnodes);
+  return Option.isSome(g) && (Term.isNamedNode(g.value) || Term.isDefaultGraph(g.value))
+    ? Option.some(g.value)
+    : Option.none();
+};
 
 const instantiate = (
   template: ReadonlyArray<Ast.QuadPattern>,
   b: B.Bindings,
   defaultGraph: Term.Graph,
 ): Array<Term.Quad> => {
-  const bnodes = new Map<string, Term.BlankNode>();
-  const out: Array<Term.Quad> = [];
-  for (const t of template) {
-    const s = groundTemplateTerm(t.subject, b, bnodes);
-    const p = groundTemplateTerm(t.predicate, b, bnodes);
-    const o = groundTemplateTerm(t.object, b, bnodes);
-    const g =
-      t.graph._tag === 'DefaultGraph' ? defaultGraph : groundTemplateTerm(t.graph, b, bnodes);
-    if (s === undefined || p === undefined || o === undefined || g === undefined) continue;
-    if (!isValidTriple(s, p, o)) continue;
-    if (g._tag !== 'NamedNode' && g._tag !== 'DefaultGraph') continue;
-    // SAFETY: `isValidTriple` checked the subject, predicate and object positions.
-    out.push(new Term.Quad(s as Term.Subject, p as Term.Predicate, o as Term.Object, g));
-  }
-  return out;
+  const bnodes = StringMap.empty<Term.BlankNode>();
+  return Arr.filterMap(template, (t) => {
+    const triple = groundTriple(t.subject, t.predicate, t.object, b, bnodes);
+    const g = groundGraph(t, b, bnodes, defaultGraph);
+    if (Option.isNone(triple) || Option.isNone(g)) return Result.failVoid;
+    const [s, p, o] = triple.value;
+    return Result.succeed(new Term.Quad(s, p, o, g.value));
+  });
 };
 
-const prebind = (op: Algebra.Operation, request: RequestOptions | undefined): Algebra.Operation =>
-  request?.bindings === undefined ? op : Algebra.prebind(op, request.bindings);
+/** The options of a request that gave none. */
+const noRequest: RequestOptions = {};
+
+const prebind = (op: Algebra.Operation, request: RequestOptions): Algebra.Operation =>
+  request.bindings === undefined ? op : Algebra.prebind(op, request.bindings);
 
 const dedupeQuads = <E>(quads: Stream.Stream<Term.Quad, E>): Stream.Stream<Term.Quad, E> =>
   Stream.suspend(() => {
-    const seen = new Set<string>();
+    const seen = StringMap.emptySet();
     return Stream.filter(quads, (q) => {
-      if (seen.has(q.key)) return false;
-      seen.add(q.key);
+      const k = q.key;
+      if (seen.has(k)) return false;
+      seen.set(k, true);
       return true;
     });
   });
@@ -243,8 +270,8 @@ const describeResources = (
   solutions: Stream.Stream<B.Bindings, SparqlError>,
   env: Evaluator.Env,
 ): Stream.Stream<Term.Quad, SparqlError> => {
-  const constants = terms.filter((t): t is Term.NamedNode => t._tag === 'NamedNode');
-  const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
+  const constants = terms.filter(Term.isNamedNode);
+  const vars = terms.filter(Term.isVariable);
   const resources: Stream.Stream<Term.GroundTerm, SparqlError> = Stream.concat(
     Stream.fromIterable(constants),
     Arr.isReadonlyArrayEmpty(vars)
@@ -262,23 +289,24 @@ const describeResources = (
   // blank node objects.
   const cbd = (
     resource: Term.GroundTerm,
-    seen: Set<string>,
+    seen: Map<string, true>,
   ): Stream.Stream<Term.Quad, SparqlError> =>
     Stream.flatMap(Evaluator.matchQuads(env, { subject: resource }), (q) => {
       const quad = new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph);
-      if (q.object._tag === 'BlankNode' && !seen.has(q.object.key)) {
-        seen.add(q.object.key);
-        return Stream.concat(Stream.succeed(quad), cbd(q.object, seen));
+      const object = q.object;
+      if (Term.isBlankNode(object) && !seen.has(object.key)) {
+        seen.set(object.key, true);
+        return Stream.concat(Stream.succeed(quad), cbd(object, seen));
       }
       return Stream.succeed(quad);
     });
   return dedupeQuads(
     Stream.suspend(() => {
-      const described = new Set<string>();
+      const described = StringMap.emptySet();
       return Stream.flatMap(resources, (r) => {
         if (described.has(r.key)) return Stream.empty;
-        described.add(r.key);
-        return cbd(r, new Set([r.key]));
+        described.set(r.key, true);
+        return cbd(r, StringMap.setOf([r.key]));
       });
     }),
   );
@@ -287,34 +315,37 @@ const describeResources = (
 const updateFailed = (message: string) => Effect.fail(new UpdateError({ message }));
 
 const freshBlankNodes = (quads: ReadonlyArray<Term.Quad>): Array<Term.Quad> => {
-  const map = new Map<string, Term.BlankNode>();
+  const map = StringMap.empty<Term.BlankNode>();
   return quads.map((q) =>
     Term.mapTerms(q, (t) => {
-      if (t._tag !== 'BlankNode') return t;
-      let n = map.get(t.value);
-      if (n === undefined) map.set(t.value, (n = Term.blankNode()));
+      if (!Term.isBlankNode(t)) return t;
+      const existing = map.get(t.value);
+      if (existing !== undefined) return existing;
+      const n = Term.blankNode();
+      map.set(t.value, n);
       return n;
     }),
   );
 };
 
 const quadPatternsToAlgebra = (patterns: ReadonlyArray<Ast.QuadPattern>): Algebra.Operation => {
-  const byGraph = new Map<
-    string,
-    { graph: Ast.QuadPattern['graph']; triples: Array<Ast.TriplePattern> }
-  >();
-  for (const p of patterns) {
-    let entry = byGraph.get(p.graph.key);
-    if (entry === undefined) byGraph.set(p.graph.key, (entry = { graph: p.graph, triples: [] }));
-    entry.triples.push({
+  const byGraph = StringMap.empty<{
+    graph: Ast.QuadPattern['graph'];
+    triples: Array<Ast.TriplePattern>;
+  }>();
+  patterns.forEach((p) => {
+    const triple: Ast.TriplePattern = {
       _tag: 'TriplePattern',
       subject: p.subject,
       predicate: p.predicate,
       object: p.object,
-    });
-  }
+    };
+    const entry = byGraph.get(p.graph.key);
+    if (entry === undefined) byGraph.set(p.graph.key, { graph: p.graph, triples: [triple] });
+    else entry.triples.push(triple);
+  });
   const parts = Array.from(byGraph.values()).map(({ graph, triples }): Algebra.Operation =>
-    graph._tag === 'DefaultGraph'
+    Term.isDefaultGraph(graph)
       ? Algebra.bgp(triples)
       : { _tag: 'Graph', name: graph, input: Algebra.bgp(triples) },
   );
@@ -339,30 +370,41 @@ export const make = (
   };
 
   const datasetFor = (
-    clause: Ast.DatasetClause | undefined,
-    request: RequestOptions | undefined,
+    clause: Option.Option<Ast.DatasetClause>,
+    request: RequestOptions,
   ): Store.DatasetSpec =>
-    clause !== undefined
-      ? { defaultGraph: clause.default, namedGraphs: clause.named }
-      : (request?.dataset ?? defaultDataset);
+    Option.isSome(clause)
+      ? { defaultGraph: clause.value.default, namedGraphs: clause.value.named }
+      : (request.dataset ?? defaultDataset);
 
-  const makeEnv = (dataset: Store.DatasetSpec, baseIri: string | undefined): Evaluator.Env => {
-    const service = options.service;
-    return {
-      store,
-      dataset,
-      graph: { _tag: 'DefaultGraph' },
-      context: B.empty,
-      expr: Expression.makeContext({ baseIri, functions: options.functions }),
-      service: service === undefined ? undefined : (endpoint, op) => service(endpoint, op),
-    };
-  };
+  const service = Option.map(
+    Option.fromUndefinedOr(options.service),
+    (handler): Evaluator.ServiceHandler =>
+      (endpoint, op) =>
+        handler(endpoint, op),
+  );
 
-  const parseQuery = (query: string | Ast.Query, request: RequestOptions | undefined) =>
+  const makeEnv = (dataset: Store.DatasetSpec, baseIri: Option.Option<string>): Evaluator.Env => ({
+    store,
+    dataset,
+    graph: { _tag: 'DefaultGraph' },
+    context: B.empty,
+    expr: Expression.makeContext({
+      baseIri: Option.getOrUndefined(baseIri),
+      functions: options.functions,
+    }),
+    service,
+  });
+
+  /** The base IRI of a request: its prologue's, the request's or the engine's. */
+  const baseIriFor = (request: RequestOptions, prologue?: Ast.Prologue): Option.Option<string> =>
+    Option.fromUndefinedOr(prologue?.base ?? request.baseIri ?? options.baseIri);
+
+  const parseQuery = (query: string | Ast.Query, request: RequestOptions) =>
     Predicate.isString(query)
       ? Parser.parseQuery(query, {
-          baseIri: request?.baseIri ?? options.baseIri,
-          prefixes: request?.prefixes,
+          baseIri: request.baseIri ?? options.baseIri,
+          prefixes: request.prefixes,
         })
       : Effect.succeed(query);
 
@@ -371,12 +413,12 @@ export const make = (
       ? Effect.succeed(op)
       : Optimizer.optimize(op, { store, dataset: env.dataset, graph: env.graph });
 
-  const run = (query: Ast.Query, request: RequestOptions | undefined) =>
+  const run = (query: Ast.Query, request: RequestOptions) =>
     Effect.gen(function* () {
       const algebra = Translate.translateQuery(query);
       const env = makeEnv(
-        datasetFor(algebra.dataset, request),
-        query.prologue.base ?? request?.baseIri ?? options.baseIri,
+        datasetFor(Option.fromUndefinedOr(algebra.dataset), request),
+        baseIriFor(request, query.prologue),
       );
       const input = yield* optimize(prebind(algebra.input, request), env);
       return { algebra, env, input };
@@ -388,7 +430,7 @@ export const make = (
       ? { 'sparql.query.text': text }
       : {};
 
-  const query: SparqlEngineShape['query'] = (q, request) =>
+  const query: SparqlEngineShape['query'] = (q, request = noRequest) =>
     Effect.gen(function* () {
       const ast = yield* parseQuery(q, request);
       const { algebra, env, input } = yield* run(ast, request);
@@ -444,21 +486,21 @@ export const make = (
 
   const select: SparqlEngineShape['select'] = (q, request) =>
     Effect.flatMap(query(q, request), (r) =>
-      r._tag === 'Select'
+      Predicate.isTagged(r, 'Select')
         ? Effect.succeed(r)
         : Effect.fail(new EvaluationError({ message: 'Not a SELECT query' })),
     );
 
   const ask: SparqlEngineShape['ask'] = (q, request) =>
     Effect.flatMap(query(q, request), (r) =>
-      r._tag === 'Ask'
+      Predicate.isTagged(r, 'Ask')
         ? Effect.succeed(r.value)
         : Effect.fail(new EvaluationError({ message: 'Not an ASK query' })),
     );
 
   const construct: SparqlEngineShape['construct'] = (q, request) =>
     Effect.flatMap(query(q, request), (r) =>
-      r._tag === 'Graph'
+      Predicate.isTagged(r, 'Graph')
         ? Effect.succeed(r.quads)
         : Effect.fail(new EvaluationError({ message: 'Not a CONSTRUCT or DESCRIBE query' })),
     );
@@ -466,7 +508,7 @@ export const make = (
   // --- updates ---------------------------------------------------------------
 
   const graphExists = (g: Ast.GraphOrDefault) =>
-    g._tag === 'DefaultGraph' ? Effect.succeed(true) : store.hasGraph(g);
+    Term.isDefaultGraph(g) ? Effect.succeed(true) : store.hasGraph(g);
 
   const graphQuads = (g: Term.Graph) => Stream.runCollect(store.match({ graph: g }));
 
@@ -490,7 +532,7 @@ export const make = (
               concurrency: 1,
               discard: true,
             });
-            if (which._tag === 'All') yield* store.clear(Term.defaultGraph);
+            if (Predicate.isTagged(which, 'All')) yield* store.clear(Term.defaultGraph);
           }),
         ),
         Match.exhaustive,
@@ -515,25 +557,26 @@ export const make = (
   const copyGraph = (op: Ast.TransferOperation) =>
     Effect.gen(function* () {
       const quads = yield* graphQuads(op.source);
-      if (op._tag !== 'Add') {
-        if (op.destination._tag === 'DefaultGraph') yield* store.clear(Term.defaultGraph);
-        else yield* store.dropGraph(op.destination);
+      const { source, destination } = op;
+      if (!Predicate.isTagged(op, 'Add')) {
+        if (Term.isDefaultGraph(destination)) yield* store.clear(Term.defaultGraph);
+        else yield* store.dropGraph(destination);
       }
-      if (op.destination._tag === 'NamedNode') yield* store.createGraph(op.destination);
+      if (Term.isNamedNode(destination)) yield* store.createGraph(destination);
       yield* store.insert(
-        quads.map((q) => new Term.Quad(q.subject, q.predicate, q.object, op.destination)),
+        quads.map((q) => new Term.Quad(q.subject, q.predicate, q.object, destination)),
       );
-      if (op._tag === 'Move') {
-        if (op.source._tag === 'DefaultGraph') yield* store.clear(Term.defaultGraph);
-        else yield* store.dropGraph(op.source);
+      if (Predicate.isTagged(op, 'Move')) {
+        if (Term.isDefaultGraph(source)) yield* store.clear(Term.defaultGraph);
+        else yield* store.dropGraph(source);
       }
     });
 
   const modify = (
     op: Ast.ModifyOperation,
     where: Algebra.Operation,
-    baseIri: string | undefined,
-    request: RequestOptions | undefined,
+    baseIri: Option.Option<string>,
+    request: RequestOptions,
   ) =>
     Effect.gen(function* () {
       const dataset: Store.DatasetSpec =
@@ -541,7 +584,7 @@ export const make = (
           ? { defaultGraph: op.using.default, namedGraphs: op.using.named }
           : op.with !== undefined
             ? { defaultGraph: [op.with], namedGraphs: 'all' }
-            : (request?.dataset ?? defaultDataset);
+            : (request.dataset ?? defaultDataset);
       const env = makeEnv(dataset, baseIri);
       const input = yield* optimize(prebind(where, request), env);
       const solutions = yield* Stream.runCollect(Evaluator.evaluate(input, env));
@@ -554,8 +597,8 @@ export const make = (
 
   const executeOperation = (
     op: Ast.UpdateOperation,
-    baseIri: string | undefined,
-    request: RequestOptions | undefined,
+    baseIri: Option.Option<string>,
+    request: RequestOptions,
   ): Effect.Effect<void, SparqlError> => {
     return Match.value(op).pipe(
       Match.tag('InsertData', (o): Effect.Effect<void, SparqlError> =>
@@ -607,15 +650,15 @@ export const make = (
     );
   };
 
-  const update: SparqlEngineShape['update'] = (u, request) =>
+  const update: SparqlEngineShape['update'] = (u, request = noRequest) =>
     Effect.gen(function* () {
       const ast = Predicate.isString(u)
         ? yield* Parser.parseUpdate(u, {
-            baseIri: request?.baseIri ?? options.baseIri,
-            prefixes: request?.prefixes,
+            baseIri: request.baseIri ?? options.baseIri,
+            prefixes: request.prefixes,
           })
         : u;
-      const baseIri = ast.prologue.base ?? request?.baseIri ?? options.baseIri;
+      const baseIri = baseIriFor(request, ast.prologue);
       yield* Effect.annotateCurrentSpan('sparql.update.operations', ast.operations.length);
       yield* store.transaction(
         Effect.forEach(ast.operations, (op) => executeOperation(op, baseIri, request), {
@@ -625,10 +668,10 @@ export const make = (
       );
     }).pipe(Effect.withSpan('SparqlEngine.update', { attributes: textAttributes(u) }));
 
-  const evaluate: SparqlEngineShape['evaluate'] = (op, request) =>
+  const evaluate: SparqlEngineShape['evaluate'] = (op, request = noRequest) =>
     Evaluator.evaluate(
       prebind(op, request),
-      makeEnv(request?.dataset ?? defaultDataset, request?.baseIri ?? options.baseIri),
+      makeEnv(request.dataset ?? defaultDataset, baseIriFor(request)),
     );
 
   return { query, select, ask, construct, update, evaluate };

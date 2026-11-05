@@ -3,6 +3,7 @@ import { assert, describe, expect, it, layer } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -18,8 +19,9 @@ import * as Store from '../src/Store.ts';
 import * as TermSchema from '../src/TermSchema.ts';
 import * as Translate from '../src/Translate.ts';
 
-const lex = (t: Term.GroundTerm | undefined): string | undefined =>
-  t === undefined || t._tag === 'Triple' ? undefined : t.value;
+/** The lexical value of a bound term (`None` when unbound or a triple term). */
+const lex = (t: Option.Option<Term.GroundTerm>): Option.Option<string> =>
+  Option.flatMap(t, (x) => (Term.isTriple(x) ? Option.none() : Option.some(x.value)));
 
 const ex = Namespace.make('http://example.org/');
 const foaf = Namespace.make('http://xmlns.com/foaf/0.1/');
@@ -46,7 +48,10 @@ layer(TestLayer)('Engine', (test) => {
         'PREFIX foaf: <http://xmlns.com/foaf/0.1/> SELECT ?name WHERE { ?p foaf:name ?name } ORDER BY ?name',
       );
       const rows = yield* Stream.runCollect(result.bindings);
-      expect(rows.map((b) => lex(Bindings.getUndefined(b, 'name')))).toEqual(['Alice', 'Bob']);
+      expect(rows.map((b) => lex(Bindings.get(b, 'name')))).toEqual([
+        Option.some('Alice'),
+        Option.some('Bob'),
+      ]);
       expect(result.variables.map((v) => v.value)).toEqual(['name']);
     }),
   );
@@ -135,7 +140,7 @@ layer(TestLayer)('Engine', (test) => {
         query: {
           evaluate: (op) => {
             seen.push(op._tag);
-            return op._tag === 'Bgp' && op.patterns.length === 1
+            return Predicate.isTagged(op, 'Bgp') && op.patterns.length === 1
               ? Option.some(Stream.succeed(Bindings.make({ name: Term.literal('native') })))
               : Option.none();
           },
@@ -146,7 +151,7 @@ layer(TestLayer)('Engine', (test) => {
         'SELECT ?name WHERE { ?p <http://xmlns.com/foaf/0.1/name> ?name }',
       );
       const rows = yield* Stream.runCollect(result.bindings);
-      expect(rows.map((r) => lex(Bindings.getUndefined(r, 'name')))).toEqual(['native']);
+      expect(rows.map((r) => lex(Bindings.get(r, 'name')))).toEqual([Option.some('native')]);
       expect(seen).toContain('Project');
       expect(seen).toContain('Bgp');
     }),
@@ -223,7 +228,7 @@ layer(TestLayer)('Pre-binding', (test) => {
       const rows = yield* Stream.runCollect(
         engine.evaluate(op, { bindings: Bindings.make({ s: ex('alice'), p: foaf('age') }) }),
       );
-      expect(rows.map((r) => lex(Bindings.getUndefined(r, 'o')))).toEqual(['30']);
+      expect(rows.map((r) => lex(Bindings.get(r, 'o')))).toEqual([Option.some('30')]);
     }),
   );
 
@@ -260,9 +265,15 @@ layer(TestLayer)('QueryBuilder', (test) => {
       const first = rows[0] ?? assert.fail('expected a row');
       // Type-level: name is required, email optional.
       const name: Term.GroundTerm = first.name;
-      const email: Term.GroundTerm | undefined = first.email;
-      expect(lex(name)).toBe('Bob');
-      expect(lex(email)).toBe('mailto:bob@example.org');
+      // `email` is optional: a term, or `undefined`.
+      const optional: [undefined, Term.GroundTerm] extends [typeof first.email, typeof first.email]
+        ? true
+        : false = true;
+      expect(optional).toBe(true);
+      expect(lex(Option.some(name))).toEqual(Option.some('Bob'));
+      expect(lex(Option.fromUndefinedOr(first.email))).toEqual(
+        Option.some('mailto:bob@example.org'),
+      );
       expect(rows[1]).toBeDefined();
       expect(rows[1]?.email).toBeUndefined();
     }),
@@ -286,8 +297,8 @@ layer(TestLayer)('QueryBuilder', (test) => {
         Q.triple(v.p, foaf('age'), v.age),
       );
       const [row] = yield* Q.executeAll(q);
-      expect(lex(row?.n)).toBe('2');
-      expect(lex(row?.total)).toBe('55');
+      expect(lex(Option.fromUndefinedOr(row?.n))).toEqual(Option.some('2'));
+      expect(lex(Option.fromUndefinedOr(row?.total))).toEqual(Option.some('55'));
     }),
   );
 });
@@ -309,9 +320,8 @@ describe('Results formats', () => {
       Effect.gen(function* () {
         const text = codec.serializeString(set);
         const parsed = yield* codec.parse(text);
-        assert.strictEqual(parsed._tag, 'ResultSet');
-        // SAFETY: asserted to be a `ResultSet` on the line above.
-        const back = parsed as Results.ResultSet;
+        assert(Predicate.isTagged(parsed, 'ResultSet'), 'expected a result set');
+        const back = parsed;
         expect(back.variables).toEqual(set.variables);
         expect(back.bindings.map((b) => b.key)).toEqual(set.bindings.map((b) => b.key));
         const bool = yield* codec.parse(codec.serializeString({ _tag: 'Ask', value: true }));
@@ -324,11 +334,11 @@ describe('Results formats', () => {
     Effect.gen(function* () {
       const text = Results.Csv.serializeString(set);
       expect(text.split('\r\n')[0]).toBe('x,y,z');
-      // SAFETY: the CSV serialization of a result set parses back to a result set.
-      const parsed = (yield* Results.Csv.parse(text)) as Results.ResultSet;
+      const parsed = yield* Results.Csv.parse(text);
+      assert(Predicate.isTagged(parsed, 'ResultSet'), 'CSV results parse to a result set');
       const [first, second] = parsed.bindings;
       assert(first !== undefined && second !== undefined);
-      expect(lex(Bindings.getUndefined(first, 'y'))).toBe('hello, "world"\n');
+      expect(lex(Bindings.get(first, 'y'))).toEqual(Option.some('hello, "world"\n'));
       expect(Bindings.getUndefined(second, 'x')?._tag).toBe('BlankNode');
     }),
   );
@@ -377,9 +387,9 @@ layer(FederatedLayer)('SERVICE with a variable endpoint', (test) => {
         'SELECT ?p ?title { ?p <http://example.org/endpoint> ?e SERVICE ?e { ?x ?y ?title } } ORDER BY ?p',
       );
       const rows = yield* Stream.runCollect(result.bindings);
-      expect(rows.map((b) => lex(b.map.get('title')))).toEqual([
-        'from http://one.example/sparql',
-        'from http://two.example/sparql',
+      expect(rows.map((b) => lex(Bindings.get(b, 'title')))).toEqual([
+        Option.some('from http://one.example/sparql'),
+        Option.some('from http://two.example/sparql'),
       ]);
     }),
   );

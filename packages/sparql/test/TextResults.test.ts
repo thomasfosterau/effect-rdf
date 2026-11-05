@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import { Term } from '@thomasfosterau/effect-rdf';
 import * as Results from '../src/Results.ts';
 
@@ -87,7 +88,7 @@ describe('CSV', () => {
     Effect.gen(function* () {
       const parsed = yield* Results.Csv.parse('a,b\r"x ""y"",\nz",1\r\n\r\n_:b,""');
       expect(parsed._tag).toBe('ResultSet');
-      if (parsed._tag !== 'ResultSet') return;
+      if (!Predicate.isTagged(parsed, 'ResultSet')) return;
       expect(parsed.variables).toEqual(['a', 'b']);
       const rows = parsed.bindings.map((b) => ['a', 'b'].map((v) => b.map.get(v)?.key ?? null));
       expect(rows).toEqual([

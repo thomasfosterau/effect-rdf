@@ -18,12 +18,17 @@ import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as HashSet from 'effect/HashSet';
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Ast from '../Ast.ts';
 import { resolve, type Tok, tokenize } from './lexer.ts';
+import { loop } from './loop.ts';
+import * as StringMap from './stringMap.ts';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
@@ -54,6 +59,33 @@ const fail = (message: string, offset: number): never => {
 type P<A> = Parser.Parser<A, Failure, never, ReadonlyArray<Tok>>;
 type Triples = Array<Ast.TriplePattern | Ast.PathPattern>;
 
+/**
+ * What a hook sees past the last token: a token no grammar rule matches (its
+ * kind is no keyword or punctuation), at the end of the input.
+ */
+const END: Tok = {
+  type: 'END',
+  value: '',
+  extra: '',
+  kind: '',
+  start: -1,
+  end: -1,
+  error: Option.none(),
+};
+
+/** The token at `pos`, or `END` past the last one. */
+const tokenAt = (tokens: ReadonlyArray<Tok>, pos: number): Tok => tokens[pos] ?? END;
+
+/**
+ * A set of token kinds, read through its backing `Map` by the token
+ * predicates (one lookup per token, without an `Option` per lookup).
+ */
+const kindSet = (kinds: Iterable<string>): ReadonlyMap<string, true> => StringMap.setOf(kinds);
+
+/** Whether a triple-shaped item is a triple pattern (not a path pattern). */
+const isTriplePattern = (t: Ast.TriplePattern | Ast.PathPattern): t is Ast.TriplePattern =>
+  Predicate.isTagged(t, 'TriplePattern');
+
 // -----------------------------------------------------------------------------
 // Per-parse context
 // -----------------------------------------------------------------------------
@@ -69,14 +101,22 @@ interface TripleContext {
   readonly labels: Map<string, number>;
 }
 
+/** The context outside every pattern (never read: the grammar sets one first). */
+const noContext: TripleContext = {
+  variables: true,
+  blankNodes: true,
+  scope: 0,
+  labels: StringMap.empty(),
+};
+
 class Context {
   readonly input: string;
-  readonly usedLabels: Set<string>;
+  readonly usedLabels: ReadonlyMap<string, true>;
   bnodeCounter = 0;
   scopeCounter = 0;
   opIndex = 0;
-  readonly patternLabels = new Map<string, number>();
-  readonly templateLabels = new Map<string, number>();
+  readonly patternLabels = StringMap.empty<number>();
+  readonly templateLabels = StringMap.empty<number>();
   aggregatesAllowed = false;
   inAggregate = false;
   /** The aggregate flags saved by `withFlags`, in pairs. */
@@ -84,19 +124,21 @@ class Context {
   /** The triple contexts in force, innermost last. */
   readonly triples: Array<TripleContext> = [];
   /** The last `VERSION` declared. */
-  version: string | undefined;
+  version = Option.none<string>();
   /** Whether the verbs being read are simple predicates, innermost last. */
   readonly verbs: Array<boolean> = [];
   /** The first token of the subject being read. */
-  subjectStart: Tok | undefined;
+  subjectStart: Tok = END;
 
   constructor(input: string) {
     this.input = input;
-    this.usedLabels = new Set(Array.from(input.matchAll(/_:([^\s.;,(){}[\]]+)/g), (m) => m[1]!));
+    this.usedLabels = StringMap.setOf(
+      Array.from(input.matchAll(/_:([^\s.;,(){}[\]]+)/g), (m) => m[1] ?? ''),
+    );
   }
 
   get tc(): TripleContext {
-    return this.triples[this.triples.length - 1]!;
+    return this.triples[this.triples.length - 1] ?? noContext;
   }
 
   patternContext(): TripleContext {
@@ -109,9 +151,13 @@ class Context {
   }
 
   freshBlankNode(): Term.BlankNode {
-    let label: string;
-    do label = `g${this.bnodeCounter++}`;
-    while (this.usedLabels.has(label));
+    let label = `g${this.bnodeCounter++}`;
+    // Skips the labels the input uses.
+    loop(() => {
+      if (!this.usedLabels.has(label)) return false;
+      label = `g${this.bnodeCounter++}`;
+      return true;
+    });
     return Term.blankNode(label);
   }
 }
@@ -125,7 +171,7 @@ const start: P<void> = Parser.make<void, Failure, never, ReadonlyArray<Tok>>(() 
   return undefined;
 });
 
-const offsetOf = (t: Tok | undefined): number => t?.start ?? ctx.input.length;
+const offsetOf = (t: Tok): number => (t === END ? ctx.input.length : t.start);
 
 /**
  * Runs `f`, returning a thrown `Failure` (a syntax error found while
@@ -144,10 +190,10 @@ const catchFailure = <A>(f: () => A): Result.Result<A, Failure> =>
  * A hook: runs `f` on the current token (without consuming it). A `Failure`
  * thrown by `f` is an unrecoverable error.
  */
-const hook = <A>(f: (t: Tok | undefined) => A): P<A> =>
+const hook = <A>(f: (t: Tok) => A): P<A> =>
   Parser.make<A, Failure, never, ReadonlyArray<Tok>>((state) => {
     try {
-      return f(state.input[state.pos]);
+      return f(tokenAt(state.input, state.pos));
     } catch (e) {
       if (e instanceof Failure) return state.failCause('Cut', 'Verify', e);
       throw e;
@@ -156,18 +202,18 @@ const hook = <A>(f: (t: Tok | undefined) => A): P<A> =>
 
 /**
  * A token parser written as a hook: `f` returns the value for the current
- * token (consumed), or `undefined` to fail without consuming it.
+ * token (consumed), or `None` to fail without consuming it.
  */
-const take = <A>(label: string, f: (t: Tok, next: Tok | undefined) => A | undefined): P<A> => {
+const take = <A>(label: string, f: (t: Tok, next: Tok) => Option.Option<A>): P<A> => {
   const expected = [label];
   return Parser.make<A, Failure, never, ReadonlyArray<Tok>>((state) => {
     const t = state.input[state.pos];
     if (t === undefined || t.type === 'ERROR') return state.backtrack('Token', expected);
     try {
-      const a = f(t, state.input[state.pos + 1]);
-      if (a === undefined) return state.backtrack('Token', expected);
+      const a = f(t, tokenAt(state.input, state.pos + 1));
+      if (Option.isNone(a)) return state.backtrack('Token', expected);
       state.pos++;
-      return a;
+      return a.value;
     } catch (e) {
       if (e instanceof Failure) return state.failCause('Cut', 'Verify', e);
       throw e;
@@ -175,22 +221,30 @@ const take = <A>(label: string, f: (t: Tok, next: Tok | undefined) => A | undefi
   });
 };
 
-/** Runs `p` with the aggregate flags set, restoring them afterwards. */
+/** A `take` result: the token is taken. */
+const taken = Option.some(true);
+const notTaken = Option.none();
+
+/**
+ * Runs `p` with the aggregate flags set (`inAggregate` left alone when
+ * `None`), restoring them afterwards.
+ */
 const withFlags = <A>(
   aggregatesAllowed: boolean,
-  inAggregate: boolean | undefined,
+  inAggregate: Option.Option<boolean>,
   p: P<A>,
 ): P<A> =>
   Parser.delimited(
     hook(() => {
       ctx.flags.push(ctx.aggregatesAllowed, ctx.inAggregate);
       ctx.aggregatesAllowed = aggregatesAllowed;
-      if (inAggregate !== undefined) ctx.inAggregate = inAggregate;
+      if (Option.isSome(inAggregate)) ctx.inAggregate = inAggregate.value;
     }),
     p,
     hook(() => {
-      ctx.inAggregate = ctx.flags.pop()!;
-      ctx.aggregatesAllowed = ctx.flags.pop()!;
+      // The flags were pushed in pairs just above.
+      ctx.inAggregate = ctx.flags.pop() ?? false;
+      ctx.aggregatesAllowed = ctx.flags.pop() ?? false;
     }),
   );
 
@@ -210,22 +264,22 @@ const inContext = <A>(make: () => TripleContext, p: P<A>): P<A> =>
 // Token parsers
 // -----------------------------------------------------------------------------
 
-const describe = (t: Tok | undefined): string =>
-  t === undefined
+const describe = (t: Tok): string =>
+  t === END
     ? 'end of input'
     : t.type === 'STRING'
       ? 'string literal'
       : `'${ctx.input.slice(t.start, t.end)}'`;
 
-const unexpected = (t: Tok | undefined, expected?: string): never =>
+const unexpected = (t: Tok, expected?: string): never =>
   fail(
     `Unexpected ${describe(t)}${expected !== undefined ? `, expected ${expected}` : ''}`,
     offsetOf(t),
   );
 
 /** The reference parser's "Unexpected …" error at `t` (or the lexer's, at an error token). */
-const unexpectedAt = (t: Tok | undefined, expected?: string): never =>
-  t?.type === 'ERROR' ? fail(t.value, t.start) : unexpected(t, expected);
+const unexpectedAt = (t: Tok, expected?: string): never =>
+  t.type === 'ERROR' ? fail(t.value, t.start) : unexpected(t, expected);
 
 /** Fails with the reference parser's "Unexpected …" message at the current token. */
 const unexpectedHere = <A = never>(expected?: string): P<A> =>
@@ -246,18 +300,19 @@ const expect = (
 ): P<Tok> => Parser.alt(tok(kind), unexpectedHere<Tok>(label));
 
 /** Whether the next token is of kind `kind` (consumed if so). */
-const eat = (kind: string): P<boolean> =>
-  Parser.opt(tok(kind)).pipe(Parser.map((o) => o._tag === 'Some'));
+const eat = (kind: string): P<boolean> => Parser.opt(tok(kind)).pipe(Parser.map(Option.isSome));
 
 /**
  * Whether the next token's kind is one of `kinds` (not consumed). A peeked
  * token set, like `tok`, so the compiler inlines it.
  */
-const peekKind = (kinds: ReadonlySet<string>): P<void> =>
-  Parser.peek(Token.oneOf<ReadonlyArray<Tok>>((t) => kinds.has(t.kind))).pipe(
+const peekKind = (kinds: ReadonlyArray<string>): P<void> => {
+  const set = kindSet(kinds);
+  return Parser.peek(Token.oneOf<ReadonlyArray<Tok>>((t) => set.has(t.kind))).pipe(
     Parser.asVoid,
-    Parser.expected(Array.from(kinds, (k) => `'${k}'`).join(' or ')),
+    Parser.expected(kinds.map((k) => `'${k}'`).join(' or ')),
   );
+};
 
 /** Any token but a lexer error token (consumed). A token set, like `tok`. */
 const anyToken: P<Tok> = Token.oneOf<ReadonlyArray<Tok>>((t) => t.type !== 'ERROR').pipe(
@@ -274,13 +329,14 @@ const select = <A, B = A>(
 ): P<A | B> => {
   // Guarded alternatives rather than `Parser.dispatch`, whose cases the JIT
   // leaves to the (slower) closure backend.
-  const seen = new Set<string>();
-  const branches: Array<P<A | B>> = [];
-  for (const [kinds, p] of cases) {
-    const own = new Set(kinds.filter((k) => !seen.has(k)));
-    for (const k of own) seen.add(k);
-    if (own.size > 0) branches.push(Parser.preceded(peekKind(own), p));
-  }
+  const seen = MutableHashSet.empty<string>();
+  const branches: Array<P<A | B>> = Arr.filterMap(cases, ([kinds, p]) => {
+    const own = Arr.dedupe(kinds.filter((k) => !MutableHashSet.has(seen, k)));
+    own.forEach((k) => MutableHashSet.add(seen, k));
+    return Arr.isArrayNonEmpty(own)
+      ? Result.succeed(Parser.preceded(peekKind(own), p))
+      : Result.failVoid;
+  });
   if (otherwise !== undefined) branches.push(otherwise);
   return Parser.alt(...branches);
 };
@@ -292,16 +348,18 @@ const nil: P<unknown> = peek2('(', ')');
 const anon: P<unknown> = peek2('[', ']');
 
 const iri: P<Term.NamedNode> = take('an IRI', (t) => {
-  if (t.type === 'IRI') return Term.namedNode(t.value);
+  if (t.type === 'IRI') return Option.some(Term.namedNode(t.value));
   if (t.type === 'PNAME')
-    return t.error !== undefined ? fail(t.error, t.start) : Term.namedNode(t.value);
-  return undefined;
+    return Option.isSome(t.error)
+      ? fail(t.error.value, t.start)
+      : Option.some(Term.namedNode(t.value));
+  return notTaken;
 });
 
 const iriOrError: P<Term.NamedNode> = Parser.alt(iri, unexpectedHere<Term.NamedNode>('an IRI'));
 
 const variable: P<Term.Variable> = take('a variable', (t) =>
-  t.type === 'VAR' ? Term.variable(t.value) : undefined,
+  t.type === 'VAR' ? Option.some(Term.variable(t.value)) : notTaken,
 );
 
 const variableOrError: P<Term.Variable> = Parser.alt(
@@ -311,17 +369,17 @@ const variableOrError: P<Term.Variable> = Parser.alt(
 
 /** A variable in a pattern (checked against the triple context). */
 const patternVariable: P<Term.Variable> = take('a variable', (t) => {
-  if (t.type !== 'VAR') return undefined;
+  if (t.type !== 'VAR') return notTaken;
   if (!ctx.tc.variables) fail('Variables are not allowed here', t.start);
-  return Term.variable(t.value);
+  return Option.some(Term.variable(t.value));
 });
 
 const isIri = (t: Tok): boolean => t.type === 'IRI' || t.type === 'PNAME';
-const isNumber = (t: Tok | undefined): boolean =>
-  t !== undefined && (t.type === 'INTEGER' || t.type === 'DECIMAL' || t.type === 'DOUBLE');
+const isNumber = (t: Tok): boolean =>
+  t.type === 'INTEGER' || t.type === 'DECIMAL' || t.type === 'DOUBLE';
 
 const blankNodeLabel: P<Term.BlankNode> = take('a blank node', (t) => {
-  if (t.type !== 'BNODE') return undefined;
+  if (t.type !== 'BNODE') return notTaken;
   const tc = ctx.tc;
   if (!tc.blankNodes) fail('Blank nodes are not allowed here', t.start);
   const existing = tc.labels.get(t.value);
@@ -329,7 +387,7 @@ const blankNodeLabel: P<Term.BlankNode> = take('a blank node', (t) => {
     fail(`Blank node label _:${t.value} is used in more than one scope`, t.start);
   }
   tc.labels.set(t.value, tc.scope);
-  return Term.blankNode(t.value);
+  return Option.some(Term.blankNode(t.value));
 });
 
 /** A generated blank node in a pattern (checked against the triple context). */
@@ -338,23 +396,29 @@ const freshPatternBlankNode: P<Term.BlankNode> = hook((t) => {
   return ctx.freshBlankNode();
 });
 
-const string: P<Tok> = take('a string', (t) => (t.type === 'STRING' ? t : undefined));
+const string: P<Tok> = take('a string', (t) => (t.type === 'STRING' ? Option.some(t) : notTaken));
+
+const isDirection = (direction: string): direction is Term.Direction =>
+  direction === 'ltr' || direction === 'rtl';
+
+/** A literal's `@tag` suffix, with its `--direction` if any. */
+interface LanguageSuffix {
+  readonly tag: string;
+  readonly direction: Option.Option<Term.Direction>;
+}
 
 const rdfLiteral: P<Term.Literal> = Parser.seq(
   string,
   Parser.alt(
-    take('a language tag', (t, next) => {
-      if (t.type !== 'LANGTAG') return undefined;
+    take('a language tag', (t, next): Option.Option<LanguageSuffix> => {
+      if (t.type !== 'LANGTAG') return notTaken;
       const tag = t.value;
       const i = tag.indexOf('--');
-      if (i === -1) return { tag, direction: undefined };
+      if (i === -1) return Option.some({ tag, direction: Option.none() });
       const direction = tag.slice(i + 2).toLowerCase();
-      if (direction !== 'ltr' && direction !== 'rtl') {
-        fail(`Invalid base direction '${direction}'`, offsetOf(next));
-      }
-      // SAFETY: `direction` was checked to be `ltr` or `rtl` just above (the failing branch never
-      // returns).
-      return { tag: tag.slice(0, i), direction: direction as Term.Direction };
+      return isDirection(direction)
+        ? Option.some({ tag: tag.slice(0, i), direction: Option.some(direction) })
+        : fail(`Invalid base direction '${direction}'`, offsetOf(next));
     }),
     Parser.preceded(tok('^^'), iriOrError),
     Parser.succeed(undefined),
@@ -363,8 +427,8 @@ const rdfLiteral: P<Term.Literal> = Parser.seq(
   Parser.map(([s, suffix]): Term.Literal => {
     if (suffix === undefined) return Term.literal(s.value);
     if (suffix instanceof Term.NamedNode) return Term.literal(s.value, suffix);
-    return suffix.direction !== undefined
-      ? Term.literal(s.value, { language: suffix.tag, direction: suffix.direction })
+    return Option.isSome(suffix.direction)
+      ? Term.literal(s.value, { language: suffix.tag, direction: suffix.direction.value })
       : Term.literal(s.value, suffix.tag);
   }),
 );
@@ -376,7 +440,7 @@ const numberLiteral = (t: Tok, sign: string): Term.Literal =>
   );
 
 const numericLiteral: P<Term.Literal> = take('a number', (t) =>
-  isNumber(t) ? numberLiteral(t, '') : undefined,
+  isNumber(t) ? Option.some(numberLiteral(t, '')) : notTaken,
 );
 
 /** `+` or `-` immediately followed by a number. */
@@ -400,8 +464,8 @@ const signedNumber: P<Term.Literal> = Parser.make<Term.Literal, Failure, never, 
 
 const booleanLiteral: P<Term.Literal> = take('a boolean', (t) =>
   t.kind === 'TRUE' || t.kind === 'FALSE'
-    ? Term.literal(t.value.toLowerCase(), xsdBoolean)
-    : undefined,
+    ? Option.some(Term.literal(t.value.toLowerCase(), xsdBoolean))
+    : notTaken,
 );
 
 /** `a`, or an IRI. */
@@ -421,7 +485,6 @@ const dataTerm: P<Term.NamedNode | Term.Literal> = Parser.alt(
   unexpectedHere<Term.Literal>('an RDF term'),
 );
 
-// SAFETY: the object comes from `tripleTermData` or `dataTerm`, all object-position terms.
 const tripleTermData: P<Term.Triple> = Parser.preceded(
   tok('<<('),
   Parser.seq(
@@ -433,12 +496,12 @@ const tripleTermData: P<Term.Triple> = Parser.preceded(
     ),
     expect(')>>'),
   ),
-).pipe(Parser.map(([s, p, o]) => Term.triple(s, p, o as Term.Object)));
+).pipe(Parser.map(([s, p, o]) => Term.triple(s, p, o)));
 
-const dataBlockValue: P<Term.GroundTerm | undefined> = Parser.alt(
-  tok('UNDEF').pipe(Parser.as(undefined)),
-  tripleTermData,
-  dataTerm,
+/** A data block value; `None` for `UNDEF`. */
+const dataBlockValue: P<Option.Option<Term.GroundTerm>> = Parser.alt(
+  tok('UNDEF').pipe(Parser.as(Option.none())),
+  Parser.alt(tripleTermData, dataTerm).pipe(Parser.map(Option.some)),
 );
 
 const dataBlock: P<Ast.ValuesPattern> = Parser.alt(
@@ -455,7 +518,7 @@ const dataBlock: P<Ast.ValuesPattern> = Parser.alt(
     Parser.map(([v, values]) =>
       Ast.values(
         [v],
-        values.map((x) => [x]),
+        values.map((x) => [Option.getOrUndefined(x)]),
       ),
     ),
   ),
@@ -468,18 +531,19 @@ const dataBlock: P<Ast.ValuesPattern> = Parser.alt(
           hook((t) => t),
         ),
       ).pipe(
-        Parser.tryMap((vars) => {
-          const out: Array<Term.Variable> = [];
-          for (const [v, next] of vars) {
-            if (out.some((x) => x.value === v.value)) {
-              return Result.fail(
-                new Failure(`Duplicate variable ?${v.value} in VALUES`, offsetOf(next)),
-              );
-            }
-            out.push(v);
-          }
-          return Result.succeed(out);
-        }),
+        Parser.tryMap((vars) =>
+          Option.match(
+            // The first variable that an earlier one repeats.
+            Arr.findFirst(vars, ([v], i) => vars.findIndex(([x]) => x.value === v.value) < i),
+            {
+              onNone: () => Result.succeed(vars.map(([v]) => v)),
+              onSome: ([v, next]) =>
+                Result.fail(
+                  new Failure(`Duplicate variable ?${v.value} in VALUES`, offsetOf(next)),
+                ),
+            },
+          ),
+        ),
         Parser.cut,
       ),
     ),
@@ -505,24 +569,27 @@ const dataBlock: P<Ast.ValuesPattern> = Parser.alt(
       ),
     ),
   ).pipe(
-    Parser.tryMap(([variables, rows]) => {
-      for (const [at, row] of rows) {
-        if (row.length !== variables.length) {
-          return Result.fail(
-            new Failure(
-              `VALUES row has ${row.length} values but ${variables.length} variables`,
-              at,
+    Parser.tryMap(([variables, rows]) =>
+      Option.match(
+        Arr.findFirst(rows, ([, row]) => row.length !== variables.length),
+        {
+          onNone: () =>
+            Result.succeed(
+              Ast.values(
+                variables,
+                rows.map(([, row]) => row.map(Option.getOrUndefined)),
+              ),
             ),
-          );
-        }
-      }
-      return Result.succeed(
-        Ast.values(
-          variables,
-          rows.map(([, row]) => row),
-        ),
-      );
-    }),
+          onSome: ([at, row]) =>
+            Result.fail(
+              new Failure(
+                `VALUES row has ${row.length} values but ${variables.length} variables`,
+                at,
+              ),
+            ),
+        },
+      ),
+    ),
     Parser.cut,
   ),
 );
@@ -547,7 +614,7 @@ interface Verb {
 /** `~ r` (and its `{| … |}`), or a `{| … |}` with a generated reifier. */
 interface Annotation {
   readonly reifier: Ast.TermPattern;
-  readonly block: PropertyList | undefined;
+  readonly block: Option.Option<PropertyList>;
 }
 
 interface Obj {
@@ -560,48 +627,55 @@ type PropertyList = ReadonlyArray<readonly [Verb, ReadonlyArray<Obj>]>;
 
 /** The triples of a property list, in the order the reference parser emits them. */
 const build = (subject: Ast.TermPattern, pl: PropertyList, out: Triples = []): Triples => {
-  for (const [v, objects] of pl) {
-    for (const { node: o, annotation } of objects) {
-      for (const t of o.triples) out.push(t);
-      if (Ast.isPath(v.predicate)) {
-        out.push(Ast.pathPattern(subject, v.predicate, o.term));
-        continue;
+  pl.forEach(([v, objects]) => {
+    const predicate = v.predicate;
+    objects.forEach(({ node: o, annotation }) => {
+      o.triples.forEach((t) => out.push(t));
+      if (Ast.isPath(predicate)) {
+        out.push(Ast.pathPattern(subject, predicate, o.term));
+        return;
       }
-      out.push(Ast.triplePattern(subject, v.predicate, o.term));
-      if (Arr.isReadonlyArrayEmpty(annotation)) continue;
-      const triple = Term.triple<any, any, any>(subject, v.predicate, o.term);
-      for (const a of annotation) {
+      out.push(Ast.triplePattern(subject, predicate, o.term));
+      if (Arr.isReadonlyArrayEmpty(annotation)) return;
+      const triple = Term.triple<any, any, any>(subject, predicate, o.term);
+      annotation.forEach((a) => {
         out.push(Ast.triplePattern(a.reifier, rdfReifies, triple));
-        if (a.block !== undefined) build(a.reifier, a.block, out);
-      }
-    }
-  }
+        if (Option.isSome(a.block)) build(a.reifier, a.block.value, out);
+      });
+    });
+  });
   return out;
 };
 
-/** Whether a token can start a triples block (`undefined`: it cannot). */
-const startsTriplesToken = Match.fn((t: Tok, _next?: Tok) => t.type).pipe(
-  Match.when(
-    Match.is('VAR', 'IRI', 'PNAME', 'BNODE', 'STRING', 'INTEGER', 'DECIMAL', 'DOUBLE'),
-    () => true as const,
-  ),
-  Match.when('WORD', (_type, t) => (t.kind === 'TRUE' || t.kind === 'FALSE' ? true : undefined)),
-  Match.when('PUNCT', (_type, t, next) =>
-    t.value === '(' ||
-    t.value === '[' ||
-    t.value === '<<' ||
-    t.value === '<<(' ||
-    ((t.value === '+' || t.value === '-') && isNumber(next))
-      ? true
-      : undefined,
-  ),
-  Match.orElse(() => undefined),
-);
+/** The token types that start a triples block on their own. */
+const TRIPLES_START = kindSet([
+  'VAR',
+  'IRI',
+  'PNAME',
+  'BNODE',
+  'STRING',
+  'INTEGER',
+  'DECIMAL',
+  'DOUBLE',
+]);
+
+/** Whether a token can start a triples block. A plain branch per type: it runs once per peek. */
+const startsTriplesToken = (t: Tok, next: Tok): boolean => {
+  if (TRIPLES_START.has(t.type)) return true;
+  if (t.type === 'WORD') return t.kind === 'TRUE' || t.kind === 'FALSE';
+  if (t.type !== 'PUNCT') return false;
+  const v = t.value;
+  return (
+    v === '(' ||
+    v === '[' ||
+    v === '<<' ||
+    v === '<<(' ||
+    ((v === '+' || v === '-') && isNumber(next))
+  );
+};
 
 const startsTriples: P<unknown> = Parser.peek(
-  take('triples', (t, next) => {
-    return startsTriplesToken(t, next);
-  }),
+  take('triples', (t, next) => (startsTriplesToken(t, next) ? taken : notTaken)),
 );
 
 /** The triples productions, with or without property paths. */
@@ -708,16 +782,17 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
       ),
     ).pipe(
       Parser.map(([items, t]) => {
-        if (Arr.isReadonlyArrayEmpty(items)) return node(rdfNil);
+        if (!Arr.isArrayNonEmpty(items)) return node(rdfNil);
         if (!ctx.tc.blankNodes) fail('Blank nodes are not allowed here', offsetOf(t));
-        const nodes = items.map(() => ctx.freshBlankNode());
+        // Each item with the blank node of its list cell.
+        const cells = Arr.map(items, (item) => [ctx.freshBlankNode(), item] as const);
         const triples: Triples = [];
-        for (const item of items) for (const x of item.triples) triples.push(x);
-        items.forEach((item, i) => {
-          triples.push(Ast.triplePattern(nodes[i]!, rdfFirst, item.term));
-          triples.push(Ast.triplePattern(nodes[i]!, rdfRest, nodes[i + 1] ?? rdfNil));
+        items.forEach((item) => item.triples.forEach((x) => triples.push(x)));
+        cells.forEach(([cell, item], i) => {
+          triples.push(Ast.triplePattern(cell, rdfFirst, item.term));
+          triples.push(Ast.triplePattern(cell, rdfRest, cells[i + 1]?.[0] ?? rdfNil));
         });
-        return node(nodes[0]!, triples);
+        return node(cells[0][0], triples);
       }),
     ),
   );
@@ -741,8 +816,8 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
       isIri(t) ||
       t.kind === 'a' ||
       (paths && (t.kind === '^' || t.kind === '!' || t.kind === '('))
-        ? true
-        : undefined,
+        ? taken
+        : notTaken,
     ),
   );
 
@@ -759,7 +834,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
     paths
       ? path.pipe(
           Parser.map((p): Verb =>
-            p._tag === 'PathLink'
+            Predicate.isTagged(p, 'PathLink')
               ? { predicate: p.iri, simple: true }
               : { predicate: p, simple: false },
           ),
@@ -777,13 +852,10 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
   // `~ r` names a reifier and `{| … |}` annotates it (a fresh one if none was named).
   const annotationItem: P<Annotation> = Parser.alt(
     Parser.seq(reifier, Parser.opt(Parser.preceded(tok('{|'), annotationBlock))).pipe(
-      Parser.map(([reifier, block]): Annotation => ({
-        reifier,
-        block: block._tag === 'Some' ? block.value : undefined,
-      })),
+      Parser.map(([r, block]): Annotation => ({ reifier: r, block })),
     ),
     Parser.preceded(tok('{|'), Parser.seq(freshPatternBlankNode, annotationBlock)).pipe(
-      Parser.map(([reifier, block]): Annotation => ({ reifier, block })),
+      Parser.map(([r, block]): Annotation => ({ reifier: r, block: Option.some(block) })),
     ),
   );
 
@@ -804,7 +876,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
 
   const objectList: P<ReadonlyArray<Obj>> = Parser.separated(
     Parser.seq(graphNode, annotation).pipe(
-      Parser.map(([node, annotation]): Obj => ({ node, annotation })),
+      Parser.map(([n, a]): Obj => ({ node: n, annotation: a })),
     ),
     tok(','),
     { min: 1 },
@@ -834,7 +906,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
   const withProperties = (subject: P<Node>): P<Triples> =>
     Parser.seq(subject, Parser.opt(Parser.preceded(startsVerb, propertyList))).pipe(
       Parser.map(([s, pl]) =>
-        pl._tag === 'Some' ? build(s.term, pl.value, [...s.triples]) : s.triples,
+        Option.isSome(pl) ? build(s.term, pl.value, [...s.triples]) : s.triples,
       ),
     );
 
@@ -883,7 +955,7 @@ const triplesGrammar = (paths: boolean): TriplesGrammar => {
         eat('.'),
       ),
     ),
-  ).pipe(Parser.map((o) => (o._tag === 'None' ? [] : [...o.value[0], ...o.value[1].flat()])));
+  ).pipe(Parser.map((o) => (Option.isNone(o) ? [] : [...o.value[0], ...o.value[1].flat()])));
 
   return { triplesSameSubject, triplesBlock, triplesTemplate };
 };
@@ -898,7 +970,7 @@ const negated: P<Ast.Path> = Parser.alt(
   Parser.preceded(
     tok('('),
     Parser.terminated(Parser.opt(Parser.separated(negatedOne, tok('|'), { min: 1 })), expect(')')),
-  ).pipe(Parser.map((o) => (o._tag === 'Some' ? o.value : []))),
+  ).pipe(Parser.map((o) => Option.getOrElse(o, () => []))),
   negatedOne.pipe(Parser.map((one) => [one])),
 ).pipe(
   Parser.map((ones) =>
@@ -922,7 +994,7 @@ const pathElt: P<Ast.Path> = Parser.seq(
   Parser.opt(Parser.alt(tok('?'), tok('*'), tok('+'))),
 ).pipe(
   Parser.map(([primary, mod]) =>
-    mod._tag === 'None'
+    Option.isNone(mod)
       ? primary
       : mod.value.kind === '?'
         ? Ast.zeroOrOne(primary)
@@ -952,14 +1024,26 @@ const pathDef: P<Ast.Path> = Parser.separated(pathSequence, tok('|'), { min: 1 }
 const expression: P<Ast.Expression> = Parser.suspend(() => expressionDef);
 const groupGraphPattern: P<Ast.GroupPattern> = Parser.suspend(() => groupGraphPatternDef);
 
-const AGGREGATES = new Set(['COUNT', 'SUM', 'MIN', 'MAX', 'AVG', 'SAMPLE', 'GROUP_CONCAT']);
+const AGGREGATES: ReadonlyArray<Ast.AggregateName> = [
+  'COUNT',
+  'SUM',
+  'MIN',
+  'MAX',
+  'AVG',
+  'SAMPLE',
+  'GROUP_CONCAT',
+];
+const AGGREGATE_KINDS = kindSet(AGGREGATES);
 
 const isBuiltInStart = (t: Tok): boolean =>
   t.type === 'WORD' &&
-  (Ast.isBuiltInName(t.kind) || AGGREGATES.has(t.kind) || t.kind === 'EXISTS' || t.kind === 'NOT');
+  (Ast.isBuiltInName(t.kind) ||
+    AGGREGATE_KINDS.has(t.kind) ||
+    t.kind === 'EXISTS' ||
+    t.kind === 'NOT');
 
 const startsBuiltIn: P<unknown> = Parser.peek(
-  take('a function', (t) => (isBuiltInStart(t) ? true : undefined)),
+  take('a function', (t) => (isBuiltInStart(t) ? taken : notTaken)),
 );
 
 const brackettedExpression: P<Ast.Expression> = Parser.delimited(
@@ -984,22 +1068,22 @@ const functionArgs: P<readonly [ReadonlyArray<Ast.Expression>, boolean]> = Parse
     Parser.seq(
       Parser.opt(
         take('DISTINCT', (t) => {
-          if (t.kind !== 'DISTINCT') return undefined;
+          if (t.kind !== 'DISTINCT') return notTaken;
           if (!ctx.aggregatesAllowed || ctx.inAggregate) {
             fail('DISTINCT is only allowed in aggregate function calls', t.start);
           }
-          return true;
+          return taken;
         }),
       ),
       Parser.separated(expression, tok(','), { min: 1 }),
       expect(')'),
     ),
-  ).pipe(Parser.map(([distinct, args]) => [args, distinct._tag === 'Some'] as const)),
+  ).pipe(Parser.map(([distinct, args]) => [args, Option.isSome(distinct)] as const)),
 );
 
 const groupGraphPatternInExpression: P<Ast.GroupPattern> = withFlags(
   false,
-  false,
+  Option.some(false),
   groupGraphPattern,
 );
 
@@ -1029,7 +1113,7 @@ const aggregate = (name: Ast.AggregateName): P<Ast.Expression> =>
                     Parser.alt(string, unexpectedHere<Tok>('a string')),
                   ),
                 )
-              : Parser.succeed({ _tag: 'None' } as const),
+              : Parser.succeed(Option.none<Tok>()),
             expect(')'),
           ),
         ),
@@ -1042,38 +1126,39 @@ const aggregate = (name: Ast.AggregateName): P<Ast.Expression> =>
     Parser.map(([distinct, body]) => {
       if (body === '*') return Ast.aggregate('COUNT', '*', { distinct });
       const [e, sep] = body;
-      return sep._tag === 'Some'
+      return Option.isSome(sep)
         ? Ast.aggregate(name, e, { distinct, separator: sep.value.value })
         : Ast.aggregate(name, e, { distinct });
     }),
   );
 
-// SAFETY: `Object.keys` of the `builtInArity` record are exactly its `BuiltInName` keys.
-const BUILT_INS = Object.keys(Ast.builtInArity) as Array<Ast.BuiltInName>;
+const BUILT_INS = Record.keys(Ast.builtInArity);
+
+/** The built-in a token names (`peekKind(BUILT_INS)` lets only those through). */
+const builtInName = (t: Tok): Ast.BuiltInName =>
+  Ast.isBuiltInName(t.kind) ? t.kind : unexpected(t, 'a function');
 
 const builtInCall: P<Ast.Expression> = Parser.alt(
   // Built-ins with arguments: the arity is checked against the name.
   Parser.preceded(
-    peekKind(new Set(BUILT_INS.filter((n) => n !== 'BOUND' && Ast.builtInArity[n][1] > 0))),
+    peekKind(BUILT_INS.filter((n) => n !== 'BOUND' && Ast.builtInArity[n][1] > 0)),
     Parser.seq(anyToken, expressionList),
   ).pipe(
     Parser.map(([t, args]) => {
-      // SAFETY: `peekKind(BUILT_INS)` only lets a token whose kind is a built-in name through.
-      const name = t.kind as Ast.BuiltInName;
+      const name = builtInName(t);
       const [min, max] = Ast.builtInArity[name];
       return args.length < min || args.length > max
         ? fail(`${name} expects ${min === max ? min : `${min} to ${max}`} arguments`, t.start)
         : Ast.operation(name, ...args);
     }),
   ),
-  // SAFETY: `peekKind` admitted only built-in names (the zero-arity ones) here.
   Parser.preceded(
-    peekKind(new Set(BUILT_INS.filter((n) => Ast.builtInArity[n][1] === 0))),
+    peekKind(BUILT_INS.filter((n) => Ast.builtInArity[n][1] === 0)),
     Parser.seq(
       anyToken,
       Parser.alt(Parser.seq(nil, anyToken, anyToken), unexpectedHere<void>("'()'")),
     ),
-  ).pipe(Parser.map(([t]) => Ast.operation(t.kind as Ast.BuiltInName))),
+  ).pipe(Parser.map(([t]) => Ast.operation(builtInName(t)))),
   Parser.preceded(
     Parser.seq(tok('BOUND'), expect('(')),
     Parser.terminated(variableOrError, expect(')')),
@@ -1084,10 +1169,7 @@ const builtInCall: P<Ast.Expression> = Parser.alt(
   Parser.preceded(Parser.seq(tok('NOT'), expect('EXISTS')), groupGraphPatternInExpression).pipe(
     Parser.map((g) => Ast.exists(g, true)),
   ),
-  ...Array.from(AGGREGATES, (name) =>
-    // SAFETY: `AGGREGATES` holds the aggregate names, so each one is an `Ast.AggregateName`.
-    Parser.preceded(peekKind(new Set([name])), aggregate(name as Ast.AggregateName)),
-  ),
+  ...AGGREGATES.map((name) => Parser.preceded(peekKind([name]), aggregate(name))),
 );
 
 const exprTripleTerm: P<Ast.Expression> = Parser.preceded(
@@ -1108,7 +1190,7 @@ const primary: P<Ast.Expression> = Parser.alt(
   variable,
   Parser.seq(iri, Parser.opt(Parser.preceded(Parser.peek(tok('(')), functionArgs))).pipe(
     Parser.map(([i, args]): Ast.Expression =>
-      args._tag === 'Some' ? Ast.functionCall(i, args.value[0], args.value[1]) : i,
+      Option.isSome(args) ? Ast.functionCall(i, args.value[0], args.value[1]) : i,
     ),
   ),
   rdfLiteral,
@@ -1170,7 +1252,7 @@ const relational: P<Ast.Expression> = Parser.seq(
       ),
     ),
   ),
-).pipe(Parser.map(([left, rest]) => (rest._tag === 'Some' ? rest.value(left) : left)));
+).pipe(Parser.map(([left, rest]) => (Option.isSome(rest) ? rest.value(left) : left)));
 
 const conditionalAnd = leftAssoc(relational, ['&&']);
 const expressionDef = leftAssoc(conditionalAnd, ['||']);
@@ -1190,7 +1272,7 @@ const constraint: P<Ast.Expression> = Parser.alt(
 
 /** Whether a constraint (`(`, a built-in, an IRI) starts here. */
 const startsConstraint: P<unknown> = Parser.peek(
-  take('a constraint', (t) => (t.kind === '(' || isBuiltInStart(t) || isIri(t) ? true : undefined)),
+  take('a constraint', (t) => (t.kind === '(' || isBuiltInStart(t) || isIri(t) ? taken : notTaken)),
 );
 
 // -----------------------------------------------------------------------------
@@ -1202,15 +1284,7 @@ const templateTriples = triplesGrammar(false);
 
 const varOrIri: P<Ast.VarOrIri> = Parser.alt(variable, iriOrError);
 
-const GPNT: HashSet.HashSet<string> = HashSet.make(
-  'OPTIONAL',
-  'MINUS',
-  'GRAPH',
-  'SERVICE',
-  'FILTER',
-  'BIND',
-  'VALUES',
-);
+const GPNT = kindSet(['OPTIONAL', 'MINUS', 'GRAPH', 'SERVICE', 'FILTER', 'BIND', 'VALUES']);
 
 const graphPatternNotTriples: P<Ast.Pattern> = select<Ast.Pattern>([
   [
@@ -1254,7 +1328,7 @@ const graphPatternNotTriples: P<Ast.Pattern> = select<Ast.Pattern>([
 
 const startsGPNT: P<unknown> = Parser.peek(
   take('a graph pattern', (t) =>
-    t.kind === '{' || (t.type === 'WORD' && HashSet.has(GPNT, t.kind)) ? true : undefined,
+    t.kind === '{' || (t.type === 'WORD' && GPNT.has(t.kind)) ? taken : notTaken,
   ),
 );
 
@@ -1272,15 +1346,15 @@ const gpntItem: P<GroupItem> = Parser.preceded(
 ).pipe(
   Parser.map(([at, pattern]): GroupItem => {
     // After anything but a FILTER, the following triples are in a new BGP scope.
-    if (pattern._tag !== 'Filter') ctx.triples[ctx.triples.length - 1] = ctx.patternContext();
+    if (!Predicate.isTagged(pattern, 'Filter')) {
+      ctx.triples[ctx.triples.length - 1] = ctx.patternContext();
+    }
     return { _tag: 'Pattern', pattern, at };
   }),
 );
 
-const isGPNTStart = (t: Tok | undefined): boolean =>
-  t !== undefined &&
-  t.type !== 'ERROR' &&
-  (t.kind === '{' || (t.type === 'WORD' && HashSet.has(GPNT, t.kind)));
+const isGPNTStart = (t: Tok): boolean =>
+  t.type !== 'ERROR' && (t.kind === '{' || (t.type === 'WORD' && GPNT.has(t.kind)));
 
 /** A triples block; one not ended by `.` must be followed by a pattern or `}`. */
 const triplesItem: P<GroupItem> = Parser.preceded(
@@ -1291,7 +1365,7 @@ const triplesItem: P<GroupItem> = Parser.preceded(
   ),
 ).pipe(
   Parser.map(([[triples, dot], t]): GroupItem => {
-    if (!dot && t?.kind !== '}' && !isGPNTStart(t)) unexpectedAt(t, "'.' or '}'");
+    if (!dot && t.kind !== '}' && !isGPNTStart(t)) unexpectedAt(t, "'.' or '}'");
     return { _tag: 'Triples', triples };
   }),
 );
@@ -1304,31 +1378,37 @@ const groupItems: P<Array<GroupItem>> = Parser.repeat(
   ),
 );
 
+/**
+ * Adds a group item to the patterns read so far; the failure if it is a
+ * `BIND` of a variable already in scope.
+ */
+const addGroupItem = (patterns: Array<Ast.Pattern>, item: GroupItem): Option.Option<Failure> => {
+  if (Predicate.isTagged(item, 'Triples')) {
+    const last = patterns[patterns.length - 1];
+    if (Predicate.isTagged(last, 'Bgp')) {
+      patterns[patterns.length - 1] = Ast.bgp([...last.triples, ...item.triples]);
+    } else patterns.push(Ast.bgp(item.triples));
+    return Option.none();
+  }
+  const p = item.pattern;
+  if (Predicate.isTagged(p, 'Bind')) {
+    const name = p.variable.value;
+    if (patterns.some((q) => Ast.inScopeVariables(q).includes(name))) {
+      return Option.some(new Failure(`BIND variable ?${name} is already in scope`, item.at));
+    }
+  }
+  patterns.push(p);
+  return Option.none();
+};
+
 const assembleGroup = (
   items: ReadonlyArray<GroupItem>,
 ): Result.Result<Ast.GroupPattern, Failure> => {
   const patterns: Array<Ast.Pattern> = [];
-  for (const item of items) {
-    if (item._tag === 'Pattern') {
-      const p = item.pattern;
-      if (p._tag === 'Bind') {
-        const inScope = new Set<string>();
-        for (const q of patterns) for (const v of Ast.inScopeVariables(q)) inScope.add(v);
-        if (inScope.has(p.variable.value)) {
-          return Result.fail(
-            new Failure(`BIND variable ?${p.variable.value} is already in scope`, item.at),
-          );
-        }
-      }
-      patterns.push(p);
-    } else {
-      const last = patterns[patterns.length - 1];
-      if (last !== undefined && last._tag === 'Bgp') {
-        patterns[patterns.length - 1] = Ast.bgp([...last.triples, ...item.triples]);
-      } else patterns.push(Ast.bgp(item.triples));
-    }
-  }
-  return Result.succeed(Ast.group(patterns));
+  return Option.match(
+    Arr.findFirst(items, (item) => addGroupItem(patterns, item)),
+    { onNone: () => Result.succeed(Ast.group(patterns)), onSome: Result.fail },
+  );
 };
 
 const subSelect: P<Ast.GroupPattern> = Parser.suspend(() => subSelectDef);
@@ -1363,7 +1443,7 @@ const prologueDecls: P<void> = Parser.asVoid(
         Parser.preceded(
           anyToken,
           Parser.alt(
-            take('an IRI', (t) => (t.type === 'IRI' ? t : undefined)),
+            take('an IRI', (t) => (t.type === 'IRI' ? Option.some(t) : notTaken)),
             unexpectedHere('an IRI'),
           ),
         ),
@@ -1374,11 +1454,13 @@ const prologueDecls: P<void> = Parser.asVoid(
           anyToken,
           Parser.seq(
             Parser.alt(
-              take('a prefix name', (t) => (t.type === 'PNAME' && t.value === '' ? t : undefined)),
+              take('a prefix name', (t) =>
+                t.type === 'PNAME' && t.value === '' ? Option.some(t) : notTaken,
+              ),
               unexpectedHere('a prefix name'),
             ),
             Parser.alt(
-              take('an IRI', (t) => (t.type === 'IRI' ? t : undefined)),
+              take('an IRI', (t) => (t.type === 'IRI' ? Option.some(t) : notTaken)),
               unexpectedHere('an IRI'),
             ),
           ),
@@ -1390,9 +1472,9 @@ const prologueDecls: P<void> = Parser.asVoid(
           anyToken,
           Parser.alt(
             take('a version string', (t) => {
-              if (t.type !== 'STRING' || t.extra === 'long') return undefined;
-              ctx.version = t.value;
-              return t;
+              if (t.type !== 'STRING' || t.extra === 'long') return notTaken;
+              ctx.version = Option.some(t.value);
+              return Option.some(t);
             }),
             unexpectedHere('a version string'),
           ),
@@ -1407,10 +1489,10 @@ type Modifiers = Pick<Ast.QueryBase, 'groupBy' | 'having' | 'orderBy' | 'limit' 
 /** `query` with its dataset clause; an absent clause leaves the member absent. */
 const withDataset = <Q extends Ast.QueryBase>(
   query: Q,
-  dataset: Ast.DatasetClause | undefined,
-): Q => (dataset === undefined ? query : { ...query, dataset });
+  dataset: Option.Option<Ast.DatasetClause>,
+): Q => (Option.isNone(dataset) ? query : { ...query, dataset: dataset.value });
 
-const withAggregates = <A>(p: P<A>): P<A> => withFlags(true, undefined, p);
+const withAggregates = <A>(p: P<A>): P<A> => withFlags(true, Option.none(), p);
 
 const groupCondition: P<Ast.GroupCondition> = Parser.alt(
   variable.pipe(Parser.map((v): Ast.GroupCondition => ({ expression: v }))),
@@ -1418,14 +1500,14 @@ const groupCondition: P<Ast.GroupCondition> = Parser.alt(
     tok('('),
     Parser.seq(expression, Parser.opt(Parser.preceded(tok('AS'), variableOrError)), expect(')')),
   ).pipe(
-    Parser.map(([expression, v]): Ast.GroupCondition =>
-      v._tag === 'Some' ? { expression, variable: v.value } : { expression },
+    Parser.map(([e, v]): Ast.GroupCondition =>
+      Option.isSome(v) ? { expression: e, variable: v.value } : { expression: e },
     ),
   ),
   Parser.preceded(
-    Parser.peek(take('a constraint', (t) => (isBuiltInStart(t) || isIri(t) ? true : undefined))),
+    Parser.peek(take('a constraint', (t) => (isBuiltInStart(t) || isIri(t) ? taken : notTaken))),
     constraint,
-  ).pipe(Parser.map((expression): Ast.GroupCondition => ({ expression }))),
+  ).pipe(Parser.map((e): Ast.GroupCondition => ({ expression: e }))),
 );
 
 const orderCondition: P<Ast.OrderCondition> = Parser.alt(
@@ -1436,16 +1518,14 @@ const orderCondition: P<Ast.OrderCondition> = Parser.alt(
       unexpectedHere<Ast.Expression>("'('"),
     ),
   ).pipe(
-    Parser.map(([d, expression]): Ast.OrderCondition => ({
-      expression,
+    Parser.map(([d, e]): Ast.OrderCondition => ({
+      expression: e,
       descending: d.kind === 'DESC',
     })),
   ),
-  variable.pipe(
-    Parser.map((expression): Ast.OrderCondition => ({ expression, descending: false })),
-  ),
+  variable.pipe(Parser.map((v): Ast.OrderCondition => ({ expression: v, descending: false }))),
   Parser.preceded(startsConstraint, constraint).pipe(
-    Parser.map((expression): Ast.OrderCondition => ({ expression, descending: false })),
+    Parser.map((e): Ast.OrderCondition => ({ expression: e, descending: false })),
   ),
 );
 
@@ -1458,7 +1538,7 @@ const atLeastOne = <A>(p: P<A>, label: string): P<Array<A>> =>
       Arr.isReadonlyArrayEmpty(items)
         ? Result.fail(
             new Failure(
-              t?.type === 'ERROR' ? t.value : `Unexpected ${describe(t)}, expected ${label}`,
+              t.type === 'ERROR' ? t.value : `Unexpected ${describe(t)}, expected ${label}`,
               offsetOf(t),
             ),
           )
@@ -1468,7 +1548,7 @@ const atLeastOne = <A>(p: P<A>, label: string): P<Array<A>> =>
   );
 
 const integer: P<number> = Parser.alt(
-  take('an integer', (t) => (t.type === 'INTEGER' ? Number(t.value) : undefined)),
+  take('an integer', (t) => (t.type === 'INTEGER' ? Option.some(Number(t.value)) : notTaken)),
   unexpectedHere<number>('an integer'),
 );
 
@@ -1507,52 +1587,43 @@ const solutionModifiers: P<Modifiers> = Parser.seq(
   ),
   Parser.alt(
     Parser.seq(
-      Parser.preceded(tok('LIMIT'), integer).pipe(Parser.map((n) => ['limit', n] as const)),
-      Parser.opt(Parser.preceded(tok('OFFSET'), integer)).pipe(
-        Parser.map((o) => ['offset', o] as const),
-      ),
-    ).pipe(
-      Parser.map(([[, limit], [, o]]) => ({
-        limit,
-        offset: o._tag === 'Some' ? o.value : undefined,
-      })),
+      Parser.preceded(tok('LIMIT'), integer).pipe(Parser.map(Option.some)),
+      Parser.opt(Parser.preceded(tok('OFFSET'), integer)),
     ),
     Parser.seq(
-      Parser.preceded(tok('OFFSET'), integer),
+      Parser.preceded(tok('OFFSET'), integer).pipe(Parser.map(Option.some)),
       Parser.opt(Parser.preceded(tok('LIMIT'), integer)),
-    ).pipe(
-      Parser.map(([offset, l]) => ({ limit: l._tag === 'Some' ? l.value : undefined, offset })),
-    ),
-    Parser.succeed({ limit: undefined, offset: undefined }),
+    ).pipe(Parser.map(([offset, limit]) => [limit, offset] as const)),
+    Parser.succeed([Option.none<number>(), Option.none<number>()] as const),
   ),
 ).pipe(
-  Parser.map(([groupBy, having, orderBy, { limit, offset }]): Modifiers => {
+  Parser.map(([groupBy, having, orderBy, [limit, offset]]): Modifiers => {
     const modifiers: Modifiers = {
-      groupBy: groupBy._tag === 'Some' ? groupBy.value : [],
-      having: having._tag === 'Some' ? having.value : [],
-      orderBy: orderBy._tag === 'Some' ? orderBy.value : [],
+      groupBy: Option.getOrElse(groupBy, () => []),
+      having: Option.getOrElse(having, () => []),
+      orderBy: Option.getOrElse(orderBy, () => []),
     };
-    const limited = limit === undefined ? modifiers : { ...modifiers, limit };
-    return offset === undefined ? limited : { ...limited, offset };
+    const limited = Option.isNone(limit) ? modifiers : { ...modifiers, limit: limit.value };
+    return Option.isNone(offset) ? limited : { ...limited, offset: offset.value };
   }),
 );
 
-const datasetClauses: P<Ast.DatasetClause | undefined> = Parser.repeat(
+const datasetClauses: P<Option.Option<Ast.DatasetClause>> = Parser.repeat(
   Parser.preceded(tok('FROM'), Parser.seq(eat('NAMED'), iriOrError)),
 ).pipe(
   Parser.map((clauses) =>
     Arr.isReadonlyArrayEmpty(clauses)
-      ? undefined
-      : {
+      ? Option.none()
+      : Option.some({
           default: clauses.filter(([named]) => !named).map(([, i]) => i),
           named: clauses.filter(([named]) => named).map(([, i]) => i),
-        },
+        }),
   ),
 );
 
-const valuesClause: P<Ast.ValuesPattern | undefined> = Parser.opt(
+const valuesClause: P<Option.Option<Ast.ValuesPattern>> = Parser.opt(
   Parser.preceded(tok('VALUES'), dataBlock),
-).pipe(Parser.map((o) => (o._tag === 'Some' ? o.value : undefined)));
+);
 
 const projectionItem: P<Term.Variable | Ast.Projection> = Parser.alt(
   variable,
@@ -1564,9 +1635,9 @@ const projectionItem: P<Term.Variable | Ast.Projection> = Parser.alt(
       expect(')'),
     ),
   ).pipe(
-    Parser.map(([expression, v]): Ast.Projection => ({
+    Parser.map(([e, v]): Ast.Projection => ({
       _tag: 'Projection',
-      expression,
+      expression: e,
       variable: v,
     })),
   ),
@@ -1585,7 +1656,7 @@ const selectQuery = (sub: boolean): P<Ast.SelectQuery> =>
         tok('*').pipe(Parser.as<'*'>('*')),
         atLeastOne(projectionItem, 'a variable, expression or *'),
       ),
-      sub ? Parser.succeed(undefined) : datasetClauses,
+      sub ? Parser.succeed(Option.none<Ast.DatasetClause>()) : datasetClauses,
       Parser.preceded(eat('WHERE'), groupGraphPattern),
       solutionModifiers,
     ),
@@ -1606,7 +1677,7 @@ const selectQuery = (sub: boolean): P<Ast.SelectQuery> =>
     ),
   );
 
-// SAFETY: `templateTriples` parses no property paths, so a template yields triple patterns only.
+// `templateTriples` parses no property paths, so a template's items are all triple patterns.
 const constructTemplate: P<Array<Ast.TriplePattern>> = Parser.delimited(
   tok('{'),
   Parser.cut(
@@ -1621,7 +1692,7 @@ const constructTemplate: P<Array<Ast.TriplePattern>> = Parser.delimited(
     ),
   ),
   expect('}'),
-).pipe(Parser.map((t) => t as Array<Ast.TriplePattern>));
+).pipe(Parser.map((t) => t.filter(isTriplePattern)));
 
 const constructQuery: P<Ast.ConstructQuery> = Parser.preceded(
   tok('CONSTRUCT'),
@@ -1649,9 +1720,9 @@ const constructQuery: P<Ast.ConstructQuery> = Parser.preceded(
       solutionModifiers,
     ).pipe(
       Parser.map(([dataset, triples, modifiers]): Ast.ConstructQuery => {
-        // SAFETY: `templateTriples` parses no property paths, so the short-form template holds
-        // triple patterns only.
-        const template = triples as Array<Ast.TriplePattern>;
+        // `templateTriples` parses no property paths, so the short-form template's items are all
+        // triple patterns.
+        const template = triples.filter(isTriplePattern);
         return withDataset(
           {
             _tag: 'Construct',
@@ -1704,14 +1775,14 @@ const askQuery: P<Ast.AskQuery> = Parser.preceded(
 );
 
 const subSelectDef: P<Ast.GroupPattern> = Parser.seq(
-  withFlags(false, undefined, Parser.seq(selectQuery(true), valuesClause)),
+  withFlags(false, Option.none(), Parser.seq(selectQuery(true), valuesClause)),
   Parser.preceded(
     expect('}'),
     hook((t) => offsetOf(t)),
   ),
 ).pipe(
   Parser.map(([[query, values], at]) => {
-    const sub = values !== undefined ? { ...query, values } : query;
+    const sub = Option.isSome(values) ? { ...query, values: values.value } : query;
     validateSelect(sub, at);
     return Ast.group([Ast.subSelect(sub)]);
   }),
@@ -1721,79 +1792,81 @@ const subSelectDef: P<Ast.GroupPattern> = Parser.seq(
 // Static checks
 // -----------------------------------------------------------------------------
 
+/** The variable a `GROUP BY` condition binds: its `AS` variable, or the variable it is. */
+const groupKey = (g: Ast.GroupCondition): Option.Option<string> =>
+  g.variable !== undefined
+    ? Option.some(g.variable.value)
+    : Term.isVariable(g.expression)
+      ? Option.some(g.expression.value)
+      : Option.none();
+
 const validateSelect = (query: Ast.SelectQuery, offset: number): void => {
   // Variables introduced by AS must not already be in scope.
-  if (query.projection !== '*') {
+  const projection = query.projection;
+  if (projection !== '*') {
     const grouped =
       Arr.isReadonlyArrayNonEmpty(query.groupBy) ||
-      query.projection.some((p) => p._tag !== 'Variable' && Ast.containsAggregate(p.expression));
+      projection.some((p) => !Term.isVariable(p) && Ast.containsAggregate(p.expression));
     // With grouping only the group keys are in scope; otherwise the
     // pattern's variables are.
-    const inScope = new Set<string>(grouped ? [] : Ast.inScopeVariables(query.where));
-    for (const g of query.groupBy) {
-      if (g.variable !== undefined) inScope.add(g.variable.value);
-      else if (g.expression._tag === 'Variable') inScope.add(g.expression.value);
-    }
+    const inScope = MutableHashSet.fromIterable(grouped ? [] : Ast.inScopeVariables(query.where));
+    Arr.forEach(Arr.getSomes(query.groupBy.map(groupKey)), (v) => MutableHashSet.add(inScope, v));
     // Variables of a trailing VALUES clause are joined before projection.
-    for (const v of query.values?.variables ?? []) inScope.add(v.value);
-    const seen = new Set<string>();
-    for (const item of query.projection) {
-      if (item._tag !== 'Variable') {
-        const name = item.variable.value;
-        if (inScope.has(name) || seen.has(name)) {
-          fail(`Variable ?${name} is already in scope`, offset);
-        }
-        seen.add(name);
-      } else seen.add(item.value);
-    }
+    (query.values?.variables ?? []).forEach((v) => MutableHashSet.add(inScope, v.value));
+    const seen = MutableHashSet.empty<string>();
+    projection.forEach((item) => {
+      if (Term.isVariable(item)) {
+        MutableHashSet.add(seen, item.value);
+        return;
+      }
+      const name = item.variable.value;
+      if (MutableHashSet.has(inScope, name) || MutableHashSet.has(seen, name)) {
+        fail(`Variable ?${name} is already in scope`, offset);
+      }
+      MutableHashSet.add(seen, name);
+    });
   }
   validateGrouping(query, offset);
 };
 
 const validateGrouping = (query: Ast.Query, offset: number): void => {
   const projectionExprs =
-    query._tag === 'Select' && query.projection !== '*'
-      ? query.projection.flatMap((p) => (p._tag === 'Variable' ? [] : [p.expression]))
+    Predicate.isTagged(query, 'Select') && query.projection !== '*'
+      ? query.projection.flatMap((p) => (Term.isVariable(p) ? [] : [p.expression]))
       : [];
   const grouped =
     Arr.isReadonlyArrayNonEmpty(query.groupBy) ||
     projectionExprs.some(Ast.containsAggregate) ||
     query.having.some(Ast.containsAggregate) ||
     query.orderBy.some((o) => Ast.containsAggregate(o.expression));
-  for (const g of query.groupBy) {
+  query.groupBy.forEach((g) => {
     if (Ast.containsAggregate(g.expression)) fail('Aggregates are not allowed in GROUP BY', offset);
+  });
+  if (!grouped || !Predicate.isTagged(query, 'Select')) return;
+  const projection = query.projection;
+  if (projection === '*') {
+    return fail('SELECT * is not allowed with GROUP BY or aggregates', offset);
   }
-  if (!grouped || query._tag !== 'Select') return;
-  if (query.projection === '*') fail('SELECT * is not allowed with GROUP BY or aggregates', offset);
-  const allowed = new Set<string>(query.values?.variables.map((v) => v.value) ?? []);
-  for (const g of query.groupBy) {
-    if (g.variable !== undefined) allowed.add(g.variable.value);
-    else if (g.expression._tag === 'Variable') allowed.add(g.expression.value);
-  }
+  const allowed = MutableHashSet.fromIterable(query.values?.variables.map((v) => v.value) ?? []);
+  Arr.forEach(Arr.getSomes(query.groupBy.map(groupKey)), (v) => MutableHashSet.add(allowed, v));
+  const checkVariable = (v: string): void => {
+    if (!MutableHashSet.has(allowed, v)) fail(`Variable ?${v} is not grouped`, offset);
+  };
   const checkExpr = (e: Ast.Expression): void => {
     Match.value(e).pipe(
-      Match.tag('Variable', (v) => {
-        if (!allowed.has(v.value)) fail(`Variable ?${v.value} is not grouped`, offset);
-      }),
+      Match.tag('Variable', (v) => checkVariable(v.value)),
       Match.tag('Operation', 'FunctionCall', (call) => call.args.forEach(checkExpr)),
-      Match.tag('Triple', (x) => {
-        for (const v of Ast.expressionVariables(x)) {
-          if (!allowed.has(v)) fail(`Variable ?${v} is not grouped`, offset);
-        }
-      }),
+      Match.tag('Triple', (x) => Ast.expressionVariables(x).forEach(checkVariable)),
       Match.orElse(() => undefined),
     );
   };
-  // SAFETY: `SELECT *` failed just above (`fail` throws), so the projection is a list of variables
-  // and `(expr AS ?v)` items.
-  for (const item of query.projection as ReadonlyArray<Term.Variable | Ast.Projection>) {
-    if (item._tag === 'Variable') {
-      if (!allowed.has(item.value)) fail(`Variable ?${item.value} is not grouped`, offset);
-    } else {
+  projection.forEach((item) => {
+    if (Term.isVariable(item)) checkVariable(item.value);
+    else {
       checkExpr(item.expression);
-      allowed.add(item.variable.value);
+      MutableHashSet.add(allowed, item.variable.value);
     }
-  }
+  });
 };
 
 const checked =
@@ -1821,11 +1894,11 @@ const queryUnit = Compiler.jit(
       Parser.alt(Parser.eof, unexpectedHere<void>()),
     ).pipe(
       Parser.map(([query, values]): Ast.Query =>
-        values !== undefined ? { ...query, values } : query,
+        Option.isSome(values) ? { ...query, values: values.value } : query,
       ),
       Parser.tryMap(
         checked((query: Ast.Query) => {
-          if (query._tag === 'Select') validateSelect(query, 0);
+          if (Predicate.isTagged(query, 'Select')) validateSelect(query, 0);
           else validateGrouping(query, 0);
         }),
       ),
@@ -1849,7 +1922,7 @@ const quadPattern: P<Array<Ast.QuadPattern>> = Parser.delimited(
           Parser.seq(
             Parser.preceded(
               hook((t) => {
-                if (t?.type === 'VAR' && !ctx.tc.variables)
+                if (t.type === 'VAR' && !ctx.tc.variables)
                   fail('Variables are not allowed here', t.start);
               }),
               varOrIri,
@@ -1858,13 +1931,12 @@ const quadPattern: P<Array<Ast.QuadPattern>> = Parser.delimited(
             eat('.'),
           ),
         ).pipe(
+          // `templateTriples` parses no property paths, so every quad-data item is a triple
+          // pattern.
           Parser.map(([g, triples]) =>
-            triples.map((t) => {
-              // SAFETY: `templateTriples` parses no property paths, so every quad-data item is a
-              // triple pattern.
-              const tp = t as Ast.TriplePattern;
-              return Ast.quadPattern(tp.subject, tp.predicate, tp.object, g);
-            }),
+            triples
+              .filter(isTriplePattern)
+              .map((tp) => Ast.quadPattern(tp.subject, tp.predicate, tp.object, g)),
           ),
         ),
         Parser.terminated(
@@ -1878,12 +1950,9 @@ const quadPattern: P<Array<Ast.QuadPattern>> = Parser.delimited(
           ),
         ).pipe(
           Parser.map((triples) =>
-            triples.map((t) => {
-              // SAFETY: `templateTriples` parses no property paths, so every quad-data item is a
-              // triple pattern.
-              const tp = t as Ast.TriplePattern;
-              return Ast.quadPattern(tp.subject, tp.predicate, tp.object, Term.defaultGraph);
-            }),
+            triples
+              .filter(isTriplePattern)
+              .map((tp) => Ast.quadPattern(tp.subject, tp.predicate, tp.object, Term.defaultGraph)),
           ),
         ),
       ),
@@ -1896,7 +1965,7 @@ const templateContext = (blankNodes: boolean) => (): TripleContext => ({
   variables: true,
   blankNodes,
   scope: ctx.opIndex,
-  labels: new Map(),
+  labels: StringMap.empty(),
 });
 
 const quadData = (blankNodes: boolean): P<Array<Term.Quad>> =>
@@ -1921,17 +1990,17 @@ const modify = (deleteFirst: boolean): P<Ast.ModifyOperation> =>
       ? Parser.seq(
           inContext(templateContext(false), quadPattern),
           Parser.opt(Parser.preceded(tok('INSERT'), inContext(templateContext(true), quadPattern))),
-        ).pipe(Parser.map(([del, ins]) => [del, ins._tag === 'Some' ? ins.value : []] as const))
+        ).pipe(Parser.map(([del, ins]) => [del, Option.getOrElse(ins, () => [])] as const))
       : inContext(templateContext(true), quadPattern).pipe(Parser.map((ins) => [[], ins] as const)),
     usingClauses,
     Parser.preceded(expect('WHERE'), groupGraphPattern),
   ).pipe(
     Parser.map(([[del, ins], using, where]): Ast.ModifyOperation => {
-      const modify: Ast.ModifyOperation = { _tag: 'Modify', delete: del, insert: ins, where };
+      const op: Ast.ModifyOperation = { _tag: 'Modify', delete: del, insert: ins, where };
       return Arr.isReadonlyArrayEmpty(using)
-        ? modify
+        ? op
         : {
-            ...modify,
+            ...op,
             using: {
               default: using.filter(([named]) => !named).map(([, i]) => i),
               named: using.filter(([named]) => named).map(([, i]) => i),
@@ -1965,7 +2034,7 @@ const update1: P<Ast.UpdateOperation> = select<Ast.UpdateOperation>(
         ),
       ).pipe(
         Parser.map(([silent, source, dest]): Ast.UpdateOperation =>
-          dest._tag === 'Some'
+          Option.isSome(dest)
             ? { _tag: 'Load', silent, source, destination: dest.value }
             : { _tag: 'Load', silent, source },
         ),
@@ -2086,7 +2155,14 @@ const updateUnit = Compiler.jit(
         Parser.alt(Parser.eof, unexpectedHere<void>("';'")),
       ),
     ),
-  ).pipe(Parser.map((ops) => Ast.update(ops._tag === 'Some' ? ops.value : [], prologue.value()))),
+  ).pipe(
+    Parser.map((ops) =>
+      Ast.update(
+        Option.getOrElse(ops, () => []),
+        prologue.value(),
+      ),
+    ),
+  ),
 );
 
 // -----------------------------------------------------------------------------
@@ -2096,8 +2172,8 @@ const updateUnit = Compiler.jit(
 const run = <A>(
   grammar: P<A>,
   input: string,
-  baseIri: string | undefined,
-  prefixes: Readonly<Record<string, string>> | undefined,
+  baseIri: Option.Option<string>,
+  prefixes: Readonly<Record<string, string>>,
 ): Result.Result<A, Failure> => {
   const tokens = tokenize(input);
   const resolved = resolve(tokens, baseIri, prefixes);
@@ -2106,8 +2182,10 @@ const run = <A>(
   prologue = {
     value: () => {
       const declared: Ast.Prologue = { prefixes: { ...resolved.prefixes } };
-      const based = resolved.base === undefined ? declared : { ...declared, base: resolved.base };
-      return ctx.version === undefined ? based : { ...based, version: ctx.version };
+      const based = Option.isNone(resolved.base)
+        ? declared
+        : { ...declared, base: resolved.base.value };
+      return Option.isNone(ctx.version) ? based : { ...based, version: ctx.version.value };
     },
   };
   // A `Failure` thrown by the maps that check what they build ends the parse.
@@ -2117,21 +2195,21 @@ const run = <A>(
   if (Result.isSuccess(result)) return Result.succeed(result.success);
   const error: ParseError.ParseError<Failure> = result.failure;
   if (error.cause !== undefined) return Result.fail(error.cause);
-  const t = tokens[error.offset];
-  if (t?.type === 'ERROR') return Result.fail(new Failure(t.value, t.start));
+  const t = tokenAt(tokens, error.offset);
+  if (t.type === 'ERROR') return Result.fail(new Failure(t.value, t.start));
   return Result.fail(new Failure(`Unexpected ${describe(t)}`, offsetOf(t)));
 };
 
-/** Parses a query. */
+/** Parses a query against a base IRI (if any) and initial prefixes. */
 export const parseQuery = (
   input: string,
-  baseIri: string | undefined,
-  prefixes: Readonly<Record<string, string>> | undefined,
+  baseIri: Option.Option<string>,
+  prefixes: Readonly<Record<string, string>>,
 ): Result.Result<Ast.Query, Failure> => run(queryUnit, input, baseIri, prefixes);
 
-/** Parses an update request. */
+/** Parses an update request against a base IRI (if any) and initial prefixes. */
 export const parseUpdate = (
   input: string,
-  baseIri: string | undefined,
-  prefixes: Readonly<Record<string, string>> | undefined,
+  baseIri: Option.Option<string>,
+  prefixes: Readonly<Record<string, string>>,
 ): Result.Result<Ast.Update, Failure> => run(updateUnit, input, baseIri, prefixes);
