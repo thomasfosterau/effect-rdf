@@ -841,6 +841,14 @@ const text = (value: string, writer: Writer): string => {
   return Xml.escapeText(value);
 };
 
+const sortByPredicateObject = (ts: ReadonlyArray<Term.Triple>) =>
+  Arr.sort(
+    ts,
+    Order.make<Term.Triple>(
+      (a, b) => Term.compare(a.predicate, b.predicate) || Term.compare(a.object, b.object),
+    ),
+  );
+
 const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeOptions): string => {
   const writer = new Writer(options, options.prefixes ?? PrefixMap.empty);
   const indentUnit = options.indent ?? '  ';
@@ -906,21 +914,13 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
     }
   }
 
-  const sortTriples = (ts: ReadonlyArray<Term.Triple>) =>
-    Arr.sort(
-      ts,
-      Order.make<Term.Triple>(
-        (a, b) => Term.compare(a.predicate, b.predicate) || Term.compare(a.object, b.object),
-      ),
-    );
-
   const body: Array<string> = [];
 
   /** Writes a node element for `subject` at `depth`. */
   const node = (subject: Term.Subject, depth: number, inline: boolean, lines: Array<string>) => {
     const pad = indentUnit.repeat(depth);
     const entry = graph.bySubject.get(subject.key);
-    let ts = entry === undefined ? [] : sortTriples(entry.triples);
+    let ts = entry === undefined ? [] : sortByPredicateObject(entry.triples);
     let element = 'rdf:Description';
     if (typed) {
       const typeTriple = ts.find(
@@ -989,7 +989,7 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
           );
         if (!hasType) {
           lines.push(`${pad}<${name} rdf:parseType="Resource">`);
-          for (const x of sortTriples(entry.triples)) property(x, depth + 1, lines);
+          for (const x of sortByPredicateObject(entry.triples)) property(x, depth + 1, lines);
           lines.push(`${pad}</${name}>`);
           return;
         }

@@ -176,6 +176,27 @@ interface Edge {
   readonly negative: boolean;
 }
 
+/** The cycles of a dependency graph, each rendered as `a -> b -> a`. */
+const cyclesOf = (graph: ReadonlyMap<string, ReadonlyArray<string>>): ReadonlyArray<string> => {
+  const state = new Map<string, number>();
+  const found: Array<string> = [];
+  const visit = (n: string, path: Array<string>): void => {
+    const s = state.get(n);
+    if (s === 2) return;
+    if (s === 1) {
+      found.push([...path.slice(path.indexOf(n)), n].join(' -> '));
+      return;
+    }
+    state.set(n, 1);
+    path.push(n);
+    for (const m of graph.get(n) ?? []) visit(m, path);
+    path.pop();
+    state.set(n, 2);
+  };
+  for (const n of graph.keys()) visit(n, []);
+  return found;
+};
+
 /**
  * Returns the structural problems of a schema (empty when it is
  * well-formed). When `allowUnresolved` is set, references to undeclared
@@ -295,26 +316,7 @@ export const problems = (
   }
 
   // Direct self-reference cycles.
-  const cyclic = (graph: ReadonlyMap<string, ReadonlyArray<string>>): ReadonlyArray<string> => {
-    const state = new Map<string, number>();
-    const found: Array<string> = [];
-    const visit = (n: string, path: Array<string>): void => {
-      const s = state.get(n);
-      if (s === 2) return;
-      if (s === 1) {
-        found.push([...path.slice(path.indexOf(n)), n].join(' -> '));
-        return;
-      }
-      state.set(n, 1);
-      path.push(n);
-      for (const m of graph.get(n) ?? []) visit(m, path);
-      path.pop();
-      state.set(n, 2);
-    };
-    for (const n of graph.keys()) visit(n, []);
-    return found;
-  };
-  for (const c of cyclic(direct)) errors.push(`shape expression refers to itself: ${c}`);
+  for (const c of cyclesOf(direct)) errors.push(`shape expression refers to itself: ${c}`);
 
   // Negation requirement: no strongly connected component contains a negative edge.
   const sccOf = tarjan(Array.from(deps.keys()), (n) => (deps.get(n) ?? []).map((e) => e.to));
@@ -335,7 +337,7 @@ export const problems = (
     }
     extendsGraph.set(d.id, parents);
   }
-  for (const c of cyclic(extendsGraph)) errors.push(`cyclic extension hierarchy: ${c}`);
+  for (const c of cyclesOf(extendsGraph)) errors.push(`cyclic extension hierarchy: ${c}`);
   return Array.from(new Set(errors));
 };
 

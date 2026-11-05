@@ -432,24 +432,28 @@ const quadOrder: Order.Order<Term.Quad> = Order.combineAll([
   Order.mapInput(Term.compare, (q: Term.Quad) => q.object),
 ]);
 
+const failSerialize = (message: string): never => {
+  throw new SerializeFailure(message);
+};
+
+const resourceValue = (t: Term.NamedNode | Term.BlankNode): UriValue | BlankNodeValue =>
+  t._tag === 'NamedNode'
+    ? { type: 'uri', value: t.value }
+    : { type: 'bnode', value: `_:${t.value}` };
+
 const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions): Document => {
   const extensions = options.extensions ?? false;
-  const fail = (message: string): never => {
-    throw new SerializeFailure(message);
-  };
-  const resource = (t: Term.NamedNode | Term.BlankNode): UriValue | BlankNodeValue =>
-    t._tag === 'NamedNode'
-      ? { type: 'uri', value: t.value }
-      : { type: 'bnode', value: `_:${t.value}` };
   // Built once per serialisation: `objectValue` runs for every object term.
   const objectValue: (t: Term.Object) => ObjectValue = Match.type<Term.Object>().pipe(
     Match.withReturnType<ObjectValue>(),
-    Match.tag('NamedNode', 'BlankNode', (t) => resource(t)),
+    Match.tag('NamedNode', 'BlankNode', (t) => resourceValue(t)),
     Match.tag('Literal', (t) => {
       if (t.language !== '') {
         if (t.direction === undefined) return { type: 'literal', value: t.value, lang: t.language };
         if (!extensions) {
-          fail(`The literal ${t.key} has a base direction, which requires the RDF/JSON extensions`);
+          failSerialize(
+            `The literal ${t.key} has a base direction, which requires the RDF/JSON extensions`,
+          );
         }
         return { type: 'literal', value: t.value, lang: t.language, direction: t.direction };
       }
@@ -459,7 +463,7 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
     }),
     Match.tag('Triple', (t) => {
       if (!extensions) {
-        fail(`The triple term ${t.key} requires the RDF/JSON extensions`);
+        failSerialize(`The triple term ${t.key} requires the RDF/JSON extensions`);
       }
       const subject = t.subject;
       if (subject._tag === 'Triple') {
@@ -468,7 +472,7 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
       return {
         type: 'triple',
         value: {
-          subject: resource(subject),
+          subject: resourceValue(subject),
           predicate: { type: 'uri', value: t.predicate.value },
           object: objectValue(t.object),
         },
@@ -482,7 +486,7 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
   const document: Record<string, Record<string, Array<ObjectValue>>> = {};
   for (const q of sorted) {
     if (q.graph._tag !== 'DefaultGraph' && !merge) {
-      fail(`RDF/JSON cannot represent named graphs (found graph ${q.graph.key})`);
+      failSerialize(`RDF/JSON cannot represent named graphs (found graph ${q.graph.key})`);
     }
     const tripleKey = `${q.subject.key} ${q.predicate.key} ${q.object.key}`;
     if (seen.has(tripleKey)) continue;

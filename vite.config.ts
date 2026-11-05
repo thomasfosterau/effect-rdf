@@ -81,14 +81,12 @@ export default defineConfig({
       // Every export's doc comment carries `@since` and `@category` (AGENTS.md).
       'jsdoc/check-tag-names': ['error', { definedTags: ['since', 'category'] }],
       // ---- oxlint categories: allowances (effect-rdf#42) --------------
-      // `suspicious` arrived with the Vite+ 1.4 toolchain move. These two sit
-      // at `warn` with their count at adoption, too many sites in the
-      // parsers and evaluators to rewrite safely in that change: short
-      // grammar-local names (`c`, `p`, `op`, `e`) reused in nested
-      // combinators, and helpers defined beside the one test or grammar rule
-      // that uses them. A new site is a defect, not headroom.
+      // `suspicious` arrived with the Vite+ 1.4 toolchain move. This one sits
+      // at `warn` with its count at adoption, too many sites in the parsers
+      // and evaluators to rewrite safely in that change: short grammar-local
+      // names (`c`, `p`, `op`, `e`) reused in nested combinators. A new site
+      // is a defect, not headroom.
       'eslint/no-shadow': 'warn', // 301
-      'unicorn/consistent-function-scoping': 'warn', // 12
       // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
       // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
       // autofixable findings (unnecessary assertions, type arguments and

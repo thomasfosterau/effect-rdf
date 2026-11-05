@@ -205,6 +205,14 @@ interface Partition {
   readonly byNode: Map<string, Array<Tuple>>;
 }
 
+/** The number of distinct colours in a colouring. */
+const countClasses = (c: Uint32Array) => {
+  const sorted = Arr.sort(c, Order.Number);
+  let count = Arr.isReadonlyArrayNonEmpty(sorted) ? 1 : 0;
+  for (let k = 1; k < sorted.length; k++) if (sorted[k] !== sorted[k - 1]) count++;
+  return count;
+};
+
 /**
  * Iterative colour refinement: a node's colour is repeatedly refined by the
  * (multiset of) tuples it occurs in, and its positions in them, until the
@@ -252,12 +260,6 @@ const refine = (tuples: ReadonlyArray<Tuple>): Partition => {
   const nN = nodes.length;
   let colour = new Uint32Array(nN);
   for (let n = 0; n < nN; n++) colour[n] = hashString(kindOf(nodes[n]!));
-  const countClasses = (c: Uint32Array) => {
-    const sorted = Arr.sort(c, Order.Number);
-    let count = Arr.isReadonlyArrayNonEmpty(sorted) ? 1 : 0;
-    for (let k = 1; k < sorted.length; k++) if (sorted[k] !== sorted[k - 1]) count++;
-    return count;
-  };
   let classes = countClasses(colour);
   const tupleHash = new Uint32Array(nT);
   for (let round = 0; round <= nN && classes < nN; round++) {
@@ -287,6 +289,18 @@ const refine = (tuples: ReadonlyArray<Tuple>): Partition => {
 
 const tupleKey = (t: Tuple): string => t.join('\u0001');
 
+/** Groups a partition's nodes by their colour label. */
+const groupByLabel = (p: Partition) => {
+  const groups = new Map<string, Array<string>>();
+  for (const n of p.nodes) {
+    const l = p.labels.get(n)!;
+    let g = groups.get(l);
+    if (g === undefined) groups.set(l, (g = []));
+    g.push(n);
+  }
+  return groups;
+};
+
 const bijectionTuples = (
   a: ReadonlyArray<Tuple>,
   b: ReadonlyArray<Tuple>,
@@ -306,18 +320,8 @@ const bijectionTuples = (
   const pa = refine(aNodes);
   const pb = refine(bNodes);
   if (pa.nodes.length !== pb.nodes.length) return Option.none();
-  const group = (p: Partition) => {
-    const groups = new Map<string, Array<string>>();
-    for (const n of p.nodes) {
-      const l = p.labels.get(n)!;
-      let g = groups.get(l);
-      if (g === undefined) groups.set(l, (g = []));
-      g.push(n);
-    }
-    return groups;
-  };
-  const groupsA = group(pa);
-  const groupsB = group(pb);
+  const groupsA = groupByLabel(pa);
+  const groupsB = groupByLabel(pb);
   for (const [l, g] of groupsA) if (groupsB.get(l)?.length !== g.length) return Option.none();
 
   const mapping = new Map<string, string>();
@@ -379,6 +383,9 @@ const bijectionTuples = (
   return i === order.length ? Option.some(mapping) : Option.none();
 };
 
+/** Renders an internal `b:` / `v:` node key as `_:label` / `?name`. */
+const renderNode = (a: string) => (a.startsWith('b:') ? `_:${a.slice(2)}` : `?${a.slice(2)}`);
+
 /**
  * Finds a renaming of blank nodes and variables from `self` to `that` under
  * which the two formulas are equal. Keys of the returned map are
@@ -396,8 +403,7 @@ export const bijection = (
     const out = new Map<string, string>();
     for (const [k, v] of m) {
       if (k.startsWith('l:') || k.startsWith('f:')) continue;
-      const render = (a: string) => (a.startsWith('b:') ? `_:${a.slice(2)}` : `?${a.slice(2)}`);
-      out.set(render(k), render(v));
+      out.set(renderNode(k), renderNode(v));
     }
     return out;
   });

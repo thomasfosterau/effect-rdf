@@ -141,6 +141,8 @@ const escapeRegexp = (s: string): string =>
 
 const escapeCode = (s: string): string => s.replace(/\\/g, '\\\\').replace(/%/g, '\\%');
 
+const quoteLiteral = (s: string): string => `"${escapeString(s)}"`;
+
 class Printer {
   readonly prefixes: PrefixMap.PrefixMap;
   readonly base: string | undefined;
@@ -218,11 +220,10 @@ class Printer {
       // SAFETY: a value without a string `type`, or with a `value`, is an object literal in ShExJ.
       return this.literal(v as ShExJ.ObjectLiteral);
     }
-    const lit = (s: string) => `"${escapeString(s)}"`;
     return Match.value(v).pipe(
       Match.withReturnType<string>(),
       Match.discriminator('type')('IriStem', (member) => `${this.iri(member.stem)}~`),
-      Match.discriminator('type')('LiteralStem', (member) => `${lit(member.stem)}~`),
+      Match.discriminator('type')('LiteralStem', (member) => `${quoteLiteral(member.stem)}~`),
       Match.discriminator('type')('Language', (member) => `@${member.languageTag}`),
       Match.discriminator('type')('LanguageStem', (member) =>
         member.stem === '' ? '@~' : `@${member.stem}~`,
@@ -237,8 +238,10 @@ class Printer {
       Match.discriminator('type')(
         'LiteralStemRange',
         (member) =>
-          `${Predicate.isString(member.stem) ? `${lit(member.stem)}~` : '.'}${member.exclusions
-            .map((e) => ` - ${Predicate.isString(e) ? lit(e) : `${lit(e.stem)}~`}`)
+          `${Predicate.isString(member.stem) ? `${quoteLiteral(member.stem)}~` : '.'}${member.exclusions
+            .map(
+              (e) => ` - ${Predicate.isString(e) ? quoteLiteral(e) : `${quoteLiteral(e.stem)}~`}`,
+            )
             .join('')}`,
       ),
       Match.discriminator('type')(

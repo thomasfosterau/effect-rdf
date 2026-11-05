@@ -407,6 +407,27 @@ export const fromDataset = (dataset: Dataset.Dataset): Effect.Effect<ShExJ.Schem
 // Writing
 // -----------------------------------------------------------------------------
 
+const labelTerm = (label: string): Term.NamedNode | Term.BlankNode =>
+  label.startsWith('_:') ? Term.blankNode(label.slice(2)) : Term.namedNode(label);
+
+const integerLiteral = (v: number) => Term.literal(String(v), Term.namedNode(`${XSD}integer`));
+
+const numericLiteral = (v: number) =>
+  Number.isInteger(v)
+    ? integerLiteral(v)
+    : Term.literal(String(v), Term.namedNode(`${XSD}decimal`));
+
+const booleanLiteral = (v: boolean) => Term.literal(String(v), Term.namedNode(`${XSD}boolean`));
+
+const objectValueTerm = (v: ShExJ.ObjectValue): Term.Object =>
+  Predicate.isString(v)
+    ? Term.namedNode(v)
+    : v.language !== undefined
+      ? Term.literal(v.value, v.language)
+      : v.type !== undefined
+        ? Term.literal(v.value, Term.namedNode(v.type))
+        : Term.literal(v.value);
+
 /**
  * Writes a schema as ShExR quads (in the default graph). Blank nodes are
  * generated for anonymous expressions.
@@ -418,12 +439,6 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
   const quads: Array<Term.Quad> = [];
   const add = (s: Term.Subject, p: Term.NamedNode, o: Term.Object) =>
     quads.push(Term.quad(s, p, o));
-  const node = (label: string): Term.NamedNode | Term.BlankNode =>
-    label.startsWith('_:') ? Term.blankNode(label.slice(2)) : Term.namedNode(label);
-  const int = (v: number) => Term.literal(String(v), Term.namedNode(`${XSD}integer`));
-  const num = (v: number) =>
-    Number.isInteger(v) ? int(v) : Term.literal(String(v), Term.namedNode(`${XSD}decimal`));
-  const bool = (v: boolean) => Term.literal(String(v), Term.namedNode(`${XSD}boolean`));
   const list = (items: ReadonlyArray<Term.Object>): Term.Object => {
     if (Arr.isReadonlyArrayEmpty(items)) return rdfNil;
     const cells = items.map(() => Term.blankNode());
@@ -433,14 +448,6 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     });
     return cells[0]!;
   };
-  const objectValue = (v: ShExJ.ObjectValue): Term.Object =>
-    Predicate.isString(v)
-      ? Term.namedNode(v)
-      : v.language !== undefined
-        ? Term.literal(v.value, v.language)
-        : v.type !== undefined
-          ? Term.literal(v.value, Term.namedNode(v.type))
-          : Term.literal(v.value);
   const meta = (
     s: Term.Subject,
     x: { semActs?: ReadonlyArray<ShExJ.SemAct>; annotations?: ReadonlyArray<ShExJ.Annotation> },
@@ -455,7 +462,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
             const b = Term.blankNode();
             add(b, rdfType, sx('Annotation'));
             add(b, sx('predicate'), Term.namedNode(a.predicate));
-            add(b, sx('object'), objectValue(a.object));
+            add(b, sx('object'), objectValueTerm(a.object));
             return b;
           }),
         ),
@@ -482,7 +489,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
   const valueSetValue = (v: ShExJ.ValueSetValue): Term.Object => {
     if (Predicate.isString(v) || !('type' in v) || 'value' in v)
       // SAFETY: a value without `type`, or with a `value`, is an object value in ShExJ.
-      return objectValue(v);
+      return objectValueTerm(v);
     const b = Term.blankNode();
     add(b, rdfType, sx(v.type));
     Match.value(v).pipe(
@@ -515,7 +522,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     return b;
   };
   const shapeExpr = (e: ShExJ.ShapeExprOrRef, subject?: Term.Subject): Term.Object => {
-    if (Predicate.isString(e)) return node(e);
+    if (Predicate.isString(e)) return labelTerm(e);
     const s = subject ?? Term.blankNode();
     add(s, rdfType, sx(e.type));
     Match.value(e).pipe(
@@ -536,9 +543,9 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
           'totaldigits',
           'fractiondigits',
         ] as const)
-          if (expr[f] !== undefined) add(s, sx(f), int(expr[f]));
+          if (expr[f] !== undefined) add(s, sx(f), integerLiteral(expr[f]));
         for (const f of ['mininclusive', 'minexclusive', 'maxinclusive', 'maxexclusive'] as const)
-          if (expr[f] !== undefined) add(s, sx(f), num(expr[f]));
+          if (expr[f] !== undefined) add(s, sx(f), numericLiteral(expr[f]));
         if (expr.pattern !== undefined) add(s, sx('pattern'), Term.literal(expr.pattern));
         if (expr.flags !== undefined) add(s, sx('flags'), Term.literal(expr.flags));
         if (expr.values !== undefined) add(s, sx('values'), list(expr.values.map(valueSetValue)));
@@ -547,7 +554,7 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
       Match.discriminator('type')('Shape', (expr) => {
         if (expr.extends !== undefined)
           add(s, sx('extends'), list(expr.extends.map((x) => shapeExpr(x))));
-        if (expr.closed !== undefined) add(s, sx('closed'), bool(expr.closed));
+        if (expr.closed !== undefined) add(s, sx('closed'), booleanLiteral(expr.closed));
         for (const p of expr.extra ?? []) add(s, sx('extra'), Term.namedNode(p));
         if (expr.expression !== undefined) add(s, sx('expression'), tripleExpr(expr.expression));
         meta(s, expr);
@@ -557,18 +564,18 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
     return s;
   };
   const tripleExpr = (t: ShExJ.TripleExprOrRef): Term.Object => {
-    if (Predicate.isString(t)) return node(t);
-    const s = t.id !== undefined ? node(t.id) : Term.blankNode();
+    if (Predicate.isString(t)) return labelTerm(t);
+    const s = t.id !== undefined ? labelTerm(t.id) : Term.blankNode();
     add(s, rdfType, sx(t.type));
     if (t.type === 'TripleConstraint') {
-      if (t.inverse !== undefined) add(s, sx('inverse'), bool(t.inverse));
+      if (t.inverse !== undefined) add(s, sx('inverse'), booleanLiteral(t.inverse));
       add(s, sx('predicate'), Term.namedNode(t.predicate));
       if (t.valueExpr !== undefined) add(s, sx('valueExpr'), shapeExpr(t.valueExpr));
     } else {
       add(s, sx('expressions'), list(t.expressions.map(tripleExpr)));
     }
-    if (t.min !== undefined) add(s, sx('min'), int(t.min));
-    if (t.max !== undefined) add(s, sx('max'), int(t.max));
+    if (t.min !== undefined) add(s, sx('min'), integerLiteral(t.min));
+    if (t.max !== undefined) add(s, sx('max'), integerLiteral(t.max));
     meta(s, t);
     return s;
   };
@@ -580,9 +587,9 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
   if (schema.start !== undefined) add(root, sx('start'), shapeExpr(schema.start));
   if (schema.shapes !== undefined) {
     const decls = schema.shapes.map((d) => {
-      const s = node(d.id);
+      const s = labelTerm(d.id);
       add(s, rdfType, sx('ShapeDecl'));
-      if (d.abstract !== undefined) add(s, sx('abstract'), bool(d.abstract));
+      if (d.abstract !== undefined) add(s, sx('abstract'), booleanLiteral(d.abstract));
       if (d.restricts !== undefined)
         add(s, sx('restricts'), list(d.restricts.map((x) => shapeExpr(x))));
       add(s, sx('shapeExpr'), shapeExpr(d.shapeExpr));
