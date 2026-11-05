@@ -4,12 +4,13 @@ A typed SPARQL 1.1 Protocol and Graph Store client on `effect/http` `HttpClient`
 
 ## Boundary
 
-Peers: `effect`. Imports from this workspace: core, jsonld, n3, ntriples, rdfjson, rdfxml, sparql, turtle (tests also use sparql-server) — `.fallowrc.json` zone `sparql-client`.
+Peers: `effect`. Imports from this workspace: core, jsonld, n3, ntriples, rdfjson, rdfxml, sparql, sparql-server (only the `SparqlApi` definition and `Errors`, which never reach Node — `SparqlApiClient.ts`), turtle — `.fallowrc.json` zone `sparql-client`.
 
 ## Invariants
 
 - **Results stream:** JSON, XML, TSV and CSV `SELECT` results and N-Triples graphs are parsed incrementally.
-- **Every failure is a `SparqlClientError` member** (`HttpStatusError` with the body, `MalformedResponseError`, `UnsupportedMediaTypeError`, `TransportError`, `TimeoutError`, `ConfigurationError`); retries apply to transient failures only by default.
+- **`SparqlApiClient` is derived from the server's `SparqlApi`** with `HttpApiClient`; its failures are the generated client's (`ProtocolError`, `HttpClientError`, `SchemaError`) plus `MalformedResponseError` / `UnsupportedMediaTypeError`.
+- **Every failure of `SparqlClient` is a `SparqlClientError` member** (`HttpStatusError` with the body, `MalformedResponseError`, `UnsupportedMediaTypeError`, `TransportError`, `TimeoutError`, `ConfigurationError`); retries apply to transient failures only by default.
 - **707 / 707 evaluation tests pass over HTTP** against an in-process `effect-sparql-server`; `service` 7 / 7. The declaration build uses `tsconfig.build.json` (src only) because the tests import the sparql package's test support.
 
 ## Terms

@@ -19,6 +19,10 @@ export * as Protocol from './Protocol.ts';
 /** @since 0.1.0 */
 export * as ServiceDescription from './ServiceDescription.ts';
 /** @since 0.1.0 */
+export * as SparqlApi from './SparqlApi.ts';
+/** @since 0.1.0 */
+export * as SparqlApiBuilder from './SparqlApiBuilder.ts';
+/** @since 0.1.0 */
 export * as SparqlServer from './SparqlServer.ts';
 /** @since 0.1.0 */
 export * as Testing from './Testing.ts';

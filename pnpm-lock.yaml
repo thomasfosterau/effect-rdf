@@ -366,6 +366,9 @@ importers:
       '@thomasfosterau/effect-sparql':
         specifier: workspace:*
         version: link:../sparql
+      '@thomasfosterau/effect-sparql-server':
+        specifier: workspace:*
+        version: link:../sparql-server
       '@thomasfosterau/effect-turtle':
         specifier: workspace:*
         version: link:../turtle
@@ -373,9 +376,6 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.1.1(effect@4.1.1)(vitest@5.0.5)
-      '@thomasfosterau/effect-sparql-server':
-        specifier: workspace:*
-        version: link:../sparql-server
       effect:
         specifier: 4.1.1
         version: 4.1.1

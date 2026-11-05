@@ -52,11 +52,11 @@
     "@thomasfosterau/effect-rdfjson": "workspace:*",
     "@thomasfosterau/effect-rdfxml": "workspace:*",
     "@thomasfosterau/effect-sparql": "workspace:*",
+    "@thomasfosterau/effect-sparql-server": "workspace:*",
     "@thomasfosterau/effect-turtle": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@thomasfosterau/effect-sparql-server": "workspace:*",
     "effect": "catalog:",
     "vitest": "catalog:"
   },
