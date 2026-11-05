@@ -224,6 +224,43 @@ describe('Validator', () => {
     }),
   );
 
+  it('encodes a report through Schema.toCodecJson', () => {
+    const report = ValidationReport.make([
+      ValidationReport.makeResult({
+        focusNode: ex('n'),
+        sourceShape: Term.blankNode('shape'),
+        sourceConstraintComponent: sh.MinCountConstraintComponent,
+        resultPath: Option.some(
+          Path.sequence(
+            Path.predicate(ex('p')),
+            Path.inverse(Path.zeroOrMore(Path.predicate(ex('q')))),
+          ),
+        ),
+        value: Option.some(Term.triple(ex('s'), ex('p'), Term.literal('o', 'en'))),
+        messages: [Term.literal('too few')],
+        details: [
+          ValidationReport.makeResult({
+            focusNode: Term.literal('1', xsd.integer),
+            sourceShape: ex('S'),
+            sourceConstraintComponent: sh.DatatypeConstraintComponent,
+          }),
+        ],
+      }),
+    ]);
+    const codec = Schema.toCodecJson(ValidationReport.ValidationReportSchema);
+    const json = Schema.encodeSync(codec)(report);
+    const text = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(json);
+    expect(Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(text)).toStrictEqual(json);
+    const back = Schema.decodeSync(codec)(json);
+    expect(
+      Isomorphism.isomorphic(ValidationReport.toDataset(back), ValidationReport.toDataset(report)),
+    ).toBe(true);
+    expect(back.results[0]?.details[0]?.focusNode.key).toBe(
+      '"1"^^<http://www.w3.org/2001/XMLSchema#integer>',
+    );
+    expect(Schema.encodeSync(codec)(back)).toStrictEqual(json);
+  });
+
   it.effect('covers value, string and pair constraints', () =>
     Effect.gen(function* () {
       const shapes = ttl(`

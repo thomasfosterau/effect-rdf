@@ -13,7 +13,8 @@ An Effect-native [SHACL Core](https://www.w3.org/TR/shacl/) validator for
   layer that pre-compiles a shapes graph, and a `Schema` that only accepts
   conforming datasets.
 - **`ValidationReport`**: the typed report model, convertible to and from the
-  standard RDF validation report graph.
+  standard RDF validation report graph; `ValidationReportSchema` has a JSON
+  codec (`Schema.toCodecJson`) that mirrors the model.
 - **`Sparql`**: the `SparqlConstraintEvaluator` service interface, the extension
   point for SHACL-SPARQL (`sh:sparql`, SPARQL-based constraint components,
   `sh:target`), implemented by `@thomasfosterau/effect-shacl-sparql`.

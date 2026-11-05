@@ -10,6 +10,7 @@ import * as Arr from 'effect/Array';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
+import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as Path from './Path.ts';
 import { sh } from './Vocabulary.ts';
 import * as Predicate from 'effect/Predicate';
@@ -104,13 +105,67 @@ export const make = (results: ReadonlyArray<ValidationResult>): ValidationReport
 export const isValidationReport = (u: unknown): u is ValidationReport =>
   Predicate.isTagged(u, 'ValidationReport');
 
+// The structural shape of the report model, which `ValidationReportSchema` links to as its JSON
+// codec: `Schema.toCodecJson` derives the terms' JSON through their own declarations.
+const PathStruct: Schema.Codec<Path.Path> = Schema.Union([
+  Schema.Struct({ _tag: Schema.tag('PredicatePath'), predicate: Term.NamedNodeSchema }),
+  Schema.Struct({
+    _tag: Schema.tag('SequencePath'),
+    paths: Schema.Array(Schema.suspend((): Schema.Codec<Path.Path> => PathStruct)),
+  }),
+  Schema.Struct({
+    _tag: Schema.tag('AlternativePath'),
+    paths: Schema.Array(Schema.suspend((): Schema.Codec<Path.Path> => PathStruct)),
+  }),
+  ...(['InversePath', 'ZeroOrMorePath', 'OneOrMorePath', 'ZeroOrOnePath'] as const).map((tag) =>
+    Schema.Struct({
+      _tag: Schema.tag(tag),
+      path: Schema.suspend((): Schema.Codec<Path.Path> => PathStruct),
+    }),
+  ),
+]).annotate({ identifier: 'Path' });
+
+const ResourceSchema = Schema.Union([Term.NamedNodeSchema, Term.BlankNodeSchema]);
+
+const ValidationResultStruct: Schema.Codec<ValidationResult> = Schema.Struct({
+  _tag: Schema.tag('ValidationResult'),
+  focusNode: Term.GroundTermSchema,
+  resultPath: Schema.Option(PathStruct),
+  value: Schema.Option(Term.GroundTermSchema),
+  sourceShape: ResourceSchema,
+  sourceConstraintComponent: ResourceSchema,
+  sourceConstraint: Schema.Option(ResourceSchema),
+  severity: Term.NamedNodeSchema,
+  messages: Schema.Array(Term.LiteralSchema),
+  details: Schema.Array(
+    Schema.suspend((): Schema.Codec<ValidationResult> => ValidationResultStruct),
+  ),
+}).annotate({ identifier: 'ValidationResult' });
+
+// `conforms` is derived from the results (`make`), so the JSON carries only the results.
+const ValidationReportJson = Schema.Struct({ results: Schema.Array(ValidationResultStruct) });
+
 /**
+ * Schema of a validation report; its JSON codec is `{ results }`, mirroring
+ * the result model with terms as `TermJson` terms and `Option`s in Effect's
+ * JSON form (`conforms` is recomputed from the results on decode).
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const ValidationReportSchema: Schema.declare<ValidationReport> = Schema.declare(
   isValidationReport,
-  { identifier: 'ValidationReport' },
+  {
+    identifier: 'ValidationReport',
+    toCodecJson: () =>
+      Schema.link<ValidationReport>()(
+        ValidationReportJson,
+        SchemaTransformation.transform({
+          decode: ({ results }) => make(results),
+          encode: ({ results }) => ({ results }),
+        }),
+      ),
+  },
 );
 
 /**

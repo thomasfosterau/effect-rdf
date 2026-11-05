@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
+import * as Equal from 'effect/Equal';
 import * as Exit from 'effect/Exit';
 import * as Schema from 'effect/Schema';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -352,5 +353,35 @@ describe('Reasoner', () => {
     expect(answers.map((b) => [b.get('x')!.key, b.get('z')!.key])).toEqual([
       [`<${EX}a>`, `<${EX}c>`],
     ]);
+  });
+});
+
+const exIri = (l: string) => Term.namedNode(`http://example.org/${l}`);
+
+describe('Model JSON codecs', () => {
+  it('round-trips N3 terms through Schema.toCodecJson', () => {
+    const inner = Model.formula([
+      Model.statement(
+        Term.variable('x'),
+        exIri('p'),
+        Model.collection([Term.literal('a', 'en'), Term.blankNode('b')]),
+      ),
+      Model.statement(Term.literal('lit'), exIri('q'), Model.emptyFormula),
+    ]);
+    const term = Model.collection([inner, exIri('s'), Model.collection([])]);
+    const codec = Schema.toCodecJson(Model.N3TermSchema);
+    const json = Schema.encodeSync(codec)(term);
+    const text = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(json);
+    expect(Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(text)).toStrictEqual(json);
+    expect(json).toMatchObject({
+      type: 'collection',
+      items: [{ type: 'formula' }, { type: 'uri' }, { type: 'collection', items: [] }],
+    });
+    expect(Equal.equals(Schema.decodeSync(codec)(json), term)).toBe(true);
+    const statement = Model.statement(exIri('s'), exIri('p'), inner);
+    const sCodec = Schema.toCodecJson(Model.StatementSchema);
+    expect(
+      Equal.equals(Schema.decodeSync(sCodec)(Schema.encodeSync(sCodec)(statement)), statement),
+    ).toBe(true);
   });
 });

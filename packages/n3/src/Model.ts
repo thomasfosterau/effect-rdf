@@ -35,6 +35,7 @@ import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import * as Order from 'effect/Order';
 import { hasProperty } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
+import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 
@@ -480,11 +481,26 @@ export const hasStatement = (self: Formula, statement: Statement): boolean =>
 // -----------------------------------------------------------------------------
 
 /**
+ * Schema of a formula; its JSON codec is
+ * `{ "type": "formula", "statements": [{ subject, predicate, object }, …] }`
+ * over JSON N3 terms.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const FormulaSchema: Schema.declare<Formula> = Schema.declare(isFormula, {
   identifier: 'Formula',
+  toCodecJson: () =>
+    Schema.link<Formula>()(
+      Schema.Struct({
+        type: Schema.tag('formula'),
+        statements: Schema.Array(Schema.suspend(() => StatementSchema)),
+      }),
+      SchemaTransformation.transform({
+        decode: (j) => new Formula(j.statements),
+        encode: (f) => ({ type: 'formula' as const, statements: f.statements }),
+      }),
+    ),
 });
 
 /**
@@ -496,11 +512,25 @@ export const FormulaSchema: Schema.declare<Formula> = Schema.declare(isFormula, 
 export type FormulaSchema = typeof FormulaSchema.Type;
 
 /**
+ * Schema of a collection; its JSON codec is
+ * `{ "type": "collection", "items": [ … ] }` over JSON N3 terms.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const CollectionSchema: Schema.declare<Collection> = Schema.declare(isCollection, {
   identifier: 'Collection',
+  toCodecJson: () =>
+    Schema.link<Collection>()(
+      Schema.Struct({
+        type: Schema.tag('collection'),
+        items: Schema.Array(Schema.suspend(() => N3TermSchema)),
+      }),
+      SchemaTransformation.transform({
+        decode: (j) => new Collection(j.items),
+        encode: (c) => ({ type: 'collection' as const, items: c.items }),
+      }),
+    ),
 });
 
 /**
@@ -512,11 +542,26 @@ export const CollectionSchema: Schema.declare<Collection> = Schema.declare(isCol
 export type CollectionSchema = typeof CollectionSchema.Type;
 
 /**
+ * Schema of a statement; its JSON codec is `{ subject, predicate, object }`
+ * over JSON N3 terms.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const StatementSchema: Schema.declare<Statement> = Schema.declare(isStatement, {
   identifier: 'Statement',
+  toCodecJson: () =>
+    Schema.link<Statement>()(
+      Schema.Struct({
+        subject: Schema.suspend(() => N3TermSchema),
+        predicate: Schema.suspend(() => N3TermSchema),
+        object: Schema.suspend(() => N3TermSchema),
+      }),
+      SchemaTransformation.transform({
+        decode: (j) => new Statement(j.subject, j.predicate, j.object),
+        encode: (st) => ({ subject: st.subject, predicate: st.predicate, object: st.object }),
+      }),
+    ),
 });
 
 /**
@@ -528,11 +573,26 @@ export const StatementSchema: Schema.declare<Statement> = Schema.declare(isState
 export type StatementSchema = typeof StatementSchema.Type;
 
 /**
+ * Schema of any N3 term; its JSON codec is core's `TermJson` term (IRIs,
+ * blank nodes, literals, variables) or a JSON collection or formula.
+ *
  * @since 0.1.0
  * @category schemas
  */
 export const N3TermSchema: Schema.declare<N3Term> = Schema.declare(isN3Term, {
   identifier: 'N3Term',
+  toCodecJson: () =>
+    Schema.link<N3Term>()(
+      Schema.Union([
+        Term.NamedNodeSchema,
+        Term.BlankNodeSchema,
+        Term.LiteralSchema,
+        Term.VariableSchema,
+        CollectionSchema,
+        FormulaSchema,
+      ]),
+      SchemaTransformation.passthrough(),
+    ),
 });
 
 /**
