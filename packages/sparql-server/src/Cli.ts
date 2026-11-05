@@ -12,13 +12,15 @@
  *
  * @since 0.1.0
  */
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
+import * as NodePath from '@effect/platform-node/NodePath';
 import * as Effect from 'effect/Effect';
+import * as FileSystem from 'effect/FileSystem';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Path from 'effect/Path';
+import * as PlatformError from 'effect/PlatformError';
 import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import type * as HttpServerError from 'effect/http/HttpServerError';
@@ -163,7 +165,10 @@ export const parse = (argv: ReadonlyArray<string>): Effect.Effect<Arguments, Cli
   });
 
 /**
- * Loads RDF files into a dataset, choosing parsers by file extension.
+ * Loads RDF files into a dataset through Effect's `FileSystem`, choosing
+ * parsers by file extension from the `Formats` service. Relative IRIs
+ * resolve against each file's `file:` URL; with `graphPerFile`, a file's
+ * default-graph triples go into a graph named by that URL.
  *
  * @since 0.1.0
  * @category cli
@@ -171,31 +176,31 @@ export const parse = (argv: ReadonlyArray<string>): Effect.Effect<Arguments, Cli
 export const load = (
   files: ReadonlyArray<string>,
   graphPerFile: boolean,
-): Effect.Effect<Dataset.Dataset, CliError | Serialization.RdfParseError, Serialization.Formats> =>
+): Effect.Effect<
+  Dataset.Dataset,
+  CliError | Serialization.RdfParseError,
+  Serialization.Formats | FileSystem.FileSystem | Path.Path
+> =>
   Effect.gen(function* () {
     const formats = yield* Serialization.Formats;
+    const paths = yield* Path.Path;
     const perFile = yield* Effect.forEach(
       files,
       Effect.fnUntraced(function* (file) {
-        const ext = path.extname(file);
-        const parser = Serialization.parserForExtension(formats, ext);
+        const parser = Serialization.parserForExtension(formats, paths.extname(file));
         if (Option.isNone(parser)) {
           return yield* new CliError({ message: `Unknown RDF file extension: ${file}` });
         }
-        const text = yield* Effect.tryPromise({
-          try: () => fs.readFile(file, 'utf8'),
-          catch: (e) =>
-            new CliError({
-              message: `Cannot read ${file}: ${
-                Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
-                  ? e.message
-                  : String(e)
-              }`,
-            }),
-        });
-        const url = pathToFileURL(path.resolve(file)).href;
+        const cannotRead = (e: PlatformError.PlatformError) =>
+          new CliError({ message: `Cannot read ${file}: ${e.message}` });
+        const url = (yield* paths
+          .toFileUrl(paths.resolve(file))
+          .pipe(Effect.mapError((e) => cannotRead(new PlatformError.PlatformError(e))))).href;
+        const result = yield* Serialization.readFile(file, {
+          parser: parser.value,
+          baseIri: url,
+        }).pipe(Effect.catchTag('PlatformError', (e) => Effect.fail(cannotRead(e))));
         const graph = graphPerFile ? Term.namedNode(url) : undefined;
-        const result = yield* parser.value.parse(text, { baseIri: url });
         const quads = Array.from(result.dataset, (q) =>
           graph !== undefined && q.graph._tag === 'DefaultGraph'
             ? new Term.Quad(q.subject, q.predicate, q.object, graph)
@@ -226,7 +231,10 @@ export const run = (
         process.stdout.write(usage);
       });
     }
-    const data = yield* Effect.provide(load(args.files, args.graphPerFile), Formats.layer);
+    const data = yield* Effect.provide(
+      load(args.files, args.graphPerFile),
+      Layer.mergeAll(Formats.layer, NodeFileSystem.layer, NodePath.layer),
+    );
     const server = SparqlServer.layerMemory({
       ...args.serve,
       data,

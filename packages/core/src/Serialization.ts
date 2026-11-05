@@ -11,15 +11,19 @@
 import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as FileSystem from 'effect/FileSystem';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Path from 'effect/Path';
+import type * as PlatformError from 'effect/PlatformError';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as Stream from 'effect/Stream';
 import * as Dataset from './Dataset.ts';
 import * as PrefixMap from './PrefixMap.ts';
+import * as TextDecoder from './internal/textDecoder.ts';
 import type * as Term from './Term.ts';
 
 // -----------------------------------------------------------------------------
@@ -382,6 +386,20 @@ export const parserForExtension = (
 };
 
 /**
+ * Finds a serializer for a file extension (with or without leading dot).
+ *
+ * @since 0.1.0
+ * @category lookup
+ */
+export const serializerForExtension = (
+  formats: Formats['Service'],
+  extension: string,
+): Option.Option<Serializer<any>> => {
+  const ext = extension.replace(/^\./, '').toLowerCase();
+  return Option.fromNullishOr(formats.serializers.find((s) => s.format.extensions.includes(ext)));
+};
+
+/**
  * A parsed `Accept` header entry.
  *
  * @since 0.1.0
@@ -465,3 +483,208 @@ export const negotiate = (
 export const freshBlankNodePrefix = (): string => `b${(documentCounter++).toString(36)}_`;
 
 let documentCounter = 0;
+
+// -----------------------------------------------------------------------------
+// Bytes
+// -----------------------------------------------------------------------------
+
+/**
+ * Options for reading bytes: a parser's options plus the text encoding.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface BytesOptions {
+  /**
+   * The character encoding of the input, as in a `charset` media-type
+   * parameter. Defaults to UTF-8, which is validated strictly; a leading byte
+   * order mark is dropped.
+   */
+  readonly charset?: string | undefined;
+}
+
+const decodeFailure = (format: Format, failure: TextDecoder.DecodeFailure): RdfParseError =>
+  new RdfParseError({
+    format: format.name,
+    message: failure.message,
+    line: failure.line,
+    column: failure.column,
+  });
+
+/**
+ * Parses a stream of bytes (from `FileSystem.stream`, an HTTP body, a socket
+ * or a child process) into a stream of quads. The bytes are decoded as UTF-8
+ * by default (or as `options.charset`), across chunk boundaries; ill-formed
+ * input fails with an `RdfParseError` at the line and column of the bad
+ * byte, never a defect.
+ *
+ * @since 0.1.0
+ * @category parsing
+ */
+export const parseBytes = <Options extends ParseOptions, E, R>(
+  parser: Parser<Options>,
+  input: Stream.Stream<Uint8Array, E, R>,
+  options?: Options & BytesOptions,
+): Stream.Stream<Term.Quad, RdfParseError | E, R> =>
+  Stream.suspend(() => {
+    const decoder = TextDecoder.make(options?.charset);
+    const step = (result: string | TextDecoder.DecodeFailure) =>
+      TextDecoder.isFailure(result)
+        ? Effect.fail(decodeFailure(parser.format, result))
+        : Effect.succeed(result);
+    const text = input.pipe(
+      Stream.mapEffect((chunk) => step(decoder.push(chunk))),
+      Stream.concat(Stream.fromEffect(Effect.suspend(() => step(decoder.end())))),
+      Stream.filter((chunk) => chunk !== ''),
+    );
+    return parser.parseStream(text, options);
+  });
+
+/**
+ * Decodes a complete document's bytes as `parseBytes` does, then parses it
+ * with `parser.parse` (so the result keeps the document's prefixes and base).
+ *
+ * @since 0.1.0
+ * @category parsing
+ */
+export const parseBytesDocument = <Options extends ParseOptions>(
+  parser: Parser<Options>,
+  input: Uint8Array,
+  options?: Options & BytesOptions,
+): Effect.Effect<ParseResult, RdfParseError> =>
+  Effect.suspend(() => {
+    const decoder = TextDecoder.make(options?.charset);
+    const body = decoder.push(input);
+    if (TextDecoder.isFailure(body)) return Effect.fail(decodeFailure(parser.format, body));
+    const rest = decoder.end();
+    if (TextDecoder.isFailure(rest)) return Effect.fail(decodeFailure(parser.format, rest));
+    return parser.parse(body + rest, options);
+  });
+
+/**
+ * Serialises quads to a stream of UTF-8 bytes.
+ *
+ * @since 0.1.0
+ * @category serializing
+ */
+export const serializeBytes = <Options extends SerializeOptions>(
+  serializer: Serializer<Options>,
+  quads: Iterable<Term.Quad>,
+  options?: Options,
+): Stream.Stream<Uint8Array, RdfSerializeError> =>
+  Stream.encodeText(serializer.serializeStream(Stream.fromIterable(quads), options));
+
+// -----------------------------------------------------------------------------
+// Files
+// -----------------------------------------------------------------------------
+
+/**
+ * Options for `readFile`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface ReadFileOptions extends ParseOptions, BytesOptions {
+  /** The parser to use; otherwise one is chosen by `mediaType` or the file extension. */
+  readonly parser?: Parser<any> | undefined;
+  /** A media type to find the parser by in the `Formats` service. */
+  readonly mediaType?: string | undefined;
+}
+
+/**
+ * Options for `writeFile`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface WriteFileOptions extends SerializeOptions {
+  /** The serializer to use; otherwise one is chosen by `mediaType` or the file extension. */
+  readonly serializer?: Serializer<any> | undefined;
+  /** A media type to find the serializer by in the `Formats` service. */
+  readonly mediaType?: string | undefined;
+}
+
+const fromFormats = <A>(
+  explicit: A | undefined,
+  lookup: (formats: Formats['Service']) => Option.Option<A>,
+): Effect.Effect<Option.Option<A>> =>
+  explicit === undefined
+    ? Effect.map(Effect.serviceOption(Formats), Option.flatMap(lookup))
+    : Effect.succeedSome(explicit);
+
+/**
+ * Reads an RDF file through Effect's platform-agnostic `FileSystem` (the
+ * consumer provides `NodeFileSystem`, Bun or another layer). The parser is
+ * `options.parser`, or is looked up in the `Formats` service by
+ * `options.mediaType` or the file extension. Relative IRIs resolve against
+ * the file's `file:` URL unless `options.baseIri` is given.
+ *
+ * @since 0.1.0
+ * @category files
+ */
+export const readFile = (
+  path: string,
+  options?: ReadFileOptions,
+): Effect.Effect<
+  ParseResult,
+  RdfParseError | PlatformError.PlatformError,
+  FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+    const mediaType = options?.mediaType;
+    const parser = yield* fromFormats(options?.parser, (formats) =>
+      mediaType === undefined
+        ? parserForExtension(formats, paths.extname(path))
+        : parserFor(formats, mediaType),
+    );
+    if (Option.isNone(parser)) {
+      return yield* new RdfParseError({
+        format: 'unknown',
+        message: `No parser for ${mediaType ?? path} (provide one, or a Formats layer that has one)`,
+      });
+    }
+    const bytes = yield* fs.readFile(path);
+    const baseIri =
+      options?.baseIri ??
+      Option.getOrUndefined(
+        Option.map(yield* Effect.option(paths.toFileUrl(paths.resolve(path))), (url) => url.href),
+      );
+    return yield* parseBytesDocument(parser.value, bytes, { ...options, baseIri });
+  });
+
+/**
+ * Writes quads to an RDF file through Effect's `FileSystem`, as UTF-8. The
+ * serializer is `options.serializer`, or is looked up in the `Formats`
+ * service by `options.mediaType` or the file extension.
+ *
+ * @since 0.1.0
+ * @category files
+ */
+export const writeFile = (
+  path: string,
+  quads: Iterable<Term.Quad>,
+  options?: WriteFileOptions,
+): Effect.Effect<
+  void,
+  RdfSerializeError | PlatformError.PlatformError,
+  FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+    const mediaType = options?.mediaType;
+    const serializer = yield* fromFormats(options?.serializer, (formats) =>
+      mediaType === undefined
+        ? serializerForExtension(formats, paths.extname(path))
+        : serializerFor(formats, mediaType),
+    );
+    if (Option.isNone(serializer)) {
+      return yield* new RdfSerializeError({
+        format: 'unknown',
+        message: `No serializer for ${mediaType ?? path} (provide one, or a Formats layer that has one)`,
+      });
+    }
+    return yield* Stream.run(serializeBytes(serializer.value, quads, options), fs.sink(path));
+  });
