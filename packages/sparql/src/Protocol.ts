@@ -19,6 +19,7 @@
 import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -92,16 +93,14 @@ export const parseContentType = (header: string | undefined): ContentType | unde
   if (header === undefined || header.trim() === '') return undefined;
   const [type, ...params] = header.split(';');
   const parameters: Record<string, string> = {};
-  for (const p of params) {
+  params.forEach((p) => {
     const eq = p.indexOf('=');
-    if (eq < 0) continue;
+    if (eq < 0) return;
     const key = p.slice(0, eq).trim().toLowerCase();
-    let value = p.slice(eq + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-      value = value.slice(1, -1);
-    }
-    parameters[key] = value;
-  }
+    const raw = p.slice(eq + 1).trim();
+    parameters[key] =
+      raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2 ? raw.slice(1, -1) : raw;
+  });
   return { mediaType: (type ?? '').trim().toLowerCase(), parameters };
 };
 
@@ -170,19 +169,19 @@ export const datasetFromParams = (
 
 const merge = (a: URLSearchParams, b: URLSearchParams): URLSearchParams => {
   const out = new URLSearchParams(a);
-  for (const [k, v] of b) out.append(k, v);
+  b.forEach((v, k) => out.append(k, v));
   return out;
 };
 
 const single = (
   params: URLSearchParams,
   name: string,
-): Effect.Effect<string | undefined, ProtocolErrors.ProtocolError> => {
+): Effect.Effect<Option.Option<string>, ProtocolErrors.ProtocolError> => {
   const values = params.getAll(name);
   if (values.length > 1) {
     return Effect.fail(ProtocolErrors.badRequest(`Exactly one '${name}' parameter is allowed`));
   }
-  return Effect.succeed(values[0]);
+  return Effect.succeed(Arr.head(values));
 };
 
 const readBody = (
@@ -212,10 +211,10 @@ const fromParams = (
   Effect.gen(function* () {
     const query = yield* single(params, 'query');
     const update = yield* single(params, 'update');
-    if (query !== undefined && update !== undefined) {
+    if (Option.isSome(query) && Option.isSome(update)) {
       return yield* ProtocolErrors.badRequest("A request cannot have both 'query' and 'update'");
     }
-    if (update !== undefined) {
+    if (Option.isSome(update)) {
       if (method !== 'POST') {
         return yield* ProtocolErrors.badRequest('Updates must be sent with POST');
       }
@@ -227,9 +226,9 @@ const fromParams = (
         'using-named-graph-uri',
         baseIri,
       );
-      return { _tag: 'Update', update, using } as const;
+      return { _tag: 'Update', update: update.value, using } as const;
     }
-    if (query !== undefined) {
+    if (Option.isSome(query)) {
       if (!kind.query)
         return yield* ProtocolErrors.badRequest('This endpoint does not accept queries');
       const dataset = yield* datasetFromParams(
@@ -238,7 +237,7 @@ const fromParams = (
         'named-graph-uri',
         baseIri,
       );
-      return { _tag: 'Query', query, dataset } as const;
+      return { _tag: 'Query', query: query.value, dataset } as const;
     }
     if (method === 'GET' || method === 'HEAD') return { _tag: 'ServiceDescription' } as const;
     return yield* ProtocolErrors.badRequest("Missing 'query' or 'update' parameter");

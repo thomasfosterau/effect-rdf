@@ -18,6 +18,7 @@ import { createServer } from 'node:http';
 import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
@@ -90,7 +91,8 @@ const charsetUtf8 = (mediaType: string) => `${mediaType}; charset=utf-8`;
 // Query
 // -----------------------------------------------------------------------------
 
-const isGraphForm = (q: Ast.Query) => q._tag === 'Construct' || q._tag === 'Describe';
+const isGraphForm = (q: Ast.Query) =>
+  Predicate.isTagged(q, 'Construct') || Predicate.isTagged(q, 'Describe');
 
 const runQuery = (
   options: Options.Resolved,
@@ -151,27 +153,26 @@ const runQuery = (
       (
         r,
       ): Effect.Effect<
-        Results.SelectResult<Engine.SparqlError | QueryTimeout> | Results.AskResult | undefined,
+        Option.Option<Results.SelectResult<Engine.SparqlError | QueryTimeout> | Results.AskResult>,
         Engine.SparqlError | QueryTimeout
       > => {
-        if (r._tag === 'Ask') return Effect.succeed(r);
-        if (r._tag !== 'Select') return Effect.succeed(undefined);
+        if (Predicate.isTagged(r, 'Ask')) return Effect.succeedSome(r);
+        if (!Predicate.isTagged(r, 'Select')) return Effect.succeedNone;
         const bindings =
           options.maxResults === undefined
             ? r.bindings
             : Stream.take(r.bindings, options.maxResults);
-        return Effect.map(prefetch(bindings, options.queryTimeout), (b) => ({
-          ...r,
-          bindings: b,
-        }));
+        return Effect.map(prefetch(bindings, options.queryTimeout), (b) =>
+          Option.some({ ...r, bindings: b }),
+        );
       },
     );
     const result = yield* Effect.mapError(
       withTimeout(evaluated, options.queryTimeout),
       fromEngineError,
     );
-    if (result === undefined) return yield* ProtocolErrors.internal('Unexpected graph result');
-    const body = codec.value.serialize(result);
+    if (Option.isNone(result)) return yield* ProtocolErrors.internal('Unexpected graph result');
+    const body = codec.value.serialize(result.value);
     return HttpServerResponse.stream(Stream.encodeText(body), {
       contentType: charsetUtf8(codec.value.format.mediaType),
     });
@@ -182,7 +183,7 @@ const runQuery = (
 // -----------------------------------------------------------------------------
 
 const declaresDataset = (op: Ast.UpdateOperation): boolean =>
-  op._tag === 'Modify' && (op.using !== undefined || op.with !== undefined);
+  Predicate.isTagged(op, 'Modify') && (op.using !== undefined || op.with !== undefined);
 
 const runUpdate = (
   options: Options.Resolved,
@@ -241,7 +242,7 @@ const serviceDescription = (options: Options.Resolved, url: URL) =>
       formats,
       unionDefaultGraph: options.unionDefaultGraph,
       federation: options.federation,
-      namedGraphs: graphs.filter((g) => g._tag === 'NamedNode'),
+      namedGraphs: graphs.filter((g) => Predicate.isTagged(g, 'NamedNode')),
     });
     const text = yield* serializer
       .serialize(quads, {

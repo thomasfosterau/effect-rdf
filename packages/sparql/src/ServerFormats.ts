@@ -11,6 +11,7 @@
  * @since 0.1.0
  */
 import type * as Layer from 'effect/Layer';
+import * as Option from 'effect/Option';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as JsonLd from '@thomasfosterau/effect-jsonld/JsonLd';
 import * as N3 from '@thomasfosterau/effect-n3/N3';
@@ -68,7 +69,7 @@ export const negotiateSerializer = (
   accept: string | undefined,
 ): Serialization.Serializer<any> | undefined => {
   const mediaType = Serialization.negotiate(accept, serializerMediaTypes(formats));
-  if (mediaType._tag === 'None') return undefined;
+  if (Option.isNone(mediaType)) return undefined;
   const serializer = Serialization.serializerFor(formats, mediaType.value);
-  return serializer._tag === 'Some' ? serializer.value : undefined;
+  return Option.getOrUndefined(serializer);
 };

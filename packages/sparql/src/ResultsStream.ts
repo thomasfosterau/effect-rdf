@@ -17,8 +17,10 @@
 import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Iterable from 'effect/Iterable';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -60,13 +62,23 @@ const variablesEvent = (variables: ReadonlyArray<string>): ResultEvent => ({
   variables,
 });
 
+const isBooleanResult = Predicate.isTagged('Boolean');
+
 const fromParsed = (parsed: Results.ParsedResult): Array<ResultEvent> =>
-  parsed._tag === 'Boolean'
+  isBooleanResult(parsed)
     ? [{ _tag: 'Boolean', value: parsed.value }]
     : [
         variablesEvent(parsed.variables),
         ...parsed.bindings.map((bindings) => ({ _tag: 'Solution', bindings }) as const),
       ];
+
+/** Appends a solution event per row of a parsed result set (none for a boolean). */
+const pushSolutions = (parsed: Results.ParsedResult, out: Array<ResultEvent>): void => {
+  if (isBooleanResult(parsed)) return;
+  parsed.bindings.forEach((bindings) => {
+    out.push({ _tag: 'Solution', bindings });
+  });
+};
 
 const runSyncParse = (
   effect: Effect.Effect<Results.ParsedResult, Results.ResultsParseError>,
@@ -88,11 +100,25 @@ const decodeHead = Schema.decodeUnknownResult(
 
 interface Frame {
   readonly type: 'object' | 'array';
-  key: string | undefined;
+  /** The last key read in an object (`''` before the first). */
+  key: string;
   expectKey: boolean;
 }
 
 type CaptureKind = 'head' | 'boolean' | 'binding';
+
+/**
+ * One token of JSON outside a string, as capture groups: (1) a run of
+ * whitespace, (2) an opening and (3) a closing bracket, (4) `:` or `,`, (5)
+ * the body of a string that starts here, followed by (6) its closing quote or
+ * (7) a lone backslash at the end of the chunk (neither: the chunk ends inside
+ * the string); no group: a run of primitive (number, literal) characters.
+ */
+const JSON_TOKEN =
+  /([ \t\n\r]+)|([{[])|([}\]])|([:,])|"([^"\\]*(?:\\[^][^"\\]*)*)(?:(")|(\\))?|[^ \t\n\r{}[\]:,"]+/g;
+
+/** The rest of a string a chunk starts inside: up to its closing quote, a lone final backslash or the end. */
+const STRING_REST = /[^"\\]*(?:\\[^][^"\\]*)*/y;
 
 /**
  * An incremental parser for SPARQL JSON results.
@@ -107,177 +133,208 @@ export const json = (): Incremental => {
   let stringIsKey = false;
   let keyRaw = '';
   let primitive = false;
-  let capture: CaptureKind | undefined;
+  let capturing = false;
+  let capture: CaptureKind = 'head';
   let captureDepth = 0;
   let captureBuf = '';
   let captureStart = -1;
   let done = false;
   let sawHead = false;
   let sawBody = false;
+  // The chunk being scanned and the events it completes.
+  let chunk = '';
+  let out: Array<ResultEvent> = [];
 
-  const interesting = (): CaptureKind | undefined => {
+  /** Whether a value starting here is one to capture, and which. */
+  const interesting = (): Option.Option<CaptureKind> => {
     const top = stack[stack.length - 1];
-    if (top === undefined) return undefined;
+    if (top === undefined) return Option.none();
     if (stack.length === 1 && top.type === 'object') {
-      if (top.key === 'head') return 'head';
-      if (top.key === 'boolean') return 'boolean';
-      return undefined;
+      if (top.key === 'head') return Option.some('head');
+      if (top.key === 'boolean') return Option.some('boolean');
+      return Option.none();
     }
     if (
       stack.length === 3 &&
       top.type === 'array' &&
-      stack[0]!.key === 'results' &&
-      stack[1]!.type === 'object' &&
-      stack[1]!.key === 'bindings'
+      stack[0]?.key === 'results' &&
+      stack[1]?.type === 'object' &&
+      stack[1].key === 'bindings'
     ) {
-      return 'binding';
+      return Option.some('binding');
     }
-    return undefined;
+    return Option.none();
   };
 
-  const emit = (kind: CaptureKind, text: string, out: Array<ResultEvent>) => {
+  const emit = (kind: CaptureKind, text: string) => {
     const parsed = Json.parse(text);
-    if (Result.isFailure(parsed)) return fail('json', `Invalid JSON: ${parsed.failure}`);
+    if (Result.isFailure(parsed)) fail('json', `Invalid JSON: ${parsed.failure}`);
     const value = parsed.success;
-    return Match.value(kind).pipe(
-      Match.when('head', () => {
-        const head = decodeHead(value);
-        if (Result.isFailure(head)) fail('json', `Invalid head: ${head.failure.message}`);
-        sawHead = true;
-        out.push(variablesEvent(head.success.vars ?? []));
-      }),
-      Match.when('boolean', () => {
-        if (!Predicate.isBoolean(value)) fail('json', '"boolean" must be true or false');
-        sawBody = true;
-        out.push({ _tag: 'Boolean', value });
-      }),
-      Match.when('binding', () => {
-        const row = decodeRow(value);
-        if (Result.isFailure(row)) fail('json', `Invalid binding: ${row.failure.message}`);
-        sawBody = true;
-        const entries: Array<readonly [string, Term.GroundTerm]> = [];
-        for (const [k, v] of Object.entries(row.success)) {
-          entries.push([k, Results.termFromJson(v)]);
-        }
-        out.push({ _tag: 'Solution', bindings: B.fromEntries(entries) });
-      }),
-      Match.exhaustive,
-    );
+    if (kind === 'head') {
+      const head = decodeHead(value);
+      if (Result.isFailure(head)) fail('json', `Invalid head: ${head.failure.message}`);
+      sawHead = true;
+      out.push(variablesEvent(head.success.vars ?? []));
+    } else if (kind === 'boolean') {
+      if (!Predicate.isBoolean(value)) fail('json', '"boolean" must be true or false');
+      sawBody = true;
+      out.push({ _tag: 'Boolean', value });
+    } else {
+      const row = decodeRow(value);
+      if (Result.isFailure(row)) fail('json', `Invalid binding: ${row.failure.message}`);
+      sawBody = true;
+      out.push({
+        _tag: 'Solution',
+        bindings: B.fromEntries(
+          Arr.map(Record.toEntries(row.success), ([k, v]) => [k, Results.termFromJson(v)] as const),
+        ),
+      });
+    }
   };
 
-  const push = (chunk: string): ReadonlyArray<ResultEvent> => {
-    const out: Array<ResultEvent> = [];
-    if (capture !== undefined) captureStart = 0;
-    const finish = (endExclusive: number) => {
-      const text = captureBuf + chunk.slice(captureStart, endExclusive);
-      const kind = capture!;
-      capture = undefined;
+  /** Emits the captured value if it ends (exclusively) at `end` of the chunk. */
+  const finish = (end: number) => {
+    if (!capturing || stack.length !== captureDepth) return;
+    const text = captureBuf + chunk.slice(captureStart, end);
+    capturing = false;
+    captureBuf = '';
+    captureStart = -1;
+    emit(capture, text);
+  };
+  const valueStart = (i: number) => {
+    if (capturing) return;
+    const kind = interesting();
+    if (Option.isSome(kind)) {
+      capturing = true;
+      capture = kind.value;
+      captureDepth = stack.length;
+      captureStart = i;
       captureBuf = '';
-      captureStart = -1;
-      emit(kind, text, out);
-    };
-    const valueStart = (i: number) => {
-      if (capture !== undefined) return;
-      const kind = interesting();
-      if (kind !== undefined) {
-        capture = kind;
-        captureDepth = stack.length;
-        captureStart = i;
-        captureBuf = '';
-      }
-    };
-    const endPrimitive = (i: number) => {
-      if (!primitive) return;
-      primitive = false;
-      if (capture !== undefined && stack.length === captureDepth) finish(i);
-    };
-    // Built once per chunk: a `Match.value` per character would allocate the
-    // pipeline and its handlers on every byte of the response.
-    const scanChar = Match.fn((c: number, _i: number) => c).pipe(
-      Match.when(Match.is(32, 9, 10, 13), (_n, _c, i) => {
-        endPrimitive(i);
-      }),
-      Match.when(Match.is(123 /* { */, 91 /* [ */), (c, _c, i) => {
-        endPrimitive(i);
-        valueStart(i);
-        stack.push({
-          type: c === 123 ? 'object' : 'array',
-          key: undefined,
-          expectKey: c === 123,
-        });
-      }),
-      Match.when(Match.is(125 /* } */, 93 /* ] */), (c, _c, i) => {
-        endPrimitive(i);
-        const frame = stack.pop();
-        if (frame === undefined || frame.type !== (c === 125 ? 'object' : 'array')) {
-          fail('json', 'Unbalanced brackets');
-        }
-        if (capture !== undefined && stack.length === captureDepth) finish(i + 1);
-        if (Arr.isReadonlyArrayEmpty(stack)) done = true;
-      }),
-      Match.when(58 /* : */, (_n, _c, i) => {
-        endPrimitive(i);
-      }),
-      Match.when(44 /* , */, (_n, _c, i) => {
-        endPrimitive(i);
-        const top = stack[stack.length - 1];
-        if (top !== undefined && top.type === 'object') top.expectKey = true;
-      }),
-      Match.when(34 /* " */, (_n, _c, i) => {
-        endPrimitive(i);
-        const top = stack[stack.length - 1];
-        inString = true;
-        if (top !== undefined && top.type === 'object' && top.expectKey) {
-          stringIsKey = true;
-          keyRaw = '';
-        } else {
-          stringIsKey = false;
-          valueStart(i);
-        }
-      }),
-      Match.orElse((_n, _c, i) => {
-        if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
-        if (!primitive) {
-          primitive = true;
-          valueStart(i);
-        }
-      }),
-    );
-    for (let i = 0; i < chunk.length; i++) {
-      const c = chunk.charCodeAt(i);
-      if (inString) {
-        if (escape) {
-          escape = false;
-          if (stringIsKey) keyRaw += chunk[i];
-        } else if (c === 92 /* \ */) {
-          escape = true;
-          if (stringIsKey) keyRaw += '\\';
-        } else if (c === 34 /* " */) {
-          inString = false;
-          if (stringIsKey) {
-            const top = stack[stack.length - 1]!;
-            const key = decodeJsonString(`"${keyRaw}"`);
-            if (Result.isFailure(key)) return fail('json', 'Invalid object key');
-            top.key = key.success;
-            top.expectKey = false;
-          } else if (capture !== undefined && stack.length === captureDepth) {
-            finish(i + 1);
-          }
-        } else if (stringIsKey) {
-          keyRaw += chunk[i];
-        }
-        continue;
-      }
-      if (done) {
-        if (c !== 32 && c !== 9 && c !== 10 && c !== 13) fail('json', 'Trailing data');
-        continue;
-      }
-      scanChar(c, i);
     }
-    if (capture !== undefined) {
+  };
+  const endPrimitive = (i: number) => {
+    if (!primitive) return;
+    primitive = false;
+    finish(i);
+  };
+  /** Ends the current string at its closing quote, `quote`. */
+  const endString = (quote: number) => {
+    inString = false;
+    if (stringIsKey) {
+      const key = decodeJsonString(`"${keyRaw}"`);
+      if (Result.isFailure(key)) fail('json', 'Invalid object key');
+      const top = stack[stack.length - 1];
+      if (top !== undefined) {
+        top.key = key.success;
+        top.expectKey = false;
+      }
+    } else {
+      finish(quote + 1);
+    }
+  };
+  /** Continues a string that the previous chunk ended inside; returns where it stops. */
+  const continueString = (): number => {
+    let start = 0;
+    if (escape) {
+      escape = false;
+      if (stringIsKey) keyRaw += chunk[0];
+      start = 1;
+    }
+    STRING_REST.lastIndex = start;
+    const body = STRING_REST.exec(chunk)?.[0] ?? '';
+    const end = start + body.length;
+    if (stringIsKey) keyRaw += body;
+    if (end >= chunk.length) return end;
+    if (chunk.charCodeAt(end) === 34 /* " */) {
+      endString(end);
+      return end + 1;
+    }
+    // A lone backslash ends the chunk: the next one starts with the escaped character.
+    escape = true;
+    if (stringIsKey) keyRaw += '\\';
+    return chunk.length;
+  };
+
+  /** Scans one token at `i` of the chunk (the groups are `JSON_TOKEN`'s, absent when unmatched). */
+  const token = (
+    i: number,
+    ws?: string,
+    open?: string,
+    close?: string,
+    punct?: string,
+    body?: string,
+    quote?: string,
+    backslash?: string,
+  ): void => {
+    if (done) {
+      if (ws === undefined) fail('json', 'Trailing data');
+      return;
+    }
+    if (ws !== undefined) {
+      endPrimitive(i);
+    } else if (open !== undefined) {
+      endPrimitive(i);
+      valueStart(i);
+      const isObject = open === '{';
+      stack.push({ type: isObject ? 'object' : 'array', key: '', expectKey: isObject });
+    } else if (close !== undefined) {
+      endPrimitive(i);
+      const frame = stack.pop();
+      if (frame === undefined || frame.type !== (close === '}' ? 'object' : 'array')) {
+        fail('json', 'Unbalanced brackets');
+      }
+      finish(i + 1);
+      if (Arr.isReadonlyArrayEmpty(stack)) done = true;
+    } else if (punct !== undefined) {
+      endPrimitive(i);
+      const top = stack[stack.length - 1];
+      if (punct === ',' && top !== undefined && top.type === 'object') top.expectKey = true;
+    } else if (body !== undefined) {
+      endPrimitive(i);
+      const top = stack[stack.length - 1];
+      inString = true;
+      if (top !== undefined && top.type === 'object' && top.expectKey) {
+        stringIsKey = true;
+        keyRaw = body;
+      } else {
+        stringIsKey = false;
+        valueStart(i);
+      }
+      if (quote !== undefined) {
+        endString(i + 1 + body.length);
+      } else if (backslash !== undefined) {
+        escape = true;
+        if (stringIsKey) keyRaw += '\\';
+      }
+    } else {
+      if (Arr.isReadonlyArrayEmpty(stack)) fail('json', 'Expected a JSON object');
+      if (!primitive) {
+        primitive = true;
+        valueStart(i);
+      }
+    }
+  };
+
+  const push = (text: string): ReadonlyArray<ResultEvent> => {
+    out = [];
+    chunk = text;
+    if (capturing) captureStart = 0;
+    const from = inString && chunk !== '' ? continueString() : 0;
+    if (from < chunk.length) {
+      // `replace` drives the scan: one callback per token, nothing is kept.
+      (from === 0 ? chunk : chunk.slice(from)).replace(
+        JSON_TOKEN,
+        (_m, ws, open, close, punct, body, quote, backslash, offset: number) => {
+          token(from + offset, ws, open, close, punct, body, quote, backslash);
+          return '';
+        },
+      );
+    }
+    if (capturing) {
       captureBuf += chunk.slice(captureStart);
       captureStart = 0;
     }
+    chunk = '';
     return out;
   };
 
@@ -303,15 +360,17 @@ export const json = (): Incremental => {
  */
 export const tsv = (): Incremental => {
   let buffer = '';
-  let variables: ReadonlyArray<string> | undefined;
+  /** Whether the first line (the variables, or a boolean) has been read. */
+  let started = false;
+  let variables: ReadonlyArray<string> = [];
   let boolean = false;
   const line = (raw: string, out: Array<ResultEvent>) => {
     const text = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-    if (variables === undefined) {
+    if (!started) {
+      started = true;
       const first = text.trim();
       if (first === 'true' || first === 'false') {
         boolean = true;
-        variables = [];
         out.push({ _tag: 'Boolean', value: first === 'true' });
         return;
       }
@@ -325,24 +384,24 @@ export const tsv = (): Incremental => {
     }
     const cells = text.split('\t');
     const entries: Array<readonly [string, Term.GroundTerm]> = [];
-    for (let i = 0; i < variables.length; i++) {
+    variables.forEach((variable, i) => {
       const cell = (cells[i] ?? '').trim();
-      if (cell === '') continue;
+      if (cell === '') return;
       const term = Results.parseTerm(cell);
       if (Option.isNone(term)) fail('tsv', `Invalid term: ${cell}`);
-      entries.push([variables[i]!, term.value]);
-    }
+      entries.push([variable, term.value]);
+    });
     out.push({ _tag: 'Solution', bindings: B.fromEntries(entries) });
   };
   return {
     push: (chunk) => {
       const out: Array<ResultEvent> = [];
       buffer += chunk;
-      let nl = buffer.indexOf('\n');
-      while (nl >= 0) {
-        line(buffer.slice(0, nl), out);
+      const nl = buffer.lastIndexOf('\n');
+      if (nl >= 0) {
+        const complete = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
-        nl = buffer.indexOf('\n');
+        complete.split('\n').forEach((l) => line(l, out));
       }
       return out;
     },
@@ -350,7 +409,7 @@ export const tsv = (): Incremental => {
       const out: Array<ResultEvent> = [];
       if (buffer !== '') line(buffer, out);
       buffer = '';
-      if (variables === undefined) fail('tsv', 'Empty document');
+      if (!started) fail('tsv', 'Empty document');
       return out;
     },
   };
@@ -398,7 +457,7 @@ export const xml = (): Incremental => {
         head = buffer.slice(0, m.index + m[0].length);
         buffer = buffer.slice(m.index + m[0].length);
         const parsed = parseXmlResults(`${root}${head}</sparql>`);
-        out.push(variablesEvent(parsed._tag === 'ResultSet' ? parsed.variables : []));
+        out.push(variablesEvent(isBooleanResult(parsed) ? [] : parsed.variables));
         phase = 'body';
         return true;
       }),
@@ -411,7 +470,7 @@ export const xml = (): Incremental => {
           const parsed = parseXmlResults(
             `${root}<head/>${buffer.slice(boolean, end + 10)}</sparql>`,
           );
-          if (parsed._tag === 'Boolean') out.push({ _tag: 'Boolean', value: parsed.value });
+          if (isBooleanResult(parsed)) out.push({ _tag: 'Boolean', value: parsed.value });
           buffer = '';
           phase = 'done';
           return false;
@@ -422,24 +481,29 @@ export const xml = (): Incremental => {
         return true;
       }),
       Match.when('results', () => {
-        let last = -1;
-        RESULT_END.lastIndex = 0;
-        for (let m = RESULT_END.exec(buffer); m !== null; m = RESULT_END.exec(buffer)) {
-          last = m.index + m[0].length;
-        }
-        if (last < 0) return false;
-        const parsed = parseXmlResults(
-          `${root}<head/><results>${buffer.slice(0, last)}</results></sparql>`,
+        // The end of the last complete `<result>` element.
+        const last = Iterable.reduce(
+          buffer.matchAll(RESULT_END),
+          -1,
+          (_, m) => m.index + m[0].length,
         );
-        if (parsed._tag === 'ResultSet') {
-          for (const bindings of parsed.bindings) out.push({ _tag: 'Solution', bindings });
-        }
+        if (last < 0) return false;
+        pushSolutions(
+          parseXmlResults(`${root}<head/><results>${buffer.slice(0, last)}</results></sparql>`),
+          out,
+        );
         buffer = buffer.slice(last);
         return false;
       }),
       Match.orElse(() => false),
     );
   };
+  /** Steps until a phase waits for more input (each `true` is a phase change). */
+  const drain = (out: Array<ResultEvent>): void => {
+    if (step(out)) drain(out);
+  };
+  /** Read through a function: `drain` may move `phase` to `whole`, which TypeScript cannot see. */
+  const isWhole = (): boolean => phase === 'whole';
   let whole = '';
   return {
     push: (chunk) => {
@@ -450,12 +514,8 @@ export const xml = (): Incremental => {
       }
       if (phase === 'done') return out;
       buffer += chunk;
-      while (step(out)) {
-        // keep consuming
-      }
-      // SAFETY: `step` may move `phase` to `whole`; TypeScript keeps the narrowing from before the
-      // loop.
-      if ((phase as string) === 'whole') {
+      drain(out);
+      if (isWhole()) {
         whole = buffer;
         buffer = '';
       }
@@ -469,7 +529,7 @@ export const xml = (): Incremental => {
         // No <results> or <boolean>: let the full parser report the problem.
         if (phase === 'head') fail('xml', 'Unexpected end of document');
         const parsed = parseXmlResults(`${root}${head}${buffer}`);
-        return parsed._tag === 'Boolean' ? [{ _tag: 'Boolean', value: parsed.value }] : [];
+        return isBooleanResult(parsed) ? [{ _tag: 'Boolean', value: parsed.value }] : [];
       }
       if (phase === 'results' && !/<\/results\s*>/.test(buffer)) {
         fail('xml', 'Unexpected end of document');
@@ -482,6 +542,32 @@ export const xml = (): Incremental => {
 // -----------------------------------------------------------------------------
 // CSV and buffering
 // -----------------------------------------------------------------------------
+
+/** Where a scan of CSV text found line breaks outside quotes, and the quote state at its end. */
+interface RecordScan {
+  quoted: boolean;
+  /** The first and last line break outside quotes (`-1`: none). */
+  first: number;
+  last: number;
+}
+
+const QUOTE_OR_LINE_BREAK = /["\n]/g;
+
+/** Scans `text` from `from`, starting inside quotes or not, for the line breaks that end records. */
+const scanRecords = (text: string, from: number, quoted: boolean): RecordScan => {
+  const scan: RecordScan = { quoted, first: -1, last: -1 };
+  // `replace` drives the scan: one callback per quote or line break, nothing is kept.
+  (from === 0 ? text : text.slice(from)).replace(QUOTE_OR_LINE_BREAK, (c, offset: number) => {
+    if (c === '"') {
+      scan.quoted = !scan.quoted;
+    } else if (!scan.quoted) {
+      if (scan.first < 0) scan.first = from + offset;
+      scan.last = from + offset;
+    }
+    return '';
+  });
+  return scan;
+};
 
 /**
  * An incremental parser for SPARQL CSV results: records are parsed (with the
@@ -496,19 +582,23 @@ export const csv = (): Incremental => {
   /** How far `buffer` has been scanned for record ends, and whether that is inside quotes. */
   let scanned = 0;
   let quoted = false;
-  let header: string | undefined;
+  let header: Option.Option<string> = Option.none();
   let boolean = false;
   /** The lines of the header, and of the records parsed so far (header included). */
   let headerLines = 0;
   let lines = 0;
   const parse = (records: string): Results.ParsedResult => {
     const parsed = Result.try(() =>
-      runSyncParse(Results.Csv.parse(header === undefined ? records : header + records)),
+      runSyncParse(
+        Results.Csv.parse(
+          Option.match(header, { onNone: () => records, onSome: (h) => h + records }),
+        ),
+      ),
     );
     if (Result.isSuccess(parsed)) return parsed.success;
     const e = parsed.failure;
     // Report lines of the whole document, not of the records parsed
-    if (e instanceof Results.ResultsParseError && e.line !== undefined && header !== undefined) {
+    if (e instanceof Results.ResultsParseError && e.line !== undefined && Option.isSome(header)) {
       const line = e.line - headerLines + lines;
       throw e.column === undefined
         ? new Results.ResultsParseError({ format: e.format, message: e.message, line })
@@ -521,52 +611,46 @@ export const csv = (): Incremental => {
     }
     throw e;
   };
-  const records = (text: string, out: Array<ResultEvent>) => {
-    if (boolean || text === '') return;
-    if (header === undefined) {
+  const records = (input: string, out: Array<ResultEvent>) => {
+    if (boolean || input === '') return;
+    let text = input;
+    if (Option.isNone(header)) {
       // The first record is the header (or a boolean)
       const end = recordEnd(text);
       const first = text.slice(0, end);
       const parsed = parse(first);
-      if (parsed._tag === 'Boolean') {
+      if (isBooleanResult(parsed)) {
         boolean = true;
         out.push({ _tag: 'Boolean', value: parsed.value });
         return;
       }
       out.push(variablesEvent(parsed.variables));
-      header = first;
+      header = Option.some(first);
       headerLines = countLines(first);
       lines = headerLines;
       text = text.slice(end);
       if (text === '') return;
     }
-    const parsed = parse(text);
-    if (parsed._tag === 'ResultSet') {
-      for (const bindings of parsed.bindings) out.push({ _tag: 'Solution', bindings });
-    }
+    pushSolutions(parse(text), out);
     lines += countLines(text);
   };
   return {
     push: (chunk) => {
       const out: Array<ResultEvent> = [];
       buffer += chunk;
-      let last = -1;
-      for (let i = scanned; i < buffer.length; i++) {
-        const c = buffer.charCodeAt(i);
-        if (c === 0x22) quoted = !quoted;
-        else if (c === 0x0a && !quoted) last = i;
-      }
+      const scan = scanRecords(buffer, scanned, quoted);
+      quoted = scan.quoted;
       scanned = buffer.length;
-      if (last >= 0) {
-        records(buffer.slice(0, last + 1), out);
-        buffer = buffer.slice(last + 1);
+      if (scan.last >= 0) {
+        records(buffer.slice(0, scan.last + 1), out);
+        buffer = buffer.slice(scan.last + 1);
         scanned = buffer.length;
       }
       return out;
     },
     end: () => {
       const out: Array<ResultEvent> = [];
-      if (header === undefined && !boolean) return fromParsed(parse(buffer));
+      if (Option.isNone(header) && !boolean) return fromParsed(parse(buffer));
       records(buffer, out);
       buffer = '';
       return out;
@@ -576,20 +660,11 @@ export const csv = (): Incremental => {
 
 /** The end of the first record of complete records (after its line break). */
 const recordEnd = (text: string): number => {
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (c === 0x22) quoted = !quoted;
-    else if (c === 0x0a && !quoted) return i + 1;
-  }
-  return text.length;
+  const { first } = scanRecords(text, 0, false);
+  return first < 0 ? text.length : first + 1;
 };
 
-const countLines = (text: string): number => {
-  let n = 0;
-  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 0x0a) n++;
-  return n;
-};
+const countLines = (text: string): number => text.split('\n').length - 1;
 
 /**
  * A parser that buffers the whole document and parses it with a complete

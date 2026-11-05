@@ -13,6 +13,7 @@
 import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
@@ -79,15 +80,18 @@ export const target = (
   return Effect.succeed({ _tag: 'Named', graph: Term.namedNode(direct.href) });
 };
 
-const graphOf = (t: Target): Term.Graph => (t._tag === 'Named' ? t.graph : Term.defaultGraph);
+const graphOf = (t: Target): Term.Graph =>
+  Predicate.isTagged(t, 'Named') ? t.graph : Term.defaultGraph;
 
 const describeTarget = (t: Target): string =>
-  t._tag === 'Named' ? `<${t.graph.value}>` : 'the default graph';
+  Predicate.isTagged(t, 'Named') ? `<${t.graph.value}>` : 'the default graph';
 
 const storeError = (e: Store.StoreError) => ProtocolErrors.internal(e.message);
 
 const exists = (store: Store.QuadStoreShape, t: Target) =>
-  t._tag === 'Named' ? Effect.mapError(store.hasGraph(t.graph), storeError) : Effect.succeed(true);
+  Predicate.isTagged(t, 'Named')
+    ? Effect.mapError(store.hasGraph(t.graph), storeError)
+    : Effect.succeed(true);
 
 const charsetUtf8 = (mediaType: string) => `${mediaType}; charset=utf-8`;
 
@@ -152,7 +156,7 @@ const readQuads = (
       const perPart = yield* Effect.forEach(
         parts,
         Effect.fnUntraced(function* (part) {
-          if (part._tag === 'Field') {
+          if (Predicate.isTagged(part, 'Field')) {
             if (part.value.trim() === '') return [];
             return yield* parseDocument(
               formats,
@@ -161,7 +165,7 @@ const readQuads = (
               baseIri,
             );
           }
-          if (part._tag === 'File') {
+          if (Predicate.isTagged(part, 'File')) {
             const bytes = yield* part.contentEffect.pipe(
               Effect.mapError((e) =>
                 ProtocolErrors.badRequest(`Invalid multipart body: ${e.message}`),
@@ -215,7 +219,7 @@ export const handle = (
     const writes = ['PUT', 'POST', 'DELETE'];
     const allowed = options.readOnly
       ? ['GET', 'HEAD', 'OPTIONS']
-      : t._tag === 'Store'
+      : Predicate.isTagged(t, 'Store')
         ? ['POST', 'OPTIONS']
         : ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'OPTIONS'];
     if (options.readOnly && writes.includes(method)) {
@@ -234,7 +238,7 @@ export const handle = (
     return yield* Match.value(method).pipe(
       Match.when(Match.is('GET', 'HEAD'), () =>
         Effect.gen(function* () {
-          if (t._tag === 'Store') {
+          if (Predicate.isTagged(t, 'Store')) {
             return yield* ProtocolErrors.badRequest(
               "Identify a graph with '?default', '?graph=<iri>' or a URL below the graph store",
             );
@@ -268,13 +272,14 @@ export const handle = (
       ),
       Match.when('PUT', () =>
         Effect.gen(function* () {
-          if (t._tag === 'Store') return yield* ProtocolErrors.methodNotAllowed(method, allowed);
-          const base = t._tag === 'Named' ? t.graph.value : url.href;
+          if (Predicate.isTagged(t, 'Store'))
+            return yield* ProtocolErrors.methodNotAllowed(method, allowed);
+          const base = Predicate.isTagged(t, 'Named') ? t.graph.value : url.href;
           const quads = yield* readQuads(request, formats, base);
-          const existed = t._tag === 'Named' ? yield* exists(store, t) : true;
+          const existed = Predicate.isTagged(t, 'Named') ? yield* exists(store, t) : true;
           return yield* commit(
             Effect.gen(function* () {
-              if (t._tag === 'Named') {
+              if (Predicate.isTagged(t, 'Named')) {
                 yield* store.dropGraph(t.graph);
                 yield* store.createGraph(t.graph);
               } else {
@@ -288,7 +293,7 @@ export const handle = (
       ),
       Match.when('POST', () =>
         Effect.gen(function* () {
-          if (t._tag === 'Store') {
+          if (Predicate.isTagged(t, 'Store')) {
             const id = globalThis.crypto.randomUUID();
             const rootUrl = new URL(root, url);
             const graph = Term.namedNode(`${rootUrl.href.replace(/\/$/, '')}/${id}`);
@@ -300,12 +305,12 @@ export const handle = (
               .pipe(Effect.mapError(storeError));
             return HttpServerResponse.empty({ status: 201, headers: { location: graph.value } });
           }
-          const base = t._tag === 'Named' ? t.graph.value : url.href;
+          const base = Predicate.isTagged(t, 'Named') ? t.graph.value : url.href;
           const quads = yield* readQuads(request, formats, base);
           const existed = yield* exists(store, t);
           return yield* commit(
             Effect.gen(function* () {
-              if (t._tag === 'Named' && !existed) yield* store.createGraph(t.graph);
+              if (Predicate.isTagged(t, 'Named') && !existed) yield* store.createGraph(t.graph);
               yield* store.insert(intoGraph(quads, graphOf(t)));
             }),
             existed,
@@ -314,8 +319,9 @@ export const handle = (
       ),
       Match.when('DELETE', () =>
         Effect.gen(function* () {
-          if (t._tag === 'Store') return yield* ProtocolErrors.methodNotAllowed(method, allowed);
-          if (t._tag === 'Default') {
+          if (Predicate.isTagged(t, 'Store'))
+            return yield* ProtocolErrors.methodNotAllowed(method, allowed);
+          if (!Predicate.isTagged(t, 'Named')) {
             yield* Effect.mapError(store.clear(Term.defaultGraph), storeError);
             return HttpServerResponse.empty({ status: 204 });
           }

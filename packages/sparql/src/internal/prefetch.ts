@@ -19,7 +19,7 @@ export class QueryTimeout extends Schema.TaggedError<QueryTimeout>()('QueryTimeo
  */
 export const prefetch = <A, E>(
   stream: Stream.Stream<A, E>,
-  timeout: Duration.Duration | undefined,
+  timeout?: Duration.Duration,
 ): Effect.Effect<Stream.Stream<A, E | QueryTimeout>, E | QueryTimeout> =>
   Effect.gen(function* () {
     const queue = yield* Queue.bounded<A, E | QueryTimeout | Cause.Done>(256);

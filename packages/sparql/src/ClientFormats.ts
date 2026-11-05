@@ -7,6 +7,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import type * as Layer from 'effect/Layer';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as JsonLd from '@thomasfosterau/effect-jsonld/JsonLd';
@@ -62,7 +63,7 @@ export const layer: Layer.Layer<Serialization.Formats> = Serialization.layer(...
  * @category negotiation
  */
 export const acceptHeader = (formats: Serialization.Formats['Service']): string => {
-  const types = Array.from(new Set(formats.parsers.map((p) => p.format.mediaType)));
+  const types = Arr.dedupe(formats.parsers.map((p) => p.format.mediaType));
   return types
     .map((t, i) => (i === 0 ? t : `${t};q=${Math.max(0.1, 1 - i * 0.1).toFixed(1)}`))
     .join(', ');
