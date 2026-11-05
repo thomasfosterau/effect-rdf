@@ -161,9 +161,15 @@ export class Formula extends N3Base {
   readonly statements: ReadonlyArray<Statement>;
   constructor(statements: Iterable<Statement>) {
     super();
+    const all = Arr.fromIterable(statements);
+    // A formula of one statement has nothing to deduplicate, and its key is left uncomputed
+    if (all.length < 2) {
+      this.statements = all === statements ? all.slice() : all;
+      return;
+    }
     const seen = new Set<string>();
     const unique: Array<Statement> = [];
-    for (const s of statements) {
+    for (const s of all) {
       if (seen.has(s.key)) continue;
       seen.add(s.key);
       unique.push(s);

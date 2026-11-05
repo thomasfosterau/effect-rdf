@@ -26,6 +26,7 @@ import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Model from '../Model.ts';
 import { i18n, log, sameAs } from '../Vocab.ts';
@@ -573,8 +574,15 @@ class Builder {
   private anonCounter = 0;
   /** Statement collectors, one per open formula (innermost last). */
   private readonly out: Array<Array<Model.Statement>> = [];
-  /** Explicit quantifier scopes (legacy `@forAll` / `@forSome`). */
-  private readonly scopes: Array<Map<string, Model.N3Term>> = [];
+  /**
+   * Explicit quantifier scopes (legacy `@forAll` / `@forSome`), innermost
+   * last, each with the depth of the formula it belongs to: only formulas
+   * that quantify something have one, so a document without quantifiers
+   * looks nothing up.
+   */
+  private readonly scopes: Array<readonly [depth: number, scope: Map<string, Model.N3Term>]> = [];
+  /** How many formulas are open. */
+  private depth = 0;
   private readonly variableNames = new Set<string>();
 
   readonly input: string;
@@ -599,9 +607,10 @@ class Builder {
 
   private formula(statements: ReadonlyArray<Statement>): Model.Formula {
     this.out.push([]);
-    this.scopes.push(new Map());
+    this.depth++;
     for (const s of statements) this.statement(s);
-    this.scopes.pop();
+    if (this.scopes.at(-1)?.[0] === this.depth) this.scopes.pop();
+    this.depth--;
     return new Model.Formula(this.out.pop()!);
   }
 
@@ -615,7 +624,7 @@ class Builder {
       b.base = b.iri(s.iri);
     }),
     Match.tag('Quantifier', (s, _s, b) => {
-      const scope = b.scopes[b.scopes.length - 1]!;
+      const scope = b.scope();
       for (const node of s.iris) {
         const iri = b.iri(node);
         scope.set(iri, s.universal ? b.variableFor(iri) : b.freshBlank());
@@ -661,11 +670,11 @@ class Builder {
   // Built once: `item` runs for every term read.
   private static readonly buildItem = Match.fn((item: Item, _builder: Builder) => item).pipe(
     Match.withReturnType<Model.N3Term>(),
-    Match.tag('IriRef', 'PName', (item, _item, b) => b.named(b.iri(item))),
+    Match.tag('IriRef', 'PName', (item, _item, b) => b.named(item)),
     Match.tag('Blank', (item, _item, b) => b.labelledBlank(item.label)),
     Match.tag('Anon', (item, _item, b) => {
       if (item.id !== undefined) {
-        const node = b.named(b.iri(item.id));
+        const node = b.named(item.id);
         b.pol(node, item.pol);
         return node;
       }
@@ -726,13 +735,60 @@ class Builder {
     return this.base === undefined ? value : Iri.resolve(value, this.base);
   }
 
-  /** Applies explicit-quantifier substitutions to an IRI. */
-  private named(iri: string): Model.N3Term {
+  /** The quantifier scope of the innermost formula, made on first use. */
+  private scope(): Map<string, Model.N3Term> {
+    const top = this.scopes.at(-1);
+    if (top !== undefined && top[0] === this.depth) return top[1];
+    const scope = new Map<string, Model.N3Term>();
+    this.scopes.push([this.depth, scope]);
+    return scope;
+  }
+
+  /**
+   * The nodes made so far, by IRI and (for prefixed names) by namespace and
+   * local name, so that a name written again is neither concatenated nor
+   * hashed anew, and each IRI's key (which formulas deduplicate by) is
+   * computed once.
+   */
+  private readonly iriNodes = new Map<string, Term.NamedNode>();
+  private readonly localNodes = new Map<string, Array<readonly [string, Term.NamedNode]>>();
+
+  /** The term an IRI as written stands for: its node, or a quantified variable or blank node. */
+  private named(node: IriNode): Model.N3Term {
+    const named = this.iriNode(node);
     for (let k = this.scopes.length - 1; k >= 0; k--) {
-      const t = this.scopes[k]!.get(iri);
+      const t = this.scopes[k]?.[1].get(named.value);
       if (t !== undefined) return t;
     }
-    return new Term.NamedNode(iri);
+    return named;
+  }
+
+  private iriNode(node: IriNode): Term.NamedNode {
+    if (Predicate.isTagged(node, 'PName')) {
+      const ns = this.prefixes.get(node.prefix);
+      if (ns !== undefined) return this.localNode(ns, node.local);
+    }
+    const iri = this.iri(node);
+    let named = this.iriNodes.get(iri);
+    if (named === undefined) {
+      named = new Term.NamedNode(iri);
+      this.iriNodes.set(iri, named);
+    }
+    return named;
+  }
+
+  /** The node of `ns` + `local`, by local name and then namespace (a local name rarely has two). */
+  private localNode(ns: string, local: string): Term.NamedNode {
+    let byNamespace = this.localNodes.get(local);
+    if (byNamespace === undefined) {
+      byNamespace = [];
+      this.localNodes.set(local, byNamespace);
+    }
+    const known = byNamespace.find(([namespace]) => namespace === ns);
+    if (known !== undefined) return known[1];
+    const named = new Term.NamedNode(ns + local);
+    byNamespace.push([ns, named]);
+    return named;
   }
 
   private emit(subject: Model.N3Term, predicate: Model.N3Term, object: Model.N3Term): void {
