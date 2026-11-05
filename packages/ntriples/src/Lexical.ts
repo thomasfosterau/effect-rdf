@@ -96,13 +96,16 @@ export const isIriChar = (c: number): boolean =>
   c !== 0x60 && // `
   c !== 0x5c; // \
 
+// Hoisted: a regex literal makes a new `RegExp` each time it is evaluated, and this runs per IRI.
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
 /**
  * Whether a string is an absolute IRI reference (starts with a scheme).
  *
  * @since 0.1.0
  * @category validation
  */
-export const isAbsoluteIri = (iri: string): boolean => /^[A-Za-z][A-Za-z0-9+.-]*:/.test(iri);
+export const isAbsoluteIri = (iri: string): boolean => SCHEME.test(iri);
 
 /**
  * Whether an IRI can be written as an N-Triples / Turtle `IRIREF`: it is
