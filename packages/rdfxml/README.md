@@ -41,6 +41,10 @@ const program = Effect.gen(function* () {
 
 Errors are `Serialization.RdfParseError`s with `line` and `column`.
 
+`RdfXml.parseQuads(input, options?)` returns the statements in document order (duplicates kept)
+with the prefixes and base, without building a dataset: the fastest way to stream a document into
+another store.
+
 `RdfXml.parseDocument(doc, options?)` reads an already-parsed `Xml.Document` instead, for formats
 that embed RDF/XML in a larger XML document (XMP, SVG metadata): pass a document whose root is
 the embedded `rdf:RDF` element.

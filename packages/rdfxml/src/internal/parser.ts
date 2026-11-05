@@ -171,6 +171,8 @@ class Context {
   tagStart = 0;
   qname = '';
   raw: Array<RawAttribute> = [];
+  /** The qualified names read so far, split (`nameParts`). */
+  readonly qnames = new Map<string, readonly [prefix: string, local: string]>();
   /** The names in `raw`, once it is too long to search (empty until then). */
   readonly names = new Set<string>();
   attlistElement = '';
@@ -659,21 +661,38 @@ const pushNode = (node: Xml.Node): void => {
   frame.children.push(node);
 };
 
+/**
+ * The prefix (`''` if none) and local part of a valid qualified name. The
+ * names of a document repeat, so each is checked and split once, and its
+ * parts are the same strings each time.
+ */
+const nameParts = (qname: string, offset: number): readonly [prefix: string, local: string] => {
+  const known = x.qnames.get(qname);
+  if (known !== undefined) return known;
+  const i = qname.indexOf(':');
+  let parts: readonly [string, string];
+  if (i === -1) {
+    if (!isNCName(qname)) fail(`Invalid name "${qname}"`, offset);
+    parts = ['', qname];
+  } else {
+    const prefix = qname.slice(0, i);
+    const local = qname.slice(i + 1);
+    if (!isNCName(prefix) || !isNCName(local)) fail(`Invalid qualified name "${qname}"`, offset);
+    if (prefix === 'xmlns') fail('Elements and attributes cannot use the "xmlns" prefix', offset);
+    parts = [prefix, local];
+  }
+  x.qnames.set(qname, parts);
+  return parts;
+};
+
 const resolveName = (
   qname: string,
   ns: ReadonlyMap<string, string>,
   isElement: boolean,
   offset: number,
 ): readonly [string, string, string | undefined] => {
-  const i = qname.indexOf(':');
-  if (i === -1) {
-    if (!isNCName(qname)) fail(`Invalid name "${qname}"`, offset);
-    return ['', qname, isElement ? ns.get('') : undefined];
-  }
-  const prefix = qname.slice(0, i);
-  const local = qname.slice(i + 1);
-  if (!isNCName(prefix) || !isNCName(local)) fail(`Invalid qualified name "${qname}"`, offset);
-  if (prefix === 'xmlns') fail('Elements and attributes cannot use the "xmlns" prefix', offset);
+  const [prefix, local] = nameParts(qname, offset);
+  if (prefix === '') return ['', local, isElement ? ns.get('') : undefined];
   if (prefix === 'xml') return [prefix, local, XML_NAMESPACE];
   const uri = ns.get(prefix);
   if (uri === undefined) fail(`Unbound namespace prefix "${prefix}"`, offset);

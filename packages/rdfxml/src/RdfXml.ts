@@ -263,6 +263,30 @@ class RdfXmlParser {
   /** The IRIs of names and datatypes seen so far, which repeat throughout a document. */
   private readonly names = new Map<string, Term.NamedNode>();
 
+  /**
+   * The IRIs of the names read so far, by local name, then namespace (a
+   * local name rarely has more than one).
+   */
+  private readonly qualifiedNames = new Map<string, Array<readonly [string, string]>>();
+
+  /**
+   * The IRI of a name (`namespace` + `localName`), the same string each time
+   * it is read: names repeat throughout a document, and each later lookup of
+   * the IRI (in the reserved-term set, the node cache) then hashes nothing.
+   */
+  qualified(namespace: string, localName: string): string {
+    let byNamespace = this.qualifiedNames.get(localName);
+    if (byNamespace === undefined) {
+      byNamespace = [];
+      this.qualifiedNames.set(localName, byNamespace);
+    }
+    const known = byNamespace.find(([ns]) => ns === namespace);
+    if (known !== undefined) return known[1];
+    const iri = namespace + localName;
+    byNamespace.push([namespace, iri]);
+    return iri;
+  }
+
   /** The node for the IRI of an element or attribute name, or of a datatype. */
   named(iri: string): Term.NamedNode {
     let node = this.names.get(iri);
@@ -330,11 +354,11 @@ class RdfXmlParser {
         if (!UNQUALIFIED_RDF_ATTRIBUTES.has(a.localName)) {
           this.fail(`Unqualified attribute "${a.localName}" is not allowed`, a);
         }
-        out.push({ iri: rdf(a.localName), value: a.value, attribute: a });
+        out.push({ iri: this.qualified(RDF, a.localName), value: a.value, attribute: a });
         continue;
       }
       if (a.namespace === ITS && (a.localName === 'dir' || a.localName === 'version')) continue;
-      out.push({ iri: a.namespace + a.localName, value: a.value, attribute: a });
+      out.push({ iri: this.qualified(a.namespace, a.localName), value: a.value, attribute: a });
     }
     return out;
   }
@@ -343,7 +367,7 @@ class RdfXmlParser {
     if (el.namespace === undefined) {
       this.fail(`Element "${el.name}" is not in a namespace`, el);
     }
-    return el.namespace + el.localName;
+    return this.qualified(el.namespace, el.localName);
   }
 
   document(doc: Xml.Document, base: string | undefined): void {
@@ -744,16 +768,17 @@ export const parseDocument = (
   options?: ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
   Effect.map(parseTriples(doc, options), (triples) =>
-    toResult(triples, doc, collectPrefixes(doc), options),
+    toResult(toQuadsResult(triples, doc, collectPrefixes(doc), options)),
   );
 
 /** The result of a parse: the triples in their graph, with the document's prefixes and base. */
-const toResult = (
+/** The quads of a parse, in their graph, with the document's prefixes and base. */
+const toQuadsResult = (
   triples: ReadonlyArray<Term.Triple>,
   doc: Xml.Document,
   prefixes: PrefixMap.PrefixMap,
   options?: ParseOptions,
-): Serialization.ParseResult => {
+): QuadsResult => {
   const graph = options?.graph ?? Term.defaultGraph;
   let baseIri = options?.baseIri;
   const xmlBase = doc.root.attributes.find(
@@ -761,25 +786,57 @@ const toResult = (
   );
   if (xmlBase !== undefined) baseIri = Iri.resolve(xmlBase.value, baseIri);
   return {
-    dataset: Dataset.mutate(Dataset.empty, (b) => {
-      for (const t of triples) b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
-    }),
+    quads: triples.map((t) => new Term.Quad(t.subject, t.predicate, t.object, graph)),
     prefixes,
     baseIri,
   };
 };
 
+const toResult = (quads: QuadsResult): Serialization.ParseResult => ({
+  dataset: Dataset.fromIterable(quads.quads),
+  prefixes: quads.prefixes,
+  baseIri: quads.baseIri,
+});
+
 /**
- * Parses a complete RDF/XML document. Namespace declarations on the root
- * element (and its children) are returned as prefixes.
+ * The statements of an RDF/XML document in document order (duplicates
+ * kept), with the namespace declarations on the root element (and its
+ * children) as prefixes and the document's base IRI.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface QuadsResult extends Omit<Serialization.ParseResult, 'dataset'> {
+  readonly quads: ReadonlyArray<Term.Quad>;
+}
+
+/**
+ * Parses a complete RDF/XML document into its statements in document order,
+ * without building a dataset. Node elements are converted as they are read,
+ * so the XML tree is never held whole.
  *
  * @since 0.1.0
  * @category parsing
+ * @example
+ * ```ts
+ * import * as Effect from 'effect/Effect';
+ * import { RdfXml } from '@thomasfosterau/effect-rdfxml';
+ *
+ * const { quads } = Effect.runSync(
+ *   RdfXml.parseQuads(
+ *     `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+ *               xmlns:ex="http://example.org/">
+ *        <rdf:Description rdf:about="http://example.org/a" ex:p="1"/>
+ *      </rdf:RDF>`,
+ *   ),
+ * );
+ * // quads.length === 1
+ * ```
  */
-export const parse = (
+export const parseQuads = (
   input: string,
   options?: ParseOptions,
-): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
+): Effect.Effect<QuadsResult, Serialization.RdfParseError> =>
   Effect.try({
     try: () => {
       const parser = new RdfXmlParser(
@@ -794,7 +851,7 @@ export const parse = (
       });
       const doc = XmlParser.parseText(input, stream.take);
       stream.finish(doc);
-      return toResult(parser.sink, doc, PrefixMap.make(stream.prefixes), options);
+      return toQuadsResult(parser.sink, doc, PrefixMap.make(stream.prefixes), options);
     },
     catch: (e) => {
       if (e instanceof XmlParser.Failure) return toParseError(e.message, e.position);
@@ -802,6 +859,19 @@ export const parse = (
       throw e;
     },
   });
+
+/**
+ * Parses a complete RDF/XML document. Namespace declarations on the root
+ * element (and its children) are returned as prefixes.
+ *
+ * @since 0.1.0
+ * @category parsing
+ */
+export const parse = (
+  input: string,
+  options?: ParseOptions,
+): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
+  Effect.map(parseQuads(input, options), toResult);
 
 /**
  * The RDF/XML parser.
