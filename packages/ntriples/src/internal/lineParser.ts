@@ -1,6 +1,33 @@
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Lexical from '../Lexical.ts';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
+import { loop } from './loop.ts';
+
+/** Spaces and tabs (sticky: matched from `lastIndex`). */
+const WS = /[ \t]*/y;
+
+/** Runs of string characters that need no decoding, in `"…"` and `'…'` strings (sticky). */
+const PLAIN_DOUBLE = /[^"\\\n\r]*/y;
+const PLAIN_SINGLE = /[^'\\\n\r]*/y;
+
+/**
+ * The rest of a blank node label: `PN_CHARS` and `.` (sticky, by code point).
+ * Spelt as a string, so that its escapes stay escapes.
+ */
+const LABEL_REST = new RegExp(
+  '[A-Za-z0-9_.\\u00B7\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u037D\\u037F-\\u1FFF' +
+    '\\u200C\\u200D\\u203F\\u2040\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF' +
+    '\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}-]*',
+  'uy',
+);
+
+/** The `.`s a label ends with, which end the statement instead. */
+const TRAILING_DOTS = /\.+$/;
+
+/** The characters a language tag (with its direction) may hold (sticky). */
+const LANGUAGE_CHARS = /[a-zA-Z0-9-]*/y;
 
 /** @internal */
 export class SyntaxFailure extends Error {
@@ -30,20 +57,20 @@ export class LineParser {
   private input = '';
   private pos = 0;
   private line = 0;
-  private readonly blankNodes = new Map<string, Term.BlankNode>();
+  private readonly blankNodes = MutableHashMap.empty<string, Term.BlankNode>();
 
   readonly options: LineParserOptions;
   constructor(options: LineParserOptions) {
     this.options = options;
   }
 
-  /** Parses one line (without its line terminator). */
-  parseLine(input: string, line: number): Term.Quad | undefined {
+  /** Parses one line (without its line terminator): its statement, if it holds one. */
+  parseLine(input: string, line: number): Option.Option<Term.Quad> {
     this.input = input;
     this.pos = 0;
     this.line = line;
     this.ws();
-    if (this.atEnd() || this.peek() === 0x23) return undefined;
+    if (this.atEnd() || this.peek() === 0x23) return Option.none();
     if (this.input.startsWith('VERSION', this.pos)) {
       this.pos += 7;
       this.ws();
@@ -51,7 +78,7 @@ export class LineParser {
       if (q !== 0x22 && q !== 0x27) this.fail('Expected a version string after VERSION');
       this.string(q);
       this.end();
-      return undefined;
+      return Option.none();
     }
     const subject = this.subject();
     this.ws();
@@ -70,7 +97,7 @@ export class LineParser {
     if (this.peek() !== 0x2e) this.fail("Expected '.' at the end of the statement");
     this.pos++;
     this.end();
-    return new Term.Quad(subject, predicate, object, graph);
+    return Option.some(new Term.Quad(subject, predicate, object, graph));
   }
 
   private fail(message: string, pos: number = this.pos): never {
@@ -85,12 +112,17 @@ export class LineParser {
     return this.input.charCodeAt(this.pos);
   }
 
+  /** Skips `pattern` (sticky, matching the empty string too) from the current position. */
+  private skip(pattern: RegExp): void {
+    pattern.lastIndex = this.pos;
+    pattern.test(this.input);
+    this.pos = pattern.lastIndex;
+  }
+
   private ws(): void {
-    while (this.pos < this.input.length) {
-      const c = this.input.charCodeAt(this.pos);
-      if (c !== 0x20 && c !== 0x09) break;
-      this.pos++;
-    }
+    // Usually there is no space, or one: test the first character before running the pattern
+    const c = this.input.charCodeAt(this.pos);
+    if (c === 0x20 || c === 0x09) this.skip(WS);
   }
 
   /** Expects optional whitespace, an optional comment, then end of line. */
@@ -161,25 +193,28 @@ export class LineParser {
     this.pos++;
     let value = '';
     let chunk = this.pos;
-    for (;;) {
+    // Up to the closing `>`, decoding numeric escapes
+    loop(() => {
       if (this.atEnd()) this.fail('Unterminated IRI', start);
       const c = this.input.charCodeAt(this.pos);
-      if (c === 0x3e) break;
+      if (c === 0x3e) return false;
       if (c === 0x5c) {
         value += this.input.slice(chunk, this.pos);
         const decoded = Lexical.decodeUchar(this.input, this.pos);
-        if (decoded._tag === 'Error') this.fail(decoded.message);
-        if (!Lexical.isIriChar(decoded.value.codePointAt(0)!)) {
+        if (Predicate.isTagged(decoded, 'Error')) return this.fail(decoded.message);
+        // A decoded escape is one code point
+        if (!Lexical.isIriChar(decoded.value.codePointAt(0) ?? 0)) {
           this.fail('Escaped character is not allowed in an IRI');
         }
         value += decoded.value;
         this.pos += decoded.length;
         chunk = this.pos;
-        continue;
+        return true;
       }
       if (!Lexical.isIriChar(c)) this.fail('Invalid character in IRI');
       this.pos++;
-    }
+      return true;
+    });
     value += this.input.slice(chunk, this.pos);
     this.pos++;
     if (!Lexical.isAbsoluteIri(value)) this.fail(`Relative IRI <${value}> is not allowed`, start);
@@ -195,20 +230,16 @@ export class LineParser {
       this.fail('Invalid blank node label');
     }
     this.pos += first > 0xffff ? 2 : 1;
-    for (;;) {
-      const c = this.input.codePointAt(this.pos);
-      if (c === undefined || !(Lexical.isPnChars(c) || c === 0x2e)) break;
-      this.pos += c > 0xffff ? 2 : 1;
-    }
-    while (this.input.charCodeAt(this.pos - 1) === 0x2e) this.pos--;
-    const label = this.input.slice(start + 2, this.pos);
-    let node = this.blankNodes.get(label);
-    if (node === undefined) {
-      node = new Term.BlankNode(
-        this.options.blankNodePrefix + (label.startsWith('_') ? `_${label}` : label),
-      );
-      this.blankNodes.set(label, node);
-    }
+    this.skip(LABEL_REST);
+    // A label does not end with `.`: that is the statement's
+    const label = this.input.slice(start + 2, this.pos).replace(TRAILING_DOTS, '');
+    this.pos = start + 2 + label.length;
+    const known = MutableHashMap.get(this.blankNodes, label);
+    if (Option.isSome(known)) return known.value;
+    const node = new Term.BlankNode(
+      this.options.blankNodePrefix + (label.startsWith('_') ? `_${label}` : label),
+    );
+    MutableHashMap.set(this.blankNodes, label, node);
     return node;
   }
 
@@ -218,10 +249,19 @@ export class LineParser {
     this.pos++;
     let value = '';
     let chunk = this.pos;
-    for (;;) {
+    const plain = q === 0x22 ? PLAIN_DOUBLE : PLAIN_SINGLE;
+    // Most strings have no escapes: one run of plain characters, then the closing quote
+    this.skip(plain);
+    if (this.peek() === q) {
+      this.pos++;
+      return this.input.slice(start + 1, this.pos - 1);
+    }
+    // Up to the closing quote, decoding escapes
+    loop(() => {
+      this.skip(plain);
       if (this.atEnd()) this.fail('Unterminated string literal', start);
       const c = this.input.charCodeAt(this.pos);
-      if (c === q) break;
+      if (c === q) return false;
       if (c === 0x5c) {
         value += this.input.slice(chunk, this.pos);
         const e = this.input.charCodeAt(this.pos + 1);
@@ -231,16 +271,17 @@ export class LineParser {
           this.pos += 2;
         } else {
           const decoded = Lexical.decodeUchar(this.input, this.pos);
-          if (decoded._tag === 'Error') this.fail(decoded.message);
+          if (Predicate.isTagged(decoded, 'Error')) return this.fail(decoded.message);
           value += decoded.value;
           this.pos += decoded.length;
         }
         chunk = this.pos;
-        continue;
+        return true;
       }
       if (c === 0x0a || c === 0x0d) this.fail('Line break in string literal');
       this.pos++;
-    }
+      return true;
+    });
     value += this.input.slice(chunk, this.pos);
     this.pos++;
     return value;
@@ -249,37 +290,28 @@ export class LineParser {
   private literal(): Term.Literal {
     const start = this.pos;
     const value = this.string(0x22);
-    let annotation: Lexical.LanguageTag | Term.NamedNode | undefined;
     this.ws();
     const c = this.peek();
     if (c === 0x40) {
       const tagStart = ++this.pos;
-      while (this.pos < this.input.length) {
-        const d = this.input.charCodeAt(this.pos);
-        if (
-          !(
-            (d >= 0x61 && d <= 0x7a) ||
-            (d >= 0x41 && d <= 0x5a) ||
-            (d >= 0x30 && d <= 0x39) ||
-            d === 0x2d
-          )
-        ) {
-          break;
-        }
-        this.pos++;
-      }
-      annotation = Lexical.parseLanguageTag(this.input.slice(tagStart, this.pos));
-      if (annotation === undefined) this.fail('Invalid language tag', tagStart);
-    } else if (c === 0x5e) {
+      this.skip(LANGUAGE_CHARS);
+      const tag = Lexical.parseLanguageTag(this.input.slice(tagStart, this.pos));
+      if (tag === undefined) return this.fail('Invalid language tag', tagStart);
+      return this.made(Lexical.makeLiteral(value, tag), start);
+    }
+    if (c === 0x5e) {
       if (this.input.charCodeAt(this.pos + 1) !== 0x5e) this.fail("Expected '^^'");
       this.pos += 2;
       this.ws();
       if (this.peek() !== 0x3c) this.fail('Expected a datatype IRI');
-      annotation = this.iri();
+      return this.made(Lexical.makeLiteral(value, this.iri()), start);
     }
-    const literal = Lexical.makeLiteral(value, annotation);
-    if (Predicate.isString(literal)) this.fail(literal, start);
-    return literal;
+    return this.made(Lexical.makeLiteral(value, undefined), start);
+  }
+
+  /** The literal `makeLiteral` made, or a failure at `start` with its message. */
+  private made(literal: Term.Literal | string, start: number): Term.Literal {
+    return Predicate.isString(literal) ? this.fail(literal, start) : literal;
   }
 }
 

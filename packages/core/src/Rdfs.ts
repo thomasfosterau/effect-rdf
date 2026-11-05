@@ -7,6 +7,9 @@ import * as Dataset from './Dataset.ts';
 import * as Term from './Term.ts';
 import { rdf, rdfs } from './Vocab.ts';
 import * as Arr from 'effect/Array';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
+import { loop } from './internal/loop.ts';
 
 const transitiveClosure = (
   self: Dataset.Dataset,
@@ -14,24 +17,27 @@ const transitiveClosure = (
   property: Term.NamedNode,
   direction: 'up' | 'down',
 ): ReadonlyArray<Term.Object> => {
-  const seen = new Map<string, Term.Object>();
+  const seen = MutableHashMap.empty<string, Term.Object>();
   const stack: Array<Term.Object> = [start];
-  while (Arr.isReadonlyArrayNonEmpty(stack)) {
-    const node = stack.pop()!;
+  // Depth-first, with an explicit stack: hierarchies can be deep
+  loop(() => {
+    const node = stack.pop();
+    if (node === undefined) return false;
     const next: ReadonlyArray<Term.Object> =
       direction === 'up'
-        ? node._tag === 'Literal'
+        ? Term.isLiteral(node)
           ? []
           : Dataset.objectsOf(self, node, property)
         : Dataset.subjectsOf(self, property, node);
-    for (const n of next) {
-      if (!seen.has(n.key) && n.key !== start.key) {
-        seen.set(n.key, n);
+    next.forEach((n) => {
+      if (!MutableHashMap.has(seen, n.key) && n.key !== start.key) {
+        MutableHashMap.set(seen, n.key, n);
         stack.push(n);
       }
-    }
-  }
-  return Array.from(seen.values());
+    });
+    return true;
+  });
+  return Arr.fromIterable(MutableHashMap.values(seen));
 };
 
 /**
@@ -99,10 +105,10 @@ export const isInstanceOf = (
 ): boolean => {
   const asserted = types(self, resource);
   if (asserted.some((t) => t.key === cls.key)) return true;
-  // SAFETY: not a literal, so the type is an IRI or blank node.
   return asserted.some(
     (t) =>
-      t._tag !== 'Literal' && superClasses(self, t as Term.Resource).some((s) => s.key === cls.key),
+      !Term.isLiteral(t) &&
+      transitiveClosure(self, t, rdfs.subClassOf, 'up').some((s) => s.key === cls.key),
   );
 };
 
@@ -117,9 +123,13 @@ export const instancesOf = (
   cls: Term.Resource,
 ): ReadonlyArray<Term.Subject> => {
   const classes = [cls, ...subClasses(self, cls)];
-  const out = new Map<string, Term.Subject>();
-  for (const c of classes) for (const s of Dataset.subjectsOf(self, rdf.type, c)) out.set(s.key, s);
-  return Array.from(out.values());
+  const out = MutableHashMap.empty<string, Term.Subject>();
+  classes.forEach((c) =>
+    Dataset.subjectsOf(self, rdf.type, c).forEach((s) => {
+      MutableHashMap.set(out, s.key, s);
+    }),
+  );
+  return Arr.fromIterable(MutableHashMap.values(out));
 };
 
 /**
@@ -153,61 +163,61 @@ export const closure = (
   self: Dataset.Dataset,
   options: EntailmentOptions = {},
 ): Dataset.Dataset => {
-  let result = self;
-  for (const graph of Dataset.graphs(self)) {
-    result = Dataset.union(
-      result,
-      closeGraph(Dataset.graph(self, graph), graph, options.full === true),
-    );
-  }
-  return result;
+  return Arr.reduce(Dataset.graphs(self), self, (result, graph) =>
+    Dataset.union(result, closeGraph(Dataset.graph(self, graph), graph, options.full === true)),
+  );
 };
 
-const asSubject = (o: Term.Object): Term.Subject | undefined =>
-  o._tag === 'Literal' ? undefined : o;
+const asSubject = (o: Term.Object): Option.Option<Term.Subject> =>
+  Term.isLiteral(o) ? Option.none() : Option.some(o);
 
 const closeGraph = (input: Dataset.Dataset, graph: Term.Graph, full: boolean): Dataset.Dataset => {
   let ds = input;
   const q = (s: Term.Subject, p: Term.Predicate, o: Term.Object) => new Term.Quad(s, p, o, graph);
-  let changed = true;
-  while (changed) {
+  // Apply the rules until a round adds nothing
+  loop(() => {
     const before = ds.size;
     ds = Dataset.mutate(ds, (b) => {
-      const add = (s: Term.Subject | undefined, p: Term.Predicate, o: Term.Object) => {
-        if (s !== undefined) b.add(q(s, p, o));
+      const add = (s: Term.Subject, p: Term.Predicate, o: Term.Object) => {
+        b.add(q(s, p, o));
+      };
+      const addFrom = (s: Option.Option<Term.Subject>, p: Term.Predicate, o: Term.Object) => {
+        if (Option.isSome(s)) add(s.value, p, o);
       };
       const all = Array.from(ds);
-      for (const t of all) {
+      all.forEach((t) => {
         const { subject: s, predicate: p, object: o } = t;
+        const os = asSubject(o);
         if (full) {
           add(p, rdf.type, rdf.Property);
           add(s, rdf.type, rdfs.Resource);
-          add(asSubject(o), rdf.type, rdfs.Resource);
+          addFrom(os, rdf.type, rdfs.Resource);
         }
         // rdfs2 / rdfs3
-        for (const d of Dataset.objectsOf(ds, p, rdfs.domain, graph)) add(s, rdf.type, d);
-        for (const r of Dataset.objectsOf(ds, p, rdfs.range, graph)) add(asSubject(o), rdf.type, r);
+        Dataset.objectsOf(ds, p, rdfs.domain, graph).forEach((d) => add(s, rdf.type, d));
+        Dataset.objectsOf(ds, p, rdfs.range, graph).forEach((r) => addFrom(os, rdf.type, r));
         // rdfs7
-        for (const sp of Dataset.objectsOf(ds, p, rdfs.subPropertyOf, graph)) {
-          if (sp._tag === 'NamedNode') add(s, sp, o);
-        }
+        Dataset.objectsOf(ds, p, rdfs.subPropertyOf, graph).forEach((sp) => {
+          if (Term.isNamedNode(sp)) add(s, sp, o);
+        });
         if (p.value === rdfs.subPropertyOf.value) {
           // rdfs5
-          const os = asSubject(o);
-          if (os !== undefined)
-            for (const x of Dataset.objectsOf(ds, os, rdfs.subPropertyOf, graph))
-              add(s, rdfs.subPropertyOf, x);
+          if (Option.isSome(os))
+            Dataset.objectsOf(ds, os.value, rdfs.subPropertyOf, graph).forEach((x) =>
+              add(s, rdfs.subPropertyOf, x),
+            );
         } else if (p.value === rdfs.subClassOf.value) {
           // rdfs11
-          const os = asSubject(o);
-          if (os !== undefined)
-            for (const x of Dataset.objectsOf(ds, os, rdfs.subClassOf, graph))
-              add(s, rdfs.subClassOf, x);
+          if (Option.isSome(os))
+            Dataset.objectsOf(ds, os.value, rdfs.subClassOf, graph).forEach((x) =>
+              add(s, rdfs.subClassOf, x),
+            );
         } else if (p.value === rdf.type.value) {
           // rdfs9
-          const os = asSubject(o);
-          if (os !== undefined)
-            for (const x of Dataset.objectsOf(ds, os, rdfs.subClassOf, graph)) add(s, rdf.type, x);
+          if (Option.isSome(os))
+            Dataset.objectsOf(ds, os.value, rdfs.subClassOf, graph).forEach((x) =>
+              add(s, rdf.type, x),
+            );
           if (full) {
             if (o.key === rdf.Property.key) {
               // SAFETY: a subject is also a valid object.
@@ -223,9 +233,9 @@ const closeGraph = (input: Dataset.Dataset, graph: Term.Graph, full: boolean): D
             if (o.key === rdfs.Datatype.key) add(s, rdfs.subClassOf, rdfs.Literal); // rdfs13
           }
         }
-      }
+      });
     });
-    changed = ds.size !== before;
-  }
+    return ds.size !== before;
+  });
   return ds;
 };

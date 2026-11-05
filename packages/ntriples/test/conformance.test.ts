@@ -7,6 +7,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, Serialization } from '@thomasfosterau/effect-rdf';
 import * as Effect from 'effect/Effect';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -23,40 +25,43 @@ interface Entry {
   readonly id: string;
   readonly type: string;
   readonly action: string;
-  readonly result: string | undefined;
+  readonly result: Option.Option<string>;
 }
 
 /** Reads the entries of a (simple, regular) W3C syntax test manifest. */
 const readManifest = (dir: string): ReadonlyArray<Entry> => {
   const text = fs.readFileSync(path.join(dir, 'manifest.ttl'), 'utf8');
   const listed = /mf:entries\s*\(([\s\S]*?)\)/.exec(text)?.[1] ?? '';
-  const ids = new Set(
-    listed
+  const ids = MutableHashSet.fromIterable([
+    ...listed
       .split('\n')
       .map((l) => l.replace(/#.*$/, '').trim())
       .flatMap((l) => l.split(/\s+/))
       .filter((l) => l !== ''),
-  );
-  // Recover `<#x>` entries whose `#` was stripped above.
-  for (const m of listed.matchAll(/<#[^>]+>/g)) ids.add(m[0]);
-  const out: Array<Entry> = [];
+    // Recover `<#x>` entries whose `#` was stripped above.
+    ...Array.from(listed.matchAll(/<#[^>]+>/g), (m) => m[0]),
+  ]);
   const block = /^(\S+)\s+(?:rdf:type|a)\s+rdft:(\w+)\s*;([\s\S]*?)(?:^\s*\.\s*$|\s\.\s*$)/gm;
-  for (const m of text.matchAll(block)) {
+  return Array.from(text.matchAll(block)).flatMap((m): Array<Entry> => {
     const id = m[1];
     const type = m[2];
     const body = m[3];
-    if (id === undefined || type === undefined || body === undefined || !ids.has(id)) continue;
+    if (id === undefined || type === undefined || body === undefined) return [];
+    if (!MutableHashSet.has(ids, id)) return [];
     const action = /mf:action\s+<([^>]+)>/.exec(body)?.[1];
-    const result = /mf:result\s+<([^>]+)>/.exec(body)?.[1];
-    if (action === undefined) continue;
-    out.push({
-      id,
-      type,
-      action: path.join(dir, action),
-      result: result === undefined ? undefined : path.join(dir, result),
-    });
-  }
-  return out;
+    if (action === undefined) return [];
+    return [
+      {
+        id,
+        type,
+        action: path.join(dir, action),
+        result: Option.map(
+          Option.fromNullishOr(/mf:result\s+<([^>]+)>/.exec(body)?.[1]),
+          (result) => path.join(dir, result),
+        ),
+      },
+    ];
+  });
 };
 
 const manifests = [
@@ -69,8 +74,9 @@ const manifests = [
 ];
 
 const chunked = (text: string, size: number): Stream.Stream<string> => {
-  const chunks: Array<string> = [];
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  const chunks = Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+    text.slice(i * size, (i + 1) * size),
+  );
   return Stream.fromIterable(chunks);
 };
 
@@ -112,25 +118,25 @@ const positive = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
     expect(Isomorphism.isomorphic(reparsed.dataset, Dataset.fromIterable(quads))).toBe(true);
     // A c14n test also pins the canonical text; other tests have none.
     const expected =
-      entry.type.endsWith('PositiveC14N') && entry.result !== undefined
-        ? fs.readFileSync(entry.result, 'utf8')
+      entry.type.endsWith('PositiveC14N') && Option.isSome(entry.result)
+        ? fs.readFileSync(entry.result.value, 'utf8')
         : text;
     expect(text).toBe(expected);
   });
 
 describe.skipIf(!exists)('N-Triples / N-Quads conformance', () => {
-  for (const dir of manifests) {
+  manifests.forEach((dir) => {
     const entries = exists ? readManifest(path.join(rdfDir, dir)) : [];
     describe(`manifest ${dir}`, () => {
       it('has entries', () => {
         expect(entries.length).toBeGreaterThan(10);
       });
-      for (const entry of entries) {
+      entries.forEach((entry) => {
         const codec = entry.type.startsWith('TestNQuads') ? NQuads : NTriples;
         it.effect(`${entry.id} (${entry.type})`, () =>
           entry.type.endsWith('NegativeSyntax') ? negative(codec, entry) : positive(codec, entry),
         );
-      }
+      });
     });
-  }
+  });
 });

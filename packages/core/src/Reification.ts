@@ -11,6 +11,8 @@
  *
  * @since 0.1.0
  */
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
 import * as Dataset from './Dataset.ts';
 import * as Term from './Term.ts';
 import { rdf } from './Vocab.ts';
@@ -73,14 +75,15 @@ export const annotations = (
  * @category conversions
  */
 export const toStandardReification = (self: Dataset.Dataset): Dataset.Dataset => {
-  const nodes = new Map<string, Term.BlankNode>();
+  const nodes = MutableHashMap.empty<string, Term.BlankNode>();
   const extra: Array<Term.Quad> = [];
-  const convert = <T extends Term.Term>(t: T, graph: Term.Graph): T | Term.BlankNode => {
-    if (t._tag !== 'Triple') return t;
-    const existing = nodes.get(t.key + graph.key);
-    if (existing !== undefined) return existing;
+  const convert = <T extends Term.Term>(t: T, graph: Term.Graph): T | Term.BlankNode =>
+    Term.isTriple(t)
+      ? Option.getOrElse(MutableHashMap.get(nodes, t.key + graph.key), () => describe(t, graph))
+      : t;
+  const describe = (t: Term.Triple, graph: Term.Graph): Term.BlankNode => {
     const node = Term.blankNode();
-    nodes.set(t.key + graph.key, node);
+    MutableHashMap.set(nodes, t.key + graph.key, node);
     // SAFETY: conversion maps a subject to a subject and an object to an object.
     extra.push(
       new Term.Quad(node, rdf.type, rdf.Statement, graph),

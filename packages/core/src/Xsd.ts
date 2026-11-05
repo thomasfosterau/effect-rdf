@@ -5,8 +5,11 @@
  * @since 0.1.0
  */
 import * as BigDecimal from 'effect/BigDecimal';
+import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import {
   Literal,
   NamedNode,
@@ -36,8 +39,8 @@ const INTEGER = /^[+-]?\d+$/;
 const LANGUAGE = /^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/;
 
 /** Lexical-space patterns by XSD local name. */
-const lexical = new Map<string, RegExp>(
-  Object.entries({
+const lexical = MutableHashMap.fromIterable<string, RegExp>(
+  Record.toEntries({
     boolean: /^(?:true|false|1|0)$/,
     decimal: /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/,
     integer: INTEGER,
@@ -70,21 +73,26 @@ const lexical = new Map<string, RegExp>(
 );
 
 /** Value-space bounds (inclusive; `undefined` is unbounded) of the XSD integer types. */
-const integerBounds = new Map<string, readonly [bigint | undefined, bigint | undefined]>(
-  Object.entries({
-    integer: [undefined, undefined],
-    long: [-(2n ** 63n), 2n ** 63n - 1n],
-    int: [-(2n ** 31n), 2n ** 31n - 1n],
-    short: [-32768n, 32767n],
-    byte: [-128n, 127n],
-    unsignedLong: [0n, 2n ** 64n - 1n],
-    unsignedInt: [0n, 2n ** 32n - 1n],
-    unsignedShort: [0n, 65535n],
-    unsignedByte: [0n, 255n],
-    positiveInteger: [1n, undefined],
-    nonNegativeInteger: [0n, undefined],
-    negativeInteger: [undefined, -1n],
-    nonPositiveInteger: [undefined, 0n],
+/** The inclusive bounds of an integer type; none is unbounded. */
+type Bounds = readonly [Option.Option<bigint>, Option.Option<bigint>];
+
+const unbounded: Option.Option<bigint> = Option.none();
+
+const integerBounds = MutableHashMap.fromIterable<string, Bounds>(
+  Record.toEntries<string, Bounds>({
+    integer: [unbounded, unbounded],
+    long: [Option.some(-(2n ** 63n)), Option.some(2n ** 63n - 1n)],
+    int: [Option.some(-(2n ** 31n)), Option.some(2n ** 31n - 1n)],
+    short: [Option.some(-32768n), Option.some(32767n)],
+    byte: [Option.some(-128n), Option.some(127n)],
+    unsignedLong: [Option.some(0n), Option.some(2n ** 64n - 1n)],
+    unsignedInt: [Option.some(0n), Option.some(2n ** 32n - 1n)],
+    unsignedShort: [Option.some(0n), Option.some(65535n)],
+    unsignedByte: [Option.some(0n), Option.some(255n)],
+    positiveInteger: [Option.some(1n), unbounded],
+    nonNegativeInteger: [Option.some(0n), unbounded],
+    negativeInteger: [unbounded, Option.some(-1n)],
+    nonPositiveInteger: [unbounded, Option.some(0n)],
   }),
 );
 
@@ -94,7 +102,7 @@ const integerBounds = new Map<string, readonly [bigint | undefined, bigint | und
  * @since 0.1.0
  */
 export const numericDatatypes: ReadonlySet<string> = new Set([
-  ...Array.from(integerBounds.keys(), (t) => XSD + t),
+  ...Arr.map(Arr.fromIterable(MutableHashMap.keys(integerBounds)), (t) => XSD + t),
   `${XSD}decimal`,
   `${XSD}float`,
   `${XSD}double`,
@@ -107,7 +115,7 @@ export const numericDatatypes: ReadonlySet<string> = new Set([
  * @since 0.1.0
  */
 export const isIntegerDatatype = (datatype: string): boolean =>
-  datatype.startsWith(XSD) && integerBounds.has(datatype.slice(XSD.length));
+  datatype.startsWith(XSD) && MutableHashMap.has(integerBounds, datatype.slice(XSD.length));
 
 /**
  * Whether a datatype IRI is numeric.
@@ -126,7 +134,11 @@ export const isKnownDatatype = (datatype: string): boolean => {
     return true;
   if (!datatype.startsWith(XSD)) return false;
   const local = datatype.slice(XSD.length);
-  return lexical.has(local) || integerBounds.has(local) || local === 'anyURI';
+  return (
+    MutableHashMap.has(lexical, local) ||
+    MutableHashMap.has(integerBounds, local) ||
+    local === 'anyURI'
+  );
 };
 
 /**
@@ -138,20 +150,19 @@ export const isKnownDatatype = (datatype: string): boolean => {
 export const isValidLexical = (datatype: string, value: string): boolean => {
   if (!datatype.startsWith(XSD)) return true;
   const local = datatype.slice(XSD.length);
-  const bounds = integerBounds.get(local);
-  if (bounds !== undefined) {
+  const bounds = MutableHashMap.get(integerBounds, local);
+  if (Option.isSome(bounds)) {
     if (!INTEGER.test(value)) return false;
     const n = BigInt(value);
-    return (
-      (bounds[0] === undefined || n >= bounds[0]) && (bounds[1] === undefined || n <= bounds[1])
-    );
+    const [min, max] = bounds.value;
+    return !Option.exists(min, (m) => n < m) && !Option.exists(max, (m) => n > m);
   }
-  const pattern = lexical.get(local);
-  if (pattern === undefined) return true;
-  if (!pattern.test(value)) return false;
+  const pattern = MutableHashMap.get(lexical, local);
+  if (Option.isNone(pattern)) return true;
+  if (!pattern.value.test(value)) return false;
   if (local === 'date' || local === 'dateTime' || local === 'dateTimeStamp') {
-    const m = /^(-?\d+)-(\d\d)-(\d\d)/.exec(value)!;
-    return Number(m[3]) <= daysInMonth(Number(m[1]), Number(m[2]));
+    const [year = 0, month = 0, day = 0] = numbers(DATE, value);
+    return day <= daysInMonth(year, month);
   }
   return true;
 };
@@ -218,13 +229,19 @@ export type Value =
   | { readonly _tag: 'Duration'; readonly months: number; readonly seconds: number }
   | { readonly _tag: 'Other'; readonly lexical: string; readonly datatype: string };
 
-const parseTimezone = (s: string): number | undefined => {
-  const m = /(Z|[+-]\d\d:\d\d)$/.exec(s);
-  if (m === null) return undefined;
-  if (m[1] === 'Z') return 0;
-  const sign = m[1]!.startsWith('-') ? -1 : 1;
-  return sign * (Number(m[1]!.slice(1, 3)) * 60 + Number(m[1]!.slice(4, 6)));
-};
+/** The numbers a pattern's groups match in `v` (the lexical form is valid, so it matches). */
+const numbers = (pattern: RegExp, v: string): ReadonlyArray<number> =>
+  (pattern.exec(v) ?? []).slice(1).map(Number);
+
+const DATE = /^(-?\d+)-(\d\d)-(\d\d)/;
+
+const parseTimezone = (s: string): Option.Option<number> =>
+  Option.map(Option.fromNullishOr(/(Z|[+-]\d\d:\d\d)$/.exec(s)?.[1]), (zone) =>
+    zone === 'Z'
+      ? 0
+      : (zone.startsWith('-') ? -1 : 1) *
+        (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6))),
+  );
 
 const toEpoch = (
   y: number,
@@ -233,12 +250,12 @@ const toEpoch = (
   h: number,
   mi: number,
   s: number,
-  tz: number | undefined,
+  tz: Option.Option<number>,
 ) => {
   const date = new Date(0);
   date.setUTCFullYear(y, mo - 1, d);
   date.setUTCHours(h, mi, 0, 0);
-  return date.getTime() + s * 1000 - (tz ?? 0) * 60_000;
+  return date.getTime() + s * 1000 - Option.getOrElse(tz, () => 0) * 60_000;
 };
 
 // Built once: `toValue` runs for every literal a comparison, filter or index touches.
@@ -259,47 +276,50 @@ const valueOf = Match.fn((local: string, _v: string, _dt: string) => local).pipe
     value: Math.fround(parseXsdFloat(v)),
   })),
   Match.when(Match.is('dateTime', 'dateTimeStamp'), (_local, _l, v) => {
-    const m = /^(-?\d+)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d(?:\.\d+)?)/.exec(v)!;
+    const [y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0] = numbers(
+      /^(-?\d+)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d(?:\.\d+)?)/,
+      v,
+    );
     const tz = parseTimezone(v);
     return {
       _tag: 'DateTime',
       kind: 'dateTime',
-      epochMillis: toEpoch(+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!, +m[6]!, tz),
-      timezone: tz,
+      epochMillis: toEpoch(y, mo, d, h, mi, s, tz),
+      timezone: Option.getOrUndefined(tz),
     };
   }),
   Match.when('date', (_local, _l, v) => {
-    const m = /^(-?\d+)-(\d\d)-(\d\d)/.exec(v)!;
+    const [y = 0, mo = 0, d = 0] = numbers(DATE, v);
     const tz = parseTimezone(v);
     return {
       _tag: 'DateTime',
       kind: 'date',
-      epochMillis: toEpoch(+m[1]!, +m[2]!, +m[3]!, 0, 0, 0, tz),
-      timezone: tz,
+      epochMillis: toEpoch(y, mo, d, 0, 0, 0, tz),
+      timezone: Option.getOrUndefined(tz),
     };
   }),
   Match.when('time', (_local, _l, v) => {
-    const m = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)/.exec(v)!;
+    const [h = 0, mi = 0, s = 0] = numbers(/^(\d\d):(\d\d):(\d\d(?:\.\d+)?)/, v);
     const tz = parseTimezone(v);
     return {
       _tag: 'DateTime',
       kind: 'time',
-      epochMillis: toEpoch(1972, 12, 31, +m[1]!, +m[2]!, +m[3]!, tz),
-      timezone: tz,
+      epochMillis: toEpoch(1972, 12, 31, h, mi, s, tz),
+      timezone: Option.getOrUndefined(tz),
     };
   }),
   Match.when(Match.is('gYear', 'gYearMonth', 'gMonth', 'gMonthDay', 'gDay'), (local, _l, v) => {
     const tz = parseTimezone(v);
-    const body = tz === undefined ? v : v.replace(/(Z|[+-]\d\d:\d\d)$/, '');
+    const body = Option.isNone(tz) ? v : v.replace(/(Z|[+-]\d\d:\d\d)$/, '');
     let y = 1972;
     let mo = 12;
     let d = 31;
     if (local === 'gYear') y = +body;
-    else if (local === 'gYearMonth')
-      // SAFETY: `toValue` only gets here for a lexical form `isValidLexical` accepted, so a
-      // `gYearMonth` body matches.
-      [y, mo] = /^(-?\d+)-(\d\d)$/.exec(body)!.slice(1).map(Number) as [number, number];
-    else if (local === 'gMonth') mo = +body.slice(2);
+    else if (local === 'gYearMonth') {
+      const [year = y, month = mo] = numbers(/^(-?\d+)-(\d\d)$/, body);
+      y = year;
+      mo = month;
+    } else if (local === 'gMonth') mo = +body.slice(2);
     else if (local === 'gMonthDay') [mo, d] = [+body.slice(2, 4), +body.slice(5, 7)];
     else d = +body.slice(3);
     if (local === 'gYear' || local === 'gYearMonth' || local === 'gMonth') d = 1;
@@ -307,14 +327,14 @@ const valueOf = Match.fn((local: string, _v: string, _dt: string) => local).pipe
       _tag: 'DateTime',
       kind: local,
       epochMillis: toEpoch(y, mo, d, 0, 0, 0, tz),
-      timezone: tz,
+      timezone: Option.getOrUndefined(tz),
     };
   }),
   Match.when(Match.is('duration', 'yearMonthDuration', 'dayTimeDuration'), (_local, _l, v) => {
     const m =
       /^(-)?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(
         v,
-      )!;
+      ) ?? [];
     const sign = m[1] === '-' ? -1 : 1;
     const months = sign * (Number(m[2] ?? 0) * 12 + Number(m[3] ?? 0));
     const seconds =
@@ -347,7 +367,7 @@ export const toValue = (self: Literal): Value => {
   if (!dt.startsWith(XSD) || !isValidLexical(dt, v))
     return { _tag: 'Other', lexical: v, datatype: dt };
   const local = dt.slice(XSD.length);
-  if (integerBounds.has(local)) return { _tag: 'Integer', value: BigInt(v) };
+  if (MutableHashMap.has(integerBounds, local)) return { _tag: 'Integer', value: BigInt(v) };
   return valueOf(local, v, dt);
 };
 
@@ -368,8 +388,8 @@ export const canonicalDouble = (n: number): string => {
   if (n === Infinity) return 'INF';
   if (n === -Infinity) return '-INF';
   if (n === 0) return Object.is(n, -0) ? '-0.0E0' : '0.0E0';
-  // SAFETY: `toExponential` always produces `<mantissa>e<exponent>`.
-  const [mantissa, exponent] = n.toExponential().split('e') as [string, string];
+  // `toExponential` always produces `<mantissa>e<exponent>`
+  const [mantissa = '', exponent = ''] = n.toExponential().split('e');
   const m = mantissa.includes('.') ? mantissa : `${mantissa}.0`;
   return `${m}E${exponent.replace('+', '')}`;
 };

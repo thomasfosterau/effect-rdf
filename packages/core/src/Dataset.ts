@@ -17,12 +17,16 @@ import * as Hash from 'effect/Hash';
 import * as HashMap from 'effect/HashMap';
 import * as HashSet from 'effect/HashSet';
 import { NodeInspectSymbol, type Inspectable } from 'effect/Inspectable';
+import * as Iterable from 'effect/Iterable';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import { MAX_DATASET_SIZE } from './internal/arbitrary.ts';
+import { loop } from './internal/loop.ts';
 import * as Term from './Term.ts';
 import { pendingQuads } from './internal/pending.ts';
 import { rdf } from './Vocab.ts';
@@ -144,12 +148,19 @@ const distinct = (quads: ReadonlyArray<Term.Quad>): ReadonlyArray<Term.Quad> => 
   quads.forEach((q, k) => {
     const hash = avalanche(quadHash(q));
     let i = hash & mask;
-    let slot = slots[i] ?? 0;
-    while (slot !== 0) {
-      if (hashes[i] === hash && (quads[slot - 1] ?? q).key === q.key) return;
+    let duplicate = false;
+    // Linear probing: step to the next slot until an empty one or an equal quad
+    loop(() => {
+      const slot = slots[i] ?? 0;
+      if (slot === 0) return false;
+      if (hashes[i] === hash && (quads[slot - 1] ?? q).key === q.key) {
+        duplicate = true;
+        return false;
+      }
       i = (i + 1) & mask;
-      slot = slots[i] ?? 0;
-    }
+      return true;
+    });
+    if (duplicate) return;
     hashes[i] = hash;
     slots[i] = k + 1;
     out.push(q);
@@ -199,9 +210,7 @@ const Proto: Omit<Dataset, 'size' | 'quads'> & Pick<Dataset, 'size' | 'quads'> =
     return HashMap.every(this.quads, (_quad, key) => HashMap.has(theirs, key));
   },
   [Hash.symbol](this: Dataset): number {
-    let h = 0;
-    for (const q of this) h = (h + Hash.hash(q)) | 0;
-    return Hash.optimize(h);
+    return Hash.optimize(Iterable.reduce(this, 0, (h, q) => (h + Hash.hash(q)) | 0));
   },
   pipe() {
     return pipeArguments(this, arguments);
@@ -260,9 +269,9 @@ export interface Builder {
 }
 
 /** The inner maps of one index made mutable during a batch, by term key. */
-type Transients = Map<string, HashMap.HashMap<string, Term.Quad>>;
+type Transients = MutableHashMap.MutableHashMap<string, HashMap.HashMap<string, Term.Quad>>;
 
-const transients = (): Transients => new Map();
+const transients = (): Transients => MutableHashMap.empty();
 
 const positions = (q: Term.Quad): readonly [string, string, string, string] => [
   q.subject.key,
@@ -296,14 +305,13 @@ const indexBatch = (spog: Spog): IndexBatch => {
   ];
   const inner = (i: 0 | 1 | 2 | 3, termKey: string): HashMap.HashMap<string, Term.Quad> => {
     const opened = open[i];
-    let map = opened.get(termKey);
-    if (map === undefined) {
-      map = HashMap.beginMutation(
-        Option.getOrElse(HashMap.get(idx[i], termKey), () => HashMap.empty<string, Term.Quad>()),
-      );
-      opened.set(termKey, map);
-      idx[i] = HashMap.set(idx[i], termKey, map);
-    }
+    const known = MutableHashMap.get(opened, termKey);
+    if (Option.isSome(known)) return known.value;
+    const map = HashMap.beginMutation(
+      Option.getOrElse(HashMap.get(idx[i], termKey), () => HashMap.empty<string, Term.Quad>()),
+    );
+    MutableHashMap.set(opened, termKey, map);
+    idx[i] = HashMap.set(idx[i], termKey, map);
     return map;
   };
   // A mutable map is updated in place, so the results of `set` and `remove` are the map itself
@@ -311,12 +319,12 @@ const indexBatch = (spog: Spog): IndexBatch => {
     HashMap.set(inner(i, termKey), key, quad);
   };
   const removeAt = (i: 0 | 1 | 2 | 3, termKey: string, key: string): void => {
-    if (open[i].has(termKey) || HashMap.has(idx[i], termKey)) {
+    if (MutableHashMap.has(open[i], termKey) || HashMap.has(idx[i], termKey)) {
       HashMap.remove(inner(i, termKey), key);
     }
   };
   const close = (i: 0 | 1 | 2 | 3): void => {
-    open[i].forEach((map, termKey) => {
+    MutableHashMap.forEach(open[i], (map, termKey) => {
       HashMap.endMutation(map);
       if (HashMap.size(map) === 0) idx[i] = HashMap.remove(idx[i], termKey);
     });
@@ -385,7 +393,9 @@ export const mutate: {
       return builder;
     },
     addAll(iterable) {
-      for (const q of iterable) builder.add(q);
+      Iterable.forEach(iterable, (q) => {
+        builder.add(q);
+      });
       return builder;
     },
     remove(quad) {
@@ -441,7 +451,9 @@ export const fromTriples = (
   graph: Term.Graph = Term.defaultGraph,
 ): Dataset =>
   mutate(empty, (b) => {
-    for (const t of triples) b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
+    Iterable.forEach(triples, (t) => {
+      b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
+    });
   });
 
 // -----------------------------------------------------------------------------
@@ -514,8 +526,27 @@ export const has: {
  */
 export const isEmpty = (self: Dataset): boolean => self.size === 0;
 
-const bound = (t: Term.Term | undefined): t is Exclude<Term.Term, Term.Variable> =>
-  t !== undefined && t._tag !== 'Variable';
+/** A position of a quad: subject, predicate, object or graph (the index of its `Spog` index). */
+type Position = 0 | 1 | 2 | 3;
+
+/** A bound position of a pattern, with the key its term must have. */
+interface Check {
+  readonly position: Position;
+  readonly key: string;
+}
+
+/** The bound positions of a pattern (omitted positions and variables match any term). */
+const checksOf = (pattern: Pattern): ReadonlyArray<Check> => {
+  const checks: Array<Check> = [];
+  const at = (position: Position, t: Pattern[keyof Pattern]): void => {
+    if (t !== undefined && !Term.isVariable(t)) checks.push({ position, key: t.key });
+  };
+  at(0, pattern.subject);
+  at(1, pattern.predicate);
+  at(2, pattern.object);
+  at(3, pattern.graph);
+  return checks;
+};
 
 /**
  * Returns all quads matching a pattern, using the most selective index.
@@ -527,37 +558,32 @@ export const match: {
   (pattern: Pattern): (self: Dataset) => ReadonlyArray<Term.Quad>;
   (self: Dataset, pattern: Pattern): ReadonlyArray<Term.Quad>;
 } = dual(2, (self: Dataset, pattern: Pattern): ReadonlyArray<Term.Quad> => {
-  const terms = [pattern.subject, pattern.predicate, pattern.object, pattern.graph] as const;
-  let candidates: HashMap.HashMap<string, Term.Quad> | undefined;
+  const checks = checksOf(pattern);
+  let candidates: Option.Option<HashMap.HashMap<string, Term.Quad>> = Option.none();
   let candidateSize = Infinity;
-  const checks: Array<readonly [number, string]> = [];
-  for (let i = 0; i < 4; i++) {
-    const t = terms[i];
-    if (!bound(t)) continue;
-    const key = t.key;
-    checks.push([i, key]);
-    const inner = HashMap.get(indexesOf(self)[i]!, key);
-    if (Option.isNone(inner)) return [];
+  // The smallest inner map of the bound positions; none of them holding the term matches nothing
+  const missing = checks.some(({ position, key }) => {
+    const inner = HashMap.get(indexesOf(self)[position], key);
+    if (Option.isNone(inner)) return true;
     const size = HashMap.size(inner.value);
     if (size < candidateSize) {
-      candidates = inner.value;
+      candidates = inner;
       candidateSize = size;
     }
-  }
-  const source = candidates ?? self.quads;
+    return false;
+  });
+  if (missing) return [];
+  const source = Option.getOrElse(candidates, () => self.quads);
   const out: Array<Term.Quad> = [];
-  for (const q of HashMap.values(source)) {
-    let ok = true;
-    if (checks.length > 1) {
+  if (checks.length > 1) {
+    HashMap.forEach(source, (q) => {
       const ks = positions(q);
-      for (const [i, key] of checks) {
-        if (ks[i] !== key) {
-          ok = false;
-          break;
-        }
-      }
-    }
-    if (ok) out.push(q);
+      if (checks.every(({ position, key }) => ks[position] === key)) out.push(q);
+    });
+  } else {
+    HashMap.forEach(source, (q) => {
+      out.push(q);
+    });
   }
   return out;
 });
@@ -629,20 +655,26 @@ export const subjectsOf = (
 
 const uniqueTerms = <T extends Term.Term>(terms: ReadonlyArray<T>): ReadonlyArray<T> => {
   if (terms.length < 2) return terms;
-  const seen = new Map<string, T>();
-  for (const t of terms) if (!seen.has(t.key)) seen.set(t.key, t);
-  return Array.from(seen.values());
+  return uniqueByKey(terms);
+};
+
+/** The first of each group of values with equal keys, in order. */
+const uniqueByKey = <T extends { readonly key: string }>(values: Iterable<T>): Array<T> => {
+  const seen = MutableHashMap.empty<string, T>();
+  Iterable.forEach(values, (t) => {
+    if (!MutableHashMap.has(seen, t.key)) MutableHashMap.set(seen, t.key, t);
+  });
+  return Arr.fromIterable(MutableHashMap.values(seen));
 };
 
 const termsAt = <T extends Term.Term>(
   self: Dataset,
-  i: number,
+  position: Position,
   pick: (q: Term.Quad) => T,
 ): ReadonlyArray<T> =>
-  Array.from(HashMap.values(indexesOf(self)[i]!), (inner) =>
-    // SAFETY: an inner map is removed from the index when its last quad goes, so it always holds
-    // one.
-    pick(HashMap.values(inner).next().value as Term.Quad),
+  // An inner map is removed from the index when its last quad goes, so each holds one
+  Arr.flatMap(Arr.fromIterable(HashMap.values(indexesOf(self)[position])), (inner) =>
+    Arr.fromOption(Option.map(Iterable.head(HashMap.values(inner)), pick)),
   );
 
 /**
@@ -702,12 +734,7 @@ export const graph: {
  * @category conversions
  */
 export const triples = (self: Dataset): ReadonlyArray<Term.Triple> => {
-  const seen = new Map<string, Term.Triple>();
-  for (const q of self) {
-    const t = q.triple;
-    if (!seen.has(t.key)) seen.set(t.key, t);
-  }
-  return Array.from(seen.values());
+  return uniqueByKey(Iterable.map(self, (q) => q.triple));
 };
 
 /**
@@ -737,18 +764,34 @@ export const list = (
   graphName?: Term.Graph,
 ): Option.Option<ReadonlyArray<Term.Object>> => {
   const items: Array<Term.Object> = [];
-  const seen = new Set<string>();
+  const seen = MutableHashSet.empty<string>();
   let node: Term.Object = head;
-  while (!(node._tag === 'NamedNode' && node.value === rdf.nil.value)) {
-    if (node._tag === 'Literal' || seen.has(node.key)) return Option.none();
-    seen.add(node.key);
-    const first = objectsOf(self, node, rdf.first, graphName);
-    const rest = objectsOf(self, node, rdf.rest, graphName);
-    if (first.length !== 1 || rest.length !== 1) return Option.none();
-    items.push(first[0]!);
-    node = rest[0]!;
-  }
-  return Option.some(items);
+  let wellFormed = true;
+  // Follow `rdf:rest` to `rdf:nil`, stopping at a literal, a cycle or a node without one value each
+  loop(() => {
+    const current = node;
+    if (Term.isNamedNode(current) && current.value === rdf.nil.value) return false;
+    if (Term.isLiteral(current) || MutableHashSet.has(seen, current.key)) {
+      wellFormed = false;
+      return false;
+    }
+    MutableHashSet.add(seen, current.key);
+    const first = objectsOf(self, current, rdf.first, graphName);
+    const rest = objectsOf(self, current, rdf.rest, graphName);
+    if (
+      !Arr.isReadonlyArrayNonEmpty(first) ||
+      !Arr.isReadonlyArrayNonEmpty(rest) ||
+      first.length !== 1 ||
+      rest.length !== 1
+    ) {
+      wellFormed = false;
+      return false;
+    }
+    items.push(first[0]);
+    node = rest[0];
+    return true;
+  });
+  return wellFormed ? Option.some(items) : Option.none();
 };
 
 // -----------------------------------------------------------------------------
@@ -784,7 +827,9 @@ export const difference: {
   (self: Dataset, that: Dataset): Dataset;
 } = dual(2, (self: Dataset, that: Dataset): Dataset =>
   mutate(self, (b) => {
-    for (const q of that) b.remove(q);
+    Iterable.forEach(that, (q) => {
+      b.remove(q);
+    });
   }),
 );
 
@@ -797,7 +842,9 @@ export const filter: {
   (self: Dataset, predicate: (quad: Term.Quad) => boolean): Dataset;
 } = dual(2, (self: Dataset, predicate: (quad: Term.Quad) => boolean): Dataset =>
   mutate(empty, (b) => {
-    for (const q of self) if (predicate(q)) b.add(q);
+    Iterable.forEach(self, (q) => {
+      if (predicate(q)) b.add(q);
+    });
   }),
 );
 
@@ -810,7 +857,9 @@ export const map: {
   (self: Dataset, f: (quad: Term.Quad) => Term.Quad): Dataset;
 } = dual(2, (self: Dataset, f: (quad: Term.Quad) => Term.Quad): Dataset =>
   mutate(empty, (b) => {
-    for (const q of self) b.add(f(q));
+    Iterable.forEach(self, (q) => {
+      b.add(f(q));
+    });
   }),
 );
 
@@ -823,7 +872,9 @@ export const flatMap: {
   (self: Dataset, f: (quad: Term.Quad) => Iterable<Term.Quad>): Dataset;
 } = dual(2, (self: Dataset, f: (quad: Term.Quad) => Iterable<Term.Quad>): Dataset =>
   mutate(empty, (b) => {
-    for (const q of self) b.addAll(f(q));
+    Iterable.forEach(self, (q) => {
+      b.addAll(f(q));
+    });
   }),
 );
 
@@ -834,11 +885,9 @@ export const flatMap: {
 export const reduce: {
   <B>(initial: B, f: (acc: B, quad: Term.Quad) => B): (self: Dataset) => B;
   <B>(self: Dataset, initial: B, f: (acc: B, quad: Term.Quad) => B): B;
-} = dual(3, <B>(self: Dataset, initial: B, f: (acc: B, quad: Term.Quad) => B): B => {
-  let acc = initial;
-  for (const q of self) acc = f(acc, q);
-  return acc;
-});
+} = dual(3, <B>(self: Dataset, initial: B, f: (acc: B, quad: Term.Quad) => B): B =>
+  Iterable.reduce(self, initial, (acc, q) => f(acc, q)),
+);
 
 /**
  * @since 0.1.0
@@ -847,10 +896,9 @@ export const reduce: {
 export const some: {
   (predicate: (quad: Term.Quad) => boolean): (self: Dataset) => boolean;
   (self: Dataset, predicate: (quad: Term.Quad) => boolean): boolean;
-} = dual(2, (self: Dataset, predicate: (quad: Term.Quad) => boolean): boolean => {
-  for (const q of self) if (predicate(q)) return true;
-  return false;
-});
+} = dual(2, (self: Dataset, predicate: (quad: Term.Quad) => boolean): boolean =>
+  Iterable.some(self, (q) => predicate(q)),
+);
 
 /**
  * @since 0.1.0
@@ -859,10 +907,11 @@ export const some: {
 export const every: {
   (predicate: (quad: Term.Quad) => boolean): (self: Dataset) => boolean;
   (self: Dataset, predicate: (quad: Term.Quad) => boolean): boolean;
-} = dual(2, (self: Dataset, predicate: (quad: Term.Quad) => boolean): boolean => {
-  for (const q of self) if (!predicate(q)) return false;
-  return true;
-});
+} = dual(
+  2,
+  (self: Dataset, predicate: (quad: Term.Quad) => boolean): boolean =>
+    !Iterable.some(self, (q) => !predicate(q)),
+);
 
 /**
  * Whether every quad of `self` is in `that`.
@@ -988,7 +1037,7 @@ export const toGraph = (self: Dataset, options: ToGraphOptions = {}): TermGraph 
     options.graph === undefined ? Arr.fromIterable(self) : match(self, { graph: options.graph }),
     (q) =>
       (keep === undefined || HashSet.has(keep, q.predicate)) &&
-      (options.literals === true || q.object._tag !== 'Literal'),
+      (options.literals === true || !Term.isLiteral(q.object)),
   );
   let nodes = HashMap.empty<Term.Subject | Term.Object, Graph.NodeIndex>();
   const directed = Graph.directed<Term.Subject | Term.Object, Term.NamedNode>((mutable) => {

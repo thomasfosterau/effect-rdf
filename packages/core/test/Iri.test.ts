@@ -76,16 +76,16 @@ describe('Iri', () => {
 
   it('relativizes', () => {
     const b = 'http://example.org/a/b';
-    for (const iri of [
+    [
       'http://example.org/a/c',
       'http://example.org/a/b#x',
       'http://example.org/z',
       'http://example.org/a/b?q',
-    ]) {
+    ].forEach((iri) => {
       const rel = Iri.relativize(iri, b);
       assert(Option.isSome(rel));
       expect(Iri.resolve(rel.value, b)).toBe(iri);
-    }
+    });
     expect(Option.isNone(Iri.relativize('https://other/', b))).toBe(true);
   });
 
