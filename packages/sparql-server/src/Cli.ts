@@ -222,8 +222,9 @@ export const run = (
   Effect.gen(function* () {
     const args = yield* parse(argv);
     if (args.help) {
-      yield* Effect.sync(() => process.stdout.write(usage));
-      return;
+      return yield* Effect.sync(() => {
+        process.stdout.write(usage);
+      });
     }
     const data = yield* Effect.provide(load(args.files, args.graphPerFile), Formats.layer);
     const server = SparqlServer.layerMemory({

@@ -193,10 +193,9 @@ const toSelect = (result: ParsedResult | AskResult): SelectResult | AskResult =>
       ? { _tag: 'Ask', value: result.value }
       : result;
 
-// SAFETY: the chunks come from an in-memory serializer that does not fail; the error type is only
-// erased for `runSync`.
+// The chunks come from an in-memory serializer that does not fail, so `runSync` returns.
 const stringify = <E>(chunks: Stream.Stream<string, E>): string =>
-  Effect.runSync(Stream.mkString(chunks as Stream.Stream<string>));
+  Effect.runSync(Stream.mkString(chunks));
 
 const ordered = <E>(
   result: SelectResult<E>,

@@ -445,13 +445,23 @@ export const make = (
       );
     });
 
-  const transfer = (op: Ast.TransferOperation) =>
+  const transfer = (
+    op: Ast.TransferOperation,
+  ): Effect.Effect<void, UpdateError | Store.StoreError> =>
+    op.source.key === op.destination.key
+      ? Effect.void
+      : Effect.flatMap(
+          graphExists(op.source),
+          (exists): Effect.Effect<void, UpdateError | Store.StoreError> =>
+            exists
+              ? copyGraph(op)
+              : op.silent
+                ? Effect.void
+                : fail(`Graph <${op.source.value}> does not exist`),
+        );
+
+  const copyGraph = (op: Ast.TransferOperation) =>
     Effect.gen(function* () {
-      if (op.source.key === op.destination.key) return;
-      if (!(yield* graphExists(op.source))) {
-        if (op.silent) return;
-        return yield* fail(`Graph <${op.source.value}> does not exist`);
-      }
       const quads = yield* graphQuads(op.source);
       if (op._tag !== 'Add') {
         if (op.destination._tag === 'DefaultGraph') yield* store.clear(Term.defaultGraph);

@@ -51,7 +51,7 @@ export interface Incremental {
   readonly end: () => ReadonlyArray<ResultEvent>;
 }
 
-const fail = (format: string, message: string): never => {
+const fail: (format: string, message: string) => never = (format, message) => {
   throw new Results.ResultsParseError({ format, message });
 };
 
@@ -142,27 +142,24 @@ export const json = (): Incremental => {
     return Match.value(kind).pipe(
       Match.when('head', () => {
         const head = decodeHead(value);
-        if (Result.isFailure(head)) return fail('json', `Invalid head: ${head.failure.message}`);
+        if (Result.isFailure(head)) fail('json', `Invalid head: ${head.failure.message}`);
         sawHead = true;
         out.push(variablesEvent(head.success.vars ?? []));
-        return;
       }),
       Match.when('boolean', () => {
-        if (!Predicate.isBoolean(value)) return fail('json', '"boolean" must be true or false');
+        if (!Predicate.isBoolean(value)) fail('json', '"boolean" must be true or false');
         sawBody = true;
         out.push({ _tag: 'Boolean', value });
-        return;
       }),
       Match.when('binding', () => {
         const row = decodeRow(value);
-        if (Result.isFailure(row)) return fail('json', `Invalid binding: ${row.failure.message}`);
+        if (Result.isFailure(row)) fail('json', `Invalid binding: ${row.failure.message}`);
         sawBody = true;
         const entries: Array<readonly [string, Term.GroundTerm]> = [];
         for (const [k, v] of Object.entries(row.success)) {
           entries.push([k, Results.termFromJson(v)]);
         }
         out.push({ _tag: 'Solution', bindings: B.fromEntries(entries) });
-        return;
       }),
       Match.exhaustive,
     );
@@ -332,7 +329,7 @@ export const tsv = (): Incremental => {
       const cell = (cells[i] ?? '').trim();
       if (cell === '') continue;
       const term = Results.parseTerm(cell);
-      if (Option.isNone(term)) return fail('tsv', `Invalid term: ${cell}`);
+      if (Option.isNone(term)) fail('tsv', `Invalid term: ${cell}`);
       entries.push([variables[i]!, term.value]);
     }
     out.push({ _tag: 'Solution', bindings: B.fromEntries(entries) });

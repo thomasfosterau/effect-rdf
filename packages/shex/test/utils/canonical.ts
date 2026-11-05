@@ -49,16 +49,14 @@ export const canonical = (schema: ShExJ.Schema): Schema.Json => {
     if (n === undefined) names.set(label, (n = `_:c${names.size}`));
     return n;
   };
-  const byString = Order.make<Schema.Json>((a, b) => {
-    const c = String(a).localeCompare(String(b));
-    return c < 0 ? -1 : c > 0 ? 1 : 0;
-  });
   const byKey = Order.mapInput(Order.String, ([k]: readonly [string, Schema.Json]) => k);
   const go = (v: Schema.Json, key: string | undefined): Schema.Json => {
     if (Predicate.isString(v)) return v.startsWith('_:') && key !== 'value' ? rename(v) : v;
     if (Array.isArray(v)) {
       const items = v.map((x) => go(x, key));
-      return key === 'extra' ? Arr.sort(items, byString) : items;
+      return key === 'extra' && Arr.every(items, Predicate.isString)
+        ? Arr.sort(items, Order.String)
+        : items;
     }
     if (isJsonObject(v)) {
       const out: { [key: string]: Schema.Json } = {};

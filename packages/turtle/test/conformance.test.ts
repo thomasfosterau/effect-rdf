@@ -1,7 +1,7 @@
 /**
  * W3C RDF 1.1 / RDF 1.2 Turtle and TriG conformance tests.
  */
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, type Term } from '@thomasfosterau/effect-rdf';
 import { NQuads, NTriples } from '@thomasfosterau/effect-ntriples';
 import * as Effect from 'effect/Effect';
@@ -34,27 +34,22 @@ const chunked = (text: string, size: number): Stream.Stream<string> => {
 type Suite = (typeof suitesUnderTest)[number];
 type Options = { readonly baseIri: string; readonly blankNodePrefix: string };
 
-/** A negative test: both the strict and the streaming parser reject the input. */
-const expectRejected = Effect.fn(function* (suite: Suite, input: string, options: Options) {
+/** A negative test: the error tags of the strict and of the streaming parser. */
+const rejections = Effect.fn(function* (suite: Suite, input: string, options: Options) {
   const error = yield* Effect.flip(suite.syntax.parse(input, options));
-  expect(error._tag).toBe('RdfParseError');
   const streamed = yield* Effect.flip(
     Stream.runCollect(suite.syntax.parseStream(chunked(input, 7), options)),
   );
-  expect(streamed._tag).toBe('RdfParseError');
+  return [error._tag, streamed._tag];
 });
 
-/** An evaluation test: the parsed graph is isomorphic to the expected result. */
-const expectEvaluatesTo = Effect.fn(function* (
-  suite: Suite,
-  dataset: Dataset.Dataset,
-  result: string,
-) {
+/** An evaluation test: whether the parsed graph is isomorphic to the expected result. */
+const evaluation = Effect.fn(function* (suite: Suite, dataset: Dataset.Dataset, result: string) {
   const expected = yield* suite.expected.parse(yield* read(result));
-  expect(
-    Isomorphism.isomorphic(dataset, expected.dataset),
-    `expected:\n${Dataset.toNQuads(expected.dataset)}\nactual:\n${Dataset.toNQuads(dataset)}`,
-  ).toBe(true);
+  return {
+    isomorphic: Isomorphism.isomorphic(dataset, expected.dataset),
+    message: `expected:\n${Dataset.toNQuads(expected.dataset)}\nactual:\n${Dataset.toNQuads(dataset)}`,
+  };
 });
 
 // The rdf12 manifests no longer include the rdf11 ones (w3c/rdf-tests#396), so both are run.
@@ -79,7 +74,12 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
             const input = yield* read(action);
             const options = { baseIri: action, blankNodePrefix: 'x' };
             if (entry.kind.endsWith('NegativeSyntax') || entry.kind.endsWith('NegativeEval')) {
-              return yield* expectRejected(suite, input, options);
+              // Both the strict and the streaming parser reject the input.
+              assert.deepStrictEqual(yield* rejections(suite, input, options), [
+                'RdfParseError',
+                'RdfParseError',
+              ]);
+              return;
             }
             const { quads, prefixes } = yield* suite.syntax.parseQuads(input, options);
             yield* Effect.forEach(
@@ -117,7 +117,12 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
               { concurrency: 1, discard: true },
             );
             if (entry.kind.endsWith('Eval')) {
-              yield* expectEvaluatesTo(suite, dataset, yield* Effect.fromOption(entry.result));
+              const { isomorphic, message } = yield* evaluation(
+                suite,
+                dataset,
+                yield* Effect.fromOption(entry.result),
+              );
+              assert(isomorphic, message);
             }
           }),
         );

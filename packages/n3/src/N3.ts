@@ -67,15 +67,13 @@ const runParser = (
   input: string,
   options?: ParseOptions,
 ): Effect.Effect<Model.Document, Serialization.RdfParseError> =>
-  Effect.try({
-    try: () =>
-      Parser.parse(input, {
-        baseIri: options?.baseIri,
-        blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
-      }),
-    catch: (e) => e,
-  }).pipe(
-    Effect.catch((e) =>
+  Effect.sync(() =>
+    Parser.parse(input, {
+      baseIri: options?.baseIri,
+      blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
+    }),
+  ).pipe(
+    Effect.catchDefect((e) =>
       e instanceof Parser.SyntaxFailure
         ? Effect.fail(
             new Serialization.RdfParseError({

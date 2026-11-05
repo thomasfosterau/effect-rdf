@@ -96,13 +96,9 @@ export default defineConfig({
       // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
       // narrowing casts the parsers and evaluators rely on; `consistent-return`
       // on exhaustive `switch`es native `tsc` already proves total
-      // (`noImplicitReturns`); the rest need an API-level rethink each.
+      // (`noImplicitReturns`).
       'typescript/no-unsafe-type-assertion': 'warn', // 222
-      'typescript/consistent-return': 'warn', // 21
-      'typescript/no-unnecessary-type-parameters': 'warn', // 2
-      'typescript/no-base-to-string': 'warn', // 3
-      'effecttsgo/any-unknown-in-error-context': 'warn', // 3
-      'effecttsgo/unsafe-effect-type-assertion': 'warn', // 1
+      'typescript/consistent-return': 'warn', // 12
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -313,7 +309,7 @@ export default defineConfig({
           // in a variable; the rule cannot see that it is a string.
           'vitest/valid-title': ['error', { ignoreTypeOfDescribeName: true }],
           'vitest/no-standalone-expect': [
-            'warn',
+            'error',
             {
               additionalTestBlockFunctions: [
                 'it.effect',

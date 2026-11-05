@@ -471,11 +471,8 @@ export const reason = (
   formula: Model.Formula | Model.Document,
   options?: Options,
 ): Effect.Effect<Result, ReasonerError> =>
-  Effect.try({
-    try: () => closureOf(Model.isFormula(formula) ? formula : formula.formula, options),
-    catch: (e) => e,
-  }).pipe(
-    Effect.catch((e) =>
+  Effect.sync(() => closureOf(Model.isFormula(formula) ? formula : formula.formula, options)).pipe(
+    Effect.catchDefect((e) =>
       e instanceof Inconsistency
         ? Effect.fail(new ReasonerError({ message: `Inconsistency derived by rule ${e.rule.key}` }))
         : e instanceof LimitExceeded

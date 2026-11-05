@@ -218,7 +218,7 @@ const runUpdateTest = (t: TestCase) =>
       const outcome = yield* Effect.result(client.update(text));
       expect(t.updateSuccess ? 'Failure' : outcome._tag).toBe('Failure');
       if (!t.updateSuccess) return;
-      if (outcome._tag === 'Failure') return yield* outcome.failure;
+      yield* Effect.fromResult(outcome);
       const quads: Array<Term.Quad> = [];
       for (const file of t.resultData) quads.push(...parseFile(file));
       for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));

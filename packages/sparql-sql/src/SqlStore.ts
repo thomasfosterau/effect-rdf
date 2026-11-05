@@ -138,10 +138,14 @@ const chunks = <A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A
 };
 
 const num = (v: unknown): number => (Predicate.isNumber(v) ? v : Number(v));
-// SAFETY: strings and nullish values returned above; what the driver hands back otherwise is a
-// number.
+// The text columns come back as strings; a count or other numeric cell as a number (or a bigint);
+// a missing cell is nullish and reads as the empty string.
 const str = (v: unknown): string =>
-  Predicate.isString(v) ? v : v === null || v === undefined ? '' : String(v);
+  Predicate.isString(v)
+    ? v
+    : Predicate.isNumber(v) || Predicate.isBigInt(v) || Predicate.isBoolean(v)
+      ? `${v}`
+      : '';
 
 // SAFETY: a stored triple term is ground, so its subject and object are ground terms.
 const depth = (t: Term.GroundTerm): number =>
