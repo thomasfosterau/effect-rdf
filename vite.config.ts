@@ -31,6 +31,7 @@ const packages = [
   'effect-sparql-sql',
   'effect-sparql-server',
   'effect-sparql-client',
+  'effect-sparql-ai',
 ].map((name) => `@thomasfosterau/${name}`);
 
 export default defineConfig({

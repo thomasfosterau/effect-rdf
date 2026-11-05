@@ -21,6 +21,7 @@ This repo publishes the `@thomasfosterau/effect-rdf` package family: an Effect 4
 | `@thomasfosterau/effect-sparql-sql`    | `packages/sparql-sql`    | core, sparql                          |
 | `@thomasfosterau/effect-sparql-server` | `packages/sparql-server` | core, sparql and every syntax package |
 | `@thomasfosterau/effect-sparql-client` | `packages/sparql-client` | core, sparql and every syntax package |
+| `@thomasfosterau/effect-sparql-ai`     | `packages/sparql-ai`     | core, sparql, turtle                  |
 
 Every module of a package is an entry point (`exports["./*"]` → `src/*.ts`; `src/index.ts` re-exports them as namespaces). Test-only workspace dependencies are `devDependencies`; `.fallowrc.json`'s boundary rules allow both.
 

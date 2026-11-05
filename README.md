@@ -26,6 +26,7 @@ and community conformance suites.
 | [`@thomasfosterau/effect-sparql-sql`](packages/sparql-sql)       | SQL storage backend for the SPARQL engine on `effect/sql` (SQLite, PostgreSQL): term dictionary with triple terms, `QuadStore`, SPARQL-to-SQL `QueryCapability`          | [SPARQL 1.1 Query](https://www.w3.org/TR/sparql11-query/)                                                                                                         | evaluation 707 / 707 runnable on SQLite and on PostgreSQL (PGlite)                                                                  |
 | [`@thomasfosterau/effect-sparql-server`](packages/sparql-server) | SPARQL 1.1 Protocol + Graph Store Protocol server over `effect/http`, with content negotiation, service description, timeouts, read-only mode and a CLI                  | [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/), [Graph Store Protocol](https://www.w3.org/TR/sparql11-http-rdf-update/)                          | protocol 34/34, graph store 14/14, service description 3/3                                                                          |
 | [`@thomasfosterau/effect-sparql-client`](packages/sparql-client) | Strongly-typed SPARQL client over `effect/http` `HttpClient`: typed builder rows, streaming results, Graph Store operations, `SERVICE` federation                        | [SPARQL 1.1 Protocol](https://www.w3.org/TR/sparql11-protocol/)                                                                                                   | 707/707 evaluation tests over HTTP; `service` 7/7                                                                                   |
+| [`@thomasfosterau/effect-sparql-ai`](packages/sparql-ai)         | Knowledge-graph tools for `effect/ai`: a read-only SPARQL / dataset `Toolkit` for `LanguageModel` and an MCP server registration                                         | [MCP](https://modelcontextprotocol.io/specification)                                                                                                              | —                                                                                                                                   |
 
 Each package has a README with its API and usage examples.
 
@@ -151,6 +152,7 @@ effect-rdf (core) ── Term · Dataset · Serialization · Formats · PrefixMa
  ├─ syntaxes: effect-ntriples · effect-turtle · effect-n3 · effect-jsonld · effect-rdfxml · effect-rdfjson
  │   └─ effect-xmp (on effect-rdfxml)
  ├─ effect-sparql ── QuadStore / QueryCapability ←─ effect-sparql-sql, protocol server / client
+ │   └─ effect-sparql-ai (effect/ai Toolkit and MCP tools over the engine)
  ├─ effect-shacl ── SparqlConstraintEvaluator ←─ effect-shacl-sparql (uses effect-sparql)
  └─ effect-shex
 ```

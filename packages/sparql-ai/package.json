@@ -1,0 +1,66 @@
+{
+  "$schema": "https://www.schemastore.org/package",
+  "name": "@thomasfosterau/effect-sparql-ai",
+  "version": "0.0.0",
+  "description": "SPARQL and dataset tools for effect/ai: a Toolkit of read-only knowledge-graph tools over @thomasfosterau/effect-sparql, and an MCP server registration",
+  "keywords": [
+    "ai",
+    "effect",
+    "mcp",
+    "rdf",
+    "sparql",
+    "typescript"
+  ],
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/sparql-ai#readme",
+  "bugs": {
+    "url": "https://github.com/thomasfosterau/effect-rdf/issues"
+  },
+  "license": "MIT",
+  "author": "Thomas Foster <me@thomasfoster.au>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thomasfosterau/effect-rdf.git",
+    "directory": "packages/sparql-ai"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./*": {
+        "types": "./dist/*.d.mts",
+        "default": "./dist/*.mjs"
+      }
+    },
+    "access": "public"
+  },
+  "dependencies": {
+    "@thomasfosterau/effect-rdf": "workspace:*",
+    "@thomasfosterau/effect-sparql": "workspace:*",
+    "@thomasfosterau/effect-turtle": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:peers"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
