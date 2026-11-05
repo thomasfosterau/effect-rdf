@@ -165,11 +165,42 @@ export class Statement<
   }
 }
 
-/** Whether two statements are equal: their terms have the same keys. */
+/**
+ * Whether two terms are equal (have the same key), compared by their parts
+ * where that avoids building keys: identical or differently hashed terms are
+ * decided at once, and statements, collections and formulas are compared
+ * part by part. Only leaf terms (IRIs, literals, blank nodes, variables) are
+ * compared by key.
+ */
+const sameTerm = (a: N3Term, b: N3Term): boolean => {
+  if (a === b) return true;
+  if (a[Hash.symbol]() !== b[Hash.symbol]()) return false;
+  if (a instanceof Formula) return b instanceof Formula && sameFormula(a, b);
+  if (a instanceof Collection) {
+    return (
+      b instanceof Collection &&
+      a.items.length === b.items.length &&
+      a.items.every((item, i) => sameTerm(item, b.items[i] ?? item))
+    );
+  }
+  if (b instanceof Formula || b instanceof Collection) return false;
+  return a.key === b.key;
+};
+
+/** Whether two statements are equal: their terms are (`sameTerm`). */
 const sameStatement = (a: Statement, b: Statement): boolean =>
-  a.subject.key === b.subject.key &&
-  a.predicate.key === b.predicate.key &&
-  a.object.key === b.object.key;
+  sameTerm(a.subject, b.subject) &&
+  sameTerm(a.predicate, b.predicate) &&
+  sameTerm(a.object, b.object);
+
+/** Whether two formulas have the same statements (searched for small ones, by key otherwise). */
+const sameFormula = (a: Formula, b: Formula): boolean => {
+  const as = a.statements;
+  const bs = b.statements;
+  if (as.length !== bs.length) return false;
+  if (as.length > 8) return a.key === b.key;
+  return as.every((s) => bs.some((t) => sameStatement(s, t)));
+};
 
 /**
  * The statements without duplicates, keeping the first of each: by their
