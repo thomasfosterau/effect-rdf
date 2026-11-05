@@ -52,6 +52,25 @@ describe('Dataset', () => {
     expect(Dataset.match(ds, { graph: ex('g') })).toEqual([b]);
   });
 
+  it('builds a dataset made from quads on first use, as if at once', () => {
+    const eager = Dataset.mutate(Dataset.empty, (builder) => builder.addAll([a, b, c, a]));
+    const fresh = () => Dataset.fromIterable([a, b, c, a]);
+    expect(fresh().size).toBe(3);
+    expect(Array.from(fresh())).toEqual(Array.from(eager));
+    expect(Equal.equals(fresh(), eager)).toBe(true);
+    expect(Equal.equals(eager, fresh())).toBe(true);
+    expect(Dataset.has(fresh(), b)).toBe(true);
+    expect(Dataset.match(fresh(), { predicate: ex('p') })).toHaveLength(2);
+    expect(Dataset.add(fresh(), Term.quad(ex('d'), ex('p'), ex('b'))).size).toBe(4);
+    expect(Dataset.toNQuads(fresh())).toBe(Dataset.toNQuads(eager));
+    expect(fresh().toJSON()).toEqual(eager.toJSON());
+    // The given array is copied, so changing it later does not change the dataset
+    const input: Array<Term.Quad> = [a, b];
+    const later = Dataset.fromIterable(input);
+    input.push(c);
+    expect(later.size).toBe(2);
+  });
+
   it('has value equality', () => {
     expect(Equal.equals(Dataset.make(a, b), Dataset.make(b, a))).toBe(true);
     expect(Equal.equals(Dataset.make(a, b), Dataset.make(a))).toBe(false);

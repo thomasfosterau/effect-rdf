@@ -22,6 +22,7 @@ import * as Schema from 'effect/Schema';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import { MAX_DATASET_SIZE } from './internal/arbitrary.ts';
 import * as Term from './Term.ts';
+import { pendingQuads } from './internal/pending.ts';
 import { rdf } from './Vocab.ts';
 
 /**
@@ -76,8 +77,34 @@ type Spog = readonly [Index, Index, Index, Index];
  */
 const indexes = new WeakMap<Dataset, Spog>();
 
-const Proto: Omit<Dataset, 'size' | 'quads'> = {
+/**
+ * A parser's dataset is often only iterated or serialized once, or not at
+ * all, so `fromIterable` keeps its quads (`pendingQuads`) and the persistent
+ * map is built the first time it is needed, with the same contents and
+ * order as if built at once.
+ */
+const pending = pendingQuads;
+
+/** Builds a pending dataset's quad set, making it like any other dataset. */
+const materialize = (self: Dataset): HashMap.HashMap<string, Term.Quad> => {
+  const quads = buildQuads(pending.get(self) ?? []);
+  pending.delete(self);
+  Object.defineProperty(self, 'quads', { value: quads, enumerable: true });
+  Object.defineProperty(self, 'size', { value: HashMap.size(quads), enumerable: true });
+  return quads;
+};
+
+const Proto: Omit<Dataset, 'size' | 'quads'> & Pick<Dataset, 'size' | 'quads'> = {
   [TypeId]: TypeId,
+  // Only a pending dataset reaches these: any other has its own `quads` and `size`
+  get quads(): HashMap.HashMap<string, Term.Quad> {
+    // SAFETY: the getter is only ever called on a dataset made from this prototype.
+    return materialize(this);
+  },
+  get size(): number {
+    // SAFETY: as for `quads`.
+    return HashMap.size(materialize(this));
+  },
   [Symbol.iterator](this: Dataset): Iterator<Term.Quad> {
     return HashMap.values(this.quads)[Symbol.iterator]();
   },
@@ -108,10 +135,11 @@ const Proto: Omit<Dataset, 'size' | 'quads'> = {
 };
 
 const makeDataset = (quads: HashMap.HashMap<string, Term.Quad>): Dataset => {
-  const self = Object.create(Proto);
-  self.quads = quads;
-  self.size = HashMap.size(quads);
-  return self;
+  // Own data properties, which shadow the prototype's getters for pending datasets
+  return Object.create(Proto, {
+    quads: { value: quads, enumerable: true },
+    size: { value: HashMap.size(quads), enumerable: true },
+  });
 };
 
 const emptyIndex: Index = HashMap.empty();
@@ -301,8 +329,16 @@ export const mutate: {
  * @since 0.1.0
  * @category constructors
  */
-export const fromIterable = (quads: Iterable<Term.Quad>): Dataset =>
-  hasDatasetTypeId(quads) ? quads : mutate(empty, (b) => b.addAll(quads));
+export const fromIterable = (quads: Iterable<Term.Quad>): Dataset => {
+  if (hasDatasetTypeId(quads)) return quads;
+  const self: Dataset = Object.create(Proto);
+  pending.set(self, Array.from(quads));
+  return self;
+};
+
+/** The quad set of `quads`, deduplicated by key (the first of equal quads is kept). */
+const buildQuads = (quads: ReadonlyArray<Term.Quad>): HashMap.HashMap<string, Term.Quad> =>
+  mutate(empty, (b) => b.addAll(quads)).quads;
 
 /**
  * @since 0.1.0

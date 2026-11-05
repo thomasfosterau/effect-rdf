@@ -18,6 +18,7 @@ import * as Order from 'effect/Order';
 import * as Path from 'effect/Path';
 import type * as PlatformError from 'effect/PlatformError';
 import * as Schema from 'effect/Schema';
+import { statementCount } from './internal/pending.ts';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import * as Stream from 'effect/Stream';
@@ -713,8 +714,9 @@ const formatAttributes = (format: Format) => ({
 /**
  * Wraps a whole-document parse in a span named `<module>.<operation>`
  * (`operation` defaults to `parse`), with the format, media type and input
- * length in characters as attributes and the parsed quad count
- * (`rdf.quads`) on completion. The input text itself is never recorded.
+ * length in characters as attributes and the number of statements parsed
+ * (`rdf.quads`, which counts a statement the document repeats each time) on
+ * completion. The input text itself is never recorded.
  * With no target the effect is returned unchanged.
  *
  * @since 0.1.0
@@ -726,7 +728,10 @@ export const withParseSpan =
     target === undefined
       ? self
       : self.pipe(
-          Effect.tap((result) => Effect.annotateCurrentSpan('rdf.quads', result.dataset.size)),
+          // The statements parsed, counted without building a dataset that was not built yet
+          Effect.tap((result) =>
+            Effect.annotateCurrentSpan('rdf.quads', statementCount(result.dataset)),
+          ),
           Effect.withSpan(`${target.module}.${operation}`, {
             attributes: { ...formatAttributes(target.format), 'rdf.input.length': input.length },
           }),
