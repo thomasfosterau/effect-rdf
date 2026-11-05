@@ -8,18 +8,20 @@ import { afterAll } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as ManagedRuntime from 'effect/ManagedRuntime';
+import * as Option from 'effect/Option';
 import * as SqlClient from 'effect/sql/SqlClient';
 import * as Dialect from '../src/Dialect.ts';
 import * as SqlStore from '../src/SqlStore.ts';
 import { conformanceSuite } from './support/conformance.ts';
 import * as PGlite from './support/pglite.ts';
 
-let listener: ((event: SqlStore.QueryEvent) => void) | undefined;
+let listener = Option.none<(event: SqlStore.QueryEvent) => void>();
 
 const runtime = ManagedRuntime.make(
-  SqlStore.layer({ dialect: Dialect.postgres, onQuery: (e) => listener?.(e) }).pipe(
-    Layer.provideMerge(PGlite.layer),
-  ),
+  SqlStore.layer({
+    dialect: Dialect.postgres,
+    onQuery: (e) => Option.map(listener, (f) => f(e)),
+  }).pipe(Layer.provideMerge(PGlite.layer)),
 );
 
 afterAll(() => runtime.dispose());
@@ -33,12 +35,12 @@ conformanceSuite('PostgreSQL via PGlite', {
         const store = yield* SqlStore.SqlStore;
         yield* sql.unsafe(`DELETE FROM ${store.tables.quads}`);
         yield* sql.unsafe(`DELETE FROM ${store.tables.graphs}`);
-        listener = onQuery;
+        listener = Option.some(onQuery);
         return yield* f(store);
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            listener = undefined;
+            listener = Option.none();
           }),
         ),
       ),

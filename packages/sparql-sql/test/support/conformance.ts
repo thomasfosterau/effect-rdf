@@ -11,7 +11,13 @@ import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Str from 'effect/String';
 import * as Effect from 'effect/Effect';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
+import * as Rec from 'effect/Record';
+import * as Result from 'effect/Result';
 import * as Stream from 'effect/Stream';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
 import type * as Ast from '@thomasfosterau/effect-sparql/Ast';
@@ -37,39 +43,41 @@ const exists = fs.existsSync(sparqlDir);
 /** Tests that are deliberately not run, with the reason. */
 const skipped: Readonly<Record<string, string>> = {};
 
-const SKIPPED_DIRECTORIES = new Map([
+const SKIPPED_DIRECTORIES: ReadonlyArray<readonly [string, string]> = [
   ['sparql11/service', 'SERVICE federation requires remote endpoints'],
   ['sparql11/entailment', 'Entailment regimes are not supported'],
   ['sparql11/protocol', 'Protocol tests belong to the HTTP server package'],
   ['sparql11/graph-store-protocol', 'Graph Store Protocol tests belong to the HTTP server package'],
   ['sparql11/http-rdf-update', 'Graph Store Protocol tests belong to the HTTP server package'],
   ['sparql11/service-description', 'Service descriptions belong to the HTTP server package'],
-]);
+];
 
-const EVAL_TYPES = new Set(['QueryEvaluationTest', 'UpdateEvaluationTest', 'CSVResultFormatTest']);
+const EVAL_TYPES = MutableHashSet.make(
+  'QueryEvaluationTest',
+  'UpdateEvaluationTest',
+  'CSVResultFormatTest',
+);
 
 const manifests = ['sparql10/manifest.ttl', 'sparql11/manifest-all.ttl', 'sparql12/manifest.ttl'];
 
 const loadTests = (): Array<TestCase> => {
   if (!exists) return [];
-  const seen = new Set<string>();
-  const out: Array<TestCase> = [];
-  for (const m of manifests) {
-    for (const t of readManifest(path.join(sparqlDir, m))) {
-      if (!EVAL_TYPES.has(t.type) || seen.has(t.id)) continue;
-      seen.add(t.id);
-      out.push(t);
-    }
-  }
-  return out;
+  const seen = MutableHashSet.empty<string>();
+  return manifests.flatMap((m) =>
+    readManifest(path.join(sparqlDir, m)).filter((t) => {
+      if (!MutableHashSet.has(EVAL_TYPES, t.type) || MutableHashSet.has(seen, t.id)) return false;
+      MutableHashSet.add(seen, t.id);
+      return true;
+    }),
+  );
 };
 
-const skipReason = (t: TestCase): string | undefined => {
+const skipReason = (t: TestCase): Option.Option<string> => {
   const rel = path.relative(sparqlDir, t.manifest);
-  for (const [dir, reason] of SKIPPED_DIRECTORIES) {
-    if (rel.startsWith(`${dir}/`)) return reason;
-  }
-  return skipped[t.id];
+  return Arr.findFirst(SKIPPED_DIRECTORIES, ([dir]) => rel.startsWith(`${dir}/`)).pipe(
+    Option.map(([, reason]) => reason),
+    Option.orElse(() => Rec.get(skipped, t.id)),
+  );
 };
 
 /** Asserts isomorphism, showing both graphs as N-Quads when they differ. */
@@ -82,30 +90,25 @@ const expectFailure = (outcome: { readonly _tag: 'Success' | 'Failure' }): void 
   expect(outcome._tag).toBe('Failure');
 };
 
-const loadQuads = (t: TestCase): Array<Term.Quad> => {
-  const quads: Array<Term.Quad> = [];
-  for (const file of t.data) quads.push(...parseFile(file));
-  for (const g of t.graphData) {
-    const name = g.name !== '' ? g.name : pathToFileURL(g.file).href;
-    quads.push(...parseFile(g.file, Term.namedNode(name)));
-  }
-  return quads;
-};
+const loadQuads = (t: TestCase): Array<Term.Quad> => [
+  ...t.data.flatMap((file) => parseFile(file)),
+  ...t.graphData.flatMap((g) =>
+    parseFile(g.file, Term.namedNode(g.name !== '' ? g.name : pathToFileURL(g.file).href)),
+  ),
+];
 
 /** Loads the graphs named in FROM / FROM NAMED clauses from files. */
 const datasetClauseQuads = (query: Ast.Query, loaded: Dataset.Dataset): Array<Term.Quad> => {
-  const out: Array<Term.Quad> = [];
   const graphs = [...(query.dataset?.default ?? []), ...(query.dataset?.named ?? [])];
-  for (const g of graphs) {
+  return graphs.flatMap((g) => {
     if (
       !g.value.startsWith('file:') ||
       Arr.isReadonlyArrayNonEmpty(Dataset.match(loaded, { graph: g }))
     )
-      continue;
+      return [];
     const file = fileURLToPath(g.value);
-    if (fs.existsSync(file)) out.push(...parseFile(file, g));
-  }
-  return out;
+    return fs.existsSync(file) ? parseFile(file, g) : [];
+  });
 };
 
 const readExpected = (file: string): Results.ParsedResult | Dataset.Dataset => {
@@ -117,17 +120,19 @@ const readExpected = (file: string): Results.ParsedResult | Dataset.Dataset => {
   return fromRdf(quads) ?? Dataset.fromIterable(quads);
 };
 
-// SAFETY: every order key was checked to be a variable just above.
-const orderVariables = (query: Ast.Query): ReadonlyArray<string> =>
-  query.orderBy.every((o) => o.expression._tag === 'Variable')
-    ? query.orderBy.map((o) => (o.expression as Term.Variable).value)
-    : [];
+/** The variables of the order keys, when every key is a variable. */
+const orderVariables = (query: Ast.Query): ReadonlyArray<string> => {
+  const vars = Arr.filterMap(query.orderBy, (o) =>
+    Term.isVariable(o.expression) ? Result.succeed(o.expression.value) : Result.failVoid,
+  );
+  return vars.length === query.orderBy.length ? vars : [];
+};
 
 const orderKey = (b: Bindings, vars: ReadonlyArray<string>): string =>
   vars
     .map((v) => {
       const t = b.map.get(v);
-      return t === undefined ? '' : t._tag === 'BlankNode' ? '_' : normalize(t).key;
+      return t === undefined ? '' : Term.isBlankNode(t) ? '_' : normalize(t).key;
     })
     .join('|');
 
@@ -171,20 +176,27 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
         Effect.gen(function* () {
           const quads = yield* Stream.runCollect(result.quads);
           const actual = Dataset.fromIterable(quads);
-          // SAFETY: a CONSTRUCT or DESCRIBE test's expected result was loaded as a dataset.
-          return expectIsomorphic(actual, expected as Dataset.Dataset);
+          // A CONSTRUCT or DESCRIBE test's expected result is a graph.
+          assert(Dataset.isDataset(expected), 'Expected a graph result');
+          return expectIsomorphic(actual, expected);
         }),
       ),
       Match.tag('Select', (result) =>
         Effect.gen(function* () {
           const set = yield* Results.collect(result);
           let actual = set.bindings;
-          // SAFETY: a SELECT test's expected result was loaded as a result set.
-          const exp = (expected as Results.ResultSet).bindings;
+          // A SELECT test's expected result is a result set.
+          assert(Predicate.isTagged(expected, 'ResultSet'), 'Expected a result set');
+          const exp = expected.bindings;
           if (t.type === 'CSVResultFormatTest' || expectedResultFile(t).endsWith('.csv')) {
             const csv = Results.Csv.serializeString(set);
-            // SAFETY: the CSV serialization of a result set parses back to a result set.
-            actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
+            // The CSV serialization of a result set parses back to a result set.
+            const parsed = yield* Results.Csv.parse(csv);
+            assert(
+              Predicate.isTagged(parsed, 'ResultSet'),
+              'CSV results did not parse to a result set',
+            );
+            actual = parsed.bindings;
           }
           const ok = sameResults(actual, exp, { lax: t.laxCardinality });
           // On a mismatch, show the sorted rows; equal rows that still differ
@@ -219,11 +231,11 @@ const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
     const outcome = yield* Effect.result(engine.update(text));
     // A negative update test passes when the update fails.
     if (!t.updateSuccess) return expectFailure(outcome);
-    if (outcome._tag === 'Failure') return yield* Effect.fail(outcome.failure);
-    const quads: Array<Term.Quad> = [];
-    for (const file of t.resultData) quads.push(...parseFile(file));
-    for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
-    const expected = Dataset.fromIterable(quads);
+    if (Result.isFailure(outcome)) return yield* outcome.failure;
+    const expected = Dataset.fromIterable([
+      ...t.resultData.flatMap((file) => parseFile(file)),
+      ...t.resultGraphData.flatMap((g) => parseFile(g.file, Term.namedNode(g.name))),
+    ]);
     const actual = yield* Store.toDataset(store);
     return expectIsomorphic(actual, expected);
   });
@@ -237,9 +249,9 @@ const label = (t: TestCase) => `${path.relative(sparqlDir, path.dirname(t.manife
  */
 export const conformanceSuite = (name: string, backend: Backend): void => {
   /** How the root of each query was evaluated (`Executed` = entirely in SQL). */
-  const outcomes = new Map<string, SqlStore.QueryEvent['_tag']>();
+  const outcomes = MutableHashMap.empty<string, SqlStore.QueryEvent['_tag']>();
   /** The tests for which at least one subtree was evaluated in SQL. */
-  const executed = new Set<string>();
+  const executed = MutableHashSet.empty<string>();
   const run = <E>(
     t: TestCase,
     f: (store: SqlStore.SqlStoreShape, t: TestCase) => Effect.Effect<void, E>,
@@ -247,15 +259,15 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
     backend.run(
       (store) => f(store, t),
       (e) => {
-        if (!outcomes.has(t.id)) outcomes.set(t.id, e._tag);
-        if (e._tag === 'Executed') executed.add(t.id);
+        if (!MutableHashMap.has(outcomes, t.id)) MutableHashMap.set(outcomes, t.id, e._tag);
+        if (Predicate.isTagged(e, 'Executed')) MutableHashSet.add(executed, t.id);
       },
     );
   describe.skipIf(!exists)(`SPARQL evaluation conformance (${name})`, () => {
-    const runnable = tests.filter((t) => skipReason(t) === undefined);
+    const runnable = tests.filter((t) => Option.isNone(skipReason(t)));
     it('documents every skipped test', () => {
-      const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
-      expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t) ?? ''))).toBe(true);
+      const skippedTests = tests.filter((t) => Option.isSome(skipReason(t)));
+      expect(skippedTests.every((t) => Option.exists(skipReason(t), Str.isNonEmpty))).toBe(true);
     });
     it.each(
       runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),
@@ -277,8 +289,10 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
     );
     it('evaluates most queries in SQL', () => {
       const queries = runnable.filter((t) => t.type !== 'UpdateEvaluationTest');
-      const root = queries.filter((t) => outcomes.get(t.id) === 'Executed').length;
-      const some = runnable.filter((t) => executed.has(t.id)).length;
+      const root = queries.filter((t) =>
+        Option.exists(MutableHashMap.get(outcomes, t.id), (o) => o === 'Executed'),
+      ).length;
+      const some = runnable.filter((t) => MutableHashSet.has(executed, t.id)).length;
       // The whole query (the root of the algebra) runs as one SQL statement for
       // more than half of the queries (the rest use ORDER BY, property paths,
       // REGEX, arithmetic, … in the engine), and SQL evaluates subtrees of

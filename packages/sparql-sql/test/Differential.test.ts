@@ -10,6 +10,7 @@ import * as Exit from 'effect/Exit';
 import * as Stream from 'effect/Stream';
 import * as Arr from 'effect/Array';
 import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
 import { Dataset, Term } from '@thomasfosterau/effect-rdf';
 import * as Engine from '@thomasfosterau/effect-sparql/Engine';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
@@ -97,9 +98,8 @@ const tripleTerm = Term.triple(
 
 const makeData = (r: Random, risky: boolean): Array<Term.Quad> => {
   const literals = risky ? [...safeLiterals, ...riskyLiterals] : safeLiterals;
-  const out: Array<Term.Quad> = [];
   const n = 25 + r.int(30);
-  for (let i = 0; i < n; i++) {
+  return Array.from({ length: n }, () => {
     const s = r.chance(0.1) ? r.pick(blanks) : r.chance(0.05) ? tripleTerm : r.pick(resources);
     const p = r.pick(predicates);
     const o = r.chance(0.4)
@@ -110,9 +110,8 @@ const makeData = (r: Random, risky: boolean): Array<Term.Quad> => {
           ? tripleTerm
           : r.pick(literals);
     const g = r.chance(0.6) ? Term.defaultGraph : r.pick(graphs);
-    out.push(Term.quad(s, p, o, g));
-  }
-  return out;
+    return Term.quad(s, p, o, g);
+  });
 };
 
 const VARS = ['?a', '?b', '?c', '?d'];
@@ -212,7 +211,7 @@ class QueryGen {
     const r = this.r;
     const parts: Array<string> = [this.triple()];
     const n = r.int(depth > 0 ? 4 : 2);
-    for (let i = 0; i < n; i++) {
+    Array.from({ length: n }, () => {
       const choice = r.int(depth > 0 ? 12 : 3);
       Match.value(choice).pipe(
         Match.when(Match.is(0, 1), () => {
@@ -265,7 +264,7 @@ class QueryGen {
           parts.push(`FILTER(${this.expr(2)})`);
         }),
       );
-    }
+    });
     return parts.join(' ');
   }
 
@@ -358,8 +357,8 @@ describe('Differential: SQL store vs in-memory store', () => {
                   compared++;
                   if (Arr.isReadonlyArrayNonEmpty(expected.value) && expected.value[0] !== 'false')
                     nonEmpty++;
-                  if (events[0]?._tag === 'Executed') rootInSql++;
-                  if (events.some((e) => e._tag === 'Executed')) sqlUsed++;
+                  if (Predicate.isTagged(events[0], 'Executed')) rootInSql++;
+                  if (events.some(Predicate.isTagged('Executed'))) sqlUsed++;
                 }),
                 { concurrency: 1, discard: true },
               );
