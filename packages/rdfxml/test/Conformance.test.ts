@@ -6,7 +6,7 @@ import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import { Dataset, Isomorphism } from '@thomasfosterau/effect-rdf';
 import { RdfXml } from '../src/index.ts';
-import { parseNTriples, readManifest, type TestCase } from './support.ts';
+import { parseBothWays, parseNTriples, readManifest, type TestCase } from './support.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const suites = process.env['RDF_TEST_SUITES'] ?? path.resolve(here, '../../../.test-suites');
@@ -61,6 +61,18 @@ describe.skipIf(!exists)('RDF/XML conformance (rdf11 + rdf12 rdf-xml)', () => {
         });
       }),
     );
+  });
+
+  // `RdfXml.parse` converts node elements as it reads them; reading the whole document first
+  // must give the same triples, blank nodes, prefixes, base and errors.
+  tests.forEach((test) => {
+    it(`${test.name} (streamed as whole)`, () => {
+      const { streamed, whole } = parseBothWays(fs.readFileSync(test.action, 'utf8'), {
+        baseIri: test.baseIri,
+        blankNodePrefix: 'b',
+      });
+      expect(streamed).toEqual(whole);
+    });
   });
 
   negativeTests.forEach((test) => {
