@@ -86,14 +86,14 @@ export default defineConfig({
       // and evaluators to rewrite safely in that change: short grammar-local
       // names (`c`, `p`, `op`, `e`) reused in nested combinators. A new site
       // is a defect, not headroom.
-      'eslint/no-shadow': 'warn', // 14
+      'eslint/no-shadow': 'warn', // 5
       // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
       // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
       // autofixable findings (unnecessary assertions, type arguments and
       // template expressions) are fixed; these sit at `warn` with their count
       // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
       // narrowing casts the parsers and evaluators rely on.
-      'typescript/no-unsafe-type-assertion': 'warn', // 52
+      'typescript/no-unsafe-type-assertion': 'warn', // 14
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -127,7 +127,7 @@ export default defineConfig({
       // Functions.ts) made 15 existing checks visible to the rule.
       'effect/avoid-direct-tag-checks': 'warn', // 75
       'effect/avoid-non-null-assertion': 'warn', // 66
-      'effect/avoid-native-object-helpers': 'warn', // 87
+      'effect/avoid-native-object-helpers': 'warn', // 16
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
