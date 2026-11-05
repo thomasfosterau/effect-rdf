@@ -686,25 +686,29 @@ export function mapTerms(
   f: (term: NamedNode | BlankNode | Literal | DefaultGraph) => Term,
 ): Quad | Triple {
   // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
-  const go = (term: Subject | Predicate | Object | Graph): Term =>
-    term._tag === 'Triple'
-      ? new Triple(
-          go(term.subject) as Subject,
-          go(term.predicate) as Predicate,
-          go(term.object) as Object,
-        )
-      : f(term);
+  // A statement whose terms all map to themselves is returned as it is (with its key, if computed)
+  const go = (term: Subject | Predicate | Object | Graph): Term => {
+    if (term._tag !== 'Triple') return f(term);
+    const s = go(term.subject);
+    const p = go(term.predicate);
+    const o = go(term.object);
+    return s === term.subject && p === term.predicate && o === term.object
+      ? term
+      : // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
+        new Triple(s as Subject, p as Predicate, o as Object);
+  };
   if (self._tag === 'Triple') {
     // SAFETY: a triple maps to a triple.
     return go(self) as Triple;
   }
-  // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
-  return new Quad(
-    go(self.subject) as Subject,
-    go(self.predicate) as Predicate,
-    go(self.object) as Object,
-    go(self.graph) as Graph,
-  );
+  const s = go(self.subject);
+  const p = go(self.predicate);
+  const o = go(self.object);
+  const g = go(self.graph);
+  return s === self.subject && p === self.predicate && o === self.object && g === self.graph
+    ? self
+    : // SAFETY: `f` maps each leaf to a term of the same kind, so each position keeps its kind.
+      new Quad(s as Subject, p as Predicate, o as Object, g as Graph);
 }
 
 /**

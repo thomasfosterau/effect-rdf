@@ -42,6 +42,7 @@ import {
   hasOwn,
 } from './util.ts';
 import { parseJson } from './json.ts';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 
 /** @internal */
@@ -55,11 +56,26 @@ export interface ToRdfOptions {
 
 const blankNode = (id: string): Term.BlankNode => Term.blankNode(id.slice(2));
 
-const toResource = (id: string): Term.NamedNode | Term.BlankNode | null => {
-  if (isBlankNodeId(id)) return blankNode(id);
-  if (isWellFormedIri(id)) return Term.namedNode(id);
-  return null;
+/**
+ * The nodes of the IRIs seen by the current `toRdf` (none for an IRI that
+ * is not well-formed), so that an IRI that recurs (a property, a type, a
+ * datatype, a node) is validated and made into a node once. `toRdf` runs
+ * synchronously, and empties it before and after.
+ */
+const iriNodes = new Map<string, Option.Option<Term.NamedNode>>();
+
+/** The node of an IRI, if it is well-formed. */
+const iriNode = (iri: string): Option.Option<Term.NamedNode> => {
+  let node = iriNodes.get(iri);
+  if (node === undefined) {
+    node = isWellFormedIri(iri) ? Option.some(Term.namedNode(iri)) : Option.none();
+    iriNodes.set(iri, node);
+  }
+  return node;
 };
+
+const toResource = (id: string): Term.NamedNode | Term.BlankNode | null =>
+  isBlankNodeId(id) ? blankNode(id) : Option.getOrNull(iriNode(id));
 
 /**
  * Converts expanded JSON-LD to quads.
@@ -68,6 +84,8 @@ const toResource = (id: string): Term.NamedNode | Term.BlankNode | null => {
  */
 export const toRdf = (expanded: Json, options: ToRdfOptions): Array<Term.Quad> => {
   const issuer = new IdIssuer();
+  iriNodes.clear();
+  const rdfType = Term.namedNode(RDF_TYPE);
   const nodeMap: NodeMap = { '@default': {} };
   generateNodeMap(expanded, nodeMap, issuer);
   const quads: Array<Term.Quad> = [];
@@ -89,24 +107,25 @@ export const toRdf = (expanded: Json, options: ToRdfOptions): Array<Term.Quad> =
         if (property === '@type') {
           for (const type of values) {
             const o = toResource(type);
-            if (o !== null) quads.push(Term.quad(s, Term.namedNode(RDF_TYPE), o, graphTerm));
+            if (o !== null) quads.push(Term.quad(s, rdfType, o, graphTerm));
           }
           continue;
         }
         if (property.startsWith('@')) continue;
         // Blank node predicates (generalized RDF) cannot be represented by
         // the core term model, so they are always skipped.
-        if (isBlankNodeId(property) || !isWellFormedIri(property)) continue;
-        const p = Term.namedNode(property);
+        const p = isBlankNodeId(property) ? Option.none() : iriNode(property);
+        if (Option.isNone(p)) continue;
         for (const item of values) {
           const listTriples: Array<[Term.Subject, Term.NamedNode, Term.Object]> = [];
           const o = objectToRdf(item, listTriples, issuer, options);
-          if (o !== null) quads.push(Term.quad(s, p, o, graphTerm));
+          if (o !== null) quads.push(Term.quad(s, p.value, o, graphTerm));
           for (const [ls, lp, lo] of listTriples) quads.push(Term.quad(ls, lp, lo, graphTerm));
         }
       }
     }
   }
+  iriNodes.clear();
   return quads;
 };
 
@@ -128,7 +147,7 @@ const objectToRdf = (
   let value = item['@value'];
   let datatype: string | null = item['@type'] ?? null;
   // 6
-  if (datatype !== null && datatype !== '@json' && !isWellFormedIri(datatype)) return null;
+  if (datatype !== null && datatype !== '@json' && Option.isNone(iriNode(datatype))) return null;
   // 7
   if ('@language' in item && !isWellFormedLanguage(item['@language'])) return null;
   // 8
@@ -169,7 +188,10 @@ const objectToRdf = (
   }
   // 14
   if ('@language' in item) return Term.literal(String(value), String(item['@language']));
-  return Term.literal(String(value), Term.namedNode(datatype));
+  return Term.literal(
+    String(value),
+    Option.getOrElse(iriNode(datatype), () => Term.namedNode(datatype)),
+  );
 };
 
 const listToRdf = (
