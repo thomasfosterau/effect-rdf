@@ -168,17 +168,17 @@ const graphParams = (target: GraphTarget) =>
   target === 'default' ? { default: '' } : { graph: target.graph };
 
 // An empty list sends no parameter.
-const queryDataset = (options: QueryOptions | undefined) => ({
+const queryDataset = (options?: QueryOptions) => ({
   'default-graph-uri': options?.defaultGraphs ?? [],
   'named-graph-uri': options?.namedGraphs ?? [],
 });
 
-const updateDataset = (options: UpdateOptions | undefined) => ({
+const updateDataset = (options?: UpdateOptions) => ({
   'using-graph-uri': options?.usingGraphs ?? [],
   'using-named-graph-uri': options?.usingNamedGraphs ?? [],
 });
 
-const queryHeaders = (accept: string | undefined) => ({
+const queryHeaders = (accept?: string) => ({
   accept: accept ?? SparqlApi.queryMediaTypes.join(', '),
 });
 

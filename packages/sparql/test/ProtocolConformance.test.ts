@@ -8,11 +8,14 @@ import * as path from 'node:path';
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Predicate from 'effect/Predicate';
 import * as Layer from 'effect/Layer';
 import type * as Scope from 'effect/Scope';
 import type * as HttpClient from 'effect/http/HttpClient';
 import * as Option from 'effect/Option';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
+import * as HttpMethod from 'effect/http/HttpMethod';
 import { Dataset, Isomorphism, Serialization, Term } from '@thomasfosterau/effect-rdf';
 import { NTriples } from '@thomasfosterau/effect-ntriples';
 import { Results } from '../src/index.ts';
@@ -41,19 +44,19 @@ const formatsService = Effect.runSync(
   ),
 );
 
-const loadGraphData = (t: ProtocolTest): Dataset.Dataset => {
-  const quads: Array<Term.Quad> = [];
-  for (const g of t.graphData) {
-    const text = fs.readFileSync(g.file, 'utf8');
-    const parsed = Effect.runSync(NTriples.parse(text));
-    for (const q of parsed.dataset) {
-      quads.push(new Term.Quad(q.subject, q.predicate, q.object, Term.namedNode(g.name)));
-    }
-  }
-  return Dataset.fromIterable(quads);
-};
+const loadGraphData = (t: ProtocolTest): Dataset.Dataset =>
+  Dataset.fromIterable(
+    t.graphData.flatMap((g) => {
+      const text = fs.readFileSync(g.file, 'utf8');
+      const parsed = Effect.runSync(NTriples.parse(text));
+      return Array.from(
+        parsed.dataset,
+        (q) => new Term.Quad(q.subject, q.predicate, q.object, Term.namedNode(g.name)),
+      );
+    }),
+  );
 
-const mediaType = (ct: string | undefined) => ((ct ?? '').split(';')[0] ?? '').trim().toLowerCase();
+const mediaType = (ct?: string) => ((ct ?? '').split(';')[0] ?? '').trim().toLowerCase();
 
 const parseRdf = (contentType: string | undefined, text: string, baseIri: string) => {
   const parser = Serialization.parserFor(formatsService, mediaType(contentType));
@@ -61,26 +64,26 @@ const parseRdf = (contentType: string | undefined, text: string, baseIri: string
   return Effect.map(parser.value.parse(text, { baseIri }), (r) => r.dataset);
 };
 
-const toRequest = (spec: RequestSpec, authority: string, vars: Map<string, string>) => {
-  const sub = (s: string) => {
-    let out = s;
-    for (const [k, v] of vars) out = out.split(k).join(v);
-    return out;
-  };
-  // SAFETY: the protocol tests' methods are valid HTTP method names; `HttpClientRequest.make` only
-  // needs the literal type.
-  let request = HttpClientRequest.make(spec.method as 'GET')(
-    `http://${authority}${sub(spec.path)}`,
+const toRequest = (
+  spec: RequestSpec,
+  authority: string,
+  vars: MutableHashMap.MutableHashMap<string, string>,
+) => {
+  const sub = (s: string) => Array.from(vars).reduce((out, [k, v]) => out.split(k).join(v), s);
+  // The protocol tests' methods are HTTP method names.
+  assert(HttpMethod.isHttpMethod(spec.method), `Unknown HTTP method ${spec.method}`);
+  const request = HttpClientRequest.make(spec.method)(`http://${authority}${sub(spec.path)}`);
+  const withBody = Option.match(spec.body, {
+    onNone: () => request,
+    onSome: (body) =>
+      HttpClientRequest.bodyText(request, sub(body)).pipe(
+        HttpClientRequest.removeHeader('content-type'),
+      ),
+  });
+  return spec.headers.reduce(
+    (r, [name, value]) => HttpClientRequest.setHeader(r, name, value),
+    withBody,
   );
-  if (spec.body !== undefined) {
-    request = HttpClientRequest.bodyText(request, sub(spec.body)).pipe(
-      HttpClientRequest.removeHeader('content-type'),
-    );
-  }
-  for (const [name, value] of spec.headers) {
-    request = HttpClientRequest.setHeader(request, name, value);
-  }
-  return request;
 };
 
 type MakeClient = Effect.Effect<
@@ -97,7 +100,7 @@ const servers: ReadonlyArray<readonly [string, MakeClient]> = [
 const runTest = (t: ProtocolTest, makeClient: MakeClient) =>
   Effect.gen(function* () {
     const client = yield* makeClient;
-    const vars = new Map<string, string>();
+    const vars = MutableHashMap.empty<string, string>();
     yield* Effect.forEach(
       t.requests.entries(),
       Effect.fnUntraced(function* ([i, spec]) {
@@ -107,45 +110,47 @@ const runTest = (t: ProtocolTest, makeClient: MakeClient) =>
         const label = `request ${i + 1}: ${spec.method} ${spec.path} -> ${response.status} ${text.slice(0, 300)}`;
         assert.strictEqual(statusMatches(response.status, spec.response.statuses), true, label);
         const contentType = response.headers['content-type'];
-        if (spec.response.expectedLocation !== undefined) {
+        if (Option.isSome(spec.response.expectedLocation)) {
           const location = response.headers['location'];
           assert.isDefined(location, label);
-          vars.set(spec.response.expectedLocation, location);
+          MutableHashMap.set(vars, spec.response.expectedLocation.value, location);
         }
-        for (const [name, value] of spec.response.headers) {
+        spec.response.headers.forEach(([name, value]) => {
           if (name.toLowerCase() === 'content-type') {
             assert.strictEqual(mediaType(contentType), mediaType(value), label);
           }
-        }
-        if (spec.response.expectedFormat !== undefined) {
-          const format = spec.response.expectedFormat;
+        });
+        const expectedBoolean = Option.getOrUndefined(spec.response.expectedBoolean);
+        if (Option.isSome(spec.response.expectedFormat)) {
+          const format = spec.response.expectedFormat.value;
           if (format === 'boolean' || format === 'tabular') {
             const codec = Results.codecFor(contentType ?? '');
             assert.strictEqual(Option.isSome(codec), true, label);
             const parsed = yield* Option.getOrElse(codec, () => assert.fail(label)).parse(text);
             assert.strictEqual(parsed._tag, format === 'boolean' ? 'Boolean' : 'ResultSet', label);
-            if (spec.response.expectedBoolean !== undefined && parsed._tag === 'Boolean') {
-              assert.strictEqual(parsed.value, spec.response.expectedBoolean, label);
+            if (expectedBoolean !== undefined && Predicate.isTagged(parsed, 'Boolean')) {
+              assert.strictEqual(parsed.value, expectedBoolean, label);
             }
           } else if (format === 'RDF') {
             yield* parseRdf(contentType, text, request.url);
           }
-        } else if (spec.response.expectedBoolean !== undefined) {
+        } else if (expectedBoolean !== undefined) {
           const parsed = yield* Option.getOrElse(Results.codecFor(contentType ?? ''), () =>
             assert.fail(label),
           ).parse(text);
           assert.strictEqual(
-            parsed._tag === 'Boolean' && parsed.value,
-            spec.response.expectedBoolean,
+            Predicate.isTagged(parsed, 'Boolean') && parsed.value,
+            expectedBoolean,
             label,
           );
         }
-        if (spec.response.body !== undefined && spec.method !== 'HEAD') {
+        const expectedBody = spec.response.body;
+        if (Option.isSome(expectedBody) && spec.method !== 'HEAD') {
           const expectedType =
             spec.response.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ??
             'text/turtle';
           const url = request.url;
-          const expected = yield* parseRdf(expectedType, spec.response.body, url);
+          const expected = yield* parseRdf(expectedType, expectedBody.value, url);
           const actual = yield* parseRdf(contentType, text, url);
           assert.isTrue(
             Isomorphism.isomorphic(actual, expected),
@@ -184,11 +189,11 @@ servers.forEach(([server, makeClient]) => {
 const SD = 'http://www.w3.org/ns/sparql-service-description#';
 const RDF_TYPE = Term.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type');
 
-const fetchDescription = (makeClient: MakeClient, accept: string | undefined) =>
+const fetchDescription = (makeClient: MakeClient, accept?: string) =>
   Effect.gen(function* () {
     const client = yield* makeClient;
-    let request = HttpClientRequest.get('http://www.example/sparql');
-    if (accept !== undefined) request = HttpClientRequest.setHeader(request, 'accept', accept);
+    const get = HttpClientRequest.get('http://www.example/sparql');
+    const request = accept === undefined ? get : HttpClientRequest.setHeader(get, 'accept', accept);
     const response = yield* client.execute(request);
     const text = yield* response.text;
     const dataset = yield* parseRdf(
@@ -233,26 +238,24 @@ servers.forEach(([server, makeClient]) => {
         const { dataset } = yield* fetchDescription(makeClient, 'text/turtle');
         const services = Dataset.subjectsOf(dataset, RDF_TYPE, Term.namedNode(`${SD}Service`));
         expect(services.length).toBeGreaterThan(0);
-        for (const s of services) {
+        services.forEach((s) => {
           // Every service has an endpoint and supported languages from the sd: vocabulary.
           expect(Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}endpoint`)).length).toBe(1);
           const languages = Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}supportedLanguage`));
           expect(languages.length).toBeGreaterThan(0);
-          for (const l of languages) {
+          languages.forEach((l) => {
             expect([`${SD}SPARQL10Query`, `${SD}SPARQL11Query`, `${SD}SPARQL11Update`]).toContain(
-              l._tag === 'NamedNode' ? l.value : '',
+              Term.isNamedNode(l) ? l.value : '',
             );
-          }
-          for (const ds of Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}defaultDataset`))) {
-            // SAFETY: an `sd:defaultDataset` value is a node, so it can be a subject.
+          });
+          Dataset.objectsOf(dataset, s, Term.namedNode(`${SD}defaultDataset`)).forEach((ds) => {
+            // An `sd:defaultDataset` value is a node, so it can be a subject.
+            assert(Term.isSubject(ds), 'Expected a node');
             expect(
-              Dataset.has(
-                dataset,
-                Term.quad(ds as Term.Subject, RDF_TYPE, Term.namedNode(`${SD}Dataset`)),
-              ),
+              Dataset.has(dataset, Term.quad(ds, RDF_TYPE, Term.namedNode(`${SD}Dataset`))),
             ).toBe(true);
-          }
-        }
+          });
+        });
       }),
     );
   });

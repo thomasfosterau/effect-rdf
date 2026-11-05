@@ -1,5 +1,6 @@
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import { Term } from '@thomasfosterau/effect-rdf';
@@ -35,11 +36,12 @@ const result: Results.SelectResult = {
   bindings: Stream.fromIterable(rows),
 };
 
-const chunked = (text: string, size: number): Stream.Stream<string> => {
-  const chunks: Array<string> = [];
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
-  return Stream.fromIterable(chunks);
-};
+const chunked = (text: string, size: number): Stream.Stream<string> =>
+  Stream.fromIterable(
+    Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+      text.slice(i * size, (i + 1) * size),
+    ),
+  );
 
 const collect = (mediaType: string, text: string, size: number) =>
   Stream.runCollect(
@@ -49,7 +51,7 @@ const collect = (mediaType: string, text: string, size: number) =>
   );
 
 const solutions = (events: ReadonlyArray<ResultsStream.ResultEvent>) =>
-  events.flatMap((e) => (e._tag === 'Solution' ? [e.bindings] : []));
+  events.flatMap((e) => (Predicate.isTagged(e, 'Solution') ? [e.bindings] : []));
 
 describe('ResultsStream', () => {
   [Results.Json, Results.Xml, Results.Tsv].forEach((codec) => {
@@ -69,7 +71,10 @@ describe('ResultsStream', () => {
         );
         const ask = codec.serializeString({ _tag: 'Ask', value: true });
         const events = yield* collect(codec.format.mediaType, ask, 2);
-        expect(events.find((e) => e._tag === 'Boolean')).toEqual({ _tag: 'Boolean', value: true });
+        expect(events.find((e) => Predicate.isTagged(e, 'Boolean'))).toEqual({
+          _tag: 'Boolean',
+          value: true,
+        });
       }),
     );
   });
@@ -79,7 +84,9 @@ describe('ResultsStream', () => {
       const text =
         'x,y\r\nhttp://example.org/a,"multi\r\nline ""quoted"""\r\n_:b,42\r\n,plain\r\nhttp://example.org/c,';
       const whole = yield* Results.Csv.parse(text);
-      const expected = whole._tag === 'ResultSet' ? whole.bindings.map((b) => b.key) : [];
+      const expected = Predicate.isTagged(whole, 'ResultSet')
+        ? whole.bindings.map((b) => b.key)
+        : [];
       expect(expected).toHaveLength(4);
       yield* Effect.forEach(
         [1, 2, 3, 7, 1000],

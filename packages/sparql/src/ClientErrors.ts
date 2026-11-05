@@ -15,6 +15,7 @@
  *
  * @since 0.1.0
  */
+import * as HashSet from 'effect/HashSet';
 import * as Match from 'effect/Match';
 import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
@@ -120,14 +121,14 @@ export type SparqlClientError =
   | TimeoutError
   | ConfigurationError;
 
-const TAGS = new Set([
+const TAGS = HashSet.make(
   'HttpStatusError',
   'MalformedResponseError',
   'UnsupportedMediaTypeError',
   'TransportError',
   'TimeoutError',
   'ConfigurationError',
-]);
+);
 
 /**
  * Whether a value is a `SparqlClientError`.
@@ -137,7 +138,7 @@ const TAGS = new Set([
  */
 export const isSparqlClientError = (u: unknown): u is SparqlClientError =>
   Predicate.isTagged(u, 'HttpStatusError') ||
-  (Predicate.hasProperty(u, '_tag') && Predicate.isString(u._tag) && TAGS.has(u._tag));
+  (Predicate.hasProperty(u, '_tag') && Predicate.isString(u._tag) && HashSet.has(TAGS, u._tag));
 
 /**
  * Whether an error is worth retrying: transport failures, timeouts, and the

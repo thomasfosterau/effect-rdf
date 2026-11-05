@@ -3,6 +3,7 @@
  */
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Layer from 'effect/Layer';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -57,8 +58,8 @@ const run = <A, E>(
   serverOptions?: Parameters<typeof Testing.layerClient>[0],
 ) => withLayer(makeLayer(config, serverOptions))(effect);
 
-const lexical = (t: Term.GroundTerm | undefined) =>
-  t === undefined || t._tag === 'Triple' ? undefined : t.value;
+const lexical = (t?: Term.GroundTerm) =>
+  t === undefined || Term.isTriple(t) ? undefined : t.value;
 
 describe('SparqlClient ↔ SparqlServer', () => {
   it.effect('streams SELECT rows for string, AST and builder queries', () =>
@@ -141,12 +142,17 @@ describe('SparqlClient ↔ SparqlServer', () => {
           expect(rows).toHaveLength(5);
           // CSV loses term kinds, so only the other formats are compared as graphs.
           const isomorphicRows = () => {
-            const expected = Dataset.filter(data, (q) => q.graph._tag === 'DefaultGraph');
-            // SAFETY: the query projects `?s ?p ?o` from the default graph, so the row holds a
+            const expected = Dataset.filter(data, (q) => Term.isDefaultGraph(q.graph));
+            // The query projects `?s ?p ?o` from the default graph, so each row holds a
             // subject, an IRI predicate and an object.
-            const quads = rows.map((r) =>
-              Term.quad(r['s'] as Term.Subject, r['p'] as Term.NamedNode, r['o'] as Term.Object),
-            );
+            const quads = rows.flatMap((r) => {
+              const s = r['s'];
+              const p = r['p'];
+              const o = r['o'];
+              return Term.isSubject(s) && Term.isNamedNode(p) && Term.isObject(o)
+                ? [Term.quad(s, p, o)]
+                : [];
+            });
             return Isomorphism.isomorphic(Dataset.fromIterable(quads), expected);
           };
           expect(accept === 'text/csv' || isomorphicRows()).toBe(true);
@@ -170,7 +176,7 @@ describe('SparqlClient ↔ SparqlServer', () => {
             Effect.gen(function* () {
               const client = yield* SparqlClient.SparqlClient;
               const dataset = yield* client.constructDataset('CONSTRUCT WHERE { ?s ?p ?o }');
-              const expected = Dataset.filter(data, (q) => q.graph._tag === 'DefaultGraph');
+              const expected = Dataset.filter(data, (q) => Term.isDefaultGraph(q.graph));
               assert.isTrue(Isomorphism.isomorphic(dataset, expected), parser.format.name);
               const described = yield* Stream.runCollect(client.describe(Q.describe(ex('alice'))));
               expect(described).toHaveLength(3);
@@ -196,7 +202,7 @@ describe('SparqlClient ↔ SparqlServer', () => {
         const ask = yield* client.query('ASK {}');
         expect(ask).toEqual({ _tag: 'Boolean', value: true });
         const graph = yield* client.query('CONSTRUCT WHERE { ?s ?p "Bob" }');
-        expect(graph._tag === 'Graph' && graph.dataset.size).toBe(1);
+        expect(Predicate.isTagged(graph, 'Graph') && graph.dataset.size).toBe(1);
       }),
     ),
   );
@@ -283,7 +289,7 @@ describe('SparqlClient ↔ SparqlServer', () => {
         yield* client.deleteGraph(g);
         expect(yield* client.hasGraph(g)).toBe(false);
         const missing = yield* Effect.flip(client.getGraphDataset(g));
-        expect(missing._tag === 'HttpStatusError' && missing.status).toBe(404);
+        expect(Predicate.isTagged(missing, 'HttpStatusError') && missing.status).toBe(404);
 
         const created = yield* client.createGraph(triples, { mediaType: 'application/ld+json' });
         expect(created.value.startsWith(`${GSP}/`)).toBe(true);
@@ -303,12 +309,12 @@ describe('SparqlClient ↔ SparqlServer', () => {
         const client = yield* SparqlClient.SparqlClient;
         const syntax = yield* Effect.flip(Stream.runCollect(client.select('SELECT * {')));
         expect(syntax._tag).toBe('HttpStatusError');
-        assert(syntax._tag === 'HttpStatusError');
+        assert(Predicate.isTagged(syntax, 'HttpStatusError'));
         expect(syntax.status).toBe(400);
         expect(syntax.body).toMatch(/line 1/);
         expect(syntax.message).toMatch(/status 400/);
         const update = yield* Effect.flip(client.update('CREATE GRAPH <http://example.org/g1>'));
-        expect(update._tag === 'HttpStatusError' && update.status).toBe(400);
+        expect(Predicate.isTagged(update, 'HttpStatusError') && update.status).toBe(400);
       }),
       {},
       { readOnly: false },
@@ -318,9 +324,9 @@ describe('SparqlClient ↔ SparqlServer', () => {
           Effect.gen(function* () {
             const client = yield* SparqlClient.SparqlClient;
             const forbidden = yield* Effect.flip(client.update('CLEAR ALL'));
-            expect(forbidden._tag === 'HttpStatusError' && forbidden.status).toBe(403);
+            expect(Predicate.isTagged(forbidden, 'HttpStatusError') && forbidden.status).toBe(403);
             const noGsp = yield* Effect.flip(client.putGraph('default', []));
-            expect(noGsp._tag === 'HttpStatusError' && noGsp.status).toBe(405);
+            expect(Predicate.isTagged(noGsp, 'HttpStatusError') && noGsp.status).toBe(405);
           }),
           {},
           { readOnly: true },

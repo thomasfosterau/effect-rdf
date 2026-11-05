@@ -14,7 +14,10 @@
  */
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Stream from 'effect/Stream';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
@@ -48,14 +51,14 @@ export type RemoteConfig = Omit<
  * @category federation
  */
 export const serviceQuery = (service: Parameters<Engine.ServiceHandler>[1]): string => {
-  const prologue = Object.entries(service.prefixes)
+  const prologue = Record.toEntries(service.prefixes)
     .map(([prefix, iri]) => `PREFIX ${prefix}: <${iri}>\n`)
     .join('');
   return `${prologue}SELECT * WHERE ${Generator.printPattern(service.pattern, service.prefixes)}`;
 };
 
 const describeError = (e: ClientErrors.SparqlClientError): string =>
-  e._tag === 'HttpStatusError' ? e.message : `${e._tag}: ${e.message}`;
+  Predicate.isTagged(e, 'HttpStatusError') ? e.message : `${e._tag}: ${e.message}`;
 
 /**
  * Builds a `SERVICE` handler that sends each remote pattern to its endpoint
@@ -69,17 +72,17 @@ export const serviceHandler = (
 ): Effect.Effect<Engine.ServiceHandler, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const context = yield* Effect.context<HttpClient.HttpClient>();
-    const clients = new Map<string, SparqlClient.SparqlClientShape>();
+    const clients = MutableHashMap.empty<string, SparqlClient.SparqlClientShape>();
     const clientFor = (endpoint: Term.NamedNode) =>
       Effect.suspend(() => {
-        const cached = clients.get(endpoint.value);
-        if (cached !== undefined) return Effect.succeed(cached);
+        const cached = MutableHashMap.get(clients, endpoint.value);
+        if (Option.isSome(cached)) return Effect.succeed(cached.value);
         return Effect.tap(
           Effect.provideContext(
             SparqlClient.make({ ...config, endpoint: endpoint.value }),
             context,
           ),
-          (client) => Effect.sync(() => clients.set(endpoint.value, client)),
+          (client) => Effect.sync(() => MutableHashMap.set(clients, endpoint.value, client)),
         );
       });
     return (endpoint, service) =>
@@ -135,12 +138,14 @@ export const loader = (
                 orElse: () => Effect.fail(loadFailed(iri, 'timed out')),
               })
         ).pipe(
-          Effect.mapError((e) => (e._tag === 'UpdateError' ? e : loadFailed(iri, e.message, e))),
+          Effect.mapError((e) =>
+            Predicate.isTagged(e, 'UpdateError') ? e : loadFailed(iri, e.message, e),
+          ),
         );
         if (response.status < 200 || response.status >= 300) {
           return yield* loadFailed(iri, `status ${response.status}`);
         }
-        const mediaType = (response.headers['content-type'] ?? '').split(';')[0]!.trim();
+        const mediaType = ((response.headers['content-type'] ?? '').split(';', 1)[0] ?? '').trim();
         const byType = Serialization.parserFor(formats, mediaType);
         const extension = new URL(iri.value).pathname.replace(/^.*\./, '');
         const parser = Option.isSome(byType)

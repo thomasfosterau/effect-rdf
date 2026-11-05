@@ -4,6 +4,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as Headers from 'effect/http/Headers';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Layer from 'effect/Layer';
 import * as Schedule from 'effect/Schedule';
 import * as Stream from 'effect/Stream';
@@ -204,7 +205,7 @@ describe('SparqlClient errors', () => {
         ),
         { retry: Schedule.recurs(2) },
       );
-      expect(last._tag === 'HttpStatusError' && last.status).toBe(503);
+      expect(Predicate.isTagged(last, 'HttpStatusError') && last.status).toBe(503);
       expect(always).toBe(3);
     }),
   );

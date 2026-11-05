@@ -108,9 +108,9 @@ export interface Resolved {
   readonly prefixes: Readonly<Record<string, string>>;
 }
 
-// SAFETY: removing a trailing slash from a path that starts with `/` keeps it starting with `/`.
-const trimSlash = <P extends `/${string}`>(path: P): P =>
-  (path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path) as P;
+/** Removes a trailing slash (but not the root's): the path still starts with `/`. */
+const trimSlash = (path: `/${string}`): `/${string}` =>
+  path.length > 1 && path.endsWith('/') ? `/${path.slice(1, -1)}` : path;
 
 /**
  * Applies the defaults.
@@ -169,7 +169,7 @@ export const requestUrl = (
   }
   if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return parsed;
   const host = request.headers['host'] ?? 'localhost';
-  const proto = (request.headers['x-forwarded-proto'] ?? 'http').split(',')[0]!.trim();
+  const proto = ((request.headers['x-forwarded-proto'] ?? 'http').split(',', 1)[0] ?? '').trim();
   return new URL(parsed.pathname + parsed.search, `${proto}://${host}`);
 };
 

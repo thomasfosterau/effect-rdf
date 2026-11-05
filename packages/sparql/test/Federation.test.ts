@@ -10,7 +10,9 @@ import { assert, describe, expect, it } from '@effect/vitest';
 import * as Arr from 'effect/Array';
 import * as Order from 'effect/Order';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as Layer from 'effect/Layer';
+import * as Record from 'effect/Record';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import * as HttpClient from 'effect/http/HttpClient';
@@ -44,7 +46,7 @@ const endpoints = (servers: Readonly<Record<string, Dataset.Dataset>>) =>
     const apps: Record<string, Parameters<typeof Testing.fromApps>[0][string]> = {};
     const client = Testing.fromApps(apps);
     yield* Effect.forEach(
-      Object.entries(servers),
+      Record.toEntries(servers),
       Effect.fnUntraced(function* ([endpoint, data]) {
         const url = new URL(endpoint);
         const context = yield* Layer.build(
@@ -56,9 +58,9 @@ const endpoints = (servers: Readonly<Record<string, Dataset.Dataset>>) =>
             ClientFormats.layer,
           ),
         );
-        // SAFETY: the endpoint URLs in the test are absolute, so their path starts with `/`.
+        // The endpoint URLs in the test are absolute, so their path starts with `/`.
         apps[url.origin] = Testing.provideServices(
-          SparqlServer.handler({ path: url.pathname as `/${string}` }),
+          SparqlServer.handler({ path: `/${url.pathname.slice(1)}` }),
           context,
         );
       }),
@@ -98,8 +100,13 @@ describe('Federation', () => {
           SERVICE <http://remote.test/sparql> { ?person <http://example.org/name> ?name }
         } ORDER BY ?name`);
       const rows = yield* Stream.runCollect(result.bindings);
-      // SAFETY: the query binds `?name` to a literal.
-      expect(rows.map((b) => (b.map.get('name') as Term.Literal).value)).toEqual(['Alice', 'Bob']);
+      // The query binds `?name` to a literal.
+      expect(
+        rows.map((b) => {
+          const name = b.map.get('name');
+          return Term.isLiteral(name) ? name.value : undefined;
+        }),
+      ).toEqual(['Alice', 'Bob']);
 
       const silent = yield* engine.select(
         'SELECT * { ?s ?p ?o SERVICE SILENT <http://down.test/sparql> { ?s ?q ?r } }',
@@ -201,8 +208,7 @@ interface ServiceTest {
   readonly result: string;
 }
 
-const iriValue = (t: Term.Term | undefined) =>
-  t !== undefined && t._tag === 'NamedNode' ? t.value : '';
+const iriValue = (t?: Term.Term) => (t !== undefined && Term.isNamedNode(t) ? t.value : '');
 
 const loadTests = (): Array<ServiceTest> => {
   if (!exists) return [];
@@ -212,9 +218,7 @@ const loadTests = (): Array<ServiceTest> => {
   );
   const ds = manifest.dataset;
   const objects = (s: Term.Term, p: string) =>
-    s._tag === 'NamedNode' || s._tag === 'BlankNode'
-      ? Dataset.objectsOf(ds, s, Term.namedNode(p))
-      : [];
+    Term.isNamedNode(s) || Term.isBlankNode(s) ? Dataset.objectsOf(ds, s, Term.namedNode(p)) : [];
   return manifest.entries.map((entry) => {
     const action =
       objects(entry.node, `${MF}action`)[0] ?? assert.fail(`${entry.name} has no mf:action`);
@@ -259,9 +263,9 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
           yield* engine.select(query, { baseIri: pathToFileURL(t.query).href }),
         );
         const expected = yield* Results.Xml.parse(fs.readFileSync(t.result, 'utf8'));
-        assert(expected._tag === 'ResultSet', 'Expected a result set');
+        assert(Predicate.isTagged(expected, 'ResultSet'), 'Expected a result set');
         const hasBlankNodes = expected.bindings.some((b) =>
-          Array.from(b.map.values()).some((v) => v._tag === 'BlankNode'),
+          Array.from(b.map.values()).some((v) => Term.isBlankNode(v)),
         );
         // Blank node labels differ between runs, so those results are compared as graphs.
         expect(
@@ -275,7 +279,7 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
         withLayer(
           federatedEngine(
             Dataset.fromIterable(t.data.flatMap((f) => Array.from(readTurtle(f)))),
-            Object.fromEntries(
+            Record.fromEntries(
               t.serviceData.map((sd) => [
                 sd.endpoint,
                 Dataset.fromIterable(sd.data.flatMap((f) => Array.from(readTurtle(f)))),

@@ -4,6 +4,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Results from './Results.ts';
@@ -85,7 +86,7 @@ export const describe = (options: DescriptionOptions): ReadonlyArray<Term.Quad> 
   if (options.updateEndpoint !== undefined && options.updateEndpoint !== options.endpoint) {
     endpoints.push(options.updateEndpoint);
   }
-  for (const endpoint of endpoints) {
+  endpoints.forEach((endpoint) => {
     const service = Term.blankNode();
     add(service, RDF_TYPE, sd('Service'));
     add(service, sd('endpoint'), Term.namedNode(endpoint));
@@ -96,17 +97,18 @@ export const describe = (options: DescriptionOptions): ReadonlyArray<Term.Quad> 
     if (options.updateEndpoint === endpoint) {
       add(service, sd('supportedLanguage'), sd('SPARQL11Update'));
     }
-    const resultFormats = new Set<string>();
-    for (const codec of Results.codecs) resultFormats.add(codec.format.mediaType);
-    for (const s of options.formats.serializers) resultFormats.add(s.format.mediaType);
-    for (const mt of resultFormats) {
+    const resultFormats = Arr.dedupe([
+      ...Results.codecs.map((codec) => codec.format.mediaType),
+      ...options.formats.serializers.map((s) => s.format.mediaType),
+    ]);
+    resultFormats.forEach((mt) => {
       const iri = formatIris[mt];
       if (iri !== undefined) add(service, sd('resultFormat'), Term.namedNode(iri));
-    }
-    for (const p of options.formats.parsers) {
+    });
+    options.formats.parsers.forEach((p) => {
       const iri = formatIris[p.format.mediaType];
       if (iri !== undefined) add(service, sd('inputFormat'), Term.namedNode(iri));
-    }
+    });
     if (options.unionDefaultGraph) add(service, sd('feature'), sd('UnionDefaultGraph'));
     if (options.federation) add(service, sd('feature'), sd('BasicFederatedQuery'));
     add(service, sd('feature'), sd('EmptyGraphs'));
@@ -117,12 +119,12 @@ export const describe = (options: DescriptionOptions): ReadonlyArray<Term.Quad> 
     const defaultGraph = Term.blankNode();
     add(dataset, sd('defaultGraph'), defaultGraph);
     add(defaultGraph, RDF_TYPE, sd('Graph'));
-    for (const g of options.namedGraphs) {
+    options.namedGraphs.forEach((g) => {
       const named = Term.blankNode();
       add(dataset, sd('namedGraph'), named);
       add(named, RDF_TYPE, sd('NamedGraph'));
       add(named, sd('name'), g);
-    }
-  }
+    });
+  });
   return quads;
 };

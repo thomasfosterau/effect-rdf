@@ -11,6 +11,7 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
 import * as Context from 'effect/Context';
 import * as Duration from 'effect/Duration';
@@ -36,6 +37,7 @@ import * as ClientErrors from './ClientErrors.ts';
 import * as ClientFormats from './ClientFormats.ts';
 import * as ResultsStream from './ResultsStream.ts';
 import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
 
 // -----------------------------------------------------------------------------
 // Models
@@ -335,10 +337,33 @@ export const toSparql = (input: QueryInput | UpdateInput): string =>
 
 const iriOf = (g: GraphIri): string => (Predicate.isString(g) ? g : g.value);
 
+/** The media type of a `Content-Type` value: what precedes its parameters. */
+const essence = (contentType: string): string => (contentType.split(';', 1)[0] ?? '').trim();
+
 const mediaTypeOf = (response: HttpClientResponse.HttpClientResponse): string =>
-  (response.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+  essence(response.headers['content-type'] ?? '').toLowerCase();
+
+const isResultsParseError = Predicate.isTagged('ResultsParseError');
+const isRdfParseError = Predicate.isTagged('RdfParseError');
+type EventOf<K extends ResultsStream.ResultEvent['_tag']> = Extract<
+  ResultsStream.ResultEvent,
+  { readonly _tag: K }
+>;
+const isVariablesEvent = (e: ResultsStream.ResultEvent): e is EventOf<'Variables'> =>
+  Predicate.isTagged(e, 'Variables');
+const isSolutionEvent = (e: ResultsStream.ResultEvent): e is EventOf<'Solution'> =>
+  Predicate.isTagged(e, 'Solution');
+const isBooleanEvent = (e: ResultsStream.ResultEvent): e is EventOf<'Boolean'> =>
+  Predicate.isTagged(e, 'Boolean');
 
 const MAX_ERROR_BODY = 64 * 1024;
+
+/** What `selectAll` collects from the results events. */
+interface SelectAccumulator {
+  variables: ReadonlyArray<string>;
+  bindings: Array<B.Bindings>;
+  boolean: boolean;
+}
 
 const fromHttpClientError = (
   e: HttpClientError.HttpClientError,
@@ -393,7 +418,7 @@ export const make = (
     /** Sends a request: applies headers, timeout and retries, checks the status. */
     const send = (
       request: HttpClientRequest.HttpClientRequest,
-      options: RequestOptions | undefined,
+      options?: RequestOptions,
       accept: ReadonlyArray<number> = [],
     ): Effect.Effect<HttpClientResponse.HttpClientResponse, ClientErrors.SparqlClientError> => {
       const withHeaders = HttpClientRequest.setHeaders(request, {
@@ -458,7 +483,7 @@ export const make = (
     const queryRequest = (
       query: QueryInput,
       accept: string,
-      options: QueryOptions | undefined,
+      options?: QueryOptions,
     ): HttpClientRequest.HttpClientRequest => {
       const text = toSparql(query);
       const params: Array<[string, string]> = [
@@ -498,13 +523,13 @@ export const make = (
         return Effect.fail(
           new ClientErrors.UnsupportedMediaTypeError({
             contentType: mediaType,
-            expected: resultsAccept.split(',').map((s) => s.split(';')[0]!.trim()),
+            expected: resultsAccept.split(',').map(essence),
           }),
         );
       }
       return Effect.succeed(
         Stream.mapError(parsed.value, (e) =>
-          e._tag === 'ResultsParseError'
+          isResultsParseError(e)
             ? new ClientErrors.MalformedResponseError({
                 message: `Invalid ${e.format} results: ${e.message}`,
                 contentType: mediaType,
@@ -534,7 +559,7 @@ export const make = (
       return Effect.succeed(
         parser.value.parseStream(bodyText(response), { baseIri }).pipe(
           Stream.mapError((e) =>
-            e._tag === 'RdfParseError'
+            isRdfParseError(e)
               ? new ClientErrors.MalformedResponseError({
                   message: Serialization.formatError(e),
                   contentType: mediaType,
@@ -542,7 +567,7 @@ export const make = (
               : e,
           ),
           Stream.map((q) =>
-            q.graph._tag === 'DefaultGraph'
+            Term.isDefaultGraph(q.graph)
               ? q
               : new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph),
           ),
@@ -571,24 +596,30 @@ export const make = (
         );
       });
 
-    // SAFETY: both overloads of `select` are one implementation over `QueryInput`;
-    // `SparqlClientShape['select']` restores the builder's row typing.
-    const select = ((query: QueryInput, options?: QueryOptions) =>
-      Stream.map(selectBindings(query, options), B.toRecord)) as SparqlClientShape['select'];
+    // Both overloads of `select` are this one implementation over `QueryInput`.
+    function select<R extends string, O extends string>(
+      query: QueryBuilder.Builder<'Select', R, O>,
+      options?: QueryOptions,
+    ): Stream.Stream<QueryBuilder.Row<R, O>, ClientErrors.SparqlClientError>;
+    function select(
+      query: string | Ast.Query,
+      options?: QueryOptions,
+    ): Stream.Stream<Row, ClientErrors.SparqlClientError>;
+    function select(
+      query: QueryInput,
+      options?: QueryOptions,
+    ): Stream.Stream<Partial<Row>, ClientErrors.SparqlClientError> {
+      return Stream.map(selectBindings(query, options), B.toRecord);
+    }
 
-    // SAFETY: empty seeds of the fold's accumulator, typed as what the fold collects.
     const selectAll: SparqlClientShape['selectAll'] = (query, options) =>
       Effect.map(
         Stream.runFold(
           results(query, options),
-          () => ({
-            variables: [] as ReadonlyArray<string>,
-            bindings: [] as Array<B.Bindings>,
-            boolean: false,
-          }),
+          (): SelectAccumulator => ({ variables: [], bindings: [], boolean: false }),
           (acc, event) => {
-            if (event._tag === 'Variables') acc.variables = event.variables;
-            else if (event._tag === 'Solution') acc.bindings.push(event.bindings);
+            if (isVariablesEvent(event)) acc.variables = event.variables;
+            else if (isSolutionEvent(event)) acc.bindings.push(event.bindings);
             else acc.boolean = true;
             return acc;
           },
@@ -602,9 +633,9 @@ export const make = (
 
     const ask: SparqlClientShape['ask'] = (query, options) =>
       Effect.flatMap(
-        Stream.runHead(Stream.filter(results(query, options), (e) => e._tag === 'Boolean')),
+        Stream.runHead(Stream.filter(results(query, options), isBooleanEvent)),
         (event) =>
-          Option.isSome(event) && event.value._tag === 'Boolean'
+          Option.isSome(event)
             ? Effect.succeed(event.value.value)
             : Effect.fail(
                 new ClientErrors.MalformedResponseError({ message: 'Expected a boolean result' }),
@@ -627,15 +658,19 @@ export const make = (
         const mediaType = mediaTypeOf(response);
         if (Option.isSome(ResultsStream.parserFor(mediaType))) {
           const events = yield* Stream.runCollect(yield* resultEvents(response));
-          const boolean = events.find((e) => e._tag === 'Boolean');
-          if (boolean !== undefined && boolean._tag === 'Boolean') {
-            return { _tag: 'Boolean', value: boolean.value } as const;
+          const boolean = Arr.findFirst(events, isBooleanEvent);
+          if (Option.isSome(boolean)) {
+            return { _tag: 'Boolean', value: boolean.value.value } as const;
           }
-          const variables = events.find((e) => e._tag === 'Variables');
           return {
             _tag: 'ResultSet',
-            variables: variables?._tag === 'Variables' ? variables.variables : [],
-            bindings: events.flatMap((e) => (e._tag === 'Solution' ? [e.bindings] : [])),
+            variables: Option.match(Arr.findFirst(events, isVariablesEvent), {
+              onNone: () => [],
+              onSome: (e) => e.variables,
+            }),
+            bindings: Arr.filterMap(events, (e) =>
+              isSolutionEvent(e) ? Result.succeed(e.bindings) : Result.failVoid,
+            ),
           } as const;
         }
         const quads = yield* Stream.runCollect(yield* graphQuads(response, config.endpoint));
@@ -735,7 +770,7 @@ export const make = (
       method: 'PUT' | 'POST',
       graph: GraphTarget,
       triples: Iterable<Term.Quad>,
-      options: UploadOptions | undefined,
+      options?: UploadOptions,
     ) =>
       Effect.gen(function* () {
         const mediaType = options?.mediaType ?? config.graphMediaType ?? 'application/n-triples';
@@ -843,16 +878,17 @@ export interface SelectAccessor {
  * @since 0.1.0
  * @category accessors
  */
-// SAFETY: both overloads of `select` are one implementation over `QueryInput`; `SelectAccessor`
-// restores the builder's row typing.
-export const select = ((query: QueryInput, options?: QueryOptions) =>
+export const select: SelectAccessor = (
+  query: QueryBuilder.Builder<'Select', string, string> | string | Ast.Query,
+  options?: QueryOptions,
+) =>
   Stream.unwrap(
     Effect.map(Effect.service(SparqlClient), (c) =>
-      // SAFETY: both overloads of `select` are one implementation over
-      // `QueryInput`; the builder's row typing is restored by `SelectAccessor`.
-      c.select(query as string | Ast.Query, options),
+      !(query instanceof QueryBuilder.Builder)
+        ? c.select(query, options)
+        : c.select(query, options),
     ),
-  )) as SelectAccessor;
+  );
 
 /**
  * Streams the rows of a `SELECT` query decoded with a schema (whose fields

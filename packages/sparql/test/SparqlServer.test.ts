@@ -4,6 +4,7 @@ import * as ConfigProvider from 'effect/ConfigProvider';
 import * as Console from 'effect/Console';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
 import * as FileSystem from 'effect/FileSystem';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -64,7 +65,7 @@ const post = (
   client: HttpClient.HttpClient,
   path: string,
   body: string,
-  contentType: string | undefined,
+  contentType?: string,
   headers: Record<string, string> = {},
 ) => {
   let request = HttpClientRequest.post(`${BASE}${path}`, { headers }).pipe(
@@ -95,7 +96,7 @@ describe('SPARQL endpoint', () => {
             expect(r.status).toBe(200);
             expect(mediaType(r)).toBe(codec.format.mediaType);
             const parsed = yield* codec.parse(yield* r.text);
-            assert(parsed._tag === 'ResultSet');
+            assert(Predicate.isTagged(parsed, 'ResultSet'));
             expect(parsed.bindings).toHaveLength(3);
           }),
           { concurrency: 1, discard: true },
@@ -132,7 +133,7 @@ describe('SPARQL endpoint', () => {
     withServer((client) =>
       Effect.gen(function* () {
         const construct = 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }';
-        const expected = Dataset.filter(data, (quad) => quad.graph._tag === 'DefaultGraph');
+        const expected = Dataset.filter(data, (quad) => Term.isDefaultGraph(quad.graph));
         yield* Effect.forEach(
           formats.serializers,
           Effect.fnUntraced(function* (serializer) {
@@ -176,7 +177,7 @@ describe('SPARQL endpoint', () => {
         );
         expect(form.status).toBe(200);
         const set = yield* Results.Json.parse(yield* form.text);
-        expect(set._tag === 'ResultSet' && set.bindings.length).toBe(1);
+        expect(Predicate.isTagged(set, 'ResultSet') && set.bindings.length).toBe(1);
         const direct = yield* post(
           client,
           `/sparql?named-graph-uri=${encodeURIComponent('http://example.org/g1')}`,
@@ -184,7 +185,7 @@ describe('SPARQL endpoint', () => {
           'application/sparql-query; charset=UTF-8',
         );
         const named = yield* Results.Json.parse(yield* direct.text);
-        expect(named._tag === 'ResultSet' && named.bindings.length).toBe(1);
+        expect(Predicate.isTagged(named, 'ResultSet') && named.bindings.length).toBe(1);
       }),
     ),
   );
@@ -197,7 +198,7 @@ describe('SPARQL endpoint', () => {
           `${q('SELECT * FROM <http://example.org/g1> { ?s ?p ?o }')}&default-graph-uri=${encodeURIComponent('http://example.org/nothing')}`,
         );
         const set = yield* Results.Json.parse(yield* r.text);
-        expect(set._tag === 'ResultSet' && set.bindings.length).toBe(0);
+        expect(Predicate.isTagged(set, 'ResultSet') && set.bindings.length).toBe(0);
       }),
     ),
   );
@@ -270,7 +271,7 @@ describe('SPARQL endpoint', () => {
         expect(using.status).toBe(204);
         const seen = yield* get(client, q('SELECT ?s { ?s <http://example.org/seen> true }'));
         const set = yield* Results.Json.parse(yield* seen.text);
-        expect(set._tag === 'ResultSet' && set.bindings.length).toBe(1);
+        expect(Predicate.isTagged(set, 'ResultSet') && set.bindings.length).toBe(1);
       }),
     ),
   );
@@ -320,7 +321,7 @@ describe('SPARQL endpoint', () => {
         Effect.gen(function* () {
           const r = yield* get(client, q(SELECT));
           const set = yield* Results.Json.parse(yield* r.text);
-          expect(set._tag === 'ResultSet' && set.bindings.length).toBe(2);
+          expect(Predicate.isTagged(set, 'ResultSet') && set.bindings.length).toBe(2);
           const c = yield* get(client, q('CONSTRUCT WHERE { ?s ?p ?o }'), {
             accept: 'application/n-triples',
           });
@@ -419,11 +420,9 @@ describe('SPARQL endpoint', () => {
       Effect.gen(function* () {
         const r = yield* get(client, q('SELECT (<rel> AS ?x) {}'));
         const set = yield* Results.Json.parse(yield* r.text);
-        // SAFETY: the query binds `?x` to an IRI.
-        expect(
-          set._tag === 'ResultSet' &&
-            (set.bindings[0]?.map.get('x') as Term.NamedNode | undefined)?.value,
-        ).toBe('http://localhost/rel');
+        assert(Predicate.isTagged(set, 'ResultSet'), 'Expected a result set');
+        const x = set.bindings[0]?.map.get('x');
+        expect(Term.isNamedNode(x) && x.value).toBe('http://localhost/rel');
       }),
     ),
   );

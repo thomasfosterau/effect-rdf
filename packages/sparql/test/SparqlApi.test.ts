@@ -85,15 +85,14 @@ const names = (response: HttpClientResponse.HttpClientResponse) =>
     );
   });
 
-const contentTypes = (content: OpenApi.OpenApiSpecContent | undefined) =>
-  Record.keys(content ?? {});
+const contentTypes = (content?: OpenApi.OpenApiSpecContent) => Record.keys(content ?? {});
 
-const statuses = (responses: OpenApi.OpenAPISpecResponses | undefined) =>
+const statuses = (responses?: OpenApi.OpenAPISpecResponses) =>
   Record.keys(responses ?? {}).map(Number);
 
 const METHODS = ['delete', 'get', 'head', 'options', 'patch', 'post', 'put', 'trace'] as const;
 
-const methods = (item: OpenApi.OpenAPISpecPathItem | undefined) =>
+const methods = (item?: OpenApi.OpenAPISpecPathItem) =>
   METHODS.filter((method) => item?.[method] !== undefined);
 
 describe('SparqlApi definition', () => {

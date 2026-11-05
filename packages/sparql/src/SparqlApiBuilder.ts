@@ -42,7 +42,7 @@ interface ServerPaths {
   readonly graphStorePath: `/${string}`;
 }
 
-const serverOptions = (options: ApiOptions | undefined): Options.Options & ServerPaths => {
+const serverOptions = (options?: ApiOptions): Options.Options & ServerPaths => {
   const path = options?.path ?? '/sparql';
   return {
     ...options,
