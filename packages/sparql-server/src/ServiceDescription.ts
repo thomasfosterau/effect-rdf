@@ -69,6 +69,8 @@ export interface DescriptionOptions {
   readonly namedGraphs: ReadonlyArray<Term.NamedNode | Term.BlankNode>;
 }
 
+const sd = (local: string) => Term.namedNode(`${SD}${local}`);
+
 /**
  * Builds the service description as triples.
  *
@@ -76,11 +78,10 @@ export interface DescriptionOptions {
  * @category constructors
  */
 export const describe = (options: DescriptionOptions): ReadonlyArray<Term.Quad> => {
-  const sd = (local: string) => Term.namedNode(`${SD}${local}`);
+  const endpoints = [options.endpoint];
   const quads: Array<Term.Quad> = [];
   const add = (s: Term.Subject, p: Term.NamedNode, o: Term.Object) =>
     quads.push(Term.quad(s, p, o));
-  const endpoints = [options.endpoint];
   if (options.updateEndpoint !== undefined && options.updateEndpoint !== options.endpoint) {
     endpoints.push(options.updateEndpoint);
   }

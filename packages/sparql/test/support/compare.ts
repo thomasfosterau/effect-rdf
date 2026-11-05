@@ -32,18 +32,19 @@ const encode = (bindings: ReadonlyArray<Bindings>, ordered: boolean): Dataset.Da
   return Dataset.fromIterable(quads);
 };
 
+const dedupeBindings = (bs: ReadonlyArray<Bindings>) => {
+  const seen = new Map<string, Bindings>();
+  for (const b of bs) seen.set(b.key, b);
+  return Array.from(seen.values());
+};
+
 export const sameResults = (
   actual: ReadonlyArray<Bindings>,
   expected: ReadonlyArray<Bindings>,
   options: { readonly ordered?: boolean; readonly lax?: boolean } = {},
 ): boolean => {
   if (options.lax) {
-    const dedupe = (bs: ReadonlyArray<Bindings>) => {
-      const seen = new Map<string, Bindings>();
-      for (const b of bs) seen.set(b.key, b);
-      return Array.from(seen.values());
-    };
-    return sameResults(dedupe(actual), dedupe(expected));
+    return sameResults(dedupeBindings(actual), dedupeBindings(expected));
   }
   if (actual.length !== expected.length) return false;
   return Isomorphism.isomorphic(

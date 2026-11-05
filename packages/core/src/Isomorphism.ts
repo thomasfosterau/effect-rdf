@@ -8,6 +8,7 @@
  */
 import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Dataset from './Dataset.ts';
@@ -40,16 +41,20 @@ const quadBlankNodes = (q: Term.Quad): Set<string> => {
   return out;
 };
 
-const termSig = (t: Term.Term, self: string, labels: ReadonlyMap<string, string>): string => {
-  switch (t._tag) {
-    case 'BlankNode':
-      return t.value === self ? '@self' : `@${labels.get(t.value) ?? ''}`;
-    case 'Triple':
-      return `<<${termSig(t.subject, self, labels)} ${t.predicate.key} ${termSig(t.object, self, labels)}>>`;
-    default:
-      return t.key;
-  }
-};
+// Built once: `termSig` runs for every term of every quad in each refinement round.
+const termSig: (t: Term.Term, self: string, labels: ReadonlyMap<string, string>) => string =
+  Match.fn((t: Term.Term, _self: string, _labels: ReadonlyMap<string, string>) => t).pipe(
+    Match.withReturnType<string>(),
+    Match.tag('BlankNode', (t, _t, self, labels) =>
+      t.value === self ? '@self' : `@${labels.get(t.value) ?? ''}`,
+    ),
+    Match.tag(
+      'Triple',
+      (t, _t, self, labels) =>
+        `<<${termSig(t.subject, self, labels)} ${t.predicate.key} ${termSig(t.object, self, labels)}>>`,
+    ),
+    Match.orElse((t) => t.key),
+  );
 
 interface Partition {
   readonly nodes: ReadonlyArray<string>;

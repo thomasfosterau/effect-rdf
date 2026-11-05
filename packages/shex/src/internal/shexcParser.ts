@@ -19,6 +19,7 @@ import * as ParseError from '@thomasfosterau/effect-parse/ParseError';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import type * as ShExJ from '../ShExJ.ts';
 import { quote } from './lexer.ts';
@@ -1147,38 +1148,40 @@ const document = Compiler.jit(
 // Checks in document order
 // -----------------------------------------------------------------------------
 
+type Visit = (t: ShExJ.TripleExpr) => void;
+
+const labelledShape = (s: AnyShapeExpr, f: Visit): void => {
+  if (!Predicate.isString(s)) labelledShapeExpr(s, f);
+};
+
+const labelledTriple = (t: ShExJ.TripleExprOrRef, f: Visit): void => {
+  if (Predicate.isString(t)) return;
+  if (t.type === 'TripleConstraint') {
+    if (t.valueExpr !== undefined) labelledShape(t.valueExpr, f);
+  } else t.expressions.forEach((e) => labelledTriple(e, f));
+  if (t.id !== undefined) f(t);
+};
+
+// Built once: it runs for every shape expression of every declaration.
+const labelledShapeExpr: (s: ShExJ.ShapeExpr, f: Visit) => void = Match.fn(
+  (s: ShExJ.ShapeExpr, _f: Visit) => s,
+).pipe(
+  Match.when({ type: Match.is('ShapeOr', 'ShapeAnd') }, (s, _s, f) =>
+    s.shapeExprs.forEach((e) => labelledShape(e, f)),
+  ),
+  Match.when({ type: 'ShapeNot' }, (s, _s, f) => labelledShape(s.shapeExpr, f)),
+  Match.when({ type: 'Shape' }, (s, _s, f) => {
+    s.extends?.forEach((e) => labelledShape(e, f));
+    if (s.expression !== undefined) labelledTriple(s.expression, f);
+  }),
+  Match.orElse(() => undefined),
+);
+
 /**
  * Calls `f` on each labelled triple expression of a shape expression, in
  * document order (each after the labelled expressions it contains).
  */
-const eachLabelled = (e: AnyShapeExpr, f: (t: ShExJ.TripleExpr) => void): void => {
-  const shape = (s: AnyShapeExpr): void => {
-    if (Predicate.isString(s)) return;
-    switch (s.type) {
-      case 'ShapeOr':
-      case 'ShapeAnd':
-        s.shapeExprs.forEach(shape);
-        break;
-      case 'ShapeNot':
-        shape(s.shapeExpr);
-        break;
-      case 'Shape':
-        s.extends?.forEach(shape);
-        if (s.expression !== undefined) triple(s.expression);
-        break;
-      default:
-        break;
-    }
-  };
-  const triple = (t: ShExJ.TripleExprOrRef): void => {
-    if (Predicate.isString(t)) return;
-    if (t.type === 'TripleConstraint') {
-      if (t.valueExpr !== undefined) shape(t.valueExpr);
-    } else t.expressions.forEach(triple);
-    if (t.id !== undefined) f(t);
-  };
-  shape(e);
-};
+const eachLabelled = (e: AnyShapeExpr, f: Visit): void => labelledShape(e, f);
 
 const assemble = (
   statements: ReadonlyArray<Statement | undefined>,

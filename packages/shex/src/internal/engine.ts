@@ -8,6 +8,7 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -52,6 +53,90 @@ interface Visit {
 }
 
 const OK = Symbol('ok');
+
+// Built once: `satisfies` runs it for every shape expression of every node it checks.
+const satisfiesExpr: (
+  e: ShExJ.ShapeExpr,
+  engine: Engine,
+  n: Term.Term,
+  ctx: Ctx,
+  deps: Set<string>,
+  declLabel?: string,
+) => Outcome = Match.fn(
+  (
+    e: ShExJ.ShapeExpr,
+    _engine: Engine,
+    _n: Term.Term,
+    _ctx: Ctx,
+    _deps: Set<string>,
+    _declLabel?: string,
+  ) => e,
+).pipe(
+  Match.withReturnType<Outcome>(),
+  Match.when({ type: 'ShapeAnd' }, (e, _e, engine, n, ctx, deps) => {
+    for (const c of e.shapeExprs) {
+      const r = engine.satisfies(n, c, ctx, deps, undefined);
+      if (r !== undefined) return r;
+    }
+    return undefined;
+  }),
+  Match.when({ type: 'ShapeOr' }, (e, _e, engine, n, ctx, deps) => {
+    // When validating a descendant of a target shape, prefer an
+    // alternative that goes through the target.
+    let first: Outcome;
+    let passed = false;
+    for (const c of e.shapeExprs) {
+      const before = ctx.target?.count ?? 0;
+      const r = engine.satisfies(n, c, ctx, deps, undefined);
+      if (r === undefined) {
+        if (ctx.target === undefined || ctx.target.count > before) return undefined;
+        passed = true;
+      } else first ??= r;
+    }
+    return passed ? undefined : `${n.key} matches none of the alternatives (${first})`;
+  }),
+  Match.when({ type: 'ShapeNot' }, (e, _e, engine, n, ctx, deps) => {
+    const r = engine.satisfies(n, e.shapeExpr, ctx, deps, undefined);
+    return r === undefined ? `${n.key} matches a negated shape expression` : undefined;
+  }),
+  Match.when({ type: 'NodeConstraint' }, (e, _e, engine, n) => {
+    const r = checkNodeConstraint(n, e);
+    if (r !== undefined) return r;
+    return engine.runSemActs(e.semActs, { site: 'nodeConstraint', node: n });
+  }),
+  Match.when({ type: 'ShapeExternal' }, (_e, _input, engine, n, ctx, deps, declLabel) => {
+    const ext = declLabel === undefined ? undefined : engine.externs.get(declLabel);
+    if (ext === undefined) return `no definition available for external shape ${declLabel}`;
+    return engine.satisfies(n, ext.shapeExpr, ctx, deps, undefined);
+  }),
+  Match.when({ type: 'Shape' }, (e, _e, engine, n, ctx, deps) =>
+    engine.matchesShape(n, e, ctx, deps),
+  ),
+  Match.exhaustive,
+);
+
+// Built once: `extensionTcs` runs it for every shape expression an extension refers to.
+const extensionTcsOf: (
+  e: ShExJ.ShapeExpr,
+  engine: Engine,
+  out: Array<ShExJ.TripleConstraint>,
+  seen: Set<string>,
+) => void = Match.fn(
+  (e: ShExJ.ShapeExpr, _engine: Engine, _out: Array<ShExJ.TripleConstraint>, _seen: Set<string>) =>
+    e,
+).pipe(
+  Match.when({ type: 'Shape' }, (e, _e, engine, out, seen) => {
+    for (const tc of engine.localTcs(e)) if (!out.includes(tc)) out.push(tc);
+    for (const x of e.extends ?? []) engine.extensionTcs(x, out, seen);
+  }),
+  Match.when({ type: Match.is('ShapeAnd', 'ShapeOr') }, (e, _e, engine, out, seen) => {
+    for (const c of e.shapeExprs) engine.extensionTcs(c, out, seen);
+  }),
+  Match.when({ type: 'ShapeNot' }, (e, _e, engine, out, seen) => {
+    engine.extensionTcs(e.shapeExpr, out, seen);
+  }),
+  Match.orElse(() => undefined),
+);
 
 export class Engine {
   private readonly cache = new Map<string, Outcome | typeof OK>();
@@ -215,45 +300,7 @@ export class Engine {
       if (r === undefined && ctx.target !== undefined && ctx.target.label === e) ctx.target.count++;
       return r;
     }
-    switch (e.type) {
-      case 'ShapeAnd':
-        for (const c of e.shapeExprs) {
-          const r = this.satisfies(n, c, ctx, deps, undefined);
-          if (r !== undefined) return r;
-        }
-        return undefined;
-      case 'ShapeOr': {
-        // When validating a descendant of a target shape, prefer an
-        // alternative that goes through the target.
-        let first: Outcome;
-        let passed = false;
-        for (const c of e.shapeExprs) {
-          const before = ctx.target?.count ?? 0;
-          const r = this.satisfies(n, c, ctx, deps, undefined);
-          if (r === undefined) {
-            if (ctx.target === undefined || ctx.target.count > before) return undefined;
-            passed = true;
-          } else first ??= r;
-        }
-        return passed ? undefined : `${n.key} matches none of the alternatives (${first})`;
-      }
-      case 'ShapeNot': {
-        const r = this.satisfies(n, e.shapeExpr, ctx, deps, undefined);
-        return r === undefined ? `${n.key} matches a negated shape expression` : undefined;
-      }
-      case 'NodeConstraint': {
-        const r = checkNodeConstraint(n, e);
-        if (r !== undefined) return r;
-        return this.runSemActs(e.semActs, { site: 'nodeConstraint', node: n });
-      }
-      case 'ShapeExternal': {
-        const ext = declLabel === undefined ? undefined : this.externs.get(declLabel);
-        if (ext === undefined) return `no definition available for external shape ${declLabel}`;
-        return this.satisfies(n, ext.shapeExpr, ctx, deps, undefined);
-      }
-      case 'Shape':
-        return this.matchesShape(n, e, ctx, deps);
-    }
+    return satisfiesExpr(e, this, n, ctx, deps, declLabel);
   }
 
   // ---------------------------------------------------------------------------
@@ -278,7 +325,7 @@ export class Engine {
     } else for (const c of te.expressions) this.tcsOf(c, out, seen);
   }
 
-  private localTcs(shape: ShExJ.Shape): ReadonlyArray<ShExJ.TripleConstraint> {
+  localTcs(shape: ShExJ.Shape): ReadonlyArray<ShExJ.TripleConstraint> {
     let tcs = this.shapeTcs.get(shape);
     if (tcs === undefined) {
       const out: Array<ShExJ.TripleConstraint> = [];
@@ -289,7 +336,7 @@ export class Engine {
   }
 
   /** All triple constraints of the shapes an extension refers to (recursively). */
-  private extensionTcs(
+  extensionTcs(
     e: ShExJ.ShapeExprOrRef,
     out: Array<ShExJ.TripleConstraint>,
     seen: Set<string>,
@@ -304,24 +351,10 @@ export class Engine {
       }
       return;
     }
-    switch (e.type) {
-      case 'Shape':
-        for (const tc of this.localTcs(e)) if (!out.includes(tc)) out.push(tc);
-        for (const x of e.extends ?? []) this.extensionTcs(x, out, seen);
-        return;
-      case 'ShapeAnd':
-      case 'ShapeOr':
-        for (const c of e.shapeExprs) this.extensionTcs(c, out, seen);
-        return;
-      case 'ShapeNot':
-        this.extensionTcs(e.shapeExpr, out, seen);
-        return;
-      default:
-        return;
-    }
+    extensionTcsOf(e, this, out, seen);
   }
 
-  private matchesShape(n: Term.Term, shape: ShExJ.Shape, ctx: Ctx, deps: Set<string>): Outcome {
+  matchesShape(n: Term.Term, shape: ShExJ.Shape, ctx: Ctx, deps: Set<string>): Outcome {
     const arcs = ctx.arcs ?? this.neighbourhood(n);
     const closed = shape.closed === true || ctx.partitionClosed;
     const local = this.localTcs(shape);

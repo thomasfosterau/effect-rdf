@@ -198,7 +198,6 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
           const order = (rows: ReadonlyArray<Bindings>) =>
             ordered ? rows.map((b) => orderKey(b, vars)) : [];
           expect(order(actual)).toEqual(order(exp));
-          return;
         }),
       ),
       Match.exhaustive,
@@ -220,7 +219,7 @@ const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
     for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
     const expected = Dataset.fromIterable(quads);
     const actual = yield* Store.toDataset(store);
-    expectIsomorphic(actual, expected);
+    return expectIsomorphic(actual, expected);
   });
 
 const tests = loadTests();
@@ -235,9 +234,9 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
   const outcomes = new Map<string, SqlStore.QueryEvent['_tag']>();
   /** The tests for which at least one subtree was evaluated in SQL. */
   const executed = new Set<string>();
-  const run = (
+  const run = <E>(
     t: TestCase,
-    f: (store: SqlStore.SqlStoreShape, t: TestCase) => Effect.Effect<void, unknown>,
+    f: (store: SqlStore.SqlStoreShape, t: TestCase) => Effect.Effect<void, E>,
   ) =>
     backend.run(
       (store) => f(store, t),

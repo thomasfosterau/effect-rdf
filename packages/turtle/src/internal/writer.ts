@@ -11,6 +11,7 @@ import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { commonPrefixes, rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 
@@ -590,20 +591,24 @@ export class Writer {
     return p.value === RDF_TYPE ? 'a' : this.iri(p.value);
   }
 
+  // Built once: `term` runs for every term written.
+  private static readonly renderTerm = Match.fn((t: Term.Term, _writer: Writer) => t).pipe(
+    Match.withReturnType<string>(),
+    Match.tag('NamedNode', (t, _t, w) => w.iri(t.value)),
+    Match.tag('BlankNode', (t, _t, w) => `_:${w.label(t.value)}`),
+    Match.tag('Literal', (t, _t, w) => w.literal(t)),
+    Match.tag(
+      'Triple',
+      (t, _t, w) => `<<( ${w.term(t.subject)} ${w.predicate(t.predicate)} ${w.term(t.object)} )>>`,
+    ),
+    Match.orElse((t) => {
+      throw new SerializeFailure(`Cannot serialise ${t._tag}`);
+    }),
+  );
+
   /** Renders a term without any abbreviation that depends on context. */
   term(t: Term.Term): string {
-    switch (t._tag) {
-      case 'NamedNode':
-        return this.iri(t.value);
-      case 'BlankNode':
-        return `_:${this.label(t.value)}`;
-      case 'Literal':
-        return this.literal(t);
-      case 'Triple':
-        return `<<( ${this.term(t.subject)} ${this.predicate(t.predicate)} ${this.term(t.object)} )>>`;
-      default:
-        throw new SerializeFailure(`Cannot serialise ${t._tag}`);
-    }
+    return Writer.renderTerm(t, this);
   }
 
   /** Output labels are assigned in order of first appearance. */
@@ -698,6 +703,33 @@ export const byPrefixName: Order.Order<readonly [string, string]> = Order.mapInp
   ([prefix]: readonly [string, string]) => prefix,
 );
 
+// Built once: `detectPrefixes` runs it for every term of every quad.
+const countNamespaces: (t: Term.Term, counts: Map<string, number>) => void = Match.fn(
+  (t: Term.Term, _counts: Map<string, number>) => t,
+).pipe(
+  Match.withReturnType<void>(),
+  Match.tag('NamedNode', (t, _t, counts) => {
+    const i = Math.max(t.value.lastIndexOf('#'), t.value.lastIndexOf('/'));
+    if (i <= 0) return;
+    const ns = t.value.slice(0, i + 1);
+    if (!Lexical.isAbsoluteIri(ns) || encodeLocalName(t.value.slice(i + 1)) === undefined) {
+      return;
+    }
+    counts.set(ns, (counts.get(ns) ?? 0) + 1);
+  }),
+  Match.tag('Literal', (t, _t, counts) => {
+    if (t.language === '' && t.datatype.value !== Term.XSD_STRING) {
+      countNamespaces(t.datatype, counts);
+    }
+  }),
+  Match.tag('Triple', (t, _t, counts) => {
+    countNamespaces(t.subject, counts);
+    countNamespaces(t.predicate, counts);
+    countNamespaces(t.object, counts);
+  }),
+  Match.orElse(() => undefined),
+);
+
 /**
  * Finds namespaces worth declaring: well-known vocabularies that are used,
  * plus any namespace used by at least two IRIs.
@@ -709,35 +741,11 @@ const detectPrefixes = (
   // Namespaces under the base IRI are better written as relative IRIs.
   const baseDir = baseIri?.slice(0, baseIri.lastIndexOf('/') + 1);
   const counts = new Map<string, number>();
-  const visit = (t: Term.Term): void => {
-    switch (t._tag) {
-      case 'NamedNode': {
-        const i = Math.max(t.value.lastIndexOf('#'), t.value.lastIndexOf('/'));
-        if (i <= 0) return;
-        const ns = t.value.slice(0, i + 1);
-        if (!Lexical.isAbsoluteIri(ns) || encodeLocalName(t.value.slice(i + 1)) === undefined) {
-          return;
-        }
-        counts.set(ns, (counts.get(ns) ?? 0) + 1);
-        return;
-      }
-      case 'Literal':
-        if (t.language === '' && t.datatype.value !== Term.XSD_STRING) visit(t.datatype);
-        return;
-      case 'Triple':
-        visit(t.subject);
-        visit(t.predicate);
-        visit(t.object);
-        return;
-      default:
-        return;
-    }
-  };
   for (const q of quads) {
-    visit(q.subject);
-    visit(q.predicate);
-    visit(q.object);
-    visit(q.graph);
+    countNamespaces(q.subject, counts);
+    countNamespaces(q.predicate, counts);
+    countNamespaces(q.object, counts);
+    countNamespaces(q.graph, counts);
   }
   // SAFETY: `commonPrefixes` maps prefixes to namespace strings.
   const known = new Map<string, string>(

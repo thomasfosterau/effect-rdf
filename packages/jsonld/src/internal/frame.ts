@@ -448,6 +448,8 @@ const nodeMatch = (state: State, pattern: JsonObject, value: Json, flags: Flags)
   return node !== undefined && filterSubject(state, node, pattern, flags);
 };
 
+const lowerIfString = (s: Json) => (isString(s) ? s.toLowerCase() : s);
+
 const valueMatch = (pattern: Json, value: Json): boolean => {
   if (!isObject(pattern)) return true;
   const v1 = value['@value'];
@@ -468,11 +470,10 @@ const valueMatch = (pattern: Json, value: Json): boolean => {
   ) {
     return false;
   }
-  const lower = (s: Json) => (isString(s) ? s.toLowerCase() : s);
   if (
     !(
       (l1 === undefined && Arr.isReadonlyArrayEmpty(l2)) ||
-      l2.map(lower).includes(lower(l1)) ||
+      l2.map(lowerIfString).includes(lowerIfString(l1)) ||
       (l1 !== undefined && isEmptyObject(l2[0]))
     )
   ) {

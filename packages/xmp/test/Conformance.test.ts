@@ -41,21 +41,21 @@ const sectionPart = (file: string): Option.Option<number> =>
     Number(m[1]),
   );
 
+const readPacketMetadata = (file: string) => {
+  const packet = lastPacket(file);
+  assert(Option.isSome(packet), 'no XMP packet');
+  return Effect.runSyncExit(Xmp.parseMetadata(packet.value.text));
+};
+
 describe.skipIf(!exists)('veraPDF corpus', () => {
   it('has the metadata sections', () => {
     expect(passing.length).toBeGreaterThan(400);
   });
 
-  const read = (file: string) => {
-    const packet = lastPacket(file);
-    assert(Option.isSome(packet), 'no XMP packet');
-    return Effect.runSyncExit(Xmp.parseMetadata(packet.value.text));
-  };
-
   it.each(passing.map((f) => [path.relative(corpus, f), f] as const))(
     'reads the XMP of %s',
     (_, file) => {
-      expect(Exit.isSuccess(read(file))).toBe(true);
+      expect(Exit.isSuccess(readPacketMetadata(file))).toBe(true);
     },
   );
 
@@ -64,7 +64,7 @@ describe.skipIf(!exists)('veraPDF corpus', () => {
       .filter((f) => f.includes('identification'))
       .map((f) => [path.relative(corpus, f), f] as const),
   )('reads the PDF/A identification of %s', (_, file) => {
-    const exit = read(file);
+    const exit = readPacketMetadata(file);
     assert(Exit.isSuccess(exit));
     expect(Option.map(PdfA.identification(exit.value), (id) => id.part)).toEqual(sectionPart(file));
   });

@@ -59,12 +59,13 @@ export interface ProtocolTest {
 const local = (iri: string) => iri.replace(/.*[#/]/, '');
 const str = (t: Term.Object | Term.Subject): string => (t._tag === 'Triple' ? '' : t.value);
 
+const nn = (iri: string) => Term.namedNode(iri);
+
 export const readManifest = (file: string): Array<ProtocolTest> => {
   const base = pathToFileURL(file).href;
   const { dataset } = Effect.runSync(
     Turtle.parse(fs.readFileSync(file, 'utf8'), { baseIri: base }),
   );
-  const nn = (iri: string) => Term.namedNode(iri);
   const objects = (s: Term.Term, p: string): Array<Term.Object> =>
     s._tag === 'NamedNode' || s._tag === 'BlankNode'
       ? [...Dataset.objectsOf(dataset, s, nn(p))]

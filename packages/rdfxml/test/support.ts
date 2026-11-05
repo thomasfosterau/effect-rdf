@@ -4,6 +4,7 @@
  * the Turtle package.
  */
 import { assert } from '@effect/vitest';
+import * as Match from 'effect/Match';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Dataset, Iri, Term } from '@thomasfosterau/effect-rdf';
@@ -12,24 +13,21 @@ import { Dataset, Iri, Term } from '@thomasfosterau/effect-rdf';
 // N-Triples
 // -----------------------------------------------------------------------------
 
+// Built once: `unescape` runs it for every escape sequence.
+const unescapeChar: (c: string) => string = Match.type<string>().pipe(
+  Match.when('t', () => '\t'),
+  Match.when('n', () => '\n'),
+  Match.when('r', () => '\r'),
+  Match.when('b', () => '\b'),
+  Match.when('f', () => '\f'),
+  Match.orElse((c) => c),
+);
+
 const unescape = (s: string): string =>
   s.replace(/\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))/g, (_, u4, u8, c) => {
     if (u4 !== undefined) return String.fromCodePoint(parseInt(u4, 16));
     if (u8 !== undefined) return String.fromCodePoint(parseInt(u8, 16));
-    switch (c) {
-      case 't':
-        return '\t';
-      case 'n':
-        return '\n';
-      case 'r':
-        return '\r';
-      case 'b':
-        return '\b';
-      case 'f':
-        return '\f';
-      default:
-        return c;
-    }
+    return unescapeChar(c);
   });
 
 /** Parses an N-Triples document (including RDF 1.2 triple terms). */
@@ -104,7 +102,7 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
       }
       return Term.literal(value);
     }
-    assert.fail(`Unexpected character '${c}' at ${pos}`);
+    return assert.fail(`Unexpected character '${c}' at ${pos}`);
   };
   for (;;) {
     ws();

@@ -5,6 +5,7 @@
  * @since 0.1.0
  */
 import * as BigDecimal from 'effect/BigDecimal';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import {
   Literal,
@@ -240,6 +241,97 @@ const toEpoch = (
   return date.getTime() + s * 1000 - (tz ?? 0) * 60_000;
 };
 
+// Built once: `toValue` runs for every literal a comparison, filter or index touches.
+const valueOf = Match.fn((local: string, _v: string, _dt: string) => local).pipe(
+  Match.withReturnType<Value>(),
+  Match.when('boolean', (_local, _l, v) => ({ _tag: 'Boolean', value: v === 'true' || v === '1' })),
+  Match.when('decimal', (_local, _l, v) => {
+    const normalized =
+      v.startsWith('.') || v.startsWith('-.') || v.startsWith('+.') ? v.replace('.', '0.') : v;
+    return {
+      _tag: 'Decimal',
+      value: BigDecimal.fromStringUnsafe(normalized.endsWith('.') ? `${normalized}0` : normalized),
+    };
+  }),
+  Match.when('double', (_local, _l, v) => ({ _tag: 'Double', value: parseXsdFloat(v) })),
+  Match.when('float', (_local, _l, v) => ({
+    _tag: 'Float',
+    value: Math.fround(parseXsdFloat(v)),
+  })),
+  Match.when(Match.is('dateTime', 'dateTimeStamp'), (_local, _l, v) => {
+    const m = /^(-?\d+)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d(?:\.\d+)?)/.exec(v)!;
+    const tz = parseTimezone(v);
+    return {
+      _tag: 'DateTime',
+      kind: 'dateTime',
+      epochMillis: toEpoch(+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!, +m[6]!, tz),
+      timezone: tz,
+    };
+  }),
+  Match.when('date', (_local, _l, v) => {
+    const m = /^(-?\d+)-(\d\d)-(\d\d)/.exec(v)!;
+    const tz = parseTimezone(v);
+    return {
+      _tag: 'DateTime',
+      kind: 'date',
+      epochMillis: toEpoch(+m[1]!, +m[2]!, +m[3]!, 0, 0, 0, tz),
+      timezone: tz,
+    };
+  }),
+  Match.when('time', (_local, _l, v) => {
+    const m = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)/.exec(v)!;
+    const tz = parseTimezone(v);
+    return {
+      _tag: 'DateTime',
+      kind: 'time',
+      epochMillis: toEpoch(1972, 12, 31, +m[1]!, +m[2]!, +m[3]!, tz),
+      timezone: tz,
+    };
+  }),
+  Match.when(Match.is('gYear', 'gYearMonth', 'gMonth', 'gMonthDay', 'gDay'), (local, _l, v) => {
+    const tz = parseTimezone(v);
+    const body = tz === undefined ? v : v.replace(/(Z|[+-]\d\d:\d\d)$/, '');
+    let y = 1972;
+    let mo = 12;
+    let d = 31;
+    if (local === 'gYear') y = +body;
+    else if (local === 'gYearMonth')
+      // SAFETY: `toValue` only gets here for a lexical form `isValidLexical` accepted, so a
+      // `gYearMonth` body matches.
+      [y, mo] = /^(-?\d+)-(\d\d)$/.exec(body)!.slice(1).map(Number) as [number, number];
+    else if (local === 'gMonth') mo = +body.slice(2);
+    else if (local === 'gMonthDay') [mo, d] = [+body.slice(2, 4), +body.slice(5, 7)];
+    else d = +body.slice(3);
+    if (local === 'gYear' || local === 'gYearMonth' || local === 'gMonth') d = 1;
+    return {
+      _tag: 'DateTime',
+      kind: local,
+      epochMillis: toEpoch(y, mo, d, 0, 0, 0, tz),
+      timezone: tz,
+    };
+  }),
+  Match.when(Match.is('duration', 'yearMonthDuration', 'dayTimeDuration'), (_local, _l, v) => {
+    const m =
+      /^(-)?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(
+        v,
+      )!;
+    const sign = m[1] === '-' ? -1 : 1;
+    const months = sign * (Number(m[2] ?? 0) * 12 + Number(m[3] ?? 0));
+    const seconds =
+      sign *
+      (Number(m[4] ?? 0) * 86400 +
+        Number(m[5] ?? 0) * 3600 +
+        Number(m[6] ?? 0) * 60 +
+        Number(m[7] ?? 0));
+    return {
+      _tag: 'Duration',
+      months: months === 0 ? 0 : months,
+      seconds: seconds === 0 ? 0 : seconds,
+    };
+  }),
+  Match.orElse((_local, _l, v, dt) => ({ _tag: 'Other', lexical: v, datatype: dt })),
+);
+
 /**
  * Maps a literal to its value. Ill-formed literals and unknown datatypes map
  * to `Other`.
@@ -256,104 +348,7 @@ export const toValue = (self: Literal): Value => {
     return { _tag: 'Other', lexical: v, datatype: dt };
   const local = dt.slice(XSD.length);
   if (integerBounds.has(local)) return { _tag: 'Integer', value: BigInt(v) };
-  switch (local) {
-    case 'boolean':
-      return { _tag: 'Boolean', value: v === 'true' || v === '1' };
-    case 'decimal': {
-      const normalized =
-        v.startsWith('.') || v.startsWith('-.') || v.startsWith('+.') ? v.replace('.', '0.') : v;
-      return {
-        _tag: 'Decimal',
-        value: BigDecimal.fromStringUnsafe(
-          normalized.endsWith('.') ? `${normalized}0` : normalized,
-        ),
-      };
-    }
-    case 'double':
-      return { _tag: 'Double', value: parseXsdFloat(v) };
-    case 'float':
-      return { _tag: 'Float', value: Math.fround(parseXsdFloat(v)) };
-    case 'dateTime':
-    case 'dateTimeStamp': {
-      const m = /^(-?\d+)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d(?:\.\d+)?)/.exec(v)!;
-      const tz = parseTimezone(v);
-      return {
-        _tag: 'DateTime',
-        kind: 'dateTime',
-        epochMillis: toEpoch(+m[1]!, +m[2]!, +m[3]!, +m[4]!, +m[5]!, +m[6]!, tz),
-        timezone: tz,
-      };
-    }
-    case 'date': {
-      const m = /^(-?\d+)-(\d\d)-(\d\d)/.exec(v)!;
-      const tz = parseTimezone(v);
-      return {
-        _tag: 'DateTime',
-        kind: 'date',
-        epochMillis: toEpoch(+m[1]!, +m[2]!, +m[3]!, 0, 0, 0, tz),
-        timezone: tz,
-      };
-    }
-    case 'time': {
-      const m = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)/.exec(v)!;
-      const tz = parseTimezone(v);
-      return {
-        _tag: 'DateTime',
-        kind: 'time',
-        epochMillis: toEpoch(1972, 12, 31, +m[1]!, +m[2]!, +m[3]!, tz),
-        timezone: tz,
-      };
-    }
-    case 'gYear':
-    case 'gYearMonth':
-    case 'gMonth':
-    case 'gMonthDay':
-    case 'gDay': {
-      const tz = parseTimezone(v);
-      const body = tz === undefined ? v : v.replace(/(Z|[+-]\d\d:\d\d)$/, '');
-      let y = 1972;
-      let mo = 12;
-      let d = 31;
-      if (local === 'gYear') y = +body;
-      else if (local === 'gYearMonth')
-        // SAFETY: `toValue` only gets here for a lexical form `isValidLexical` accepted, so a
-        // `gYearMonth` body matches.
-        [y, mo] = /^(-?\d+)-(\d\d)$/.exec(body)!.slice(1).map(Number) as [number, number];
-      else if (local === 'gMonth') mo = +body.slice(2);
-      else if (local === 'gMonthDay') [mo, d] = [+body.slice(2, 4), +body.slice(5, 7)];
-      else d = +body.slice(3);
-      if (local === 'gYear' || local === 'gYearMonth' || local === 'gMonth') d = 1;
-      return {
-        _tag: 'DateTime',
-        kind: local,
-        epochMillis: toEpoch(y, mo, d, 0, 0, 0, tz),
-        timezone: tz,
-      };
-    }
-    case 'duration':
-    case 'yearMonthDuration':
-    case 'dayTimeDuration': {
-      const m =
-        /^(-)?P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(
-          v,
-        )!;
-      const sign = m[1] === '-' ? -1 : 1;
-      const months = sign * (Number(m[2] ?? 0) * 12 + Number(m[3] ?? 0));
-      const seconds =
-        sign *
-        (Number(m[4] ?? 0) * 86400 +
-          Number(m[5] ?? 0) * 3600 +
-          Number(m[6] ?? 0) * 60 +
-          Number(m[7] ?? 0));
-      return {
-        _tag: 'Duration',
-        months: months === 0 ? 0 : months,
-        seconds: seconds === 0 ? 0 : seconds,
-      };
-    }
-    default:
-      return { _tag: 'Other', lexical: v, datatype: dt };
-  }
+  return valueOf(local, v, dt);
 };
 
 const parseXsdFloat = (v: string): number =>
@@ -390,29 +385,30 @@ export const canonicalDecimal = (d: BigDecimal.BigDecimal): string => {
   return s.includes('.') ? s : `${s}.0`;
 };
 
+// Built once: `canonicalize` runs for every literal a serializer or the dataset canonicalises.
+const canonicalOf = Match.fn((value: Value, _self: Literal) => value).pipe(
+  Match.withReturnType<Literal>(),
+  Match.tag('Boolean', (value, _v, self) => new Literal(String(value.value), self.datatype)),
+  Match.tag('Integer', (value, _v, self) => new Literal(value.value.toString(), self.datatype)),
+  Match.tag(
+    'Decimal',
+    (value, _v, self) => new Literal(canonicalDecimal(value.value), self.datatype),
+  ),
+  Match.tag(
+    'Double',
+    'Float',
+    (value, _v, self) => new Literal(canonicalDouble(value.value), self.datatype),
+  ),
+  Match.orElse((_value, _v, self) => self),
+);
+
 /**
  * Returns the canonical form of a literal, or the literal unchanged if its
  * datatype has no known canonical mapping or it is ill-formed.
  *
  * @since 0.1.0
  */
-export const canonicalize = (self: Literal): Literal => {
-  const value = toValue(self);
-  const dt = self.datatype;
-  switch (value._tag) {
-    case 'Boolean':
-      return new Literal(String(value.value), dt);
-    case 'Integer':
-      return new Literal(value.value.toString(), dt);
-    case 'Decimal':
-      return new Literal(canonicalDecimal(value.value), dt);
-    case 'Double':
-    case 'Float':
-      return new Literal(canonicalDouble(value.value), dt);
-    default:
-      return self;
-  }
-};
+export const canonicalize = (self: Literal): Literal => canonicalOf(toValue(self), self);
 
 // -----------------------------------------------------------------------------
 // Constructors
@@ -523,6 +519,28 @@ export const fromJs = (value: string | number | bigint | boolean | Date): Litera
   return dateTime(value);
 };
 
+// Built once: `toJs` runs for every literal a result row or JSON conversion reads.
+const jsOf = Match.type<Value>().pipe(
+  Match.withReturnType<Option.Option<string | number | bigint | boolean | Date>>(),
+  Match.tag('String', (v) => Option.some(v.value)),
+  Match.tag('Boolean', (v) => Option.some(v.value)),
+  Match.tag('Integer', (v) =>
+    Option.some(
+      v.value <= BigInt(Number.MAX_SAFE_INTEGER) && v.value >= BigInt(Number.MIN_SAFE_INTEGER)
+        ? Number(v.value)
+        : v.value,
+    ),
+  ),
+  Match.tag('Decimal', (v) => Option.some(BigDecimal.toNumberUnsafe(v.value))),
+  Match.tag('Double', 'Float', (v) => Option.some(v.value)),
+  Match.tag('DateTime', (v) =>
+    v.kind === 'dateTime' || v.kind === 'date'
+      ? Option.some(new Date(v.epochMillis))
+      : Option.none(),
+  ),
+  Match.orElse(() => Option.none()),
+);
+
 /**
  * Converts a literal to a natural JavaScript value: strings, booleans,
  * numbers (for integers within the safe range, decimals, floats and doubles),
@@ -531,29 +549,5 @@ export const fromJs = (value: string | number | bigint | boolean | Date): Litera
  *
  * @since 0.1.0
  */
-export const toJs = (self: Literal): Option.Option<string | number | bigint | boolean | Date> => {
-  const v = toValue(self);
-  switch (v._tag) {
-    case 'String':
-      return Option.some(v.value);
-    case 'Boolean':
-      return Option.some(v.value);
-    case 'Integer':
-      return Option.some(
-        v.value <= BigInt(Number.MAX_SAFE_INTEGER) && v.value >= BigInt(Number.MIN_SAFE_INTEGER)
-          ? Number(v.value)
-          : v.value,
-      );
-    case 'Decimal':
-      return Option.some(BigDecimal.toNumberUnsafe(v.value));
-    case 'Double':
-    case 'Float':
-      return Option.some(v.value);
-    case 'DateTime':
-      return v.kind === 'dateTime' || v.kind === 'date'
-        ? Option.some(new Date(v.epochMillis))
-        : Option.none();
-    default:
-      return Option.none();
-  }
-};
+export const toJs = (self: Literal): Option.Option<string | number | bigint | boolean | Date> =>
+  jsOf(toValue(self));

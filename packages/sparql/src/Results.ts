@@ -193,10 +193,9 @@ const toSelect = (result: ParsedResult | AskResult): SelectResult | AskResult =>
       ? { _tag: 'Ask', value: result.value }
       : result;
 
-// SAFETY: the chunks come from an in-memory serializer that does not fail; the error type is only
-// erased for `runSync`.
+// The chunks come from an in-memory serializer that does not fail, so `runSync` returns.
 const stringify = <E>(chunks: Stream.Stream<string, E>): string =>
-  Effect.runSync(Stream.mkString(chunks as Stream.Stream<string>));
+  Effect.runSync(Stream.mkString(chunks));
 
 const ordered = <E>(
   result: SelectResult<E>,
@@ -503,6 +502,15 @@ const attribute = (e: XmlParser.Element, local: string, ns?: string): string | u
 
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 
+const xmlTriplePart = (e: XmlParser.Element, name: string): Term.GroundTerm => {
+  const p = elements(e).find((c) => c.localName === name);
+  const inner = p === undefined ? undefined : elements(p)[0];
+  if (inner === undefined) {
+    throw new ResultsParseError({ format: 'xml', message: `Missing ${name} in triple term` });
+  }
+  return xmlToTerm(inner);
+};
+
 const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
   return Match.value(e.localName).pipe(
     Match.when('uri', (): Term.GroundTerm => Term.namedNode(textOf(e))),
@@ -521,20 +529,12 @@ const xmlToTerm = (e: XmlParser.Element): Term.GroundTerm => {
         : Term.literal(textOf(e));
     }),
     Match.when('triple', () => {
-      const part = (name: string) => {
-        const p = elements(e).find((c) => c.localName === name);
-        const inner = p === undefined ? undefined : elements(p)[0];
-        if (inner === undefined) {
-          throw new ResultsParseError({ format: 'xml', message: `Missing ${name} in triple term` });
-        }
-        return xmlToTerm(inner);
-      };
       // SAFETY: the XML results grammar puts a subject, an IRI predicate and an object in a triple
       // term's three parts.
       return Term.triple(
-        part('subject') as Term.Subject,
-        part('predicate') as Term.Predicate,
-        part('object'),
+        xmlTriplePart(e, 'subject') as Term.Subject,
+        xmlTriplePart(e, 'predicate') as Term.Predicate,
+        xmlTriplePart(e, 'object'),
       );
     }),
     Match.orElse((name) => {

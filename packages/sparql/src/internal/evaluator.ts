@@ -163,6 +163,8 @@ const collect = (
   pattern: Omit<Store.QuadPattern, 'graph'>,
 ): E<ReadonlyArray<Term.Quad>> => Stream.runCollect(matchQuads(env, pattern));
 
+const iriValueSet = (list: ReadonlyArray<Term.NamedNode>) => new Set(list.map((i) => i.value));
+
 const distinctTerms = (terms: ReadonlyArray<Term.GroundTerm>): Array<Term.GroundTerm> => {
   const seen = new Map<string, Term.GroundTerm>();
   for (const t of terms) if (!seen.has(t.key)) seen.set(t.key, t);
@@ -208,9 +210,8 @@ const pathFrom = (
     ),
     Match.tag('PathNegated', (neg) => {
       const parts: Array<E<ReadonlyArray<Term.GroundTerm>>> = [];
-      const excluded = (list: ReadonlyArray<Term.NamedNode>) => new Set(list.map((i) => i.value));
       if (Arr.isReadonlyArrayNonEmpty(neg.iris) || Arr.isReadonlyArrayEmpty(neg.inverse)) {
-        const ex = excluded(neg.iris);
+        const ex = iriValueSet(neg.iris);
         parts.push(
           Effect.map(collect(env, forward ? { subject: start } : { object: start }), (qs) =>
             qs
@@ -220,7 +221,7 @@ const pathFrom = (
         );
       }
       if (Arr.isReadonlyArrayNonEmpty(neg.inverse)) {
-        const ex = excluded(neg.inverse);
+        const ex = iriValueSet(neg.inverse);
         parts.push(
           Effect.map(collect(env, forward ? { object: start } : { subject: start }), (qs) =>
             qs

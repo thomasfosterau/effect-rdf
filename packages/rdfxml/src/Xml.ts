@@ -21,6 +21,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Order from 'effect/Order';
 import type * as Ordering from 'effect/Ordering';
 import * as Result from 'effect/Result';
@@ -387,58 +388,59 @@ const compareStrings = (a: string, b: string): Ordering.Ordering => (a < b ? -1 
  */
 export const canonicalize = (nodes: ReadonlyArray<Node>): string => {
   let out = '';
-  const go = (node: Node, rendered: ReadonlyMap<string, string>): void => {
-    switch (node._tag) {
-      case 'Text':
-        out += escapeText(node.value);
-        return;
-      case 'Comment':
-        out += `<!--${node.value}-->`;
-        return;
-      case 'ProcessingInstruction':
-        out += node.data === '' ? `<?${node.target}?>` : `<?${node.target} ${node.data}?>`;
-        return;
-      case 'Element': {
-        const utilized = new Set<string>([node.prefix]);
-        for (const a of node.attributes)
-          if (a.prefix !== '' && a.prefix !== 'xml') utilized.add(a.prefix);
-        utilized.delete('xml');
-        const unsorted: Array<readonly [string, string]> = [];
-        for (const p of utilized) {
-          const uri = node.inScopeNamespaces.get(p) ?? '';
-          if ((rendered.get(p) ?? '') !== uri) unsorted.push([p, uri]);
-        }
-        const decls = Arr.sort(
-          unsorted,
-          Order.make<readonly [string, string]>((a, b) => compareStrings(a[0], b[0])),
-        );
-        let next = rendered;
-        if (Arr.isReadonlyArrayNonEmpty(decls)) {
-          const m = new Map(rendered);
-          for (const [p, uri] of decls) m.set(p, uri);
-          next = m;
-        }
-        out += `<${node.name}`;
-        for (const [p, uri] of decls) {
-          out +=
-            p === '' ? ` xmlns="${escapeAttribute(uri)}"` : ` xmlns:${p}="${escapeAttribute(uri)}"`;
-        }
-        const attrs = Arr.sort(
-          node.attributes,
-          Order.make<Attribute>(
-            (a, b) =>
-              compareStrings(a.namespace ?? '', b.namespace ?? '') ||
-              compareStrings(a.localName, b.localName),
-          ),
-        );
-        for (const a of attrs) out += ` ${a.name}="${escapeAttribute(a.value)}"`;
-        out += '>';
-        for (const c of node.children) go(c, next);
-        out += `</${node.name}>`;
-        return;
-      }
-    }
-  };
-  for (const n of nodes) go(n, new Map());
+  for (const n of nodes) out += canonicalNode(n, new Map());
   return out;
 };
+
+// Built once: `canonicalize` runs it for every node of an XML literal.
+const canonicalNode: (node: Node, rendered: ReadonlyMap<string, string>) => string = Match.fn(
+  (node: Node, _rendered: ReadonlyMap<string, string>) => node,
+).pipe(
+  Match.withReturnType<string>(),
+  Match.tag('Text', (node) => escapeText(node.value)),
+  Match.tag('Comment', (node) => `<!--${node.value}-->`),
+  Match.tag('ProcessingInstruction', (node) =>
+    node.data === '' ? `<?${node.target}?>` : `<?${node.target} ${node.data}?>`,
+  ),
+  Match.tag('Element', (node, _node, rendered) => {
+    let out = '';
+    const utilized = new Set<string>([node.prefix]);
+    for (const a of node.attributes)
+      if (a.prefix !== '' && a.prefix !== 'xml') utilized.add(a.prefix);
+    utilized.delete('xml');
+    const unsorted: Array<readonly [string, string]> = [];
+    for (const p of utilized) {
+      const uri = node.inScopeNamespaces.get(p) ?? '';
+      if ((rendered.get(p) ?? '') !== uri) unsorted.push([p, uri]);
+    }
+    const decls = Arr.sort(
+      unsorted,
+      Order.make<readonly [string, string]>((a, b) => compareStrings(a[0], b[0])),
+    );
+    let next = rendered;
+    if (Arr.isReadonlyArrayNonEmpty(decls)) {
+      const m = new Map(rendered);
+      for (const [p, uri] of decls) m.set(p, uri);
+      next = m;
+    }
+    out += `<${node.name}`;
+    for (const [p, uri] of decls) {
+      out +=
+        p === '' ? ` xmlns="${escapeAttribute(uri)}"` : ` xmlns:${p}="${escapeAttribute(uri)}"`;
+    }
+    const attrs = Arr.sort(
+      node.attributes,
+      Order.make<Attribute>(
+        (a, b) =>
+          compareStrings(a.namespace ?? '', b.namespace ?? '') ||
+          compareStrings(a.localName, b.localName),
+      ),
+    );
+    for (const a of attrs) out += ` ${a.name}="${escapeAttribute(a.value)}"`;
+    out += '>';
+    for (const c of node.children) out += canonicalNode(c, next);
+    out += `</${node.name}>`;
+    return out;
+  }),
+  Match.exhaustive,
+);

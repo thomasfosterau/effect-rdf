@@ -185,29 +185,29 @@ describe('SQL execution', () => {
   );
 });
 
-describe('PostgreSQL SQL generation', () => {
-  const compile = (query: string) => {
-    const algebra = Translate.translateQuery(Parser.parseQueryUnsafe(PREFIX + query));
-    let next = 1;
-    const ids = new Map<string, number>();
-    return Translation.compile(
-      algebra.input,
-      {
-        dialect: Dialect.postgres,
-        tables: Dialect.tables(),
-        dataset: { defaultGraph: 'default', namedGraphs: 'all' },
-        activeGraph: { _tag: 'DefaultGraph' },
-      },
-      (t) => {
-        let id = ids.get(t.key);
-        if (id === undefined) ids.set(t.key, (id = next++));
-        return id;
-      },
-    );
-  };
+const compilePostgres = (query: string) => {
+  const algebra = Translate.translateQuery(Parser.parseQueryUnsafe(PREFIX + query));
+  let next = 1;
+  const ids = new Map<string, number>();
+  return Translation.compile(
+    algebra.input,
+    {
+      dialect: Dialect.postgres,
+      tables: Dialect.tables(),
+      dataset: { defaultGraph: 'default', namedGraphs: 'all' },
+      activeGraph: { _tag: 'DefaultGraph' },
+    },
+    (t) => {
+      let id = ids.get(t.key);
+      if (id === undefined) ids.set(t.key, (id = next++));
+      return id;
+    },
+  );
+};
 
+describe('PostgreSQL SQL generation', () => {
   it('uses numbered placeholders, typed NULLs and binary collation', () => {
-    const result = compile(
+    const result = compilePostgres(
       'SELECT ?n ?m WHERE { ?p ex:name ?n OPTIONAL { ?p ex:nick ?m } FILTER(?n < "B" && CONTAINS(?n, "o")) }',
     );
     assert(Result.isSuccess(result));
@@ -217,7 +217,7 @@ describe('PostgreSQL SQL generation', () => {
     expect(sql).toContain('COLLATE "C"');
     expect(sql).toContain('strpos(');
     expect(params).toEqual(expect.arrayContaining(['B', 'o']));
-    const union = compile('SELECT * WHERE { { ?a ex:p ?b } UNION { ?a ex:q ?c } }');
+    const union = compilePostgres('SELECT * WHERE { { ?a ex:p ?b } UNION { ?a ex:q ?c } }');
     assert(Result.isSuccess(union));
     expect(union.success.sql).toContain('CAST(NULL AS BIGINT)');
   });
@@ -230,7 +230,7 @@ describe('PostgreSQL SQL generation', () => {
   });
 
   it('reports untranslatable algebra', () => {
-    const result = compile('SELECT ?s WHERE { ?s ex:p+ ?o }');
+    const result = compilePostgres('SELECT ?s WHERE { ?s ex:p+ ?o }');
     expect(Result.isFailure(result)).toBe(true);
   });
 });

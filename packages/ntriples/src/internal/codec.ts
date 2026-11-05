@@ -4,6 +4,7 @@ import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import * as Lexical from '../Lexical.ts';
@@ -121,23 +122,41 @@ export interface SerializeOptions extends Serialization.SerializeOptions {
 
 class SerializeFailure extends Error {}
 
-const checkIris = (term: Term.Term): void => {
-  switch (term._tag) {
-    case 'NamedNode':
-      if (!Lexical.isWritableIri(term.value)) {
-        throw new SerializeFailure(`Invalid or relative IRI ${term.key}`);
-      }
-      return;
-    case 'Literal':
-      return checkIris(term.datatype);
-    case 'Triple':
-      checkIris(term.subject);
-      checkIris(term.predicate);
-      return checkIris(term.object);
-    default:
-      return;
-  }
-};
+// Built once: `checkIris` runs for every term of every quad serialised.
+const checkIris: (term: Term.Term) => void = Match.type<Term.Term>().pipe(
+  Match.withReturnType<void>(),
+  Match.tag('NamedNode', (term) => {
+    if (!Lexical.isWritableIri(term.value)) {
+      throw new SerializeFailure(`Invalid or relative IRI ${term.key}`);
+    }
+  }),
+  Match.tag('Literal', (term) => checkIris(term.datatype)),
+  Match.tag('Triple', (term) => {
+    checkIris(term.subject);
+    checkIris(term.predicate);
+    checkIris(term.object);
+  }),
+  Match.orElse(() => undefined),
+);
+
+// Built once: `formatQuad` runs it for every quad serialised.
+const formatGraph = Match.fn(
+  (quad: Term.Quad, _syntax: Syntax, _triple: string) => quad.graph,
+).pipe(
+  Match.withReturnType<string>(),
+  Match.tag('DefaultGraph', (_graph, _quad, _syntax, triple) => `${triple} .\n`),
+  Match.tag('NamedNode', 'BlankNode', (graph, quad, syntax, triple) => {
+    if (!syntax.quads) {
+      throw new SerializeFailure(
+        `${syntax.name} cannot represent quads in named graphs: ${quad.key}`,
+      );
+    }
+    return `${triple} ${Lexical.formatTerm(graph)!} .\n`;
+  }),
+  Match.orElse((_graph, quad) => {
+    throw new SerializeFailure(`Invalid graph term in ${quad.key}`);
+  }),
+);
 
 const formatQuad = (syntax: Syntax, quad: Term.Quad): string => {
   checkIris(quad.subject);
@@ -155,20 +174,7 @@ const formatQuad = (syntax: Syntax, quad: Term.Quad): string => {
     throw new SerializeFailure(`Cannot serialise non-ground quad ${quad.key}`);
   }
   const triple = `${s} ${Lexical.formatIri(quad.predicate.value)} ${o}`;
-  switch (quad.graph._tag) {
-    case 'DefaultGraph':
-      return `${triple} .\n`;
-    case 'NamedNode':
-    case 'BlankNode':
-      if (!syntax.quads) {
-        throw new SerializeFailure(
-          `${syntax.name} cannot represent quads in named graphs: ${quad.key}`,
-        );
-      }
-      return `${triple} ${Lexical.formatTerm(quad.graph)!} .\n`;
-    default:
-      throw new SerializeFailure(`Invalid graph term in ${quad.key}`);
-  }
+  return formatGraph(quad, syntax, triple);
 };
 
 const formatAll = (syntax: Syntax, quads: Iterable<Term.Quad>): string => {

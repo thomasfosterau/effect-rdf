@@ -6,6 +6,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
@@ -140,6 +141,8 @@ const escapeRegexp = (s: string): string =>
 
 const escapeCode = (s: string): string => s.replace(/\\/g, '\\\\').replace(/%/g, '\\%');
 
+const quoteLiteral = (s: string): string => `"${escapeString(s)}"`;
+
 class Printer {
   readonly prefixes: PrefixMap.PrefixMap;
   readonly base: string | undefined;
@@ -217,31 +220,39 @@ class Printer {
       // SAFETY: a value without a string `type`, or with a `value`, is an object literal in ShExJ.
       return this.literal(v as ShExJ.ObjectLiteral);
     }
-    const lit = (s: string) => `"${escapeString(s)}"`;
-    switch (v.type) {
-      case 'IriStem':
-        return `${this.iri(v.stem)}~`;
-      case 'LiteralStem':
-        return `${lit(v.stem)}~`;
-      case 'Language':
-        return `@${v.languageTag}`;
-      case 'LanguageStem':
-        return v.stem === '' ? '@~' : `@${v.stem}~`;
-      case 'IriStemRange':
-        return `${Predicate.isString(v.stem) ? `${this.iri(v.stem)}~` : '.'}${v.exclusions
-          .map((e) => ` - ${Predicate.isString(e) ? this.iri(e) : `${this.iri(e.stem)}~`}`)
-          .join('')}`;
-      case 'LiteralStemRange':
-        return `${Predicate.isString(v.stem) ? `${lit(v.stem)}~` : '.'}${v.exclusions
-          .map((e) => ` - ${Predicate.isString(e) ? lit(e) : `${lit(e.stem)}~`}`)
-          .join('')}`;
-      case 'LanguageStemRange':
-        return `${Predicate.isString(v.stem) ? (v.stem === '' ? '@~' : `@${v.stem}~`) : '.'}${v.exclusions
-          .map((e) => ` - @${Predicate.isString(e) ? e : `${e.stem}~`}`)
-          .join('')}`;
-      default:
-        return '';
-    }
+    return Match.value(v).pipe(
+      Match.withReturnType<string>(),
+      Match.discriminator('type')('IriStem', (member) => `${this.iri(member.stem)}~`),
+      Match.discriminator('type')('LiteralStem', (member) => `${quoteLiteral(member.stem)}~`),
+      Match.discriminator('type')('Language', (member) => `@${member.languageTag}`),
+      Match.discriminator('type')('LanguageStem', (member) =>
+        member.stem === '' ? '@~' : `@${member.stem}~`,
+      ),
+      Match.discriminator('type')(
+        'IriStemRange',
+        (member) =>
+          `${Predicate.isString(member.stem) ? `${this.iri(member.stem)}~` : '.'}${member.exclusions
+            .map((e) => ` - ${Predicate.isString(e) ? this.iri(e) : `${this.iri(e.stem)}~`}`)
+            .join('')}`,
+      ),
+      Match.discriminator('type')(
+        'LiteralStemRange',
+        (member) =>
+          `${Predicate.isString(member.stem) ? `${quoteLiteral(member.stem)}~` : '.'}${member.exclusions
+            .map(
+              (e) => ` - ${Predicate.isString(e) ? quoteLiteral(e) : `${quoteLiteral(e.stem)}~`}`,
+            )
+            .join('')}`,
+      ),
+      Match.discriminator('type')(
+        'LanguageStemRange',
+        (member) =>
+          `${Predicate.isString(member.stem) ? (member.stem === '' ? '@~' : `@${member.stem}~`) : '.'}${member.exclusions
+            .map((e) => ` - @${Predicate.isString(e) ? e : `${e.stem}~`}`)
+            .join('')}`,
+      ),
+      Match.orElse(() => ''),
+    );
   }
 
   nodeConstraint(nc: ShExJ.NodeConstraint): string {
@@ -270,24 +281,33 @@ class Printer {
    */
   shapeExpr(e: ShExJ.ShapeExprOrRef, indent: string, inline: boolean): string {
     if (Predicate.isString(e)) return `@${this.label(e)}`;
-    switch (e.type) {
-      case 'ShapeOr':
-        return e.shapeExprs.map((s) => this.junct(s, indent, 'ShapeOr')).join(' OR ');
-      case 'ShapeAnd':
-        return e.shapeExprs.map((s) => this.junct(s, indent, 'ShapeAnd')).join(' AND ');
-      case 'ShapeNot':
-        return `NOT ${this.junct(e.shapeExpr, indent, 'ShapeNot')}`;
-      case 'NodeConstraint': {
-        const s = this.nodeConstraint(e);
-        return inline && (e.annotations !== undefined || e.semActs !== undefined) ? `(${s})` : s;
-      }
-      case 'Shape': {
-        const s = this.shape(e, indent);
-        return inline && (e.annotations !== undefined || e.semActs !== undefined) ? `(${s})` : s;
-      }
-      case 'ShapeExternal':
-        return 'EXTERNAL';
-    }
+    return Match.value(e).pipe(
+      Match.withReturnType<string>(),
+      Match.discriminator('type')('ShapeOr', (expr) =>
+        expr.shapeExprs.map((s) => this.junct(s, indent, 'ShapeOr')).join(' OR '),
+      ),
+      Match.discriminator('type')('ShapeAnd', (expr) =>
+        expr.shapeExprs.map((s) => this.junct(s, indent, 'ShapeAnd')).join(' AND '),
+      ),
+      Match.discriminator('type')(
+        'ShapeNot',
+        (expr) => `NOT ${this.junct(expr.shapeExpr, indent, 'ShapeNot')}`,
+      ),
+      Match.discriminator('type')('NodeConstraint', (expr) => {
+        const s = this.nodeConstraint(expr);
+        return inline && (expr.annotations !== undefined || expr.semActs !== undefined)
+          ? `(${s})`
+          : s;
+      }),
+      Match.discriminator('type')('Shape', (expr) => {
+        const s = this.shape(expr, indent);
+        return inline && (expr.annotations !== undefined || expr.semActs !== undefined)
+          ? `(${s})`
+          : s;
+      }),
+      Match.discriminator('type')('ShapeExternal', () => 'EXTERNAL'),
+      Match.exhaustive,
+    );
   }
 
   junct(e: ShExJ.ShapeExprOrRef, indent: string, parent: string): string {
@@ -318,28 +338,30 @@ class Printer {
   tripleExpr(t: ShExJ.TripleExprOrRef, indent: string, nested: boolean): string {
     if (Predicate.isString(t)) return `&${this.label(t)}`;
     const id = t.id !== undefined ? `$${this.label(t.id)} ` : '';
-    switch (t.type) {
-      case 'TripleConstraint': {
-        const value = t.valueExpr === undefined ? '.' : this.shapeExpr(t.valueExpr, indent, true);
-        return `${id}${t.inverse === true ? '^' : ''}${this.predicate(t.predicate)} ${value}${this.cardinality(t)}${this.annotations(t.annotations)}${this.semActs(t.semActs)}`;
-      }
-      case 'EachOf':
-      case 'OneOf': {
-        const sep = t.type === 'EachOf' ? ` ;\n${indent}` : `\n${indent}| `;
+    return Match.value(t).pipe(
+      Match.withReturnType<string>(),
+      Match.discriminator('type')('TripleConstraint', (expr) => {
+        const value =
+          expr.valueExpr === undefined ? '.' : this.shapeExpr(expr.valueExpr, indent, true);
+        return `${id}${expr.inverse === true ? '^' : ''}${this.predicate(expr.predicate)} ${value}${this.cardinality(expr)}${this.annotations(expr.annotations)}${this.semActs(expr.semActs)}`;
+      }),
+      Match.discriminator('type')('EachOf', 'OneOf', (expr) => {
+        const sep = expr.type === 'EachOf' ? ` ;\n${indent}` : `\n${indent}| `;
         const inner = indent + this.unit;
-        const items = t.expressions.map((e) =>
+        const items = expr.expressions.map((e) =>
           this.tripleExpr(e, inner, !Predicate.isString(e) && e.type !== 'TripleConstraint'),
         );
         const decorated =
           id !== '' ||
-          this.cardinality(t) !== '' ||
-          t.annotations !== undefined ||
-          t.semActs !== undefined;
+          this.cardinality(expr) !== '' ||
+          expr.annotations !== undefined ||
+          expr.semActs !== undefined;
         if (!decorated && !nested) return items.join(sep);
-        if (!decorated && t.type === 'EachOf' && nested) return `(${items.join(sep)})`;
-        return `${id}(${items.join(sep)})${this.cardinality(t)}${this.annotations(t.annotations)}${this.semActs(t.semActs)}`;
-      }
-    }
+        if (!decorated && expr.type === 'EachOf' && nested) return `(${items.join(sep)})`;
+        return `${id}(${items.join(sep)})${this.cardinality(expr)}${this.annotations(expr.annotations)}${this.semActs(expr.semActs)}`;
+      }),
+      Match.exhaustive,
+    );
   }
 
   schema(schema: ShExJ.Schema): string {

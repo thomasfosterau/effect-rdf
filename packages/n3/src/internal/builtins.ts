@@ -8,6 +8,7 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { xsd } from '@thomasfosterau/effect-rdf/Vocab';
@@ -78,20 +79,19 @@ const toNum = (t: Model.N3Term): Num | undefined => {
 
 const asNumber = (n: Num): number => (n.kind === 'integer' ? Number(n.value) : n.value);
 
-const fromNum = (n: Num): Term.Literal => {
-  switch (n.kind) {
-    case 'integer':
-      return Term.literal(n.value.toString(), xsd.integer);
-    case 'decimal': {
-      const s = String(Number(n.value.toPrecision(15)));
-      return Number.isFinite(n.value) && !/e/i.test(s)
-        ? Term.literal(s.includes('.') ? s : `${s}.0`, xsd.decimal)
-        : Term.literal(Xsd.canonicalDouble(n.value), xsd.double);
-    }
-    case 'double':
-      return Term.literal(Xsd.canonicalDouble(n.value), xsd.double);
-  }
-};
+// Built once: `fromNum` runs for every arithmetic result.
+const fromNum: (n: Num) => Term.Literal = Match.type<Num>().pipe(
+  Match.withReturnType<Term.Literal>(),
+  Match.when({ kind: 'integer' }, (n) => Term.literal(n.value.toString(), xsd.integer)),
+  Match.when({ kind: 'decimal' }, (n) => {
+    const s = String(Number(n.value.toPrecision(15)));
+    return Number.isFinite(n.value) && !/e/i.test(s)
+      ? Term.literal(s.includes('.') ? s : `${s}.0`, xsd.decimal)
+      : Term.literal(Xsd.canonicalDouble(n.value), xsd.double);
+  }),
+  Match.when({ kind: 'double' }, (n) => Term.literal(Xsd.canonicalDouble(n.value), xsd.double)),
+  Match.exhaustive,
+);
 
 const numEquals = (a: Num, b: Num): boolean => {
   if (a.kind === 'integer' && b.kind === 'integer') return a.value === b.value;
@@ -299,28 +299,25 @@ const mathBuiltins = {
 // -----------------------------------------------------------------------------
 
 /** The XPath string value of a term (numbers and booleans in canonical form). */
-const str = (t: Model.N3Term): string | undefined => {
-  switch (t._tag) {
-    case 'Literal': {
-      const dt = t.datatype.value;
-      if (dt === xsd.boolean.value) return t.value === '1' || t.value === 'true' ? 'true' : 'false';
-      if (dt !== Term.XSD_STRING && Xsd.isNumericDatatype(dt)) {
-        const n = toNum(t);
-        if (n !== undefined) {
-          if (n.kind === 'integer') return n.value.toString();
-          if (Number.isNaN(n.value)) return 'NaN';
-          if (!Number.isFinite(n.value)) return n.value > 0 ? 'INF' : '-INF';
-          return String(n.value);
-        }
+const str = Match.type<Model.N3Term>().pipe(
+  Match.withReturnType<string | undefined>(),
+  Match.tag('Literal', (t) => {
+    const dt = t.datatype.value;
+    if (dt === xsd.boolean.value) return t.value === '1' || t.value === 'true' ? 'true' : 'false';
+    if (dt !== Term.XSD_STRING && Xsd.isNumericDatatype(dt)) {
+      const n = toNum(t);
+      if (n !== undefined) {
+        if (n.kind === 'integer') return n.value.toString();
+        if (Number.isNaN(n.value)) return 'NaN';
+        if (!Number.isFinite(n.value)) return n.value > 0 ? 'INF' : '-INF';
+        return String(n.value);
       }
-      return t.value;
     }
-    case 'NamedNode':
-      return t.value;
-    default:
-      return undefined;
-  }
-};
+    return t.value;
+  }),
+  Match.tag('NamedNode', (t) => t.value),
+  Match.orElse(() => undefined),
+);
 
 const stringTest =
   (test: (a: string, b: string) => boolean): Builtin =>

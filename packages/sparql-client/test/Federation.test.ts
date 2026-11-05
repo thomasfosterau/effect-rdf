@@ -201,6 +201,9 @@ interface ServiceTest {
   readonly result: string;
 }
 
+const iriValue = (t: Term.Term | undefined) =>
+  t !== undefined && t._tag === 'NamedNode' ? t.value : '';
+
 const loadTests = (): Array<ServiceTest> => {
   if (!exists) return [];
   const file = path.join(serviceDir, 'manifest.ttl');
@@ -212,17 +215,15 @@ const loadTests = (): Array<ServiceTest> => {
     s._tag === 'NamedNode' || s._tag === 'BlankNode'
       ? Dataset.objectsOf(ds, s, Term.namedNode(p))
       : [];
-  const iri = (t: Term.Term | undefined) =>
-    t !== undefined && t._tag === 'NamedNode' ? t.value : '';
   return manifest.entries.map((entry) => {
     const action = objects(entry.node, `${MF}action`)[0]!;
     return {
       name: entry.name,
-      query: fileURLToPath(iri(objects(action, `${QT}query`)[0])),
-      data: objects(action, `${QT}data`).map((t) => fileURLToPath(iri(t))),
+      query: fileURLToPath(iriValue(objects(action, `${QT}query`)[0])),
+      data: objects(action, `${QT}data`).map((t) => fileURLToPath(iriValue(t))),
       serviceData: objects(action, `${QT}serviceData`).map((sd) => ({
-        endpoint: iri(objects(sd, `${QT}endpoint`)[0]),
-        data: objects(sd, `${QT}data`).map((t) => fileURLToPath(iri(t))),
+        endpoint: iriValue(objects(sd, `${QT}endpoint`)[0]),
+        data: objects(sd, `${QT}data`).map((t) => fileURLToPath(iriValue(t))),
       })),
       result: fileURLToPath(
         Option.getOrElse(entry.result, () => assert.fail(`${entry.name} has no result`)),
@@ -232,6 +233,20 @@ const loadTests = (): Array<ServiceTest> => {
 };
 
 const serviceTests = loadTests();
+
+const rowsToGraph = (rows: ReadonlyArray<{ readonly map: ReadonlyMap<string, Term.GroundTerm> }>) =>
+  Dataset.fromIterable(
+    rows.flatMap((row, i) =>
+      Array.from(row.map, ([k, v]) =>
+        Term.quad(
+          Term.namedNode(`urn:row:${i}`),
+          Term.namedNode(`urn:var:${k}`),
+          // SAFETY: the bound values in this test are object-position terms.
+          v,
+        ),
+      ),
+    ),
+  );
 
 describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', () => {
   serviceTests.forEach((t) => {
@@ -247,25 +262,10 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
         const hasBlankNodes = expected.bindings.some((b) =>
           Array.from(b.map.values()).some((v) => v._tag === 'BlankNode'),
         );
-        const toGraph = (
-          rows: ReadonlyArray<{ readonly map: ReadonlyMap<string, Term.GroundTerm> }>,
-        ) =>
-          Dataset.fromIterable(
-            rows.flatMap((row, i) =>
-              Array.from(row.map, ([k, v]) =>
-                Term.quad(
-                  Term.namedNode(`urn:row:${i}`),
-                  Term.namedNode(`urn:var:${k}`),
-                  // SAFETY: the bound values in this test are object-position terms.
-                  v,
-                ),
-              ),
-            ),
-          );
         // Blank node labels differ between runs, so those results are compared as graphs.
         expect(
           !hasBlankNodes ||
-            Isomorphism.isomorphic(toGraph(result.bindings), toGraph(expected.bindings)),
+            Isomorphism.isomorphic(rowsToGraph(result.bindings), rowsToGraph(expected.bindings)),
         ).toBe(true);
         expect(hasBlankNodes ? [] : sortedKeys(result.bindings)).toEqual(
           hasBlankNodes ? [] : sortedKeys(expected.bindings),

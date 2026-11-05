@@ -1,4 +1,5 @@
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 /**
  * Translation of XPath / XML Schema regular expressions (as used by the
  * ShEx `pattern` facet and `fn:matches`) to JavaScript `RegExp`s.
@@ -75,6 +76,31 @@ const SYNTAX = new Set([
   '/',
 ]);
 
+/** An escape read by `Translator.escape`: a character, or a class body. */
+type Escape = { kind: 'char'; text: string } | { kind: 'class'; body: string; negated: boolean };
+
+// Built once: `escape` runs it for every backslash of every pattern.
+const escapeOf: (c: string, t: Translator) => Escape = Match.fn(
+  (c: string, _t: Translator) => c,
+).pipe(
+  Match.withReturnType<Escape>(),
+  Match.when('n', () => ({ kind: 'char', text: '\\n' })),
+  Match.when('r', () => ({ kind: 'char', text: '\\r' })),
+  Match.when('t', () => ({ kind: 'char', text: '\\t' })),
+  Match.when(Match.is('p', 'P'), (c, _c, t) => {
+    const p = t.property(c === 'P');
+    return { kind: 'class', ...p };
+  }),
+  Match.orElse((c, _c, t) => {
+    const ce = CLASS_ESCAPES[c];
+    if (ce !== undefined) return { kind: 'class', ...ce };
+    if (/[0-9]/.test(c)) return { kind: 'char', text: `\\${c}` };
+    if (c === '-') return { kind: 'char', text: '\\-' };
+    if (SYNTAX.has(c)) return { kind: 'char', text: `\\${c}` };
+    return t.fail(`invalid escape \\${c}`);
+  }),
+);
+
 class Translator {
   i = 0;
   readonly src: string;
@@ -106,30 +132,10 @@ class Translator {
   }
 
   /** Reads an escape inside or outside a class (cursor after the backslash). */
-  escape(): { kind: 'char'; text: string } | { kind: 'class'; body: string; negated: boolean } {
+  escape(): Escape {
     const c = this.src[this.i++];
     if (c === undefined) this.fail('dangling backslash');
-    switch (c) {
-      case 'n':
-        return { kind: 'char', text: '\\n' };
-      case 'r':
-        return { kind: 'char', text: '\\r' };
-      case 't':
-        return { kind: 'char', text: '\\t' };
-      case 'p':
-      case 'P': {
-        const p = this.property(c === 'P');
-        return { kind: 'class', ...p };
-      }
-      default:
-        break;
-    }
-    const ce = CLASS_ESCAPES[c];
-    if (ce !== undefined) return { kind: 'class', ...ce };
-    if (/[0-9]/.test(c)) return { kind: 'char', text: `\\${c}` };
-    if (c === '-') return { kind: 'char', text: '\\-' };
-    if (SYNTAX.has(c)) return { kind: 'char', text: `\\${c}` };
-    return this.fail(`invalid escape \\${c}`);
+    return escapeOf(c, this);
   }
 
   /** Translates a character class (cursor after `[`); returns a JS fragment. */

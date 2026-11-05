@@ -77,7 +77,9 @@ export type PatternInput =
   | Ast.Pattern
   | ReadonlyArray<PatternInput>;
 
-const isJsValue = <A>(u: A | JsValue): u is JsValue =>
+const isJsValue = (
+  u: ExpressionInput | Alias<string, boolean> | Ast.OrderCondition,
+): u is JsValue =>
   Predicate.isString(u) ||
   Predicate.isNumber(u) ||
   Predicate.isBigInt(u) ||

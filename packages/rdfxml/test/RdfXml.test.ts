@@ -258,15 +258,15 @@ _:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org
   );
 });
 
-describe('RdfXml.serialize', () => {
-  const roundTrip = (quads: ReadonlyArray<Term.Quad>, options?: RdfXml.SerializeOptions) =>
-    Effect.gen(function* () {
-      const xml = yield* RdfXml.serialize(quads, options);
-      const parsed = yield* RdfXml.parse(xml);
-      expect(Isomorphism.isomorphic(parsed.dataset, Dataset.fromIterable(quads))).toBe(true);
-      return xml;
-    });
+const roundTrip = (quads: ReadonlyArray<Term.Quad>, options?: RdfXml.SerializeOptions) =>
+  Effect.gen(function* () {
+    const xml = yield* RdfXml.serialize(quads, options);
+    const parsed = yield* RdfXml.parse(xml);
+    expect(Isomorphism.isomorphic(parsed.dataset, Dataset.fromIterable(quads))).toBe(true);
+    return xml;
+  });
 
+describe('RdfXml.serialize', () => {
   it.effect('writes typed nodes, nested blank nodes and configured prefixes', () =>
     Effect.gen(function* () {
       const bob = Term.blankNode();

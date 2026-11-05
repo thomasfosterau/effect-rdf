@@ -81,28 +81,19 @@ export default defineConfig({
       // Every export's doc comment carries `@since` and `@category` (AGENTS.md).
       'jsdoc/check-tag-names': ['error', { definedTags: ['since', 'category'] }],
       // ---- oxlint categories: allowances (effect-rdf#42) --------------
-      // `suspicious` arrived with the Vite+ 1.4 toolchain move. These two sit
-      // at `warn` with their count at adoption, too many sites in the
-      // parsers and evaluators to rewrite safely in that change: short
-      // grammar-local names (`c`, `p`, `op`, `e`) reused in nested
-      // combinators, and helpers defined beside the one test or grammar rule
-      // that uses them. A new site is a defect, not headroom.
+      // `suspicious` arrived with the Vite+ 1.4 toolchain move. This one sits
+      // at `warn` with its count at adoption, too many sites in the parsers
+      // and evaluators to rewrite safely in that change: short grammar-local
+      // names (`c`, `p`, `op`, `e`) reused in nested combinators. A new site
+      // is a defect, not headroom.
       'eslint/no-shadow': 'warn', // 301
-      'unicorn/consistent-function-scoping': 'warn', // 63
       // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
       // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
       // autofixable findings (unnecessary assertions, type arguments and
       // template expressions) are fixed; these sit at `warn` with their count
       // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
-      // narrowing casts the parsers and evaluators rely on; `consistent-return`
-      // on exhaustive `switch`es native `tsc` already proves total
-      // (`noImplicitReturns`); the rest need an API-level rethink each.
-      'typescript/no-unsafe-type-assertion': 'warn', // 222
-      'typescript/consistent-return': 'warn', // 21
-      'typescript/no-unnecessary-type-parameters': 'warn', // 2
-      'typescript/no-base-to-string': 'warn', // 3
-      'effecttsgo/any-unknown-in-error-context': 'warn', // 3
-      'effecttsgo/unsafe-effect-type-assertion': 'warn', // 1
+      // narrowing casts the parsers and evaluators rely on.
+      'typescript/no-unsafe-type-assertion': 'warn', // 220
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -134,10 +125,9 @@ export default defineConfig({
       'effect/imperative-loops': 'warn', // 833
       // 631 at adoption; dropping the unnecessary `a!` in `a!._tag` (sparql
       // Functions.ts) made 15 existing checks visible to the rule.
-      'effect/avoid-direct-tag-checks': 'warn', // 646
+      'effect/avoid-direct-tag-checks': 'warn', // 619
       'effect/avoid-non-null-assertion': 'warn', // 558
       'effect/avoid-native-object-helpers': 'warn', // 539
-      'effect/prefer-match-over-switch': 'warn', // 56
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
@@ -313,7 +303,7 @@ export default defineConfig({
           // in a variable; the rule cannot see that it is a string.
           'vitest/valid-title': ['error', { ignoreTypeOfDescribeName: true }],
           'vitest/no-standalone-expect': [
-            'warn',
+            'error',
             {
               additionalTestBlockFunctions: [
                 'it.effect',

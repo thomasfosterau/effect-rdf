@@ -288,6 +288,8 @@ export const seq = (items: Iterable<string>): ArrayValue =>
     Arr.map(Arr.fromIterable(items), (item) => text(item)),
   );
 
+const isDefaultLanguage = ([language]: readonly [string, string]) => language === X_DEFAULT;
+
 /**
  * A language alternative: an `rdf:Alt` of text values each qualified by
  * `xml:lang`, from `[language, text]` pairs. An `x-default` entry is moved
@@ -298,11 +300,13 @@ export const seq = (items: Iterable<string>): ArrayValue =>
  */
 export const languageAlternative = (entries: Iterable<readonly [string, string]>): ArrayValue => {
   const all = Arr.fromIterable(entries);
-  const isDefault = ([language]: readonly [string, string]) => language === X_DEFAULT;
   return array(
     'Alt',
     Arr.map(
-      [...Arr.filter(all, isDefault), ...Arr.filter(all, (entry) => !isDefault(entry))],
+      [
+        ...Arr.filter(all, isDefaultLanguage),
+        ...Arr.filter(all, (entry) => !isDefaultLanguage(entry)),
+      ],
       ([language, value]) => text(value, language),
     ),
   );
@@ -498,6 +502,8 @@ const byPredicate = Order.mapInput(Order.String, (q: Term.Quad) => q.predicate.v
 
 type Visiting = HashSet.HashSet<string>;
 
+const isRdfValueQuad = (q: Term.Quad) => q.predicate.value === RDF_VALUE;
+
 class ModelReader {
   readonly dataset: Dataset.Dataset;
   constructor(dataset: Dataset.Dataset) {
@@ -539,10 +545,9 @@ class ModelReader {
 
   node(node: Term.BlankNode, visiting: Visiting): Value {
     const quads = this.properties(node);
-    const isValue = (q: Term.Quad) => q.predicate.value === RDF_VALUE;
-    const value = Arr.findFirst(quads, isValue);
+    const value = Arr.findFirst(quads, isRdfValueQuad);
     if (Option.isSome(value)) {
-      const others = Arr.filter(quads, (q) => !isValue(q));
+      const others = Arr.filter(quads, (q) => !isRdfValueQuad(q));
       return withQualifiers(
         this.value(value.value.object, visiting),
         this.entries(others, visiting),

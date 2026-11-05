@@ -359,6 +359,9 @@ const bodyText = (
 // Constructor
 // -----------------------------------------------------------------------------
 
+const graphBase = (graph: GraphTarget, endpoint: string) =>
+  graph === 'default' ? endpoint : graph.value;
+
 /**
  * Builds a client from configuration, using the `HttpClient` from the context
  * and the `Serialization.Formats` service when provided (the default formats
@@ -671,9 +674,6 @@ export const make = (
           ),
         ),
       );
-
-    const graphBase = (graph: GraphTarget, endpoint: string) =>
-      graph === 'default' ? endpoint : graph.value;
 
     const getGraph: SparqlClientShape['getGraph'] = (graph, options) =>
       Stream.unwrap(

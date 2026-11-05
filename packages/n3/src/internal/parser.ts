@@ -25,6 +25,7 @@ import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Model from '../Model.ts';
 import { i18n, log, sameAs } from '../Vocab.ts';
@@ -604,30 +605,32 @@ class Builder {
     return new Model.Formula(this.out.pop()!);
   }
 
+  // Built once: `statement` runs for every statement read.
+  private static readonly buildStatement = Match.fn((s: Statement, _builder: Builder) => s).pipe(
+    Match.withReturnType<void>(),
+    Match.tag('Prefix', (s, _s, b) => {
+      b.prefixes.set(s.prefix, b.iri(s.iri));
+    }),
+    Match.tag('Base', (s, _s, b) => {
+      b.base = b.iri(s.iri);
+    }),
+    Match.tag('Quantifier', (s, _s, b) => {
+      const scope = b.scopes[b.scopes.length - 1]!;
+      for (const node of s.iris) {
+        const iri = b.iri(node);
+        scope.set(iri, s.universal ? b.variableFor(iri) : b.freshBlank());
+      }
+    }),
+    Match.tag('Triples', (s, _s, b) => {
+      const subject = b.path(s.subject);
+      b.pol(subject, s.pol);
+    }),
+    Match.tag('Error', (s, _s, b) => failAt(b.input, s.message, s.at)),
+    Match.exhaustive,
+  );
+
   private statement(s: Statement): void {
-    switch (s._tag) {
-      case 'Prefix':
-        this.prefixes.set(s.prefix, this.iri(s.iri));
-        return;
-      case 'Base':
-        this.base = this.iri(s.iri);
-        return;
-      case 'Quantifier': {
-        const scope = this.scopes[this.scopes.length - 1]!;
-        for (const node of s.iris) {
-          const iri = this.iri(node);
-          scope.set(iri, s.universal ? this.variableFor(iri) : this.freshBlank());
-        }
-        return;
-      }
-      case 'Triples': {
-        const subject = this.path(s.subject);
-        this.pol(subject, s.pol);
-        return;
-      }
-      case 'Error':
-        return failAt(this.input, s.message, s.at);
-    }
+    Builder.buildStatement(s, this);
   }
 
   private pol(subject: Model.N3Term, pol: ReadonlyArray<Pol>): void {
@@ -655,54 +658,54 @@ class Builder {
     return item;
   }
 
+  // Built once: `item` runs for every term read.
+  private static readonly buildItem = Match.fn((item: Item, _builder: Builder) => item).pipe(
+    Match.withReturnType<Model.N3Term>(),
+    Match.tag('IriRef', 'PName', (item, _item, b) => b.named(b.iri(item))),
+    Match.tag('Blank', (item, _item, b) => b.labelledBlank(item.label)),
+    Match.tag('Anon', (item, _item, b) => {
+      if (item.id !== undefined) {
+        const node = b.named(b.iri(item.id));
+        b.pol(node, item.pol);
+        return node;
+      }
+      const fresh = b.freshBlank();
+      b.pol(fresh, item.pol);
+      return fresh;
+    }),
+    Match.tag('List', (item, _item, b) => new Model.Collection(item.items.map((p) => b.path(p)))),
+    Match.tag('Formula', (item, _item, b) => {
+      const f = b.formula(item.statements);
+      // An empty graph term is the literal `true` (N3 test suite: graph/empty_graph).
+      return f.size === 0 ? TRUE : f;
+    }),
+    Match.tag('Error', (item, _item, b) => failAt(b.input, item.message, item.at)),
+    Match.tag('Var', (item, _item, b) => {
+      b.variableNames.add(item.name);
+      return new Term.Variable(item.name);
+    }),
+    Match.tag('Literal', (item) => item.value),
+    Match.tag('String', (item, _item, b) => {
+      if (item.language !== undefined) return Term.literal(item.value, item.language);
+      if (item.datatype === undefined) return Term.literal(item.value);
+      const datatype = b.iri(item.datatype);
+      const dir = datatype.startsWith(i18n.base)
+        ? I18N_DATATYPE.exec(datatype.slice(i18n.base.length))
+        : null;
+      if (dir !== null) {
+        // SAFETY: the base-direction regex only captures `ltr` or `rtl`.
+        return Term.literal(item.value, {
+          language: dir[1]!,
+          direction: dir[2] as Term.Direction,
+        });
+      }
+      return Term.literal(item.value, new Term.NamedNode(datatype));
+    }),
+    Match.exhaustive,
+  );
+
   private item(item: Item): Model.N3Term {
-    switch (item._tag) {
-      case 'IriRef':
-      case 'PName':
-        return this.named(this.iri(item));
-      case 'Blank':
-        return this.labelledBlank(item.label);
-      case 'Anon': {
-        if (item.id !== undefined) {
-          const node = this.named(this.iri(item.id));
-          this.pol(node, item.pol);
-          return node;
-        }
-        const b = this.freshBlank();
-        this.pol(b, item.pol);
-        return b;
-      }
-      case 'List':
-        return new Model.Collection(item.items.map((p) => this.path(p)));
-      case 'Formula': {
-        const f = this.formula(item.statements);
-        // An empty graph term is the literal `true` (N3 test suite: graph/empty_graph).
-        return f.size === 0 ? TRUE : f;
-      }
-      case 'Error':
-        return failAt(this.input, item.message, item.at);
-      case 'Var':
-        this.variableNames.add(item.name);
-        return new Term.Variable(item.name);
-      case 'Literal':
-        return item.value;
-      case 'String': {
-        if (item.language !== undefined) return Term.literal(item.value, item.language);
-        if (item.datatype === undefined) return Term.literal(item.value);
-        const datatype = this.iri(item.datatype);
-        const dir = datatype.startsWith(i18n.base)
-          ? I18N_DATATYPE.exec(datatype.slice(i18n.base.length))
-          : null;
-        if (dir !== null) {
-          // SAFETY: the base-direction regex only captures `ltr` or `rtl`.
-          return Term.literal(item.value, {
-            language: dir[1]!,
-            direction: dir[2] as Term.Direction,
-          });
-        }
-        return Term.literal(item.value, new Term.NamedNode(datatype));
-      }
-    }
+    return Builder.buildItem(item, this);
   }
 
   private iri(node: IriNode): string {

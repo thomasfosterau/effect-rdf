@@ -98,6 +98,9 @@ export const serviceHandler = (
       ).pipe(Stream.withSpan('Federation.service', { attributes: { endpoint: endpoint.value } }));
   });
 
+const loadFailed = (iri: Term.NamedNode, message: string, cause?: unknown) =>
+  new UpdateError({ message: `LOAD <${iri.value}> failed: ${message}`, cause });
+
 /**
  * Builds a `LOAD` handler that fetches documents over HTTP and parses them
  * with the `Serialization.Formats` service (or the default formats), by
@@ -116,8 +119,6 @@ export const loader = (
       () => Formats.defaults,
     );
     const accept = Formats.acceptHeader(formats);
-    const fail = (iri: Term.NamedNode, message: string, cause?: unknown) =>
-      new UpdateError({ message: `LOAD <${iri.value}> failed: ${message}`, cause });
     return (iri: Term.NamedNode) =>
       Effect.gen(function* () {
         const request = HttpClientRequest.get(iri.value, {
@@ -131,11 +132,13 @@ export const loader = (
             ? exchange
             : Effect.timeoutOrElse(exchange, {
                 duration: config.timeout,
-                orElse: () => Effect.fail(fail(iri, 'timed out')),
+                orElse: () => Effect.fail(loadFailed(iri, 'timed out')),
               })
-        ).pipe(Effect.mapError((e) => (e._tag === 'UpdateError' ? e : fail(iri, e.message, e))));
+        ).pipe(
+          Effect.mapError((e) => (e._tag === 'UpdateError' ? e : loadFailed(iri, e.message, e))),
+        );
         if (response.status < 200 || response.status >= 300) {
-          return yield* fail(iri, `status ${response.status}`);
+          return yield* loadFailed(iri, `status ${response.status}`);
         }
         const mediaType = (response.headers['content-type'] ?? '').split(';')[0]!.trim();
         const byType = Serialization.parserFor(formats, mediaType);
@@ -144,11 +147,11 @@ export const loader = (
           ? byType
           : Serialization.parserForExtension(formats, extension);
         if (Option.isNone(parser)) {
-          return yield* fail(iri, `unsupported media type '${mediaType}'`);
+          return yield* loadFailed(iri, `unsupported media type '${mediaType}'`);
         }
         const parsed = yield* parser.value
           .parse(text, { baseIri: iri.value })
-          .pipe(Effect.mapError((e) => fail(iri, Serialization.formatError(e), e)));
+          .pipe(Effect.mapError((e) => loadFailed(iri, Serialization.formatError(e), e)));
         return parsed.dataset;
       }).pipe(Effect.withSpan('Federation.load', { attributes: { iri: iri.value } }));
   });

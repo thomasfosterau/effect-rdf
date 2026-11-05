@@ -4,6 +4,7 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
@@ -91,24 +92,28 @@ class Writer {
     }
   }
 
+  // Built once: `analyseTerm` runs for every term written.
+  private static readonly analyseTermOf = Match.fn(
+    (t: Model.N3Term, _writer: Writer, _f: Model.Formula, _position: string) => t,
+  ).pipe(
+    Match.withReturnType<void>(),
+    Match.tag('BlankNode', (t, _t, w, f, position) => {
+      const info = w.info(t.value);
+      info.formulas.add(f);
+      if (position === 'predicate') info.predicate = true;
+      else if (position !== 'subject') info.refs++;
+    }),
+    Match.tag('Collection', (t, _t, w, f) => {
+      for (const item of t.items) w.analyseTerm(item, f, 'item');
+    }),
+    Match.tag('Formula', (t, _t, w) => {
+      w.analyse(t);
+    }),
+    Match.orElse(() => undefined),
+  );
+
   private analyseTerm(t: Model.N3Term, f: Model.Formula, position: string): void {
-    switch (t._tag) {
-      case 'BlankNode': {
-        const info = this.info(t.value);
-        info.formulas.add(f);
-        if (position === 'predicate') info.predicate = true;
-        else if (position !== 'subject') info.refs++;
-        return;
-      }
-      case 'Collection':
-        for (const item of t.items) this.analyseTerm(item, f, 'item');
-        return;
-      case 'Formula':
-        this.analyse(t);
-        return;
-      default:
-        return;
-    }
+    Writer.analyseTermOf(t, this, f, position);
   }
 
   // ---------------------------------------------------------------------------
@@ -204,23 +209,26 @@ class Writer {
   // Terms
   // ---------------------------------------------------------------------------
 
+  // Built once: `term` runs for every term written.
+  private static readonly renderTerm = Match.fn(
+    (t: Model.N3Term, _writer: Writer, _depth: number) => t,
+  ).pipe(
+    Match.withReturnType<string>(),
+    Match.tag('NamedNode', (t, _t, w) => w.iri(t.value)),
+    Match.tag('BlankNode', (t, _t, w, depth) => w.blank(t, depth)),
+    Match.tag('Literal', (t, _t, w) => w.literal(t)),
+    Match.tag('Variable', (t, _t, w) => w.variable(t)),
+    Match.tag('Collection', (t, _t, w, depth) =>
+      Arr.isReadonlyArrayEmpty(t.items)
+        ? '()'
+        : `( ${t.items.map((i) => w.term(i, depth)).join(' ')} )`,
+    ),
+    Match.tag('Formula', (t, _t, w, depth) => w.formula(t, depth)),
+    Match.exhaustive,
+  );
+
   private term(t: Model.N3Term, depth: number): string {
-    switch (t._tag) {
-      case 'NamedNode':
-        return this.iri(t.value);
-      case 'BlankNode':
-        return this.blank(t, depth);
-      case 'Literal':
-        return this.literal(t);
-      case 'Variable':
-        return this.variable(t);
-      case 'Collection':
-        return Arr.isReadonlyArrayEmpty(t.items)
-          ? '()'
-          : `( ${t.items.map((i) => this.term(i, depth)).join(' ')} )`;
-      case 'Formula':
-        return this.formula(t, depth);
-    }
+    return Writer.renderTerm(t, this, depth);
   }
 
   private formula(f: Model.Formula, depth: number): string {

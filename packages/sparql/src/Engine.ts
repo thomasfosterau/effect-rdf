@@ -233,6 +233,91 @@ const dedupeQuads = <E>(quads: Stream.Stream<Term.Quad, E>): Stream.Stream<Term.
     });
   });
 
+const describeResources = (
+  terms: ReadonlyArray<Term.NamedNode | Term.Variable>,
+  solutions: Stream.Stream<B.Bindings, SparqlError>,
+  env: Evaluator.Env,
+): Stream.Stream<Term.Quad, SparqlError> => {
+  const constants = terms.filter((t): t is Term.NamedNode => t._tag === 'NamedNode');
+  const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
+  const resources: Stream.Stream<Term.GroundTerm, SparqlError> = Stream.concat(
+    Stream.fromIterable(constants),
+    Arr.isReadonlyArrayEmpty(vars)
+      ? Stream.empty
+      : Stream.flatMap(solutions, (b) =>
+          Stream.fromIterable(
+            vars.flatMap((v) => {
+              const t = b.map.get(v.value);
+              return t === undefined ? [] : [t];
+            }),
+          ),
+        ),
+  );
+  // Concise bounded description: outgoing triples, recursively through
+  // blank node objects.
+  const cbd = (
+    resource: Term.GroundTerm,
+    seen: Set<string>,
+  ): Stream.Stream<Term.Quad, SparqlError> =>
+    Stream.flatMap(Evaluator.matchQuads(env, { subject: resource }), (q) => {
+      const quad = new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph);
+      if (q.object._tag === 'BlankNode' && !seen.has(q.object.key)) {
+        seen.add(q.object.key);
+        return Stream.concat(Stream.succeed(quad), cbd(q.object, seen));
+      }
+      return Stream.succeed(quad);
+    });
+  return dedupeQuads(
+    Stream.suspend(() => {
+      const described = new Set<string>();
+      return Stream.flatMap(resources, (r) => {
+        if (described.has(r.key)) return Stream.empty;
+        described.add(r.key);
+        return cbd(r, new Set([r.key]));
+      });
+    }),
+  );
+};
+
+const updateFailed = (message: string) => Effect.fail(new UpdateError({ message }));
+
+const freshBlankNodes = (quads: ReadonlyArray<Term.Quad>): Array<Term.Quad> => {
+  const map = new Map<string, Term.BlankNode>();
+  return quads.map((q) =>
+    Term.mapTerms(q, (t) => {
+      if (t._tag !== 'BlankNode') return t;
+      let n = map.get(t.value);
+      if (n === undefined) map.set(t.value, (n = Term.blankNode()));
+      return n;
+    }),
+  );
+};
+
+const quadPatternsToAlgebra = (patterns: ReadonlyArray<Ast.QuadPattern>): Algebra.Operation => {
+  const byGraph = new Map<
+    string,
+    { graph: Ast.QuadPattern['graph']; triples: Array<Ast.TriplePattern> }
+  >();
+  for (const p of patterns) {
+    let entry = byGraph.get(p.graph.key);
+    if (entry === undefined) byGraph.set(p.graph.key, (entry = { graph: p.graph, triples: [] }));
+    entry.triples.push({
+      _tag: 'TriplePattern',
+      subject: p.subject,
+      predicate: p.predicate,
+      object: p.object,
+    });
+  }
+  const parts = Array.from(byGraph.values()).map(({ graph, triples }): Algebra.Operation =>
+    graph._tag === 'DefaultGraph'
+      ? Algebra.bgp(triples)
+      : { _tag: 'Graph', name: graph, input: Algebra.bgp(triples) },
+  );
+  return Arr.isReadonlyArrayEmpty(parts)
+    ? Algebra.unit
+    : parts.reduce((a, b) => Algebra.join(a, b));
+};
+
 /**
  * Creates the engine over a quad store.
  *
@@ -336,57 +421,14 @@ export const make = (
           } as const);
         }),
         Match.tag('Describe', (d) =>
-          Effect.succeed({ _tag: 'Graph', quads: describe(d.terms, solutions, env) } as const),
+          Effect.succeed({
+            _tag: 'Graph',
+            quads: describeResources(d.terms, solutions, env),
+          } as const),
         ),
         Match.exhaustive,
       );
     });
-
-  const describe = (
-    terms: ReadonlyArray<Term.NamedNode | Term.Variable>,
-    solutions: Stream.Stream<B.Bindings, SparqlError>,
-    env: Evaluator.Env,
-  ): Stream.Stream<Term.Quad, SparqlError> => {
-    const constants = terms.filter((t): t is Term.NamedNode => t._tag === 'NamedNode');
-    const vars = terms.filter((t): t is Term.Variable => t._tag === 'Variable');
-    const resources: Stream.Stream<Term.GroundTerm, SparqlError> = Stream.concat(
-      Stream.fromIterable(constants),
-      Arr.isReadonlyArrayEmpty(vars)
-        ? Stream.empty
-        : Stream.flatMap(solutions, (b) =>
-            Stream.fromIterable(
-              vars.flatMap((v) => {
-                const t = b.map.get(v.value);
-                return t === undefined ? [] : [t];
-              }),
-            ),
-          ),
-    );
-    // Concise bounded description: outgoing triples, recursively through
-    // blank node objects.
-    const cbd = (
-      resource: Term.GroundTerm,
-      seen: Set<string>,
-    ): Stream.Stream<Term.Quad, SparqlError> =>
-      Stream.flatMap(Evaluator.matchQuads(env, { subject: resource }), (q) => {
-        const quad = new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph);
-        if (q.object._tag === 'BlankNode' && !seen.has(q.object.key)) {
-          seen.add(q.object.key);
-          return Stream.concat(Stream.succeed(quad), cbd(q.object, seen));
-        }
-        return Stream.succeed(quad);
-      });
-    return dedupeQuads(
-      Stream.suspend(() => {
-        const described = new Set<string>();
-        return Stream.flatMap(resources, (r) => {
-          if (described.has(r.key)) return Stream.empty;
-          described.add(r.key);
-          return cbd(r, new Set([r.key]));
-        });
-      }),
-    );
-  };
 
   const select: SparqlEngineShape['select'] = (q, request) =>
     Effect.flatMap(query(q, request), (r) =>
@@ -411,8 +453,6 @@ export const make = (
 
   // --- updates ---------------------------------------------------------------
 
-  const fail = (message: string) => Effect.fail(new UpdateError({ message }));
-
   const graphExists = (g: Ast.GraphOrDefault) =>
     g._tag === 'DefaultGraph' ? Effect.succeed(true) : store.hasGraph(g);
 
@@ -427,7 +467,7 @@ export const make = (
         Match.tag('NamedNode', (graph) =>
           Effect.flatMap(store.hasGraph(graph), (exists): Effect.Effect<void, SparqlError> => {
             if (!exists)
-              return silent ? Effect.void : fail(`Graph <${graph.value}> does not exist`);
+              return silent ? Effect.void : updateFailed(`Graph <${graph.value}> does not exist`);
             return drop ? store.dropGraph(graph) : store.clear(graph);
           }),
         ),
@@ -445,13 +485,23 @@ export const make = (
       );
     });
 
-  const transfer = (op: Ast.TransferOperation) =>
+  const transfer = (
+    op: Ast.TransferOperation,
+  ): Effect.Effect<void, UpdateError | Store.StoreError> =>
+    op.source.key === op.destination.key
+      ? Effect.void
+      : Effect.flatMap(
+          graphExists(op.source),
+          (exists): Effect.Effect<void, UpdateError | Store.StoreError> =>
+            exists
+              ? copyGraph(op)
+              : op.silent
+                ? Effect.void
+                : updateFailed(`Graph <${op.source.value}> does not exist`),
+        );
+
+  const copyGraph = (op: Ast.TransferOperation) =>
     Effect.gen(function* () {
-      if (op.source.key === op.destination.key) return;
-      if (!(yield* graphExists(op.source))) {
-        if (op.silent) return;
-        return yield* fail(`Graph <${op.source.value}> does not exist`);
-      }
       const quads = yield* graphQuads(op.source);
       if (op._tag !== 'Add') {
         if (op.destination._tag === 'DefaultGraph') yield* store.clear(Term.defaultGraph);
@@ -466,18 +516,6 @@ export const make = (
         else yield* store.dropGraph(op.source);
       }
     });
-
-  const freshBlankNodes = (quads: ReadonlyArray<Term.Quad>): Array<Term.Quad> => {
-    const map = new Map<string, Term.BlankNode>();
-    return quads.map((q) =>
-      Term.mapTerms(q, (t) => {
-        if (t._tag !== 'BlankNode') return t;
-        let n = map.get(t.value);
-        if (n === undefined) map.set(t.value, (n = Term.blankNode()));
-        return n;
-      }),
-    );
-  };
 
   const modify = (
     op: Ast.ModifyOperation,
@@ -501,31 +539,6 @@ export const make = (
       yield* store.delete(deletes);
       yield* store.insert(inserts);
     });
-
-  const quadPatternsToAlgebra = (patterns: ReadonlyArray<Ast.QuadPattern>): Algebra.Operation => {
-    const byGraph = new Map<
-      string,
-      { graph: Ast.QuadPattern['graph']; triples: Array<Ast.TriplePattern> }
-    >();
-    for (const p of patterns) {
-      let entry = byGraph.get(p.graph.key);
-      if (entry === undefined) byGraph.set(p.graph.key, (entry = { graph: p.graph, triples: [] }));
-      entry.triples.push({
-        _tag: 'TriplePattern',
-        subject: p.subject,
-        predicate: p.predicate,
-        object: p.object,
-      });
-    }
-    const parts = Array.from(byGraph.values()).map(({ graph, triples }): Algebra.Operation =>
-      graph._tag === 'DefaultGraph'
-        ? Algebra.bgp(triples)
-        : { _tag: 'Graph', name: graph, input: Algebra.bgp(triples) },
-    );
-    return Arr.isReadonlyArrayEmpty(parts)
-      ? Algebra.unit
-      : parts.reduce((a, b) => Algebra.join(a, b));
-  };
 
   const executeOperation = (
     op: Ast.UpdateOperation,
@@ -554,7 +567,9 @@ export const make = (
       Match.tag('Load', (o) => {
         const loader = options.load;
         if (loader === undefined) {
-          return o.silent ? Effect.void : fail('LOAD is not supported (no loader configured)');
+          return o.silent
+            ? Effect.void
+            : updateFailed('LOAD is not supported (no loader configured)');
         }
         const destination: Term.Graph = o.destination ?? Term.defaultGraph;
         const load = Effect.flatMap(loader(o.source), (quads) =>
@@ -571,7 +586,7 @@ export const make = (
           exists
             ? o.silent
               ? Effect.void
-              : fail(`Graph <${o.graph.value}> already exists`)
+              : updateFailed(`Graph <${o.graph.value}> already exists`)
             : store.createGraph(o.graph),
         ),
       ),

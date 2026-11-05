@@ -9,6 +9,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import { ShExStructureError } from './ShExError.ts';
 import type * as ShExJ from './ShExJ.ts';
 import * as Predicate from 'effect/Predicate';
@@ -32,22 +33,14 @@ export interface SchemaIndex {
   readonly descendants: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
-const forEachShapeExprChild = (
+const forEachShapeExprChild: (
   e: ShExJ.ShapeExpr,
   f: (child: ShExJ.ShapeExprOrRef) => void,
-): void => {
-  switch (e.type) {
-    case 'ShapeAnd':
-    case 'ShapeOr':
-      e.shapeExprs.forEach(f);
-      break;
-    case 'ShapeNot':
-      f(e.shapeExpr);
-      break;
-    default:
-      break;
-  }
-};
+) => void = Match.fn((e: ShExJ.ShapeExpr, _f: (child: ShExJ.ShapeExprOrRef) => void) => e).pipe(
+  Match.when({ type: Match.is('ShapeAnd', 'ShapeOr') }, (e, _e, f) => e.shapeExprs.forEach(f)),
+  Match.when({ type: 'ShapeNot' }, (e, _e, f) => f(e.shapeExpr)),
+  Match.orElse(() => undefined),
+);
 
 /** Collects the labelled triple expressions of a shape expression tree. */
 const collectTripleExprs = (
@@ -183,6 +176,27 @@ interface Edge {
   readonly negative: boolean;
 }
 
+/** The cycles of a dependency graph, each rendered as `a -> b -> a`. */
+const cyclesOf = (graph: ReadonlyMap<string, ReadonlyArray<string>>): ReadonlyArray<string> => {
+  const state = new Map<string, number>();
+  const found: Array<string> = [];
+  const visit = (n: string, path: Array<string>): void => {
+    const s = state.get(n);
+    if (s === 2) return;
+    if (s === 1) {
+      found.push([...path.slice(path.indexOf(n)), n].join(' -> '));
+      return;
+    }
+    state.set(n, 1);
+    path.push(n);
+    for (const m of graph.get(n) ?? []) visit(m, path);
+    path.pop();
+    state.set(n, 2);
+  };
+  for (const n of graph.keys()) visit(n, []);
+  return found;
+};
+
 /**
  * Returns the structural problems of a schema (empty when it is
  * well-formed). When `allowUnresolved` is set, references to undeclared
@@ -242,24 +256,21 @@ export const problems = (
       if (isDirect) direct.get(from)!.push(e);
       return;
     }
-    switch (e.type) {
-      case 'ShapeAnd':
-      case 'ShapeOr':
-        for (const c of e.shapeExprs) walkShape(from, c, negative, isDirect, visitingIncludes);
-        return;
-      case 'ShapeNot':
-        walkShape(from, e.shapeExpr, true, isDirect, visitingIncludes);
-        return;
-      case 'Shape': {
-        for (const x of e.extends ?? []) walkShape(from, x, negative, false, visitingIncludes);
-        const extra = new Set(e.extra ?? []);
-        if (e.expression !== undefined)
-          walkTriple(from, e.expression, negative, extra, visitingIncludes);
-        return;
-      }
-      default:
-        return;
-    }
+    Match.value(e).pipe(
+      Match.discriminator('type')('ShapeAnd', 'ShapeOr', (expr) => {
+        for (const c of expr.shapeExprs) walkShape(from, c, negative, isDirect, visitingIncludes);
+      }),
+      Match.discriminator('type')('ShapeNot', (expr) =>
+        walkShape(from, expr.shapeExpr, true, isDirect, visitingIncludes),
+      ),
+      Match.discriminator('type')('Shape', (expr) => {
+        for (const x of expr.extends ?? []) walkShape(from, x, negative, false, visitingIncludes);
+        const extra = new Set(expr.extra ?? []);
+        if (expr.expression !== undefined)
+          walkTriple(from, expr.expression, negative, extra, visitingIncludes);
+      }),
+      Match.orElse(() => undefined),
+    );
   };
   const walkTriple = (
     from: string,
@@ -305,26 +316,7 @@ export const problems = (
   }
 
   // Direct self-reference cycles.
-  const cyclic = (graph: ReadonlyMap<string, ReadonlyArray<string>>): ReadonlyArray<string> => {
-    const state = new Map<string, number>();
-    const found: Array<string> = [];
-    const visit = (n: string, path: Array<string>): void => {
-      const s = state.get(n);
-      if (s === 2) return;
-      if (s === 1) {
-        found.push([...path.slice(path.indexOf(n)), n].join(' -> '));
-        return;
-      }
-      state.set(n, 1);
-      path.push(n);
-      for (const m of graph.get(n) ?? []) visit(m, path);
-      path.pop();
-      state.set(n, 2);
-    };
-    for (const n of graph.keys()) visit(n, []);
-    return found;
-  };
-  for (const c of cyclic(direct)) errors.push(`shape expression refers to itself: ${c}`);
+  for (const c of cyclesOf(direct)) errors.push(`shape expression refers to itself: ${c}`);
 
   // Negation requirement: no strongly connected component contains a negative edge.
   const sccOf = tarjan(Array.from(deps.keys()), (n) => (deps.get(n) ?? []).map((e) => e.to));
@@ -345,7 +337,7 @@ export const problems = (
     }
     extendsGraph.set(d.id, parents);
   }
-  for (const c of cyclic(extendsGraph)) errors.push(`cyclic extension hierarchy: ${c}`);
+  for (const c of cyclesOf(extendsGraph)) errors.push(`cyclic extension hierarchy: ${c}`);
   return Array.from(new Set(errors));
 };
 

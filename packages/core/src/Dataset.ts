@@ -442,14 +442,16 @@ const uniqueTerms = <T extends Term.Term>(terms: ReadonlyArray<T>): ReadonlyArra
   return Array.from(seen.values());
 };
 
-const termsAt = <T extends Term.Term>(self: Dataset, i: number): ReadonlyArray<T> =>
-  Array.from(HashMap.values(self.spog[i]!), (inner) => {
+const termsAt = <T extends Term.Term>(
+  self: Dataset,
+  i: number,
+  pick: (q: Term.Quad) => T,
+): ReadonlyArray<T> =>
+  Array.from(HashMap.values(self.spog[i]!), (inner) =>
     // SAFETY: an inner map is removed from the index when its last quad goes, so it always holds
     // one.
-    const q = HashMap.values(inner).next().value as Term.Quad;
-    // SAFETY: position `i` (0–3) selects the term kind `T` the caller asked for.
-    return [q.subject, q.predicate, q.object, q.graph][i] as T;
-  });
+    pick(HashMap.values(inner).next().value as Term.Quad),
+  );
 
 /**
  * All distinct subjects.
@@ -457,7 +459,8 @@ const termsAt = <T extends Term.Term>(self: Dataset, i: number): ReadonlyArray<T
  * @since 0.1.0
  * @category queries
  */
-export const subjects = (self: Dataset): ReadonlyArray<Term.Subject> => termsAt(self, 0);
+export const subjects = (self: Dataset): ReadonlyArray<Term.Subject> =>
+  termsAt(self, 0, (q) => q.subject);
 
 /**
  * All distinct predicates.
@@ -465,7 +468,8 @@ export const subjects = (self: Dataset): ReadonlyArray<Term.Subject> => termsAt(
  * @since 0.1.0
  * @category queries
  */
-export const predicates = (self: Dataset): ReadonlyArray<Term.Predicate> => termsAt(self, 1);
+export const predicates = (self: Dataset): ReadonlyArray<Term.Predicate> =>
+  termsAt(self, 1, (q) => q.predicate);
 
 /**
  * All distinct objects.
@@ -473,7 +477,8 @@ export const predicates = (self: Dataset): ReadonlyArray<Term.Predicate> => term
  * @since 0.1.0
  * @category queries
  */
-export const objects = (self: Dataset): ReadonlyArray<Term.Object> => termsAt(self, 2);
+export const objects = (self: Dataset): ReadonlyArray<Term.Object> =>
+  termsAt(self, 2, (q) => q.object);
 
 /**
  * All distinct graph names (including the default graph if it is non-empty).
@@ -481,7 +486,8 @@ export const objects = (self: Dataset): ReadonlyArray<Term.Object> => termsAt(se
  * @since 0.1.0
  * @category queries
  */
-export const graphs = (self: Dataset): ReadonlyArray<Term.Graph> => termsAt(self, 3);
+export const graphs = (self: Dataset): ReadonlyArray<Term.Graph> =>
+  termsAt(self, 3, (q) => q.graph);
 
 /**
  * The quads of one graph.
