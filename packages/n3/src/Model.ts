@@ -64,6 +64,15 @@ abstract class N3Base implements Equal.Equal, Pipeable {
 
   protected abstract computeKey(): string;
 
+  /**
+   * Statements, collections and formulas override this to combine their
+   * parts' hashes, so that a formula deduplicating its statements builds no
+   * key; whatever the override, equal keys give equal hashes.
+   */
+  protected computeHash(): number {
+    return Hash.string(this.key);
+  }
+
   /** RDF/JS-style alias of `_tag`. */
   get termType(): this['_tag'] {
     return this._tag;
@@ -79,7 +88,7 @@ abstract class N3Base implements Equal.Equal, Pipeable {
   }
 
   [Hash.symbol](): number {
-    return (this.#hash ??= Hash.string(this.key));
+    return (this.#hash ??= this.computeHash());
   }
 
   pipe() {
@@ -113,6 +122,9 @@ export class Collection extends N3Base {
     super();
     this.items = items;
   }
+  protected override computeHash(): number {
+    return this.items.reduce((h, item) => Hash.combine(h, item[Hash.symbol]()), Hash.string('()'));
+  }
   protected computeKey(): string {
     return Arr.isReadonlyArrayEmpty(this.items)
       ? '()'
@@ -142,15 +154,16 @@ export class Statement<
     this.predicate = predicate;
     this.object = object;
   }
+  protected override computeHash(): number {
+    return Hash.combine(
+      Hash.combine(this.subject[Hash.symbol](), this.predicate[Hash.symbol]()),
+      this.object[Hash.symbol](),
+    );
+  }
   protected computeKey(): string {
     return `${this.subject.key} ${this.predicate.key} ${this.object.key}`;
   }
 }
-
-const statementHash = (s: Statement): number =>
-  Hash.combine(s.object[Hash.symbol]())(
-    Hash.combine(s.predicate[Hash.symbol]())(s.subject[Hash.symbol]()),
-  );
 
 /** Whether two statements are equal: their terms have the same keys. */
 const sameStatement = (a: Statement, b: Statement): boolean =>
@@ -159,9 +172,39 @@ const sameStatement = (a: Statement, b: Statement): boolean =>
   a.object.key === b.object.key;
 
 /**
+ * The statements without duplicates, keeping the first of each: by their
+ * structural hashes, comparing keys only when two hashes are equal, so that
+ * no key is built for statements that differ.
+ */
+const deduplicate = (all: ReadonlyArray<Statement>): ReadonlyArray<Statement> => {
+  const n = all.length;
+  if (n < 2) return all;
+  // Open addressing over a power-of-two table at most half full: each slot holds a statement's
+  // hash and its position + 1 (0 when empty), probed linearly
+  const mask = 2 ** Math.ceil(Math.log2(n * 2)) - 1;
+  const hashes = new Int32Array(mask + 1);
+  const slots = new Int32Array(mask + 1);
+  const unique: Array<Statement> = [];
+  all.forEach((s, k) => {
+    const hash = s[Hash.symbol]() | 0;
+    let i = hash & mask;
+    let slot = slots[i] ?? 0;
+    while (slot !== 0) {
+      if (hashes[i] === hash && sameStatement(s, all[slot - 1] ?? s)) return;
+      i = (i + 1) & mask;
+      slot = slots[i] ?? 0;
+    }
+    hashes[i] = hash;
+    slots[i] = k + 1;
+    unique.push(s);
+  });
+  return unique.length === n ? all : unique;
+};
+
+/**
  * An N3 formula (graph term): an unordered set of statements, written
- * `{ ... }`. Duplicate statements are removed on construction, and equality
- * is set equality of the statements (blank node labels are compared
+ * `{ ... }`. Duplicate statements are removed (when the statements are first
+ * read), and equality is set equality of the statements (blank node labels are compared
  * literally; use `Isomorphism.isomorphic` for a blank-node-aware comparison).
  *
  * @since 0.1.0
@@ -169,32 +212,34 @@ const sameStatement = (a: Statement, b: Statement): boolean =>
  */
 export class Formula extends N3Base {
   readonly _tag = 'Formula' as const;
-  readonly statements: ReadonlyArray<Statement>;
+  /** The statements as given (copied), then without duplicates once first read. */
+  #statements: ReadonlyArray<Statement>;
+  #deduplicated = false;
   constructor(statements: Iterable<Statement>) {
     super();
-    const all = Arr.fromIterable(statements);
-    // A formula of one statement has nothing to deduplicate, and its key is left uncomputed
-    if (all.length < 2) {
-      this.statements = all === statements ? all.slice() : all;
-      return;
+    this.#statements = Array.from(statements);
+  }
+  /**
+   * The statements, without duplicates, in the order first given. They are
+   * deduplicated the first time they are read, not when the formula is
+   * made, so a formula that is never read (a parse whose result is only
+   * checked for errors, a formula a rule discards) costs nothing to dedupe.
+   */
+  get statements(): ReadonlyArray<Statement> {
+    if (!this.#deduplicated) {
+      this.#statements = deduplicate(this.#statements);
+      this.#deduplicated = true;
     }
-    // By the terms' hashes (each cached with its term), comparing keys only within a bucket, so
-    // that no statement key is built for the check
-    const buckets = new Map<number, Array<Statement>>();
-    const unique: Array<Statement> = [];
-    for (const s of all) {
-      const hash = statementHash(s);
-      const bucket = buckets.get(hash);
-      if (bucket === undefined) buckets.set(hash, [s]);
-      else if (bucket.some((t) => sameStatement(s, t))) continue;
-      else bucket.push(s);
-      unique.push(s);
-    }
-    this.statements = unique;
+    return this.#statements;
+  }
+  /** The sum of the statements' hashes: the same for the same set, whatever the order. */
+  protected override computeHash(): number {
+    return Hash.optimize(this.statements.reduce((h, st) => (h + st[Hash.symbol]()) | 0, 0x7b7d));
   }
   /** The number of statements in the formula. */
   get size(): number {
-    return this.statements.length;
+    // Fewer than two statements cannot hold a duplicate
+    return this.#statements.length < 2 ? this.#statements.length : this.statements.length;
   }
   protected computeKey(): string {
     if (Arr.isReadonlyArrayEmpty(this.statements)) return '{}';
