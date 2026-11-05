@@ -147,6 +147,17 @@ export class Statement<
   }
 }
 
+const statementHash = (s: Statement): number =>
+  Hash.combine(s.object[Hash.symbol]())(
+    Hash.combine(s.predicate[Hash.symbol]())(s.subject[Hash.symbol]()),
+  );
+
+/** Whether two statements are equal: their terms have the same keys. */
+const sameStatement = (a: Statement, b: Statement): boolean =>
+  a.subject.key === b.subject.key &&
+  a.predicate.key === b.predicate.key &&
+  a.object.key === b.object.key;
+
 /**
  * An N3 formula (graph term): an unordered set of statements, written
  * `{ ... }`. Duplicate statements are removed on construction, and equality
@@ -167,11 +178,16 @@ export class Formula extends N3Base {
       this.statements = all === statements ? all.slice() : all;
       return;
     }
-    const seen = new Set<string>();
+    // By the terms' hashes (each cached with its term), comparing keys only within a bucket, so
+    // that no statement key is built for the check
+    const buckets = new Map<number, Array<Statement>>();
     const unique: Array<Statement> = [];
     for (const s of all) {
-      if (seen.has(s.key)) continue;
-      seen.add(s.key);
+      const hash = statementHash(s);
+      const bucket = buckets.get(hash);
+      if (bucket === undefined) buckets.set(hash, [s]);
+      else if (bucket.some((t) => sameStatement(s, t))) continue;
+      else bucket.push(s);
       unique.push(s);
     }
     this.statements = unique;
