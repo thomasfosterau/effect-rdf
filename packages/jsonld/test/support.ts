@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as DocumentLoader from '../src/DocumentLoader.ts';
@@ -39,24 +40,20 @@ export const toJsonText = (value: Json, space?: number): string =>
 // N-Quads
 // -----------------------------------------------------------------------------
 
+const echar: (c: string) => string = Match.type<string>().pipe(
+  Match.when('t', () => '\t'),
+  Match.when('n', () => '\n'),
+  Match.when('r', () => '\r'),
+  Match.when('b', () => '\b'),
+  Match.when('f', () => '\f'),
+  Match.orElse((c) => c),
+);
+
 const unescape = (s: string): string =>
   s.replace(/\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))/g, (_, u, U, c) => {
     if (u !== undefined) return String.fromCodePoint(parseInt(u, 16));
     if (U !== undefined) return String.fromCodePoint(parseInt(U, 16));
-    switch (c) {
-      case 't':
-        return '\t';
-      case 'n':
-        return '\n';
-      case 'r':
-        return '\r';
-      case 'b':
-        return '\b';
-      case 'f':
-        return '\f';
-      default:
-        return c;
-    }
+    return echar(c);
   });
 
 const TERM =

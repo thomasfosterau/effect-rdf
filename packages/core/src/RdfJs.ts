@@ -6,6 +6,7 @@
  *
  * @since 0.1.0
  */
+import * as Match from 'effect/Match';
 import * as Term from './Term.ts';
 
 /**
@@ -43,39 +44,42 @@ export interface RdfJsQuad {
   readonly graph: RdfJsTerm;
 }
 
+// Built once: `fromTerm` runs for every term of every quad converted.
+const fromTermMatch: (term: RdfJsTerm) => Term.Term = Match.type<RdfJsTerm>().pipe(
+  Match.withReturnType<Term.Term>(),
+  Match.when({ termType: 'NamedNode' }, (term) => new Term.NamedNode(term.value)),
+  Match.when({ termType: 'BlankNode' }, (term) => new Term.BlankNode(term.value)),
+  Match.when({ termType: 'Literal' }, (term) =>
+    term.language !== ''
+      ? Term.literal(term.value, {
+          language: term.language,
+          direction:
+            term.direction === 'ltr' || term.direction === 'rtl' ? term.direction : undefined,
+        })
+      : Term.literal(term.value, new Term.NamedNode(term.datatype.value)),
+  ),
+  Match.when({ termType: 'Variable' }, (term) => new Term.Variable(term.value)),
+  Match.when({ termType: 'DefaultGraph' }, () => Term.defaultGraph),
+  // SAFETY: an RDF/JS quad term's components are a subject, a predicate and an object.
+  Match.when(
+    { termType: 'Quad' },
+    (term) =>
+      new Term.Triple(
+        fromTerm(term.subject) as Term.Subject,
+        fromTerm(term.predicate) as Term.Predicate,
+        fromTerm(term.object) as Term.Object,
+      ),
+  ),
+  Match.exhaustive,
+);
+
 /**
  * Converts an RDF/JS term. Quads appearing as terms become triple terms.
  *
  * @since 0.1.0
  * @category conversions
  */
-export const fromTerm = (term: RdfJsTerm): Term.Term => {
-  switch (term.termType) {
-    case 'NamedNode':
-      return new Term.NamedNode(term.value);
-    case 'BlankNode':
-      return new Term.BlankNode(term.value);
-    case 'Literal':
-      return term.language !== ''
-        ? Term.literal(term.value, {
-            language: term.language,
-            direction:
-              term.direction === 'ltr' || term.direction === 'rtl' ? term.direction : undefined,
-          })
-        : Term.literal(term.value, new Term.NamedNode(term.datatype.value));
-    case 'Variable':
-      return new Term.Variable(term.value);
-    case 'DefaultGraph':
-      return Term.defaultGraph;
-    case 'Quad':
-      // SAFETY: an RDF/JS quad term's components are a subject, a predicate and an object.
-      return new Term.Triple(
-        fromTerm(term.subject) as Term.Subject,
-        fromTerm(term.predicate) as Term.Predicate,
-        fromTerm(term.object) as Term.Object,
-      );
-  }
-};
+export const fromTerm = (term: RdfJsTerm): Term.Term => fromTermMatch(term);
 
 /**
  * Converts an RDF/JS quad to a `Quad`.
@@ -92,39 +96,39 @@ export const fromQuad = (quad: RdfJsQuad): Term.Quad =>
     fromTerm(quad.graph) as Term.Graph,
   );
 
+// Built once: `toTerm` runs for every term of every quad converted.
+const toTermMatch: (term: Term.Term) => RdfJsTerm = Match.type<Term.Term>().pipe(
+  Match.withReturnType<RdfJsTerm>(),
+  Match.tag('NamedNode', 'BlankNode', 'Variable', (term) => ({
+    termType: term._tag,
+    value: term.value,
+  })),
+  Match.tag('DefaultGraph', () => ({ termType: 'DefaultGraph', value: '' })),
+  Match.tag('Literal', (term) => ({
+    termType: 'Literal',
+    value: term.value,
+    language: term.language,
+    direction: term.direction ?? '',
+    datatype: { termType: 'NamedNode', value: term.datatype.value },
+  })),
+  Match.tag('Triple', (term) => ({
+    termType: 'Quad',
+    value: '',
+    subject: toTerm(term.subject),
+    predicate: toTerm(term.predicate),
+    object: toTerm(term.object),
+    graph: { termType: 'DefaultGraph', value: '' },
+  })),
+  Match.exhaustive,
+);
+
 /**
  * Converts a term to a plain RDF/JS term object.
  *
  * @since 0.1.0
  * @category conversions
  */
-export const toTerm = (term: Term.Term): RdfJsTerm => {
-  switch (term._tag) {
-    case 'NamedNode':
-    case 'BlankNode':
-    case 'Variable':
-      return { termType: term._tag, value: term.value };
-    case 'DefaultGraph':
-      return { termType: 'DefaultGraph', value: '' };
-    case 'Literal':
-      return {
-        termType: 'Literal',
-        value: term.value,
-        language: term.language,
-        direction: term.direction ?? '',
-        datatype: { termType: 'NamedNode', value: term.datatype.value },
-      };
-    case 'Triple':
-      return {
-        termType: 'Quad',
-        value: '',
-        subject: toTerm(term.subject),
-        predicate: toTerm(term.predicate),
-        object: toTerm(term.object),
-        graph: { termType: 'DefaultGraph', value: '' },
-      };
-  }
-};
+export const toTerm = (term: Term.Term): RdfJsTerm => toTermMatch(term);
 
 /**
  * Converts a quad to a plain RDF/JS quad object.

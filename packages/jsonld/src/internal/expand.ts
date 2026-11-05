@@ -4,6 +4,7 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import {
   type ActiveContext,
   applyTypeScopedContexts,
@@ -219,6 +220,160 @@ const expandObject = (
   options: ExpandOptions,
 ): void => {
   const nests: Array<string> = [];
+  // Built once per object: runs for every keyword key (13.4). It returns the expanded value
+  // to store under the keyword, or `undefined` when there is nothing to store.
+  const expandKeyword = Match.fn(
+    (expandedProperty: string, _key: string, _value: Json) => expandedProperty,
+  ).pipe(
+    Match.withReturnType<Json>(),
+    Match.when('@id', (_p, _ep, _key, value) => {
+      if (isString(value)) return expandIri(env, active, value, false, true);
+      if (
+        options.frameExpansion &&
+        isObject(value) &&
+        Arr.isReadonlyArrayEmpty(Object.keys(value))
+      ) {
+        return [value];
+      }
+      if (options.frameExpansion && Array.isArray(value) && value.every(isString)) {
+        return value.map((v) => expandIri(env, active, v, false, true));
+      }
+      return fail('invalid @id value', stringifyJson(value));
+    }),
+    Match.when('@type', (_p, _ep, _key, value) => {
+      let expandedValue: Json = undefined;
+      if (
+        options.frameExpansion &&
+        isObject(value) &&
+        Arr.isReadonlyArrayEmpty(Object.keys(value))
+      ) {
+        expandedValue = value;
+      } else if (
+        options.frameExpansion &&
+        isObject(value) &&
+        '@default' in value &&
+        Object.keys(value).length === 1
+      ) {
+        expandedValue = {
+          '@default': expandIri(env, typeScoped, value['@default'], true, true),
+        };
+      } else if (isString(value)) {
+        expandedValue = expandIri(env, typeScoped, value, true, true);
+      } else if (Array.isArray(value) && value.every(isString)) {
+        expandedValue = value.map((v) => expandIri(env, typeScoped, v, true, true));
+      } else {
+        fail('invalid type value', stringifyJson(value));
+      }
+      if ('@type' in result) {
+        expandedValue = [...asArray(result['@type']), ...asArray(expandedValue)];
+      }
+      return expandedValue;
+    }),
+    Match.when('@graph', (_p, _ep, _key, value) =>
+      asArray(expandElement(env, active, '@graph', value, baseUrl, options)),
+    ),
+    Match.when('@included', (_p, _ep, _key, value) => {
+      if (env.processingMode === 'json-ld-1.0') return undefined;
+      const expandedValue = asArray(
+        expandElement(env, active, activeProperty, value, baseUrl, options),
+      );
+      for (const v of expandedValue) {
+        if (!isObject(v) || '@value' in v || '@list' in v || '@set' in v) {
+          fail('invalid @included value');
+        }
+      }
+      return '@included' in result ? [...result['@included'], ...expandedValue] : expandedValue;
+    }),
+    Match.when('@value', (_p, _ep, _key, value) => {
+      let expandedValue: Json = undefined;
+      if (inputType === '@json') {
+        if (env.processingMode === 'json-ld-1.0') fail('invalid value object value');
+        expandedValue = value;
+      } else if (value === null || isScalar(value)) {
+        expandedValue = value;
+      } else if (
+        options.frameExpansion &&
+        (isEmptyObject(value) || (Array.isArray(value) && value.every(isScalar)))
+      ) {
+        expandedValue = value;
+      } else {
+        fail('invalid value object value');
+      }
+      if (expandedValue === null) {
+        result['@value'] = null;
+        return undefined;
+      }
+      return expandedValue;
+    }),
+    Match.when('@language', (_p, _ep, _key, value) => {
+      if (isString(value)) return value;
+      if (options.frameExpansion && isFrameStringValue(value)) return value;
+      return fail('invalid language-tagged string');
+    }),
+    Match.when('@direction', (_p, _ep, _key, value) => {
+      if (env.processingMode === 'json-ld-1.0') return undefined;
+      if (value === 'ltr' || value === 'rtl') return value;
+      if (options.frameExpansion && isFrameStringValue(value)) return value;
+      return fail('invalid base direction');
+    }),
+    Match.when('@index', (_p, _ep, _key, value) => {
+      if (!isString(value)) fail('invalid @index value');
+      return value;
+    }),
+    Match.when('@list', (_p, _ep, _key, value) => {
+      if (activeProperty === null || activeProperty === '@graph') return undefined;
+      const expandedValue = asArray(
+        expandElement(env, active, activeProperty, value, baseUrl, options),
+      );
+      if (env.processingMode === 'json-ld-1.0' && expandedValue.some(isListObject)) {
+        fail('list of lists');
+      }
+      return expandedValue;
+    }),
+    Match.when('@set', (_p, _ep, _key, value) =>
+      expandElement(env, active, activeProperty, value, baseUrl, options),
+    ),
+    Match.when('@reverse', (_p, _ep, _key, value) => {
+      if (!isObject(value)) fail('invalid @reverse value');
+      const ev = expandElement(env, active, '@reverse', value, baseUrl, options);
+      if (isObject(ev)) {
+        if ('@reverse' in ev) {
+          // SAFETY: an expanded `@reverse` value is a JSON object of reverse properties.
+          for (const [property, items] of Object.entries(ev['@reverse'] as JsonObject)) {
+            if (!hasOwn(result, property)) result[property] = [];
+            result[property].push(...asArray(items));
+          }
+        }
+        const others = Object.keys(ev).filter((k) => k !== '@reverse');
+        if (Arr.isReadonlyArrayNonEmpty(others)) {
+          const reverseMap: JsonObject = getOrInit(result, '@reverse', () => ({}));
+          for (const property of others) {
+            for (const item of asArray(ev[property])) {
+              if (isValueObject(item) || isListObject(item)) {
+                fail('invalid reverse property value');
+              }
+              getOrInit(reverseMap, property, () => []).push(item);
+            }
+          }
+        }
+      }
+      return undefined;
+    }),
+    Match.when('@nest', (_p, _ep, key, _value) => {
+      nests.push(key);
+      return undefined;
+    }),
+    Match.when('@default', (_p, _ep, _key, value) =>
+      options.frameExpansion
+        ? expandElement(env, active, activeProperty, value, baseUrl, options)
+        : undefined,
+    ),
+    Match.when(
+      Match.is('@embed', '@explicit', '@omitDefault', '@requireAll'),
+      (_p, _ep, _key, value) => (options.frameExpansion ? asArray(value) : undefined),
+    ),
+    Match.orElse(() => undefined),
+  );
   const keys = options.ordered
     ? Arr.sort(Object.keys(element), compareStrings)
     : Object.keys(element);
@@ -252,169 +407,7 @@ const expandObject = (
       ) {
         fail('colliding keywords', expandedProperty);
       }
-      let expandedValue: Json = undefined;
-      switch (expandedProperty) {
-        case '@id': {
-          if (isString(value)) {
-            expandedValue = expandIri(env, active, value, false, true);
-          } else if (
-            options.frameExpansion &&
-            isObject(value) &&
-            Arr.isReadonlyArrayEmpty(Object.keys(value))
-          ) {
-            expandedValue = [value];
-          } else if (options.frameExpansion && Array.isArray(value) && value.every(isString)) {
-            expandedValue = value.map((v) => expandIri(env, active, v, false, true));
-          } else {
-            fail('invalid @id value', stringifyJson(value));
-          }
-          break;
-        }
-        case '@type': {
-          if (
-            options.frameExpansion &&
-            isObject(value) &&
-            Arr.isReadonlyArrayEmpty(Object.keys(value))
-          ) {
-            expandedValue = value;
-          } else if (
-            options.frameExpansion &&
-            isObject(value) &&
-            '@default' in value &&
-            Object.keys(value).length === 1
-          ) {
-            expandedValue = {
-              '@default': expandIri(env, typeScoped, value['@default'], true, true),
-            };
-          } else if (isString(value)) {
-            expandedValue = expandIri(env, typeScoped, value, true, true);
-          } else if (Array.isArray(value) && value.every(isString)) {
-            expandedValue = value.map((v) => expandIri(env, typeScoped, v, true, true));
-          } else {
-            fail('invalid type value', stringifyJson(value));
-          }
-          if ('@type' in result) {
-            expandedValue = [...asArray(result['@type']), ...asArray(expandedValue)];
-          }
-          break;
-        }
-        case '@graph': {
-          expandedValue = asArray(expandElement(env, active, '@graph', value, baseUrl, options));
-          break;
-        }
-        case '@included': {
-          if (env.processingMode === 'json-ld-1.0') continue;
-          expandedValue = asArray(
-            expandElement(env, active, activeProperty, value, baseUrl, options),
-          );
-          for (const v of expandedValue) {
-            if (!isObject(v) || '@value' in v || '@list' in v || '@set' in v) {
-              fail('invalid @included value');
-            }
-          }
-          if ('@included' in result) expandedValue = [...result['@included'], ...expandedValue];
-          break;
-        }
-        case '@value': {
-          if (inputType === '@json') {
-            if (env.processingMode === 'json-ld-1.0') fail('invalid value object value');
-            expandedValue = value;
-          } else if (value === null || isScalar(value)) {
-            expandedValue = value;
-          } else if (
-            options.frameExpansion &&
-            (isEmptyObject(value) || (Array.isArray(value) && value.every(isScalar)))
-          ) {
-            expandedValue = value;
-          } else {
-            fail('invalid value object value');
-          }
-          if (expandedValue === null) {
-            result['@value'] = null;
-            continue;
-          }
-          break;
-        }
-        case '@language': {
-          if (isString(value)) expandedValue = value;
-          else if (options.frameExpansion && isFrameStringValue(value)) {
-            expandedValue = value;
-          } else fail('invalid language-tagged string');
-          break;
-        }
-        case '@direction': {
-          if (env.processingMode === 'json-ld-1.0') continue;
-          if (value === 'ltr' || value === 'rtl') expandedValue = value;
-          else if (options.frameExpansion && isFrameStringValue(value)) {
-            expandedValue = value;
-          } else fail('invalid base direction');
-          break;
-        }
-        case '@index': {
-          if (!isString(value)) fail('invalid @index value');
-          expandedValue = value;
-          break;
-        }
-        case '@list': {
-          if (activeProperty === null || activeProperty === '@graph') continue;
-          expandedValue = asArray(
-            expandElement(env, active, activeProperty, value, baseUrl, options),
-          );
-          if (env.processingMode === 'json-ld-1.0' && expandedValue.some(isListObject)) {
-            fail('list of lists');
-          }
-          break;
-        }
-        case '@set': {
-          expandedValue = expandElement(env, active, activeProperty, value, baseUrl, options);
-          break;
-        }
-        case '@reverse': {
-          if (!isObject(value)) fail('invalid @reverse value');
-          const ev = expandElement(env, active, '@reverse', value, baseUrl, options);
-          if (isObject(ev)) {
-            if ('@reverse' in ev) {
-              // SAFETY: an expanded `@reverse` value is a JSON object of reverse properties.
-              for (const [property, items] of Object.entries(ev['@reverse'] as JsonObject)) {
-                if (!hasOwn(result, property)) result[property] = [];
-                result[property].push(...asArray(items));
-              }
-            }
-            const others = Object.keys(ev).filter((k) => k !== '@reverse');
-            if (Arr.isReadonlyArrayNonEmpty(others)) {
-              const reverseMap: JsonObject = getOrInit(result, '@reverse', () => ({}));
-              for (const property of others) {
-                for (const item of asArray(ev[property])) {
-                  if (isValueObject(item) || isListObject(item)) {
-                    fail('invalid reverse property value');
-                  }
-                  getOrInit(reverseMap, property, () => []).push(item);
-                }
-              }
-            }
-          }
-          continue;
-        }
-        case '@nest': {
-          nests.push(key);
-          continue;
-        }
-        case '@default': {
-          if (options.frameExpansion) {
-            expandedValue = expandElement(env, active, activeProperty, value, baseUrl, options);
-          }
-          break;
-        }
-        case '@embed':
-        case '@explicit':
-        case '@omitDefault':
-        case '@requireAll': {
-          if (options.frameExpansion) expandedValue = asArray(value);
-          break;
-        }
-        default:
-          break;
-      }
+      const expandedValue = expandKeyword(expandedProperty, key, value);
       if (expandedValue !== undefined) result[expandedProperty] = expandedValue;
       continue;
     }

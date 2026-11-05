@@ -9,6 +9,7 @@
  * @since 0.1.0
  */
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Match from 'effect/Match';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const RDF_LANG_STRING = `${RDF}langString`;
@@ -177,6 +178,19 @@ export const decodeUchar = (input: string, index: number): DecodedEscape => {
   return { _tag: 'Ok', value: String.fromCodePoint(value), length: digits + 2 };
 };
 
+// Built once: `decodeEchar` runs for every backslash escape a lexer reads.
+const echar = Match.type<number>().pipe(
+  Match.when(0x74, () => '\t'),
+  Match.when(0x62, () => '\b'),
+  Match.when(0x6e, () => '\n'),
+  Match.when(0x72, () => '\r'),
+  Match.when(0x66, () => '\f'),
+  Match.when(0x22, () => '"'),
+  Match.when(0x27, () => "'"),
+  Match.when(0x5c, () => '\\'),
+  Match.orElse(() => undefined),
+);
+
 /**
  * Decodes the string-escape (`ECHAR`) character following a backslash, if
  * it is one of `t b n r f " ' \`.
@@ -184,28 +198,7 @@ export const decodeUchar = (input: string, index: number): DecodedEscape => {
  * @since 0.1.0
  * @category escapes
  */
-export const decodeEchar = (c: number): string | undefined => {
-  switch (c) {
-    case 0x74:
-      return '\t';
-    case 0x62:
-      return '\b';
-    case 0x6e:
-      return '\n';
-    case 0x72:
-      return '\r';
-    case 0x66:
-      return '\f';
-    case 0x22:
-      return '"';
-    case 0x27:
-      return "'";
-    case 0x5c:
-      return '\\';
-    default:
-      return undefined;
-  }
-};
+export const decodeEchar = (c: number): string | undefined => echar(c);
 
 /**
  * A language tag with an optional base direction.
@@ -306,6 +299,21 @@ export const formatLiteral = (literal: Term.Literal): string => {
   return `${lexical}^^${formatIri(literal.datatype.value)}`;
 };
 
+// Built once: `formatTerm` runs for every term a serializer writes.
+const formatTermMatch = Match.type<Term.Term>().pipe(
+  Match.tag('NamedNode', (term) => formatIri(term.value)),
+  Match.tag('BlankNode', (term) => `_:${blankNodeLabel(term.value)}`),
+  Match.tag('Literal', (term) => formatLiteral(term)),
+  Match.tag('Triple', (term) => {
+    const s = formatTerm(term.subject);
+    const o = formatTerm(term.object);
+    return s === undefined || o === undefined
+      ? undefined
+      : `<<( ${s} ${formatIri(term.predicate.value)} ${o} )>>`;
+  }),
+  Match.orElse(() => undefined),
+);
+
 /**
  * Formats a ground term (IRI, blank node, literal or triple term) in
  * canonical N-Triples form. Returns `undefined` for variables and the
@@ -314,22 +322,4 @@ export const formatLiteral = (literal: Term.Literal): string => {
  * @since 0.1.0
  * @category formatting
  */
-export const formatTerm = (term: Term.Term): string | undefined => {
-  switch (term._tag) {
-    case 'NamedNode':
-      return formatIri(term.value);
-    case 'BlankNode':
-      return `_:${blankNodeLabel(term.value)}`;
-    case 'Literal':
-      return formatLiteral(term);
-    case 'Triple': {
-      const s = formatTerm(term.subject);
-      const o = formatTerm(term.object);
-      return s === undefined || o === undefined
-        ? undefined
-        : `<<( ${s} ${formatIri(term.predicate.value)} ${o} )>>`;
-    }
-    default:
-      return undefined;
-  }
-};
+export const formatTerm = (term: Term.Term): string | undefined => formatTermMatch(term);

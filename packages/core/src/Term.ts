@@ -14,6 +14,7 @@
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
+import * as Match from 'effect/Match';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty, isString } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
@@ -610,6 +611,18 @@ export const isGroundTerm = (u: unknown): u is GroundTerm =>
  */
 export const isLanguageTagged = (self: Literal): boolean => self.language !== '';
 
+// Built once: `hasBlankNodes` runs for every term of every quad a dataset or comparison visits.
+const blankNodesIn: (self: Term | Quad) => boolean = Match.type<Term | Quad>().pipe(
+  Match.tag('BlankNode', () => true),
+  Match.tag('Triple', (self) => hasBlankNodes(self.subject) || hasBlankNodes(self.object)),
+  Match.tag(
+    'Quad',
+    (self) =>
+      hasBlankNodes(self.subject) || hasBlankNodes(self.object) || hasBlankNodes(self.graph),
+  ),
+  Match.orElse(() => false),
+);
+
 /**
  * Whether a triple or quad mentions a blank node anywhere, including inside
  * nested triple terms.
@@ -617,18 +630,25 @@ export const isLanguageTagged = (self: Literal): boolean => self.language !== ''
  * @since 0.1.0
  * @category predicates
  */
-export const hasBlankNodes = (self: Term | Quad): boolean => {
-  switch (self._tag) {
-    case 'BlankNode':
-      return true;
-    case 'Triple':
-      return hasBlankNodes(self.subject) || hasBlankNodes(self.object);
-    case 'Quad':
-      return hasBlankNodes(self.subject) || hasBlankNodes(self.object) || hasBlankNodes(self.graph);
-    default:
-      return false;
-  }
-};
+export const hasBlankNodes = (self: Term | Quad): boolean => blankNodesIn(self);
+
+// Built once: `isGround` runs for every term of every pattern or quad it checks.
+const groundCheck: (self: Term | Quad) => boolean = Match.type<Term | Quad>().pipe(
+  Match.tag('Variable', () => false),
+  Match.tag(
+    'Triple',
+    (self) => isGround(self.subject) && isGround(self.predicate) && isGround(self.object),
+  ),
+  Match.tag(
+    'Quad',
+    (self) =>
+      isGround(self.subject) &&
+      isGround(self.predicate) &&
+      isGround(self.object) &&
+      isGround(self.graph),
+  ),
+  Match.orElse(() => true),
+);
 
 /**
  * Whether a term or quad is free of variables.
@@ -636,23 +656,7 @@ export const hasBlankNodes = (self: Term | Quad): boolean => {
  * @since 0.1.0
  * @category predicates
  */
-export const isGround = (self: Term | Quad): boolean => {
-  switch (self._tag) {
-    case 'Variable':
-      return false;
-    case 'Triple':
-      return isGround(self.subject) && isGround(self.predicate) && isGround(self.object);
-    case 'Quad':
-      return (
-        isGround(self.subject) &&
-        isGround(self.predicate) &&
-        isGround(self.object) &&
-        isGround(self.graph)
-      );
-    default:
-      return true;
-  }
-};
+export const isGround = (self: Term | Quad): boolean => groundCheck(self);
 
 // -----------------------------------------------------------------------------
 // Utilities
@@ -735,6 +739,23 @@ export const compareQuads = (a: Quad, b: Quad): -1 | 0 | 1 =>
 // Escaping
 // -----------------------------------------------------------------------------
 
+// Built once: `escapeString` runs it for every character of a string that needs escaping.
+const escapeChar: (ch: string) => string = Match.type<string>().pipe(
+  Match.when('"', () => '\\"'),
+  Match.when('\\', () => '\\\\'),
+  Match.when('\n', () => '\\n'),
+  Match.when('\r', () => '\\r'),
+  Match.when('\t', () => '\\t'),
+  Match.when('\b', () => '\\b'),
+  Match.when('\f', () => '\\f'),
+  Match.orElse((ch) => {
+    const code = ch.codePointAt(0)!;
+    return code < 0x20 || code === 0x7f || code === 0xfffe || code === 0xffff
+      ? `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
+      : ch;
+  }),
+);
+
 /**
  * Escapes a string for use inside a double-quoted N-Triples / Turtle string
  * literal, using the canonical N-Triples escapes.
@@ -746,38 +767,7 @@ export const escapeString = (value: string): string => {
   // eslint-disable-next-line no-control-regex
   if (!/["\\\u0000-\u001f\u007f\ufffe\uffff]/.test(value)) return value;
   let out = '';
-  for (const ch of value) {
-    switch (ch) {
-      case '"':
-        out += '\\"';
-        break;
-      case '\\':
-        out += '\\\\';
-        break;
-      case '\n':
-        out += '\\n';
-        break;
-      case '\r':
-        out += '\\r';
-        break;
-      case '\t':
-        out += '\\t';
-        break;
-      case '\b':
-        out += '\\b';
-        break;
-      case '\f':
-        out += '\\f';
-        break;
-      default: {
-        const code = ch.codePointAt(0)!;
-        out +=
-          code < 0x20 || code === 0x7f || code === 0xfffe || code === 0xffff
-            ? `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
-            : ch;
-      }
-    }
-  }
+  for (const ch of value) out += escapeChar(ch);
   return out;
 };
 

@@ -5,6 +5,7 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { type NodeMap, generateNodeMap } from './flatten.ts';
@@ -205,18 +206,13 @@ export interface FromRdfOptions {
   readonly processingMode: 'json-ld-1.0' | 'json-ld-1.1';
 }
 
-const termId = (t: Term.Term): string => {
-  switch (t._tag) {
-    case 'BlankNode':
-      return `_:${t.value}`;
-    case 'NamedNode':
-      return t.value;
-    case 'DefaultGraph':
-      return '@default';
-    default:
-      return t.key;
-  }
-};
+// Built once: `termId` runs for every term of every quad converted.
+const termId: (t: Term.Term) => string = Match.type<Term.Term>().pipe(
+  Match.tag('BlankNode', (t) => `_:${t.value}`),
+  Match.tag('NamedNode', (t) => t.value),
+  Match.tag('DefaultGraph', () => '@default'),
+  Match.orElse((t) => t.key),
+);
 
 interface Usage {
   readonly node: JsonObject;

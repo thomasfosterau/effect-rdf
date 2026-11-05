@@ -42,6 +42,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Order from 'effect/Order';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
@@ -360,30 +361,33 @@ export const toDataset = (document: Document, options?: ToDatasetOptions): Datas
   const blank = (label: string) => new Term.BlankNode(prefix + label.slice(2));
   const subjectTerm = (key: string): Term.NamedNode | Term.BlankNode =>
     key.startsWith('_:') ? blank(key) : new Term.NamedNode(key);
-  const objectTerm = (v: ObjectValue): Term.Object => {
-    switch (v.type) {
-      case 'uri':
-        return new Term.NamedNode(v.value);
-      case 'bnode':
-        return blank(v.value);
-      case 'literal':
-        if (v.lang !== undefined) {
-          return Term.literal(
-            v.value,
-            v.direction !== undefined ? { language: v.lang, direction: v.direction } : v.lang,
-          );
-        }
-        return Term.literal(v.value, new Term.NamedNode(v.datatype ?? XSD_STRING));
-      case 'triple':
-        return new Term.Triple(
+  // Built once per document: `objectTerm` runs for every object value.
+  const objectTerm: (v: ObjectValue) => Term.Object = Match.type<ObjectValue>().pipe(
+    Match.withReturnType<Term.Object>(),
+    Match.when({ type: 'uri' }, (v) => new Term.NamedNode(v.value)),
+    Match.when({ type: 'bnode' }, (v) => blank(v.value)),
+    Match.when({ type: 'literal' }, (v) => {
+      if (v.lang !== undefined) {
+        return Term.literal(
+          v.value,
+          v.direction !== undefined ? { language: v.lang, direction: v.direction } : v.lang,
+        );
+      }
+      return Term.literal(v.value, new Term.NamedNode(v.datatype ?? XSD_STRING));
+    }),
+    Match.when(
+      { type: 'triple' },
+      (v) =>
+        new Term.Triple(
           v.value.subject.type === 'uri'
             ? new Term.NamedNode(v.value.subject.value)
             : blank(v.value.subject.value),
           new Term.NamedNode(v.value.predicate.value),
           objectTerm(v.value.object),
-        );
-    }
-  };
+        ),
+    ),
+    Match.exhaustive,
+  );
   return Dataset.mutate(Dataset.empty, (b) => {
     for (const [s, predicates] of Object.entries(document)) {
       const subject = subjectTerm(s);
@@ -437,45 +441,41 @@ const fromQuadsUnsafe = (quads: Iterable<Term.Quad>, options: FromQuadsOptions):
     t._tag === 'NamedNode'
       ? { type: 'uri', value: t.value }
       : { type: 'bnode', value: `_:${t.value}` };
-  const objectValue = (t: Term.Object): ObjectValue => {
-    switch (t._tag) {
-      case 'NamedNode':
-      case 'BlankNode':
-        return resource(t);
-      case 'Literal': {
-        if (t.language !== '') {
-          if (t.direction === undefined)
-            return { type: 'literal', value: t.value, lang: t.language };
-          if (!extensions) {
-            fail(
-              `The literal ${t.key} has a base direction, which requires the RDF/JSON extensions`,
-            );
-          }
-          return { type: 'literal', value: t.value, lang: t.language, direction: t.direction };
-        }
-        return t.datatype.value === XSD_STRING
-          ? { type: 'literal', value: t.value }
-          : { type: 'literal', value: t.value, datatype: t.datatype.value };
-      }
-      case 'Triple': {
+  // Built once per serialisation: `objectValue` runs for every object term.
+  const objectValue: (t: Term.Object) => ObjectValue = Match.type<Term.Object>().pipe(
+    Match.withReturnType<ObjectValue>(),
+    Match.tag('NamedNode', 'BlankNode', (t) => resource(t)),
+    Match.tag('Literal', (t) => {
+      if (t.language !== '') {
+        if (t.direction === undefined) return { type: 'literal', value: t.value, lang: t.language };
         if (!extensions) {
-          fail(`The triple term ${t.key} requires the RDF/JSON extensions`);
+          fail(`The literal ${t.key} has a base direction, which requires the RDF/JSON extensions`);
         }
-        const subject = t.subject;
-        if (subject._tag === 'Triple') {
-          throw new SerializeFailure(`Triple terms cannot have triple terms as subjects: ${t.key}`);
-        }
-        return {
-          type: 'triple',
-          value: {
-            subject: resource(subject),
-            predicate: { type: 'uri', value: t.predicate.value },
-            object: objectValue(t.object),
-          },
-        };
+        return { type: 'literal', value: t.value, lang: t.language, direction: t.direction };
       }
-    }
-  };
+      return t.datatype.value === XSD_STRING
+        ? { type: 'literal', value: t.value }
+        : { type: 'literal', value: t.value, datatype: t.datatype.value };
+    }),
+    Match.tag('Triple', (t) => {
+      if (!extensions) {
+        fail(`The triple term ${t.key} requires the RDF/JSON extensions`);
+      }
+      const subject = t.subject;
+      if (subject._tag === 'Triple') {
+        throw new SerializeFailure(`Triple terms cannot have triple terms as subjects: ${t.key}`);
+      }
+      return {
+        type: 'triple',
+        value: {
+          subject: resource(subject),
+          predicate: { type: 'uri', value: t.predicate.value },
+          object: objectValue(t.object),
+        },
+      };
+    }),
+    Match.exhaustive,
+  );
   const merge = options.mergeGraphs ?? false;
   const seen = new Set<string>();
   const sorted = Arr.sort(quads, quadOrder);
