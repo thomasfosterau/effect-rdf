@@ -1,5 +1,7 @@
 import { assert, describe, expect, it, layer } from '@effect/vitest';
 import * as Arr from 'effect/Array';
+import * as ConfigProvider from 'effect/ConfigProvider';
+import * as Console from 'effect/Console';
 import * as Effect from 'effect/Effect';
 import * as FileSystem from 'effect/FileSystem';
 import * as Layer from 'effect/Layer';
@@ -541,6 +543,65 @@ describe('CLI', () => {
       expect(error._tag).toBe('CliError');
       const unknown = yield* Effect.flip(Cli.parse(['--nope']));
       expect(unknown._tag).toBe('CliError');
+    }),
+  );
+
+  it.effect('reads unset flags from SPARQL_SERVER_* environment variables', () =>
+    Effect.gen(function* () {
+      const env = ConfigProvider.fromEnvRecord({
+        SPARQL_SERVER_PORT: '4040',
+        SPARQL_SERVER_HOST: '127.0.0.1',
+        SPARQL_SERVER_PATH: '/query',
+        SPARQL_SERVER_READ_ONLY: 'true',
+        SPARQL_SERVER_MAX_RESULTS: '10',
+        SPARQL_SERVER_NO_GRAPH_STORE: 'true',
+        SPARQL_SERVER_BASE_URL: 'https://example.org',
+      });
+      const fromEnv = yield* Cli.parse(['a.ttl']).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, env),
+      );
+      expect(fromEnv.serve).toMatchObject({
+        port: 4040,
+        host: '127.0.0.1',
+        path: '/query',
+        readOnly: true,
+        maxResults: 10,
+        graphStorePath: false,
+        baseUrl: 'https://example.org',
+      });
+      // A flag wins over the environment.
+      const flagged = yield* Cli.parse(['-p', '1', '--path', '/sparql']).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, env),
+      );
+      expect(flagged.serve.port).toBe(1);
+      expect(flagged.serve.path).toBe('/sparql');
+      const invalid = yield* Effect.flip(
+        Cli.parse([]).pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnvRecord({ SPARQL_SERVER_BASE_URL: 'not an iri' }),
+          ),
+        ),
+      );
+      expect(invalid.message).toContain('--base-url must be an absolute IRI');
+      expect((yield* Effect.flip(Cli.parse(['--path', 'x']))).message).toContain(
+        "must start with '/'",
+      );
+    }),
+  );
+
+  it.effect('prints generated --help listing every flag and its environment variable', () =>
+    Effect.gen(function* () {
+      const lines: Array<string> = [];
+      const capture: Console.Console = Object.assign(Object.create(globalThis.console), {
+        log: (...args: ReadonlyArray<unknown>) => lines.push(args.join(' ')),
+      });
+      yield* Cli.run(['--help']).pipe(Effect.provideService(Console.Console, capture));
+      const help = lines.join('\n');
+      const flags = ['--port', '--read-only', '--graph-store', '--no-graph-store', '--base-url'];
+      expect(flags.filter((flag) => !help.includes(flag))).toEqual([]);
+      expect(help).toContain('[SPARQL_SERVER_MAX_RESULTS]');
+      expect((yield* Cli.parse(['--help'])).help).toBe(true);
     }),
   );
 });

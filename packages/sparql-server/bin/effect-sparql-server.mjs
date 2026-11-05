@@ -3,6 +3,7 @@
 // Uses the built `dist/` when available, otherwise the TypeScript sources
 // (run directly with Node's built-in type stripping).
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 const dist = new URL('../dist/Cli.mjs', import.meta.url);
 const Cli = await import(
@@ -10,12 +11,14 @@ const Cli = await import(
 );
 const { NodeRuntime } = await import('@effect/platform-node');
 const { Effect } = await import('effect');
+const { version } = createRequire(import.meta.url)('../package.json');
 
 NodeRuntime.runMain(
-  Cli.run(process.argv.slice(2)).pipe(
+  Cli.run(process.argv.slice(2), { version }).pipe(
+    // Usage errors: `effect/cli` has printed the help; say what was wrong.
     Effect.catchTag('CliError', (e) =>
       Effect.sync(() => {
-        process.stderr.write(`${e.message}\n\n${Cli.usage}`);
+        if (e.message !== '') process.stderr.write(`${e.message}\n`);
         process.exitCode = 2;
       }),
     ),

@@ -10,6 +10,9 @@
     "scripts/check-dist-imports.mjs"
   ],
   "ignorePatterns": ["**/dist/**", "**/coverage/**", ".test-suites/**"],
+  // The CLI bin imports the built `dist/Cli.mjs` when it exists (and the sources otherwise);
+  // `dist/` is ignored above, so that runtime-optional import cannot resolve here.
+  "ignoreUnresolvedImports": ["../dist/Cli.mjs"],
   "ignoreDependencies": [
     "@types/node",
     "@effect/language-service",
