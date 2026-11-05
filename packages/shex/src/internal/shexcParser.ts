@@ -258,9 +258,9 @@ const annotations: P<Array<ShExJ.Annotation>> = Parser.repeat(
     tok('//'),
     Parser.cut(
       Parser.seq(predicate, select('an IRI or a literal', [[IRI_KINDS, iri]], literal)).pipe(
-        Parser.map(([predicate, object]): ShExJ.Annotation => ({
+        Parser.map(([pred, object]): ShExJ.Annotation => ({
           type: 'Annotation',
-          predicate,
+          predicate: pred,
           object,
         })),
       ),
@@ -405,7 +405,7 @@ const exclusion = <A>(p: P<A>): P<A> => Parser.preceded(tok('-'), Parser.cut(p))
 
 const iriExclusion: P<string | ShExJ.IriStem> = exclusion(
   Parser.seq(iri, tilde).pipe(
-    Parser.map(([iri, stem]) => (stem ? { type: 'IriStem', stem: iri } : iri)),
+    Parser.map(([base, stem]) => (stem ? { type: 'IriStem', stem: base } : base)),
   ),
 );
 
@@ -425,10 +425,10 @@ const languageExclusion: P<string | ShExJ.LanguageStem> = exclusion(
 
 const stemmed = <A, X>(
   head: P<A>,
-  exclusion: P<X>,
+  exclude: P<X>,
   build: (head: A, stem: boolean, exclusions: Array<X>) => ShExJ.ValueSetValue,
 ): P<ShExJ.ValueSetValue> =>
-  Parser.seq(head, optional(Parser.preceded(tok('~'), Parser.repeat(exclusion)))).pipe(
+  Parser.seq(head, optional(Parser.preceded(tok('~'), Parser.repeat(exclude)))).pipe(
     Parser.map(([h, exclusions]) => build(h, exclusions !== undefined, exclusions ?? [])),
   );
 
@@ -602,10 +602,10 @@ const nonLitNodeConstraintOpt: P<ShExJ.NodeConstraint | undefined> = optional(
 
 const withAnnotations = (nc: P<ShExJ.NodeConstraint>): P<ShExJ.NodeConstraint> =>
   Parser.seq(nc, annotations, semanticActions).pipe(
-    Parser.map(([nc, annotations, semActs]) => {
-      if (Arr.isReadonlyArrayEmpty(annotations) && semActs === undefined) return nc;
-      const out: Mutable<ShExJ.NodeConstraint> = nc;
-      if (Arr.isReadonlyArrayNonEmpty(annotations)) out.annotations = annotations;
+    Parser.map(([constraint, annots, semActs]) => {
+      if (Arr.isReadonlyArrayEmpty(annots) && semActs === undefined) return constraint;
+      const out: Mutable<ShExJ.NodeConstraint> = constraint;
+      if (Arr.isReadonlyArrayNonEmpty(annots)) out.annotations = annots;
       if (semActs !== undefined) out.semActs = semActs;
       return out;
     }),
@@ -708,9 +708,9 @@ const shapeDefinition: P<AnyShapeExpr> = Parser.seq(
   annotations,
   semanticActions,
 ).pipe(
-  Parser.map(([def, annotations, semActs]) => {
+  Parser.map(([def, annots, semActs]) => {
     const out: Mutable<ShExJ.Shape> = def === EMPTY ? { type: 'Shape' } : def;
-    if (Arr.isReadonlyArrayNonEmpty(annotations)) out.annotations = annotations;
+    if (Arr.isReadonlyArrayNonEmpty(annots)) out.annotations = annots;
     if (semActs !== undefined) out.semActs = semActs;
     return out;
   }),
@@ -793,18 +793,18 @@ const shapeAnd: P<AnyShapeExpr> = Parser.seq(
 const ors = Parser.repeat(Parser.preceded(tok('OR'), Parser.cut(shapeAnd)));
 
 const shapeOrRest: P<Rest> = select("'AND' or 'OR'", [
-  [['OR'], ors.pipe(Parser.map((ors): Rest => ({ _tag: 'Or', ors })))],
+  [['OR'], ors.pipe(Parser.map((operands): Rest => ({ _tag: 'Or', ors: operands })))],
   [
     ['AND'],
     Parser.seq(Parser.repeat(Parser.preceded(tok('AND'), Parser.cut(shapeNot))), ors).pipe(
-      Parser.map(([conjuncts, ors]): Rest => {
+      Parser.map(([conjuncts, operands]): Rest => {
         const ands: Array<AnyShapeExpr> = [];
         for (const c of conjuncts) {
           if (!Predicate.isString(c.e) && c.e.type === 'ShapeAnd' && !c.nested) {
             ands.push(...c.e.shapeExprs);
           } else ands.push(c.e);
         }
-        return { _tag: 'And', ands, ors };
+        return { _tag: 'And', ands, ors: operands };
       }),
     ),
   ],
@@ -936,17 +936,17 @@ const tripleConstraint: P<ShExJ.TripleConstraint> = Parser.seq(
   annotations,
   semanticActions,
 ).pipe(
-  Parser.map(([inverse, predicate, valueExpr, card, annotations, semActs]) => {
+  Parser.map(([inverse, pred, valueExpr, card, annots, semActs]) => {
     const tc: Mutable<ShExJ.TripleConstraint> = inverse
-      ? { type: 'TripleConstraint', inverse: true, predicate }
-      : { type: 'TripleConstraint', predicate };
+      ? { type: 'TripleConstraint', inverse: true, predicate: pred }
+      : { type: 'TripleConstraint', predicate: pred };
     if (valueExpr !== EMPTY) tc.valueExpr = valueExpr;
     if (card !== undefined) {
       tc.min = card.min;
       tc.max = card.max;
     }
     if (semActs !== undefined) tc.semActs = semActs;
-    if (Arr.isReadonlyArrayNonEmpty(annotations)) tc.annotations = annotations;
+    if (Arr.isReadonlyArrayNonEmpty(annots)) tc.annotations = annots;
     return tc;
   }),
 );
@@ -958,8 +958,8 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
   annotations,
   semanticActions,
 ).pipe(
-  Parser.tryMap(([at, expr, card, annotations, semActs]) => {
-    if (card === undefined && Arr.isReadonlyArrayEmpty(annotations) && semActs === undefined) {
+  Parser.tryMap(([at, expr, card, annots, semActs]) => {
+    if (card === undefined && Arr.isReadonlyArrayEmpty(annots) && semActs === undefined) {
       return Result.succeed(expr);
     }
     if (Predicate.isString(expr)) {
@@ -982,7 +982,7 @@ const bracketedTripleExpr: P<ShExJ.TripleExprOrRef> = Parser.seq(
       out.min = card.min;
       out.max = card.max;
     }
-    if (Arr.isReadonlyArrayNonEmpty(annotations)) out.annotations = annotations;
+    if (Arr.isReadonlyArrayNonEmpty(annots)) out.annotations = annots;
     if (semActs !== undefined) out.semActs = [...(out.semActs ?? []), ...semActs];
     return Result.succeed<ShExJ.TripleExprOrRef>(out);
   }),
@@ -1080,7 +1080,7 @@ const directiveCases: ReadonlyArray<readonly [ReadonlyArray<string>, P<Statement
   [
     ['IMPORT'],
     Parser.preceded(anyToken, Parser.cut(iri)).pipe(
-      Parser.map((iri): Statement => ({ _tag: 'Import', iri })),
+      Parser.map((base): Statement => ({ _tag: 'Import', iri: base })),
     ),
   ],
 ];
@@ -1122,9 +1122,9 @@ const shapeExprDecl: P<Statement> = Parser.seq(
     shapeExpressionBody,
   ),
 ).pipe(
-  Parser.map(([abstract, at, label, restricts, body]): Statement => {
+  Parser.map(([abstract, at, name, restricts, body]): Statement => {
     const shapeExpr = body === EMPTY ? { type: 'Shape' as const } : body;
-    const decl: Mutable<ShExJ.ShapeDecl> = { type: 'ShapeDecl', id: label, shapeExpr };
+    const decl: Mutable<ShExJ.ShapeDecl> = { type: 'ShapeDecl', id: name, shapeExpr };
     if (abstract) decl.abstract = true;
     if (Arr.isReadonlyArrayNonEmpty(restricts)) decl.restricts = restricts;
     return { _tag: 'Decl', decl, at };

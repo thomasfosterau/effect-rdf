@@ -326,10 +326,10 @@ export const decode = (
           return { _tag: 'Update', update, using } as const;
         }),
       ),
-      Match.orElse((contentType) =>
+      Match.orElse((other) =>
         Effect.gen(function* () {
           return yield* Errors.unsupportedMediaType(
-            `Unsupported Content-Type '${contentType.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
+            `Unsupported Content-Type '${other.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
           );
         }),
       ),

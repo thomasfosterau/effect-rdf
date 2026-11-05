@@ -150,9 +150,9 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
     const loaded = Dataset.fromIterable(loadQuads(t));
     yield* store.insert(Dataset.addAll(loaded, datasetClauseQuads(query, loaded)));
     const engine = Engine.make(store, { baseIri });
-    const result = yield* engine.query(query);
+    const answer = yield* engine.query(query);
     const expected = readExpected(t.result!);
-    return yield* Match.value(result).pipe(
+    return yield* Match.value(answer).pipe(
       Match.tag('Ask', (result) =>
         Effect.sync(() => {
           expect(Dataset.isDataset(expected) ? undefined : expected).toEqual({

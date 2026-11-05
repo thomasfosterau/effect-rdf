@@ -551,8 +551,8 @@ export const make = (
       ).pipe(Stream.withSpan('SparqlClient.results'));
 
     const selectBindings: SparqlClientShape['selectBindings'] = (query, options) =>
-      Stream.flatMap(results(query, options), (event) => {
-        return Match.value(event).pipe(
+      Stream.flatMap(results(query, options), (item) => {
+        return Match.value(item).pipe(
           Match.tag('Solution', (event) => Stream.succeed(event.bindings)),
           Match.tag('Variables', () => Stream.empty),
           Match.tag('Boolean', () =>

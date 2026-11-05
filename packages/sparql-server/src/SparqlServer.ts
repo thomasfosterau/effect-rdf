@@ -60,8 +60,8 @@ export type Requirements = Engine.SparqlEngine | Store.QuadStore | Serialization
 const formatParseError = (e: Parser.SparqlParseError): string =>
   `Syntax error at line ${e.line}, column ${e.column}: ${e.message}`;
 
-const fromEngineError = (e: Engine.SparqlError | QueryTimeout): Errors.ProtocolError => {
-  return Match.value(e).pipe(
+const fromEngineError = (failure: Engine.SparqlError | QueryTimeout): Errors.ProtocolError => {
+  return Match.value(failure).pipe(
     Match.tag('SparqlParseError', (e) => Errors.badRequest(formatParseError(e))),
     Match.tag('UpdateError', (e) => Errors.badRequest(e.message)),
     Match.tag('EvaluationError', (e) => Errors.internal(e.message)),
@@ -257,8 +257,8 @@ const endpoint = (options: Options.Resolved, kind: Protocol.EndpointKind) =>
     const base = new URL(url.href);
     base.search = '';
     const baseIri = options.baseIri ?? base.href;
-    const operation = yield* Protocol.decode(request, kind, baseIri);
-    return yield* Match.value(operation).pipe(
+    const decoded = yield* Protocol.decode(request, kind, baseIri);
+    return yield* Match.value(decoded).pipe(
       Match.tag('Query', (operation) =>
         Effect.gen(function* () {
           return yield* runQuery(options, operation, baseIri);

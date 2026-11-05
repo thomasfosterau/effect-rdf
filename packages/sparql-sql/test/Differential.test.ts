@@ -282,8 +282,8 @@ class QueryGen {
 
 const evaluate = (engine: Engine.SparqlEngineShape, query: string) =>
   Effect.gen(function* () {
-    const result = yield* engine.query(query);
-    return yield* Match.value(result).pipe(
+    const answer = yield* engine.query(query);
+    return yield* Match.value(answer).pipe(
       Match.tag('Ask', (result) => Effect.sync(() => [String(result.value)])),
       Match.tag('Select', (result) =>
         Effect.gen(function* () {

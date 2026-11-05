@@ -579,12 +579,12 @@ export class Engine {
     n: Term.Term,
     triples: ReadonlyArray<Term.Triple>,
   ): Outcome {
-    const visit = (te0: ShExJ.TripleExprOrRef, seen: Set<string>): Visit => {
-      if (Predicate.isString(te0)) {
-        if (seen.has(te0)) return { used: false, r: undefined };
-        seen.add(te0);
+    const visit = (node: ShExJ.TripleExprOrRef, seen: Set<string>): Visit => {
+      if (Predicate.isString(node)) {
+        if (seen.has(node)) return { used: false, r: undefined };
+        seen.add(node);
       }
-      const te = this.resolveTe(te0);
+      const te = this.resolveTe(node);
       if (te === undefined) return { used: false, r: undefined };
       if (te.type === 'TripleConstraint') {
         const k = localIndex.get(te);

@@ -391,7 +391,7 @@ export const textOf = (value: Value): Option.Option<string> =>
  * @category accessors
  */
 export const itemsOf = (value: Value): Option.Option<ReadonlyArray<string>> =>
-  Option.map(asArray(value), (array) => Arr.getSomes(Arr.map(array.items, textOf)));
+  Option.map(asArray(value), (arr) => Arr.getSomes(Arr.map(arr.items, textOf)));
 
 const hasLanguage = (language: string) => (item: Simple) =>
   Option.exists(item.language, (l) => l.toLowerCase() === language.toLowerCase());

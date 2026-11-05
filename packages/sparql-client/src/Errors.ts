@@ -149,7 +149,7 @@ export const isSparqlClientError = (u: unknown): u is SparqlClientError =>
 export const isTransient = (error: SparqlClientError): boolean => {
   return Match.value(error).pipe(
     Match.tag('TransportError', 'TimeoutError', () => true),
-    Match.tag('HttpStatusError', (error) => [408, 429, 502, 503, 504].includes(error.status)),
+    Match.tag('HttpStatusError', (http) => [408, 429, 502, 503, 504].includes(http.status)),
     Match.orElse(() => false),
   );
 };

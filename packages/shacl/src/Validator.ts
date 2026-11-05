@@ -201,9 +201,9 @@ const codePointLength = (s: string): number => {
   return n;
 };
 
-const defaultMessage = (c: Shapes.Constraint, value: Term.Term | undefined): string => {
+const defaultMessage = (constraint: Shapes.Constraint, value: Term.Term | undefined): string => {
   const v = value === undefined ? 'Value' : `Value ${show(value)}`;
-  return Match.value(c)
+  return Match.value(constraint)
     .pipe(
       Match.tag('Class', (c) => `${v} is not an instance of ${show(c.class)}`),
       Match.tag('Datatype', (c) => `${v} does not have datatype ${show(c.datatype)}`),
@@ -263,8 +263,10 @@ const listText = (terms: ReadonlyArray<Term.Term>) =>
   Term.literal(terms.map(Message.display).join(', '));
 
 /** The parameter values of a core constraint by parameter name (for message templates). */
-const coreParameters = (c: Shapes.Constraint): ReadonlyArray<readonly [string, Term.Term]> => {
-  return Match.value(c)
+const coreParameters = (
+  constraint: Shapes.Constraint,
+): ReadonlyArray<readonly [string, Term.Term]> => {
+  return Match.value(constraint)
     .pipe(
       Match.withReturnType<ReadonlyArray<readonly [string, Term.Term]>>(),
       Match.tag('Class', (c) => [['class', c.class]]),
@@ -455,12 +457,12 @@ const makeEngine = (
     shape: Shapes.Shape,
     focus: Term.GroundTerm,
     valueNodes: ReadonlyArray<Term.GroundTerm>,
-    c: Shapes.Constraint,
+    constraint: Shapes.Constraint,
   ): Effect.fn.Return<Results, EngineError> {
-    const component = Shapes.componentOf(c);
+    const component = Shapes.componentOf(constraint);
     const shapePath =
       shape._tag === 'PropertyShape' ? Option.some(shape.path) : Option.none<Path.Path>();
-    const parameters = new Map(coreParameters(c));
+    const parameters = new Map(coreParameters(constraint));
     const result = (
       value: Term.GroundTerm | undefined,
       extra: { readonly path?: Path.Path; readonly details?: Results } = {},
@@ -484,14 +486,14 @@ const makeEngine = (
                 Match.orElse(() => parameters.get(name)),
               );
             })
-          : [Term.literal(defaultMessage(c, value))],
+          : [Term.literal(defaultMessage(constraint, value))],
         details: withDetails ? (extra.details ?? []) : [],
       });
     };
     const each = (failed: (v: Term.GroundTerm) => boolean): Results =>
       valueNodes.filter(failed).map((v) => result(v));
 
-    return yield* Match.value(c)
+    return yield* Match.value(constraint)
       .pipe(
         Match.tag('Class', (c) => Effect.sync(() => each((v) => !isInstanceOf(v, c.class)))),
         Match.tag('Datatype', (c) => Effect.sync(() => each((v) => !hasDatatype(v, c.datatype)))),
@@ -614,18 +616,18 @@ const makeEngine = (
       .pipe(
         Match.tag('And', 'Or', 'Xone', (c) =>
           Effect.gen(function* () {
-            const shapes = c.shapes;
+            const members = c.shapes;
             const tag = c._tag;
             const perNode = yield* Effect.forEach(
               valueNodes,
               (v) =>
                 Effect.map(
-                  Effect.forEach(shapes, (s) => nestedResults(s, v), { concurrency: 1 }),
+                  Effect.forEach(members, (s) => nestedResults(s, v), { concurrency: 1 }),
                   (nested) => {
                     const conforming = nested.filter((rs) => Arr.isReadonlyArrayEmpty(rs)).length;
                     const failed =
                       tag === 'And'
-                        ? conforming < shapes.length
+                        ? conforming < members.length
                         : tag === 'Or'
                           ? conforming === 0
                           : conforming !== 1;
@@ -639,11 +641,11 @@ const makeEngine = (
         ),
         Match.tag('Node', (c) =>
           Effect.gen(function* () {
-            const shape = c.shape;
+            const nested = c.shape;
             const perNode = yield* Effect.forEach(
               valueNodes,
               (v) =>
-                Effect.map(nestedResults(shape, v), (rs) =>
+                Effect.map(nestedResults(nested, v), (rs) =>
                   Arr.isReadonlyArrayNonEmpty(rs) ? [result(v, { details: rs })] : [],
                 ),
               { concurrency: 1 },
@@ -662,11 +664,11 @@ const makeEngine = (
         ),
         Match.tag('QualifiedMinCount', 'QualifiedMaxCount', (c) =>
           Effect.gen(function* () {
-            const { shape, disjoint, siblings } = c;
+            const { shape: nested, disjoint, siblings } = c;
             // A value node counts when it conforms to the qualified shape and, with
             // `sh:qualifiedValueShapesDisjoint`, to none of the sibling shapes.
             const counted = yield* Effect.filter(valueNodes, (v) =>
-              Effect.flatMap(conforms(shape, v), (ok) =>
+              Effect.flatMap(conforms(nested, v), (ok) =>
                 !ok || !disjoint
                   ? Effect.succeed(ok)
                   : Effect.map(

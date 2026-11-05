@@ -87,7 +87,7 @@ export default defineConfig({
       // and evaluators to rewrite safely in that change: short grammar-local
       // names (`c`, `p`, `op`, `e`) reused in nested combinators. A new site
       // is a defect, not headroom.
-      'eslint/no-shadow': 'warn', // 301
+      'eslint/no-shadow': 'warn', // 68
       // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
       // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
       // autofixable findings (unnecessary assertions, type arguments and

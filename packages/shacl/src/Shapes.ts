@@ -331,8 +331,8 @@ const componentNames: Record<Exclude<ConstraintTag, 'Sparql' | 'Component'>, str
 export const componentOf = (constraint: Constraint): Term.NamedNode | Term.BlankNode => {
   return Match.value(constraint).pipe(
     Match.tag('Sparql', () => sh.SPARQLConstraintComponent),
-    Match.tag('Component', (constraint) => constraint.component),
-    Match.orElse((constraint) => Term.namedNode(SH + componentNames[constraint._tag])),
+    Match.tag('Component', (custom) => custom.component),
+    Match.orElse((core) => Term.namedNode(SH + componentNames[core._tag])),
   );
 };
 

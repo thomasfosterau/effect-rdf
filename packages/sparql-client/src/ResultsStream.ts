@@ -675,8 +675,8 @@ export const parserFor = (
       ({ value }) => value === Results.Csv,
       () => Option.some({ make: csv, format: 'csv' }),
     ),
-    Match.orElse((codec) => {
-      const c = codec.value;
+    Match.orElse((found) => {
+      const c = found.value;
       return Option.some({ make: () => buffered(c), format: c.format.extensions[0] ?? 'csv' });
     }),
   );
