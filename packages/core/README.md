@@ -15,7 +15,7 @@ pnpm add effect @thomasfosterau/effect-rdf
 | `Term`               | `NamedNode`, `BlankNode`, `Literal` (language tags with base direction), `Variable`, `DefaultGraph`, `Triple` (triple terms) and `Quad`; constructors (`namedNode`, `blankNode`, `literal`, `triple`, `quad`), guards, `compare` / `compareQuads` and their Effect instances (`Order`, `QuadOrder`, `Equivalence`, `QuadEquivalence`), JSON conversion (`toJson`, `fromJson`, `quadToJson`, `quadFromJson`, `isWellFormed`) and schemas with JSON codecs. Every term implements `Equal` / `Hash`.                        |
 | `TermJson`           | The JSON shape of terms and quads: the SPARQL 1.2 JSON results term (`{ "type": "uri", "value": … }`, triple terms, `xml:lang`, `its:dir`) extended with `{ "type": "variable", "value" }` and `{ "type": "default-graph" }`, and `{ subject, predicate, object, graph? }` quads.                                                                                                                                                                                                                                        |
 | `TermCodec`          | `Schema`s between ground terms and JS values: `string`, `localized`, `langString`, `iri`, `namedNode`, `resource`, `literal`, `lexical`, `number`, `integer`, `bigint`, `decimal`, `double`, `float`, `boolean`, `date`, `dateTime` (Effect `DateTime.Utc` / `Zoned`), `value`, `typed`, `typedOneOf`, and `make` for your own. Decode a `Dataset`'s objects or SPARQL solutions into typed structs.                                                                                                                     |
-| `Dataset`            | An immutable, indexed set of quads: `make`, `fromIterable`, `add`, `remove`, `match`, `objectsOf`, `subjects`, `graphs`, `list` (RDF collections), set operations, `filter` / `map` / `reduce`, `toNQuads` and `DatasetSchema` (JSON: sorted array of quads).                                                                                                                                                                                                                                                            |
+| `Dataset`            | An immutable, indexed set of quads: `make`, `fromIterable`, `add`, `remove`, `match`, `objectsOf`, `subjects`, `graphs`, `list` (RDF collections), set operations, `filter` / `map` / `reduce`, `toNQuads`, `toGraph` / `fromGraph` (`effect/Graph`) and `DatasetSchema` (JSON: sorted array of quads).                                                                                                                                                                                                                  |
 | `Iri`                | RFC 3987 resolution (`resolve`, `removeDotSegments`), `relativize`, `isAbsolute`, `isValid`, `isValidReference`, and `IriSchema` / `IriReferenceSchema` (JSON Schema `format: "iri"` / `"iri-reference"`) for validating IRIs from `Config`, CLI flags or HTTP parameters.                                                                                                                                                                                                                                               |
 | `LanguageTag`        | BCP 47 language tags as RDF 1.2 requires them: `isWellFormed` (the §2.1 ABNF), `normalize` (lower case) and `LanguageTagSchema`.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `PrefixMap`          | Prefix ⇄ namespace maps: `make`, `set`, `merge`, `expand` (CURIE → IRI), `compact` (IRI → prefix and local name).                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -44,6 +44,25 @@ const program = Effect.gen(function* () {
   yield* Serialization.writeFile('data.nq', dataset, { serializer: NQuads.serializer });
 });
 ```
+
+### Graph algorithms
+
+`Dataset.toGraph` turns a dataset into an `effect/Graph` directed graph — subjects and objects are nodes, each quad an edge labelled with its predicate — with the term → node-index map algorithms start from. Restrict it to some predicates, one named graph, or include literal objects:
+
+```ts
+import { Graph, HashMap, Option } from 'effect';
+import { Dataset, Vocab } from '@thomasfosterau/effect-rdf';
+
+const classes = Dataset.toGraph(data, { predicates: [Vocab.rdfs.subClassOf] });
+Graph.isAcyclic(classes.graph); // false if the hierarchy has a cycle
+const order = Array.from(Graph.indices(Graph.topo()(classes.graph))); // subclasses first
+
+const people = Dataset.toGraph(data, { predicates: [foaf('knows')] });
+const index = (t: Term.NamedNode) => Option.getOrElse(HashMap.get(people.nodes, t), () => -1);
+Graph.dijkstra({ source: index(alice), target: index(dave), cost: () => 1 })(people.graph);
+```
+
+`Dataset.fromGraph(graph, graphName?)` turns such a graph back into quads.
 
 ### JSON
 
