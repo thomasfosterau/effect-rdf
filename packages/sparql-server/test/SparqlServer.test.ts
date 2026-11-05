@@ -2,6 +2,7 @@ import { assert, describe, expect, it, layer } from '@effect/vitest';
 import * as Arr from 'effect/Array';
 import * as ConfigProvider from 'effect/ConfigProvider';
 import * as Console from 'effect/Console';
+import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as FileSystem from 'effect/FileSystem';
 import * as Layer from 'effect/Layer';
@@ -22,6 +23,7 @@ import type * as Options from '../src/Options.ts';
 import * as Protocol from '../src/Protocol.ts';
 import * as SparqlServer from '../src/SparqlServer.ts';
 import * as Testing from '../src/Testing.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 /** The value of an `Option` the test expects to be present. */
 const some = <A>(option: Option.Option<A>, label: string): A =>
@@ -38,7 +40,11 @@ const data = Dataset.make(
 const BASE = 'http://localhost';
 
 const formats = Effect.runSync(
-  Effect.provide(Effect.service(Serialization.Formats), Formats.layer),
+  Effect.scoped(
+    Effect.map(Layer.build(Formats.layer), (context) =>
+      Context.get(context, Serialization.Formats),
+    ),
+  ),
 );
 
 const withServer = <A, E>(
@@ -49,7 +55,7 @@ const withServer = <A, E>(
   Effect.gen(function* () {
     const client = yield* Testing.makeClient(options);
     return yield* f(client);
-  }).pipe(Effect.provide(services));
+  }).pipe(withLayer(services));
 
 const get = (client: HttpClient.HttpClient, path: string, headers: Record<string, string> = {}) =>
   client.execute(HttpClientRequest.get(`${BASE}${path}`, { headers }));
@@ -661,8 +667,14 @@ layer(Layer.mergeAll(Formats.layer, Path.layer, fileSystem))('CLI files', (withF
   );
 });
 
-describe('Node server', () => {
-  it.effect('serves over a real socket via the HttpRouter', () =>
+layer(
+  SparqlServer.layerServe({ logging: false }).pipe(
+    Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provide(SparqlServer.layerMemoryServices(data)),
+  ),
+  { buildPerTest: true },
+)('Node server', (test) => {
+  test.effect('serves over a real socket via the HttpRouter', () =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
       const r = yield* client.execute(
@@ -678,13 +690,6 @@ describe('Node server', () => {
       expect(g.status).toBe(200);
       const direct = yield* client.execute(HttpClientRequest.get('/rdf-graph-store/missing'));
       expect(direct.status).toBe(404);
-    }).pipe(
-      Effect.provide(
-        SparqlServer.layerServe({ logging: false }).pipe(
-          Layer.provideMerge(NodeHttpServer.layerTest),
-          Layer.provide(SparqlServer.layerMemoryServices(data)),
-        ),
-      ),
-    ),
+    }),
   );
 });

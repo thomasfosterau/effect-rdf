@@ -2,12 +2,11 @@
  * The "Quick tour" example of the repository README, kept verbatim (between
  * the markers) so that it is type-checked and run by the test suite.
  */
-import { describe, expect, it } from '@effect/vitest';
+import { expect, layer } from '@effect/vitest';
 import { readFileSync } from 'node:fs';
 
 // --- README example: begin ---
 import * as Effect from 'effect/Effect';
-import * as Layer from 'effect/Layer';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 import { Namespace, PrefixMap } from '@thomasfosterau/effect-rdf';
@@ -57,15 +56,14 @@ const program = Effect.fn('program')(function* () {
     Schema.Struct({ name: TermSchema.string, age: TermSchema.integer }),
   ).pipe(
     Stream.runCollect,
-    Effect.provide(Engine.layer().pipe(Layer.provide(Store.layerMemory(dataset)))),
+    Effect.provideService(Engine.SparqlEngine, Engine.make(yield* Store.makeMemory(dataset))),
   );
   // [{ name: 'Alice', age: 42 }, { name: 'Bob', age: -1 }]
 
-  // 3. Validate it with SHACL; the evaluator layer enables SHACL-SPARQL.
+  // 3. Validate it with SHACL; the evaluator layer (provided at the entry point) enables
+  //    SHACL-SPARQL.
   const shapesGraph = (yield* Turtle.parse(shapes)).dataset;
-  const report = yield* Validator.validate(dataset, shapesGraph).pipe(
-    Effect.provide(Evaluator.layer()),
-  );
+  const report = yield* Validator.validate(dataset, shapesGraph);
   // report.conforms === false: "http://example.org/bob has an invalid age: -1"
 
   // 4. Serialise it as JSON-LD (compacted with the given prefixes).
@@ -79,8 +77,8 @@ const program = Effect.fn('program')(function* () {
 const between = (text: string, start: string, end: string) =>
   text.slice(text.indexOf(start) + start.length, text.indexOf(end, text.indexOf(start)));
 
-describe('README quick tour', () => {
-  it('matches the code in the README', () => {
+layer(Evaluator.layer())('README quick tour', (test) => {
+  test('matches the code in the README', () => {
     const readme = readFileSync(new URL('../../../README.md', import.meta.url), 'utf8');
     const self = readFileSync(new URL(import.meta.url), 'utf8');
     const inReadme = between(readme, '## Quick tour', '\nEffect.runPromise');
@@ -92,7 +90,7 @@ describe('README quick tour', () => {
     expect(inReadme).toContain(inTest.trim());
   });
 
-  it.effect('runs end to end', () =>
+  test.effect('runs end to end', () =>
     Effect.gen(function* () {
       const { people, report, jsonld } = yield* program();
       expect(people).toEqual([

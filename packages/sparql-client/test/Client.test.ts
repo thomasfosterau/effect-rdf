@@ -18,6 +18,7 @@ import { Parser, QueryBuilder as Q, Store, TermSchema } from '@thomasfosterau/ef
 import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
 import * as Formats from '../src/Formats.ts';
 import * as SparqlClient from '../src/SparqlClient.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 const ex = Namespace.make('http://example.org/');
 const foaf = Namespace.make('http://xmlns.com/foaf/0.1/');
@@ -48,7 +49,7 @@ const run = <A, E>(
   effect: Effect.Effect<A, E, SparqlClient.SparqlClient | Store.QuadStore>,
   config?: Partial<SparqlClient.Config>,
   serverOptions?: Parameters<typeof Testing.layerClient>[0],
-) => Effect.provide(effect, makeLayer(config, serverOptions));
+) => withLayer(makeLayer(config, serverOptions))(effect);
 
 const lexical = (t: Term.GroundTerm | undefined) =>
   t === undefined || t._tag === 'Triple' ? undefined : t.value;
@@ -328,7 +329,7 @@ describe('SparqlClient ↔ SparqlServer', () => {
       const error = yield* Effect.flip(client.getGraphDataset('default'));
       expect(error._tag).toBe('ConfigurationError');
     }).pipe(
-      Effect.provide(
+      withLayer(
         SparqlClient.layer({ endpoint: ENDPOINT }).pipe(
           Layer.provide(Testing.layerClient()),
           Layer.provide(SparqlServer.layerMemoryServices(data)),

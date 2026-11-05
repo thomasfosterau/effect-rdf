@@ -184,9 +184,6 @@ export default defineConfig({
           'effect/use-path-service': 'off',
           'effect/use-console-service': 'off',
           'effect/effect-run-in-body': 'off',
-          // Allowance (effect-rdf#42): tests compose their layers with
-          // chained `Effect.provide` calls. Count at adoption.
-          'effecttsgo/strict-effect-provide': 'warn', // 43
         },
       },
       // The one native `JSON.parse` per package: `Schema.fromJsonString`

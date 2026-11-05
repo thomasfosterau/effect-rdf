@@ -5,13 +5,14 @@
 import * as Effect from 'effect/Effect';
 import * as SqlStore from '../src/SqlStore.ts';
 import { conformanceSuite } from './support/conformance.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 conformanceSuite('SQLite', {
   minRootShare: 0.5,
   run: (f, onQuery) =>
     Effect.runPromise(
       Effect.flatMap(Effect.service(SqlStore.SqlStore), f).pipe(
-        Effect.provide(SqlStore.layerSqlite({ filename: ':memory:', onQuery })),
+        withLayer(SqlStore.layerSqlite({ filename: ':memory:', onQuery })),
       ),
     ),
 });

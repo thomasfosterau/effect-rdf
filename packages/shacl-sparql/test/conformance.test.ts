@@ -9,7 +9,7 @@
  */
 import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Term, Vocab } from '@thomasfosterau/effect-rdf';
-import { Path, ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
+import { Path, Sparql, ValidationReport, Validator } from '@thomasfosterau/effect-shacl';
 import { Turtle } from '@thomasfosterau/effect-turtle';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
@@ -103,7 +103,9 @@ const runCase = (tc: TestCase) =>
     const expectedNode = one(tc.node, mf('result')) ?? assert.fail('test case has no mf:result');
 
     const exit = yield* Effect.exit(
-      Validator.validate(data, shapes).pipe(Effect.provide(Evaluator.layer())),
+      Validator.validate(data, shapes).pipe(
+        Effect.provideService(Sparql.SparqlConstraintEvaluator, Evaluator.make()),
+      ),
     );
     if (expectedNode.key === sht('Failure').key) {
       assert.isTrue(Exit.isFailure(exit));

@@ -5,7 +5,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assert, describe, expect, it } from '@effect/vitest';
+import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import { Dataset, Isomorphism, Serialization, Term } from '@thomasfosterau/effect-rdf';
@@ -14,6 +16,7 @@ import { Results } from '@thomasfosterau/effect-sparql';
 import * as Formats from '../src/Formats.ts';
 import * as SparqlServer from '../src/SparqlServer.ts';
 import * as Testing from '../src/Testing.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 import {
   type ProtocolTest,
   readManifest,
@@ -28,7 +31,11 @@ const exists = fs.existsSync(sparql11);
 const SERVER_OPTIONS = { path: '/sparql', graphStorePath: '/gsp' } as const;
 
 const formatsService = Effect.runSync(
-  Effect.provide(Effect.service(Serialization.Formats), Formats.layer),
+  Effect.scoped(
+    Effect.map(Layer.build(Formats.layer), (context) =>
+      Context.get(context, Serialization.Formats),
+    ),
+  ),
 );
 
 const loadGraphData = (t: ProtocolTest): Dataset.Dataset => {
@@ -134,7 +141,7 @@ const runTest = (t: ProtocolTest) =>
       }),
       { concurrency: 1, discard: true },
     );
-  }).pipe(Effect.provide(SparqlServer.layerMemoryServices(loadGraphData(t))));
+  }).pipe(withLayer(SparqlServer.layerMemoryServices(loadGraphData(t))));
 
 const protocolTests = exists ? readManifest(path.join(sparql11, 'protocol', 'manifest.ttl')) : [];
 const gspTests = exists
@@ -174,7 +181,7 @@ const fetchDescription = (accept: string | undefined) =>
       'http://www.example/sparql',
     );
     return { response, dataset };
-  }).pipe(Effect.provide(SparqlServer.layerMemoryServices()));
+  }).pipe(withLayer(SparqlServer.layerMemoryServices()));
 
 describe.skipIf(!exists)('SPARQL 1.1 Service Description', () => {
   it.effect('returns-rdf: GET on endpoint returns RDF', () =>

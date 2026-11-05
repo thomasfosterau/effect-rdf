@@ -1,7 +1,7 @@
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import { describe, expect, it } from '@effect/vitest';
+import { describe, expect, it, layer } from '@effect/vitest';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
@@ -154,19 +154,21 @@ describe('DocumentLoader', () => {
     'http://example.org/doc': '{"@context": "ctx", "name": "Remote"}',
   });
 
-  it.effect('resolves remote contexts and documents from a static map', () =>
-    Effect.gen(function* () {
-      const expanded = yield* JsonLd.expand('http://example.org/doc');
-      expect(expanded).toEqual([{ 'http://schema.org/name': [{ '@value': 'Remote' }] }]);
-    }).pipe(Effect.provide(contexts)),
-  );
+  layer(contexts)((test) => {
+    test.effect('resolves remote contexts and documents from a static map', () =>
+      Effect.gen(function* () {
+        const expanded = yield* JsonLd.expand('http://example.org/doc');
+        expect(expanded).toEqual([{ 'http://schema.org/name': [{ '@value': 'Remote' }] }]);
+      }),
+    );
 
-  it.effect('reports missing documents', () =>
-    Effect.gen(function* () {
-      const error = yield* Effect.flip(JsonLd.expand('http://example.org/missing'));
-      expect(error.code).toBe('loading document failed');
-    }).pipe(Effect.provide(contexts)),
-  );
+    test.effect('reports missing documents', () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(JsonLd.expand('http://example.org/missing'));
+        expect(error.code).toBe('loading document failed');
+      }),
+    );
+  });
 
   it('parses Link headers', () => {
     expect(
@@ -211,30 +213,33 @@ describe('DocumentLoader', () => {
     }),
   );
 
-  it.effect('loads documents over HttpClient', () => {
-    const requested: Array<string> = [];
-    const client = HttpClient.make((request) =>
-      Effect.sync(() => {
-        requested.push(request.url);
-        const body = request.url.endsWith('/ctx')
-          ? '{"@context": {"name": "http://schema.org/name"}}'
-          : '{"@context": "/ctx", "name": "Over HTTP"}';
-        return HttpClientResponse.fromWeb(
-          request,
-          new Response(body, { headers: { 'content-type': 'application/ld+json' } }),
-        );
+  const requested: Array<string> = [];
+  const client = HttpClient.make((request) =>
+    Effect.sync(() => {
+      requested.push(request.url);
+      const body = request.url.endsWith('/ctx')
+        ? '{"@context": {"name": "http://schema.org/name"}}'
+        : '{"@context": "/ctx", "name": "Over HTTP"}';
+      return HttpClientResponse.fromWeb(
+        request,
+        new Response(body, { headers: { 'content-type': 'application/ld+json' } }),
+      );
+    }),
+  );
+  const httpLoader = DocumentLoader.layerHttp.pipe(
+    Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+  );
+
+  layer(httpLoader)((test) => {
+    test.effect('loads documents over HttpClient', () =>
+      Effect.gen(function* () {
+        const expanded = yield* JsonLd.expand('http://example.org/doc');
+        expect(expanded).toEqual([{ 'http://schema.org/name': [{ '@value': 'Over HTTP' }] }]);
+        // documents are cached by the HTTP loader
+        yield* JsonLd.expand('http://example.org/doc');
+        expect(requested).toEqual(['http://example.org/doc', 'http://example.org/ctx']);
       }),
     );
-    const layer = DocumentLoader.layerHttp.pipe(
-      Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
-    );
-    return Effect.gen(function* () {
-      const expanded = yield* JsonLd.expand('http://example.org/doc');
-      expect(expanded).toEqual([{ 'http://schema.org/name': [{ '@value': 'Over HTTP' }] }]);
-      // documents are cached by the HTTP loader
-      yield* JsonLd.expand('http://example.org/doc');
-      expect(requested).toEqual(['http://example.org/doc', 'http://example.org/ctx']);
-    }).pipe(Effect.provide(layer));
   });
 });
 

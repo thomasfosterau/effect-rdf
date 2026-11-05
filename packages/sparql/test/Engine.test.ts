@@ -1,5 +1,5 @@
 import * as crypto from 'node:crypto';
-import { assert, describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it, layer } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -38,8 +38,8 @@ const TestLayer = Engine.layer({ baseIri: 'http://example.org/' }).pipe(
   Layer.provideMerge(Store.layerMemory(data)),
 );
 
-describe('Engine', () => {
-  it.effect('evaluates SELECT queries as streams', () =>
+layer(TestLayer)('Engine', (test) => {
+  test.effect('evaluates SELECT queries as streams', () =>
     Effect.gen(function* () {
       const engine = yield* Engine.SparqlEngine;
       const result = yield* engine.select(
@@ -48,10 +48,10 @@ describe('Engine', () => {
       const rows = yield* Stream.runCollect(result.bindings);
       expect(rows.map((b) => lex(Bindings.getUndefined(b, 'name')))).toEqual(['Alice', 'Bob']);
       expect(result.variables.map((v) => v.value)).toEqual(['name']);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it.effect('evaluates ASK, CONSTRUCT and GRAPH patterns', () =>
+  test.effect('evaluates ASK, CONSTRUCT and GRAPH patterns', () =>
     Effect.gen(function* () {
       const engine = yield* Engine.SparqlEngine;
       expect(yield* engine.ask('ASK { <http://example.org/alice> ?p ?o }')).toBe(true);
@@ -65,17 +65,17 @@ describe('Engine', () => {
       expect(quads.map((q) => q.toString())).toEqual([
         '<http://example.org/bob> <http://xmlns.com/foaf/0.1/knownBy> <http://example.org/alice> .',
       ]);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it.effect('supports the union default graph option', () =>
+  test.effect('supports the union default graph option', () =>
     Effect.gen(function* () {
       const engine = Engine.make(yield* Store.makeMemory(data), { unionDefaultGraph: true });
       expect(yield* engine.ask('ASK { ?s ?p "Carol" }')).toBe(true);
     }),
   );
 
-  it.effect('executes updates atomically', () =>
+  test.effect('executes updates atomically', () =>
     Effect.gen(function* () {
       const store = yield* Store.makeMemory(data);
       const engine = Engine.make(store);
@@ -96,7 +96,7 @@ describe('Engine', () => {
     }),
   );
 
-  it.effect('reports parse errors with positions', () =>
+  test.effect('reports parse errors with positions', () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(Parser.parseQuery('SELECT * WHERE {\n  ?s ?p \n}'));
       expect(error._tag).toBe('SparqlParseError');
@@ -105,7 +105,7 @@ describe('Engine', () => {
     }),
   );
 
-  it.effect('streams lazily: LIMIT stops evaluation early', () =>
+  test.effect('streams lazily: LIMIT stops evaluation early', () =>
     Effect.gen(function* () {
       const big = Dataset.fromIterable(
         Array.from({ length: 20_000 }, (_, i) => Term.quad(ex(`s${i}`), ex('p'), Xsd.integer(i))),
@@ -126,7 +126,7 @@ describe('Engine', () => {
     }),
   );
 
-  it.effect('offers algebra to a store query capability first', () =>
+  test.effect('offers algebra to a store query capability first', () =>
     Effect.gen(function* () {
       const base = yield* Store.makeMemory(data);
       const seen: Array<string> = [];
@@ -162,8 +162,8 @@ const selectPrebound = (query: string, bindings: Record<string, Term.GroundTerm>
     return (yield* Stream.runCollect(result.bindings)).map((b) => b.toString());
   });
 
-describe('Pre-binding', () => {
-  it.effect('makes pre-bound values visible in FILTERs of empty groups', () =>
+layer(TestLayer)('Pre-binding', (test) => {
+  test.effect('makes pre-bound values visible in FILTERs of empty groups', () =>
     Effect.gen(function* () {
       expect(
         yield* selectPrebound(
@@ -181,10 +181,10 @@ describe('Pre-binding', () => {
           },
         ),
       ).toEqual([]);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it.effect('pre-binds BGPs, UNION branches, BIND and nested groups', () =>
+  test.effect('pre-binds BGPs, UNION branches, BIND and nested groups', () =>
     Effect.gen(function* () {
       expect(
         yield* selectPrebound('SELECT ?name WHERE { $this foaf:name ?name }', { this: ex('bob') }),
@@ -201,10 +201,10 @@ describe('Pre-binding', () => {
           { this: ex('carol') },
         ),
       ).toEqual([]);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it.effect('pre-binds GRAPH ?g, ASK and algebra evaluation', () =>
+  test.effect('pre-binds GRAPH ?g, ASK and algebra evaluation', () =>
     Effect.gen(function* () {
       const engine = yield* Engine.SparqlEngine;
       expect(
@@ -224,10 +224,10 @@ describe('Pre-binding', () => {
         engine.evaluate(op, { bindings: Bindings.make({ s: ex('alice'), p: foaf('age') }) }),
       );
       expect(rows.map((r) => lex(Bindings.getUndefined(r, 'o')))).toEqual(['30']);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it('rewrites the algebra by values insertion', () => {
+  test('rewrites the algebra by values insertion', () => {
     const op = Algebra.prebind(
       Translate.translatePattern(
         Effect.runSync(Parser.parseQuery('SELECT * WHERE { ?s ?p ?o FILTER (?o != 1) }')).where,
@@ -239,14 +239,14 @@ describe('Pre-binding', () => {
   });
 });
 
-describe('QueryBuilder', () => {
+layer(TestLayer)('QueryBuilder', (test) => {
   const v = Q.vars('person', 'name', 'email', 'p', 'age');
   const query = Q.select('person', 'name', Q.maybe('email'))
     .where(Q.triple(v.person, foaf('name'), v.name))
     .optional(Q.triple(v.person, foaf('mbox'), v.email))
     .orderBy(Q.desc(v.name));
 
-  it('builds ASTs that print as SPARQL', () => {
+  test('builds ASTs that print as SPARQL', () => {
     const text = query.toString();
     expect(text).toContain('OPTIONAL');
     const reparsed = Parser.parseQueryUnsafe(text);
@@ -254,7 +254,7 @@ describe('QueryBuilder', () => {
     expect(Algebra.format(Translate.translateQuery(reparsed).input)).toContain('leftjoin');
   });
 
-  it.effect('executes with typed rows', () =>
+  test.effect('executes with typed rows', () =>
     Effect.gen(function* () {
       const rows = yield* Q.executeAll(query);
       const first = rows[0] ?? assert.fail('expected a row');
@@ -265,10 +265,10 @@ describe('QueryBuilder', () => {
       expect(lex(email)).toBe('mailto:bob@example.org');
       expect(rows[1]).toBeDefined();
       expect(rows[1]?.email).toBeUndefined();
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it.effect('decodes rows with schemas', () =>
+  test.effect('decodes rows with schemas', () =>
     Effect.gen(function* () {
       const people = Q.select('name', 'age')
         .where(Q.triple(v.p, foaf('name'), v.name), Q.triple(v.p, foaf('age'), v.age))
@@ -277,10 +277,10 @@ describe('QueryBuilder', () => {
         Q.decode(people, Schema.Struct({ name: TermSchema.string, age: TermSchema.integer })),
       );
       expect(decoded).toEqual([{ name: 'Alice', age: 30 }]);
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 
-  it.effect('supports aggregates and grouping', () =>
+  test.effect('supports aggregates and grouping', () =>
     Effect.gen(function* () {
       const q = Q.select(Q.as(Q.count(), 'n'), Q.as(Q.sum(v.age), 'total')).where(
         Q.triple(v.p, foaf('age'), v.age),
@@ -288,7 +288,7 @@ describe('QueryBuilder', () => {
       const [row] = yield* Q.executeAll(q);
       expect(lex(row?.n)).toBe('2');
       expect(lex(row?.total)).toBe('55');
-    }).pipe(Effect.provide(TestLayer)),
+    }),
   );
 });
 
@@ -358,19 +358,19 @@ describe('Hash functions', () => {
 const remoteTitles = (endpoint: Term.NamedNode) =>
   Stream.make(Bindings.make({ title: Term.literal(`from ${endpoint.value}`) }));
 
-describe('SERVICE with a variable endpoint', () => {
-  const FederatedLayer = Engine.layer({ service: (endpoint) => remoteTitles(endpoint) }).pipe(
-    Layer.provideMerge(
-      Store.layerMemory(
-        Dataset.make(
-          Term.quad(ex('p1'), ex('endpoint'), Term.namedNode('http://one.example/sparql')),
-          Term.quad(ex('p2'), ex('endpoint'), Term.namedNode('http://two.example/sparql')),
-        ),
+const FederatedLayer = Engine.layer({ service: (endpoint) => remoteTitles(endpoint) }).pipe(
+  Layer.provideMerge(
+    Store.layerMemory(
+      Dataset.make(
+        Term.quad(ex('p1'), ex('endpoint'), Term.namedNode('http://one.example/sparql')),
+        Term.quad(ex('p2'), ex('endpoint'), Term.namedNode('http://two.example/sparql')),
       ),
     ),
-  );
+  ),
+);
 
-  it.effect('evaluates the remote pattern once per bound endpoint', () =>
+layer(FederatedLayer)('SERVICE with a variable endpoint', (test) => {
+  test.effect('evaluates the remote pattern once per bound endpoint', () =>
     Effect.gen(function* () {
       const engine = yield* Engine.SparqlEngine;
       const result = yield* engine.select(
@@ -381,15 +381,15 @@ describe('SERVICE with a variable endpoint', () => {
         'from http://one.example/sparql',
         'from http://two.example/sparql',
       ]);
-    }).pipe(Effect.provide(FederatedLayer)),
+    }),
   );
 
-  it.effect('fails when the endpoint variable is unbound', () =>
+  test.effect('fails when the endpoint variable is unbound', () =>
     Effect.gen(function* () {
       const engine = yield* Engine.SparqlEngine;
       const result = yield* engine.select('SELECT * { SERVICE ?e { ?x ?y ?z } }');
       const error = yield* Effect.flip(Stream.runCollect(result.bindings));
       expect(error._tag).toBe('EvaluationError');
-    }).pipe(Effect.provide(FederatedLayer)),
+    }),
   );
 });

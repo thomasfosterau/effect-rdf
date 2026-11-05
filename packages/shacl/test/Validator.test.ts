@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it, layer } from '@effect/vitest';
 import { Dataset, Isomorphism, Namespace, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
@@ -404,26 +404,23 @@ describe('Validator', () => {
     }),
   );
 
-  it.effect('provides a pre-compiled Validator service', () =>
-    Effect.gen(function* () {
-      const validator = yield* Validator.Validator;
-      expect(yield* validator.conforms(personData)).toBe(false);
-      const error = yield* Effect.flip(validator.check(personData));
-      expect(error._tag).toBe('ConformanceError');
-      const good = ttl(`ex:x a ex:Person ; ex:name "X" .`);
-      expect(yield* validator.check(good)).toBe(good);
-    }).pipe(Effect.provide(Validator.layer(personShapes))),
-  );
+  layer(Validator.layer(personShapes))((test) => {
+    test.effect('provides a pre-compiled Validator service', () =>
+      Effect.gen(function* () {
+        const validator = yield* Validator.Validator;
+        expect(yield* validator.conforms(personData)).toBe(false);
+        const error = yield* Effect.flip(validator.check(personData));
+        expect(error._tag).toBe('ConformanceError');
+        const good = ttl(`ex:x a ex:Person ; ex:name "X" .`);
+        expect(yield* validator.check(good)).toBe(good);
+      }),
+    );
+  });
 
   it.effect('fails building the layer from an ill-formed shapes graph', () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(
-        Effect.provide(
-          Effect.gen(function* () {
-            return yield* Validator.Validator;
-          }),
-          Validator.layer(ttl(`ex:S sh:targetNode ex:a ; sh:maxCount ex:x .`)),
-        ),
+        Layer.build(Validator.layer(ttl(`ex:S sh:targetNode ex:a ; sh:maxCount ex:x .`))),
       );
       expect(error._tag).toBe('ShapesGraphError');
     }),
@@ -522,18 +519,16 @@ describe('SHACL-SPARQL extension point', () => {
         Option.some(Term.literal('1', xsd.integer).key),
       );
     }).pipe(
-      Effect.provide(
-        Layer.succeed(Sparql.SparqlConstraintEvaluator, {
-          evaluateConstraint: (input) =>
-            Effect.succeed(
-              // SAFETY: the test data has IRI focus nodes.
-              Dataset.objectsOf(input.dataGraph, input.focusNode as Term.NamedNode, ex('bad')).map(
-                (value) => ({ value }),
-              ),
+      Effect.provideService(Sparql.SparqlConstraintEvaluator, {
+        evaluateConstraint: (input) =>
+          Effect.succeed(
+            // SAFETY: the test data has IRI focus nodes.
+            Dataset.objectsOf(input.dataGraph, input.focusNode as Term.NamedNode, ex('bad')).map(
+              (value) => ({ value }),
             ),
-          selectTargets: () => Effect.succeed([]),
-        }),
-      ),
+          ),
+        selectTargets: () => Effect.succeed([]),
+      }),
     ),
   );
 
@@ -551,18 +546,16 @@ describe('SHACL-SPARQL extension point', () => {
         'http://example.org/a is bad: 1 (too bad)',
       ]);
     }).pipe(
-      Effect.provide(
-        Layer.succeed(Sparql.SparqlConstraintEvaluator, {
-          evaluateConstraint: () =>
-            Effect.succeed([
-              {
-                value: Term.literal('1', xsd.integer),
-                bindings: new Map([['reason', Term.literal('too bad')]]),
-              },
-            ]),
-          selectTargets: () => Effect.succeed([]),
-        }),
-      ),
+      Effect.provideService(Sparql.SparqlConstraintEvaluator, {
+        evaluateConstraint: () =>
+          Effect.succeed([
+            {
+              value: Term.literal('1', xsd.integer),
+              bindings: new Map([['reason', Term.literal('too bad')]]),
+            },
+          ]),
+        selectTargets: () => Effect.succeed([]),
+      }),
     ),
   );
 });

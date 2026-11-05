@@ -14,6 +14,7 @@ import { Dataset, Term } from '@thomasfosterau/effect-rdf';
 import * as Engine from '@thomasfosterau/effect-sparql/Engine';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
 import * as SqlStore from '../src/SqlStore.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 // -----------------------------------------------------------------------------
 // Random generation
@@ -363,7 +364,7 @@ describe('Differential: SQL store vs in-memory store', () => {
                 { concurrency: 1, discard: true },
               );
             }).pipe(
-              Effect.provide(
+              withLayer(
                 SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) }),
               ),
             );

@@ -20,6 +20,7 @@ import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
 import { Manifest, Turtle } from '@thomasfosterau/effect-turtle';
 import * as Federation from '../src/Federation.ts';
 import * as Formats from '../src/Formats.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 const suitesDir =
   process.env.RDF_TEST_SUITES ??
@@ -113,7 +114,7 @@ describe('Federation', () => {
       expect(error._tag).toBe('EvaluationError');
       expect(error.message).toContain('502');
     }).pipe(
-      Effect.provide(
+      withLayer(
         federatedEngine(
           Dataset.make(
             Term.quad(ex('alice'), ex('age'), Term.literal('30')),
@@ -146,7 +147,7 @@ describe('Federation', () => {
       expect(error._tag).toBe('UpdateError');
       yield* engine.update('LOAD SILENT <http://nowhere.test/doc.ttl>');
     }).pipe(
-      Effect.provide(
+      withLayer(
         federatedEngine(Dataset.empty, {
           'http://docs.test/sparql': Dataset.make(
             Term.quad(ex('r'), ex('label'), Term.literal('Remote')),
@@ -272,7 +273,7 @@ describe.skipIf(!exists)('W3C SPARQL 1.1 federated query (sparql11/service)', ()
           hasBlankNodes ? [] : sortedKeys(expected.bindings),
         );
       }).pipe(
-        Effect.provide(
+        withLayer(
           federatedEngine(
             Dataset.fromIterable(t.data.flatMap((f) => Array.from(readTurtle(f)))),
             Object.fromEntries(

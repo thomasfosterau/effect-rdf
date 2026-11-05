@@ -29,6 +29,7 @@ import {
   readManifest,
   type TestCase,
 } from '../../sparql/test/support/manifest.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 import { parseFile } from '../../sparql/test/support/rdf.ts';
 
 const suitesDir =
@@ -211,7 +212,7 @@ const runQueryTest = (t: TestCase, accept: string) =>
         ),
         Match.exhaustive,
       );
-    }).pipe(Effect.provide(clientLayer(loadDataset(t, parsed), baseIri, accept)));
+    }).pipe(withLayer(clientLayer(loadDataset(t, parsed), baseIri, accept)));
   });
 
 const runUpdateTest = (t: TestCase) =>
@@ -233,7 +234,7 @@ const runUpdateTest = (t: TestCase) =>
       expect(isomorphic ? '' : Dataset.toNQuads(actual)).toBe(
         isomorphic ? '' : Dataset.toNQuads(expected),
       );
-    }).pipe(Effect.provide(clientLayer(loadDataset(t, undefined), baseIri, FORMATS[0])));
+    }).pipe(withLayer(clientLayer(loadDataset(t, undefined), baseIri, FORMATS[0])));
   });
 
 const tests = loadTests();

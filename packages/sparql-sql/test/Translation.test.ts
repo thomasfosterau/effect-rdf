@@ -16,6 +16,7 @@ import * as Translate from '@thomasfosterau/effect-sparql/Translate';
 import * as Dialect from '../src/Dialect.ts';
 import * as SqlStore from '../src/SqlStore.ts';
 import * as Translation from '../src/Translation.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 const ex = Namespace.make('http://example.org/');
 
@@ -54,7 +55,7 @@ const run = (query: string, quads: ReadonlyArray<Term.Quad> = data) => {
           : [];
     return { rows, events };
   }).pipe(
-    Effect.provide(SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) })),
+    withLayer(SqlStore.layerSqlite({ filename: ':memory:', onQuery: (e) => events.push(e) })),
   );
 };
 

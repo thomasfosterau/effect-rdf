@@ -13,6 +13,7 @@ import type * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import * as Errors from '../src/Errors.ts';
 import * as SparqlClient from '../src/SparqlClient.ts';
+import { withLayer } from '../../sparql/test/support/layer.ts';
 
 const ENDPOINT = 'http://mock.test/sparql';
 
@@ -38,14 +39,13 @@ const withMock = <A, E>(
   effect: Effect.Effect<A, E, SparqlClient.SparqlClient>,
   config: Partial<SparqlClient.Config> = {},
 ) =>
-  Effect.provide(
-    effect,
+  withLayer(
     SparqlClient.layer({
       endpoint: ENDPOINT,
       graphStoreEndpoint: `${ENDPOINT}/gsp`,
       ...config,
     }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, HttpClient.make(handler)))),
-  );
+  )(effect);
 
 const selectAll = Effect.flatMap(Effect.service(SparqlClient.SparqlClient), (c) =>
   Stream.runCollect(c.select('SELECT * {}')),
