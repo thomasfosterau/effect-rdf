@@ -350,8 +350,57 @@ const formula: P<Model.N3Term> = Parser.preceded(
 );
 
 /** A prefixed name, or the bare words `true` and `false`. */
+const TRAILING_DOTS = /\.+$/;
+
+/** ASCII letters (`PN_CHARS_BASE` below 0x80). */
+const isAsciiLetter = (c: number): boolean => (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a);
+
+/** ASCII name characters (`PN_CHARS` below 0x80, with `.`), and `:` too in a local name. */
+const isAsciiNameChar = (c: number, local: boolean): boolean =>
+  isAsciiLetter(c) ||
+  (c >= 0x30 && c <= 0x39) ||
+  c === 0x5f ||
+  c === 0x2d ||
+  c === 0x2e ||
+  (local && c === 0x3a);
+
+/**
+ * A prefixed name that is plain ASCII, scanned by hand: a prefix of letters,
+ * digits, `_` and `-` (or none), `:`, and a local name of those and `:` and
+ * `.` (without trailing dots). It backtracks, having changed nothing, at
+ * anything else (`.` in the prefix, `%`, `\`, a character from 0x80, no
+ * `:`), so that `pnameTerm` reads the name, with the same result.
+ */
+const asciiPName: P<Model.N3Term> = Parser.make((state) => {
+  const input = state.input;
+  const start = state.pos;
+  const n = input.length;
+  let i = start;
+  let c = input.charCodeAt(i);
+  if (isAsciiLetter(c)) {
+    do c = input.charCodeAt(++i);
+    while (i < n && isAsciiNameChar(c, false) && c !== 0x2e);
+  }
+  if (c !== 0x3a) return state.backtrack('Token');
+  const colon = i;
+  c = input.charCodeAt(++i);
+  if (i < n && isAsciiNameChar(c, true) && c !== 0x2d && c !== 0x2e) {
+    do c = input.charCodeAt(++i);
+    while (i < n && isAsciiNameChar(c, true));
+  }
+  if (c === 0x25 || c === 0x5c || c >= 0x80) return state.backtrack('Token');
+  // A dot cannot end a name (it ends the statement)
+  const local =
+    input.charCodeAt(i - 1) === 0x2e && i > colon + 1
+      ? input.slice(colon + 1, i).replace(TRAILING_DOTS, '')
+      : input.slice(colon + 1, i);
+  b.at = start;
+  state.pos = colon + 1 + local.length;
+  return b.namedPNameParts(input.slice(start, colon), local);
+});
+
 const nameItem: P<Model.N3Term> = Parser.alt(
-  pnameTerm,
+  Parser.alt(asciiPName, pnameTerm),
   Parser.seq(Parser.location, bareWord).pipe(
     Parser.map(([at, w]) =>
       w === 'true'
@@ -718,10 +767,10 @@ class Builder {
 
   quantify(universal: boolean, iris: ReadonlyArray<IriNode>): void {
     const scope = this.scope();
-    for (const node of iris) {
+    iris.forEach((node) => {
       const iri = this.iri(node);
       scope.set(iri, universal ? this.variableFor(iri) : this.freshBlank());
-    }
+    });
   }
 
   variable(name: string): Term.Variable {
@@ -798,10 +847,16 @@ class Builder {
   /** The term a prefixed name read at `at` stands for. */
   namedPName(name: string): Model.N3Term {
     const colon = name.indexOf(':');
-    const prefix = name.slice(0, colon);
     const raw = name.slice(colon + 1);
     // `PN_LOCAL_ESC`s are decoded, as `TurtleGrammar.pnLocal` does
-    const local = raw.includes('\\') ? raw.replace(PN_LOCAL_ESC, '$1') : raw;
+    return this.namedPNameParts(
+      name.slice(0, colon),
+      raw.includes('\\') ? raw.replace(PN_LOCAL_ESC, '$1') : raw,
+    );
+  }
+
+  /** The term of a prefixed name read at `at`, given its prefix and decoded local name. */
+  namedPNameParts(prefix: string, local: string): Model.N3Term {
     const ns = this.prefixes.get(prefix);
     if (ns !== undefined) return this.scoped(this.localNode(ns, local));
     return this.named({ _tag: 'PName', prefix, local, at: this.at });
@@ -814,11 +869,10 @@ class Builder {
 
   /** `named`, or the variable or blank node it is quantified as. */
   private scoped(named: Term.NamedNode): Model.N3Term {
-    for (let k = this.scopes.length - 1; k >= 0; k--) {
-      const t = this.scopes[k]?.[1].get(named.value);
-      if (t !== undefined) return t;
-    }
-    return named;
+    // Usually no formula quantifies anything, and there is nothing to look up
+    if (Arr.isReadonlyArrayEmpty(this.scopes)) return named;
+    const scope = this.scopes.findLast(([, quantified]) => quantified.has(named.value));
+    return scope?.[1].get(named.value) ?? named;
   }
 
   private iriNode(node: IriNode): Term.NamedNode {

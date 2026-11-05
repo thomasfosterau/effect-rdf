@@ -32,6 +32,17 @@ describe('N3.parse', () => {
     }),
   );
 
+  it.each([
+    [':a.b :p :c.', [`<${EX}a.b> <${EX}p> <${EX}c>`]],
+    [':a..b :p :c.', [`<${EX}a..b> <${EX}p> <${EX}c>`]],
+    [':a%20b :p :c\\-d.', [`<${EX}a%20b> <${EX}p> <${EX}c-d>`]],
+    [':é :p :xé.', [`<${EX}é> <${EX}p> <${EX}xé>`]],
+    [': : :_x.', [`<${EX}> <${EX}> <${EX}_x>`]],
+    [':a :p :b:c, :0 .', [`<${EX}a> <${EX}p> <${EX}b:c>`, `<${EX}a> <${EX}p> <${EX}0>`]],
+  ])('reads prefixed names, plain ASCII or not, alike: %s', (text, expected) => {
+    expect(keys(text)).toEqual(expected);
+  });
+
   it('parses formulas, variables and rule shorthands', () => {
     const rule = Arr.getUnsafe(statements('{ ?x a :Man } => { ?x a :Mortal } .'), 0);
     expect(rule.predicate).toEqual(Vocab.log.implies);
