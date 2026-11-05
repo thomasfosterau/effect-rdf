@@ -26,10 +26,13 @@ import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, xsd } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
 import * as Arr from 'effect/Array';
-import * as Str from 'effect/String';
-import * as Result from 'effect/Result';
-import * as Grammar from '../Grammar.ts';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
+import * as Str from 'effect/String';
+import * as Grammar from '../Grammar.ts';
+import { loop } from './loop.ts';
 
 /** @internal */
 export class SyntaxFailure extends Error {
@@ -45,7 +48,7 @@ export class SyntaxFailure extends Error {
 /** @internal */
 export interface ParserOptions {
   readonly trig: boolean;
-  readonly baseIri: string | undefined;
+  readonly baseIri: Option.Option<string>;
   readonly blankNodePrefix: string;
   /** The graph for triples outside graph blocks. */
   readonly graph: Term.Graph;
@@ -74,6 +77,17 @@ const C_BACKSLASH = 0x5c;
 const C_PERCENT = 0x25;
 const C_GT = 0x3e;
 
+/** A run of dots, matched where it starts. */
+const DOTS = /\.*/y;
+
+/** The offset after any dots at `pos`. */
+const skipDots = (input: string, pos: number): number => {
+  if (input.charCodeAt(pos) !== C_DOT) return pos;
+  DOTS.lastIndex = pos;
+  DOTS.test(input);
+  return DOTS.lastIndex;
+};
+
 type P<A> = Parser.Parser<A>;
 
 // -----------------------------------------------------------------------------
@@ -85,16 +99,23 @@ class Frame {
   subject: Term.Subject = rdf.nil;
   predicate: Term.Predicate = rdf.nil;
   object: Term.Object = rdf.nil;
-  reifier: Term.NamedNode | Term.BlankNode | undefined;
-  triple: Term.Triple | undefined;
+  reifier: Option.Option<Term.NamedNode | Term.BlankNode> = Option.none();
+  /** The triple of the current object, once built for a reifier. */
+  triple: Option.Option<Term.Triple> = Option.none();
 }
+
+const noReifier = Option.none<Term.NamedNode | Term.BlankNode>();
+const noTriple = Option.none<Term.Triple>();
+
+/** A previous prefix binding (`None` when the prefix was unbound). */
+type PrefixBinding = readonly [prefix: string, previous: Option.Option<string>];
 
 class Builder {
   readonly options: ParserOptions;
-  readonly prefixes = new Map<string, string>();
-  base: string | undefined;
+  readonly prefixes = MutableHashMap.empty<string, string>();
+  base: Option.Option<string>;
   out: Array<Term.Quad> = [];
-  readonly labels = new Map<string, Term.BlankNode>();
+  readonly labels = MutableHashMap.empty<string, Term.BlankNode>();
   counter = 0;
   graph: Term.Graph;
   inGraph = false;
@@ -114,9 +135,9 @@ class Builder {
   snapCounter = 0;
   snapGraph: Term.Graph;
   snapInGraph = false;
-  snapBase: string | undefined;
-  snapPrefix: string | undefined;
-  snapPrefixValue: string | undefined;
+  snapBase: Option.Option<string> = Option.none();
+  /** The prefix the statement bound, with its previous binding. */
+  snapPrefix: Option.Option<PrefixBinding> = Option.none();
   /** Registers for the terms being read (none of them nests). */
   iriStart = 0;
   iriEnd = 0;
@@ -135,9 +156,9 @@ class Builder {
   private runCounter = 0;
   private runGraph: Term.Graph;
   private runInGraph = false;
-  private runBase: string | undefined;
+  private runBase: Option.Option<string> = Option.none();
   /** The prefixes set during the run, with their previous values. */
-  private readonly runPrefixes: Array<readonly [string, string | undefined]> = [];
+  private readonly runPrefixes: Array<PrefixBinding> = [];
 
   constructor(options: ParserOptions) {
     this.options = options;
@@ -169,23 +190,25 @@ class Builder {
     this.graph = this.runGraph;
     this.inGraph = this.runInGraph;
     this.base = this.runBase;
-    for (let i = this.runPrefixes.length - 1; i >= 0; i--) {
-      const [prefix, value] = this.runPrefixes[i]!;
-      if (value === undefined) this.prefixes.delete(prefix);
-      else this.prefixes.set(prefix, value);
-    }
+    Arr.forEach(Arr.reverse(this.runPrefixes), (binding) => this.restorePrefix(binding));
     this.runPrefixes.length = 0;
   }
 
+  private restorePrefix([prefix, previous]: PrefixBinding): void {
+    if (Option.isSome(previous)) MutableHashMap.set(this.prefixes, prefix, previous.value);
+    else MutableHashMap.remove(this.prefixes, prefix);
+  }
+
   frame(): Frame {
-    return this.frames[this.depth]!;
+    // The grammar pushes a frame before it reads one, so the fallback is never used
+    return this.frames[this.depth] ?? new Frame();
   }
 
   push(subject: Term.Subject): void {
     const frame = (this.frames[++this.depth] ??= new Frame());
     frame.subject = subject;
-    frame.reifier = undefined;
-    frame.triple = undefined;
+    frame.reifier = noReifier;
+    frame.triple = noTriple;
   }
 
   emit(s: Term.Subject, p: Term.Predicate, o: Term.Object): void {
@@ -205,7 +228,7 @@ class Builder {
     this.snapGraph = this.graph;
     this.snapInGraph = this.inGraph;
     this.snapBase = this.base;
-    this.snapPrefix = undefined;
+    this.snapPrefix = Option.none();
   }
 
   /** Undoes the statement in progress. */
@@ -216,21 +239,18 @@ class Builder {
     this.graph = this.snapGraph;
     this.inGraph = this.snapInGraph;
     this.base = this.snapBase;
-    if (this.snapPrefix !== undefined) {
-      if (this.snapPrefixValue === undefined) this.prefixes.delete(this.snapPrefix);
-      else this.prefixes.set(this.snapPrefix, this.snapPrefixValue);
-      this.snapPrefix = undefined;
+    if (Option.isSome(this.snapPrefix)) {
+      this.restorePrefix(this.snapPrefix.value);
+      this.snapPrefix = Option.none();
     }
     this.depth = -1;
   }
 
   setPrefix(prefix: string, iri: string): void {
-    if (this.snapPrefix === undefined) {
-      this.snapPrefix = prefix;
-      this.snapPrefixValue = this.prefixes.get(prefix);
-    }
-    this.runPrefixes.push([prefix, this.prefixes.get(prefix)]);
-    this.prefixes.set(prefix, iri);
+    const binding: PrefixBinding = [prefix, MutableHashMap.get(this.prefixes, prefix)];
+    if (Option.isNone(this.snapPrefix)) this.snapPrefix = Option.some(binding);
+    this.runPrefixes.push(binding);
+    MutableHashMap.set(this.prefixes, prefix, iri);
   }
 
   openGraph(graph: Term.Graph): void {
@@ -242,7 +262,7 @@ class Builder {
 /** The builder of the parser running the grammar. */
 let b: Builder = new Builder({
   trig: false,
-  baseIri: undefined,
+  baseIri: Option.none(),
   blankNodePrefix: '',
   graph: Term.defaultGraph,
 });
@@ -290,62 +310,81 @@ const nameStart: P<unknown> = Parser.peek(Parser.alt(lit(':'), Token.oneOf(Gramm
 // Diagnostics: the errors of IRIs and strings, found by scanning them again
 // -----------------------------------------------------------------------------
 
-/** The error in the IRI at `start`, or `undefined`; `end` bounds an IRI that matched. */
-const iriError = (input: string, start: number, end = input.length): Stop | undefined => {
-  let i = start + 1;
-  for (;;) {
-    if (i >= end) return end === input.length ? new Stop('Unterminated IRI', start) : undefined;
-    const c = input.charCodeAt(i);
-    if (c === C_GT) return undefined;
-    if (c === C_BACKSLASH) {
-      const decoded = Lexical.decodeUchar(input, i);
-      if (decoded._tag === 'Error') return new Stop(decoded.message, i);
-      if (!Lexical.isIriChar(decoded.value.codePointAt(0)!)) {
-        return new Stop('Escaped character is not allowed in an IRI', i);
-      }
-      i += decoded.length;
-      continue;
+const isDecodeError = Predicate.isTagged('Error');
+
+/**
+ * Scans from `start` with `step`, which returns the next offset, or the
+ * error found (`Some`) or the end of the term (`None`) to stop.
+ */
+const scan = (
+  start: number,
+  step: (i: number) => number | Option.Option<Stop>,
+): Option.Option<Stop> => {
+  let i = start;
+  let error = Option.none<Stop>();
+  loop(() => {
+    const next = step(i);
+    if (Predicate.isNumber(next)) {
+      i = next;
+      return true;
     }
-    if (!Lexical.isIriChar(c)) return new Stop('Invalid character in IRI', i);
-    i++;
-  }
+    error = next;
+    return false;
+  });
+  return error;
 };
 
-/** The error in the string at `start`, or `undefined`; `end` bounds a string that matched. */
-const stringError = (input: string, start: number, end = input.length): Stop | undefined => {
+const fail = (message: string, pos: number): Option.Option<Stop> =>
+  Option.some(new Stop(message, pos));
+
+/** The error in the IRI at `start`, or `None`; `end` bounds an IRI that matched. */
+const iriError = (input: string, start: number, end = input.length): Option.Option<Stop> =>
+  scan(start + 1, (i) => {
+    if (i >= end) return end === input.length ? fail('Unterminated IRI', start) : Option.none();
+    const c = input.charCodeAt(i);
+    if (c === C_GT) return Option.none();
+    if (c === C_BACKSLASH) {
+      const decoded = Lexical.decodeUchar(input, i);
+      if (isDecodeError(decoded)) return fail(decoded.message, i);
+      if (!Lexical.isIriChar(decoded.value.codePointAt(0) ?? 0)) {
+        return fail('Escaped character is not allowed in an IRI', i);
+      }
+      return i + decoded.length;
+    }
+    if (!Lexical.isIriChar(c)) return fail('Invalid character in IRI', i);
+    return i + 1;
+  });
+
+/** The error in the string at `start`, or `None`; `end` bounds a string that matched. */
+const stringError = (input: string, start: number, end = input.length): Option.Option<Stop> => {
   const q = input.charCodeAt(start);
   const long = input.charCodeAt(start + 1) === q && input.charCodeAt(start + 2) === q;
-  if (!long && input.charCodeAt(start + 1) === q) return undefined;
-  let i = start + (long ? 3 : 1);
-  for (;;) {
-    if (i >= end)
-      return end === input.length ? new Stop('Unterminated string literal', start) : undefined;
+  if (!long && input.charCodeAt(start + 1) === q) return Option.none();
+  return scan(start + (long ? 3 : 1), (i) => {
+    if (i >= end) {
+      return end === input.length ? fail('Unterminated string literal', start) : Option.none();
+    }
     const c = input.charCodeAt(i);
     if (c === q) {
-      if (!long) return undefined;
-      if (input.charCodeAt(i + 1) === q && input.charCodeAt(i + 2) === q) return undefined;
-      i++;
-      continue;
+      if (!long) return Option.none();
+      if (input.charCodeAt(i + 1) === q && input.charCodeAt(i + 2) === q) return Option.none();
+      return i + 1;
     }
     if (c === C_BACKSLASH) {
-      if (Lexical.decodeEchar(input.charCodeAt(i + 1)) !== undefined) {
-        i += 2;
-        continue;
-      }
+      if (Lexical.decodeEchar(input.charCodeAt(i + 1)) !== undefined) return i + 2;
       const decoded = Lexical.decodeUchar(input, i);
-      if (decoded._tag === 'Error') return new Stop(decoded.message, i);
-      i += decoded.length;
-      continue;
+      if (isDecodeError(decoded)) return fail(decoded.message, i);
+      return i + decoded.length;
     }
-    if (!long && (c === 0x0a || c === 0x0d)) return new Stop('Line break in string literal', i);
-    i++;
-  }
+    if (!long && (c === 0x0a || c === 0x0d)) return fail('Line break in string literal', i);
+    return i + 1;
+  });
 };
 
 const diagnosis =
-  (find: (input: string, start: number) => Stop | undefined, message: string) =>
+  (find: (input: string, start: number) => Option.Option<Stop>, message: string) =>
   (input: string, pos: number): Stop =>
-    find(input, pos) ?? new Stop(message, pos);
+    Option.getOrElse(find(input, pos), () => new Stop(message, pos));
 
 // -----------------------------------------------------------------------------
 // Terms
@@ -368,15 +407,15 @@ const iri: P<Term.NamedNode> = Parser.preceded(
     // Escapes (which shorten the value) may decode to characters an IRI cannot contain
     if (b.iriEnd - start - 2 !== value.length) {
       const error = iriError(b.input, start, b.iriEnd);
-      if (error !== undefined) throw error;
+      if (Option.isSome(error)) throw error.value;
     }
-    if (b.base === undefined) {
+    if (Option.isNone(b.base)) {
       if (!Lexical.isAbsoluteIri(value)) {
         throw new Stop(`Relative IRI <${value}> cannot be resolved without a base IRI`, start);
       }
       return new Term.NamedNode(value);
     }
-    return new Term.NamedNode(Iri.resolve(value, b.base));
+    return new Term.NamedNode(Iri.resolve(value, b.base.value));
   }),
 );
 
@@ -403,8 +442,7 @@ const prefixLabel: P<string> = Parser.alt(
 /** Fails on the escapes that end a local name early: `%` or `\` (after any dots). */
 const localTail: P<void> = Parser.make<void>((state) => {
   const input = state.input;
-  let i = state.pos;
-  while (input.charCodeAt(i) === C_DOT) i++;
+  const i = skipDots(input, state.pos);
   const c = input.charCodeAt(i);
   if (c === C_PERCENT) throw new Stop('Invalid percent escape', i);
   if (c === C_BACKSLASH) throw new Stop('Invalid escape in local name', i);
@@ -426,9 +464,9 @@ const prefixedName: P<Term.NamedNode> = Parser.preceded(
       Parser.terminated(Parser.alt(Grammar.pnLocal, Parser.succeed('')), localTail),
     ).pipe(
       Parser.map((local) => {
-        const ns = b.prefixes.get(b.prefix);
-        if (ns === undefined) throw new Stop(`Undefined prefix "${b.prefix}:"`, b.nameStart);
-        return new Term.NamedNode(ns + local);
+        const ns = MutableHashMap.get(b.prefixes, b.prefix);
+        if (Option.isNone(ns)) throw new Stop(`Undefined prefix "${b.prefix}:"`, b.nameStart);
+        return new Term.NamedNode(ns.value + local);
       }),
     ),
     Parser.make<Term.NamedNode>(() => {
@@ -442,13 +480,12 @@ const blankNode: P<Term.BlankNode> = Parser.alt(
   Parser.preceded(lit('_:'), failHere<string>('Invalid blank node label')),
 ).pipe(
   Parser.map((label) => {
-    let node = b.labels.get(label);
-    if (node === undefined) {
-      node = new Term.BlankNode(
-        b.options.blankNodePrefix + (label.startsWith('_') ? `_${label}` : label),
-      );
-      b.labels.set(label, node);
-    }
+    const found = MutableHashMap.get(b.labels, label);
+    if (Option.isSome(found)) return found.value;
+    const node = new Term.BlankNode(
+      b.options.blankNodePrefix + (label.startsWith('_') ? `_${label}` : label),
+    );
+    MutableHashMap.set(b.labels, label, node);
     return node;
   }),
 );
@@ -484,7 +521,7 @@ const string: P<string> = Parser.preceded(
     const quotes = input.charCodeAt(start + 1) === q && input.charCodeAt(start + 2) === q ? 6 : 2;
     if (b.stringEnd - start - quotes !== value.length) {
       const error = stringError(input, start, b.stringEnd);
-      if (error !== undefined) throw error;
+      if (Option.isSome(error)) throw error.value;
     }
     return value;
   }),
@@ -512,10 +549,11 @@ const languageTag: P<Lexical.LanguageTag> = Parser.preceded(
   }),
 );
 
-const literal = (annotation: Lexical.LanguageTag | Term.NamedNode | undefined): Term.Literal => {
-  const literal = Lexical.makeLiteral(b.literalValue, annotation);
-  if (Predicate.isString(literal)) throw new Stop(literal, b.literalStart);
-  return literal;
+/** The literal read, with a language tag or datatype. */
+const annotatedLiteral = (annotation: Lexical.LanguageTag | Term.NamedNode): Term.Literal => {
+  const result = Lexical.makeLiteral(b.literalValue, annotation);
+  if (Predicate.isString(result)) throw new Stop(result, b.literalStart);
+  return result;
 };
 
 const rdfLiteral: P<Term.Literal> = Parser.preceded(
@@ -529,12 +567,12 @@ const rdfLiteral: P<Term.Literal> = Parser.preceded(
     skip,
   ),
   Parser.alt(
-    languageTag.pipe(Parser.map(literal)),
+    languageTag.pipe(Parser.map(annotatedLiteral)),
     Parser.preceded(
       Parser.alt(lit('^^'), Parser.preceded(at('^'), failHere("Expected '^^'"))),
       Parser.preceded(skip, datatype),
-    ).pipe(Parser.map(literal)),
-    Parser.make<Term.Literal>(() => literal(undefined)),
+    ).pipe(Parser.map(annotatedLiteral)),
+    Parser.make<Term.Literal>(() => Term.literal(b.literalValue)),
   ),
 );
 
@@ -657,7 +695,7 @@ const reifiedTripleDef: P<Term.NamedNode | Term.BlankNode> = Parser.seq(
   Parser.alt(lit('>>'), failHere("Expected '>>'")),
 ).pipe(
   Parser.map(([s, p, o, r]) => {
-    const reifier = r._tag === 'Some' && r.value._tag === 'Some' ? r.value.value : b.fresh();
+    const reifier = Option.getOrElse(Option.flatten(r), () => b.fresh());
     b.emit(reifier, rdf.reifies, new Term.Triple(s, p, o));
     return reifier;
   }),
@@ -688,12 +726,15 @@ const collection: P<Term.NamedNode | Term.BlankNode> = Parser.preceded(
 ).pipe(
   Parser.map((items) => {
     if (Arr.isReadonlyArrayEmpty(items)) return rdf.nil;
-    const nodes = items.map(() => b.fresh());
-    for (let i = 0; i < items.length; i++) {
-      b.emit(nodes[i]!, rdf.first, items[i]!);
-      b.emit(nodes[i]!, rdf.rest, i + 1 < nodes.length ? nodes[i + 1]! : rdf.nil);
-    }
-    return nodes[0]!;
+    // Each cell is labelled before the next: `( a b )` is `_:c0 first a ; rest _:c1`, …
+    const head = b.fresh();
+    Arr.reduce<Term.Object, Term.NamedNode | Term.BlankNode>(items, head, (cell, item, i) => {
+      b.emit(cell, rdf.first, item);
+      const next = i + 1 < items.length ? b.fresh() : rdf.nil;
+      b.emit(cell, rdf.rest, next);
+      return next;
+    });
+    return head;
   }),
 );
 
@@ -726,13 +767,20 @@ const emitObject: P<Term.Object> = Parser.tap(object, (o) => {
   const frame = b.frame();
   b.emit(frame.subject, frame.predicate, o);
   frame.object = o;
-  frame.reifier = undefined;
-  frame.triple = undefined;
+  frame.reifier = noReifier;
+  frame.triple = noTriple;
 });
 
+/** The triple of the frame's current object, built once. */
+const frameTriple = (frame: Frame): Term.Triple => {
+  if (Option.isSome(frame.triple)) return frame.triple.value;
+  const triple = new Term.Triple(frame.subject, frame.predicate, frame.object);
+  frame.triple = Option.some(triple);
+  return triple;
+};
+
 const reifies = (frame: Frame, reifier: Term.NamedNode | Term.BlankNode): void => {
-  frame.triple ??= new Term.Triple(frame.subject, frame.predicate, frame.object);
-  b.emit(reifier, rdf.reifies, frame.triple);
+  b.emit(reifier, rdf.reifies, frameTriple(frame));
 };
 
 // `~ r` names a reifier of the triple; `{| … |}` describes it (a fresh one if none was named).
@@ -745,24 +793,27 @@ const annotation: P<unknown> = Parser.repeat(
         (reifier) => {
           const frame = b.frame();
           reifies(frame, reifier);
-          frame.reifier = reifier;
+          frame.reifier = Option.some(reifier);
         },
       ),
       Parser.seq(
         Parser.tap(lit('{|'), () => {
           const frame = b.frame();
-          if (frame.reifier === undefined) {
-            frame.reifier = b.fresh();
-            reifies(frame, frame.reifier);
+          if (Option.isSome(frame.reifier)) {
+            b.push(frame.reifier.value);
+            return;
           }
-          b.push(frame.reifier);
+          const reifier = b.fresh();
+          frame.reifier = Option.some(reifier);
+          reifies(frame, reifier);
+          b.push(reifier);
         }),
         Parser.preceded(skip, predicateObjectList),
         Parser.preceded(skip, Parser.alt(lit('|}'), failHere("Expected '|}'"))),
       ).pipe(
         Parser.tap(() => {
           b.depth--;
-          b.frame().reifier = undefined;
+          b.frame().reifier = noReifier;
         }),
       ),
     ),
@@ -843,14 +894,14 @@ const prefixDirective = (turtle: boolean): P<unknown> =>
     Parser.tap(
       Parser.preceded(skip, Parser.seq(Parser.location, prefixLabel, Parser.opt(lit(':')))),
       ([start, , colon]) => {
-        if (colon._tag === 'None') throw new Stop('Expected a prefix name ending with ":"', start);
+        if (Option.isNone(colon)) throw new Stop('Expected a prefix name ending with ":"', start);
       },
     ),
     Parser.preceded(skip, Parser.alt(Parser.preceded(at('<'), iri), failHere('Expected an IRI'))),
     turtle ? Parser.preceded(skip, expectDot("'.' after @prefix")) : Parser.succeed(undefined),
   ).pipe(
-    Parser.tap(([[, prefix], iri]) => {
-      b.setPrefix(prefix, iri.value);
+    Parser.tap(([[, prefix], ref]) => {
+      b.setPrefix(prefix, ref.value);
     }),
   );
 
@@ -859,8 +910,8 @@ const baseDirective = (turtle: boolean): P<unknown> =>
     Parser.preceded(skip, Parser.alt(Parser.preceded(at('<'), iri), failHere('Expected an IRI'))),
     turtle ? Parser.preceded(skip, expectDot("'.' after @base")) : Parser.succeed(undefined),
   ).pipe(
-    Parser.tap(([iri]) => {
-      b.base = iri.value;
+    Parser.tap(([ref]) => {
+      b.base = Option.some(ref.value);
     }),
   );
 
@@ -1003,8 +1054,7 @@ const beginStatement: P<void> = Parser.make<void>((state) => {
 const endStatement: P<void> = Parser.make<void>((state) => {
   if (!b.final) {
     const input = state.input;
-    let i = state.pos;
-    while (input.charCodeAt(i) === C_DOT) i++;
+    const i = skipDots(input, state.pos);
     if (i + MARGIN > input.length) return state.backtrack('Verify', ['more input']);
   }
   b.open = false;
@@ -1077,11 +1127,11 @@ export class TurtleParser {
     this.builder = new Builder(options);
   }
 
-  get prefixes(): Map<string, string> {
+  get prefixes(): MutableHashMap.MutableHashMap<string, string> {
     return this.builder.prefixes;
   }
 
-  get base(): string | undefined {
+  get base(): Option.Option<string> {
     return this.builder.base;
   }
 
@@ -1184,13 +1234,13 @@ export class TurtleParser {
       // text, and checked when it still fails once its text has doubled (which
       // keeps the interpreted checks linear in the input)
       const start = builder.snapPos;
-      const pending = input.length - start;
-      if (start !== 0 || this.checked < 0 || pending < 2 * this.checked) {
-        if (start !== 0 || this.checked < 0) this.checked = pending;
+      const remaining = input.length - start;
+      if (start !== 0 || this.checked < 0 || remaining < 2 * this.checked) {
+        if (start !== 0 || this.checked < 0) this.checked = remaining;
         this.pos = base + start;
         return;
       }
-      this.checked = pending;
+      this.checked = remaining;
       this.check(input, base);
     }
   }
@@ -1238,12 +1288,16 @@ export class TurtleParser {
   }
 }
 
+/** A line break: `\r\n`, `\r` or `\n`. */
+const LINE_BREAK = /\r\n?|\n/g;
+
 const countLines = (text: string): number => {
   let n = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (c === 0x0a) n++;
-    else if (c === 0x0d && text.charCodeAt(i + 1) !== 0x0a) n++;
-  }
+  LINE_BREAK.lastIndex = 0;
+  loop(() => {
+    if (!LINE_BREAK.test(text)) return false;
+    n++;
+    return true;
+  });
   return n;
 };

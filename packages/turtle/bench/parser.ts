@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
 import { parseQuads, parseStream, type Syntax } from '../src/internal/parse.ts';
@@ -24,8 +25,8 @@ const walk = (dir: string): Array<string> =>
       })
     : [];
 
-const turtle: Syntax = { name: 'Turtle', trig: false };
-const trig: Syntax = { name: 'TriG', trig: true };
+const turtle: Syntax = { name: 'Turtle', trig: false, trace: Option.none() };
+const trig: Syntax = { name: 'TriG', trig: true, trace: Option.none() };
 
 interface Doc {
   readonly syntax: Syntax;
@@ -64,7 +65,7 @@ const bigTrig =
   Array.from(
     { length: n / 100 },
     (_, g) =>
-      `GRAPH ex:g${g} {\n${Array.from({ length: 100 }, (_, i) => block(g * 100 + i)).join('')}}\n`,
+      `GRAPH ex:g${g} {\n${Array.from({ length: 100 }, (_block, i) => block(g * 100 + i)).join('')}}\n`,
   ).join('');
 const ntriples = Array.from(
   { length: 200_000 },
@@ -76,25 +77,23 @@ const ntriples = Array.from(
 const run = (doc: Doc, stream: boolean) => {
   const options = { baseIri: doc.baseIri };
   if (!stream) return Effect.runSync(Effect.result(parseQuads(doc.syntax, doc.text, options)));
-  const chunks: Array<string> = [];
-  for (let i = 0; i < doc.text.length; i += 65536) chunks.push(doc.text.slice(i, i + 65536));
+  const chunks = Array.from({ length: Math.ceil(doc.text.length / 65536) }, (_, i) =>
+    doc.text.slice(i * 65536, (i + 1) * 65536),
+  );
   return Effect.runSync(
     Effect.result(Stream.runDrain(parseStream(doc.syntax)(Stream.fromIterable(chunks), options))),
   );
 };
 
 const bench = (name: string, docs: ReadonlyArray<Doc>, stream = false, k = 9) => {
-  const size = docs.reduce((n, d) => n + d.text.length, 0);
-  const all = () => {
-    for (const d of docs) run(d, stream);
-  };
-  for (let i = 0; i < 3; i++) all();
-  const samples: Array<number> = [];
-  for (let i = 0; i < k; i++) {
+  const size = docs.reduce((total, d) => total + d.text.length, 0);
+  const all = () => Arr.forEach(docs, (d) => run(d, stream));
+  Arr.forEach(Arr.range(1, 3), all);
+  const samples = Arr.makeBy(k, () => {
     const t = performance.now();
     all();
-    samples.push(performance.now() - t);
-  }
+    return performance.now() - t;
+  });
   const sorted = Arr.sort(samples, Order.Number);
   const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
   // oxlint-disable-next-line no-console -- benchmark output

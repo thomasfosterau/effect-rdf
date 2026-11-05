@@ -1,6 +1,7 @@
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import type { Syntax } from './parse.ts';
@@ -29,8 +30,8 @@ export interface SerializeOptions extends Serialization.SerializeOptions {
 
 const writerOptions = (syntax: Syntax, options?: SerializeOptions): WriterOptions => ({
   trig: syntax.trig,
-  prefixes: options?.prefixes,
-  baseIri: options?.baseIri,
+  prefixes: Option.fromUndefinedOr(options?.prefixes),
+  baseIri: Option.fromUndefinedOr(options?.baseIri),
   autoPrefixes: options?.autoPrefixes ?? false,
   sparqlDirectives: options?.sparqlDirectives ?? false,
   indent: options?.indent ?? '    ',
@@ -52,7 +53,7 @@ export const serialize = (
   Effect.try({
     try: () => new Writer(writerOptions(syntax, options), prepare(quads)).write(),
     catch: (error) => toSerializeError(syntax, Predicate.isError(error) ? error : String(error)),
-  }).pipe(Serialization.withSerializeSpan(syntax.trace));
+  }).pipe(Serialization.withSerializeSpan(Option.getOrUndefined(syntax.trace)));
 
 /** @internal */
 export const serializeStream =
@@ -75,4 +76,4 @@ export const serializeStream =
         Stream.concat(Stream.fromEffect(write(() => writer.end()))),
         Stream.filter((s) => s !== ''),
       );
-    }).pipe(Serialization.withStreamSpan(syntax.trace, 'serializeStream'));
+    }).pipe(Serialization.withStreamSpan(Option.getOrUndefined(syntax.trace), 'serializeStream'));

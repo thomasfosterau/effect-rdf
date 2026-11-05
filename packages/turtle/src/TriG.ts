@@ -25,6 +25,7 @@
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import type * as Stream from 'effect/Stream';
 import * as internal from './internal/parse.ts';
 import * as internalSerialize from './internal/serialize.ts';
@@ -58,7 +59,11 @@ export const format: Serialization.Format = Serialization.makeFormat({
 });
 
 // The span names are `TriG.parse`, `TriG.serialize`, …
-const syntax: internal.Syntax = { name: 'TriG', trig: true, trace: { module: 'TriG', format } };
+const syntax: internal.Syntax = {
+  name: 'TriG',
+  trig: true,
+  trace: Option.some({ module: 'TriG', format }),
+};
 
 /**
  * Parses a TriG document, returning the dataset together with the declared

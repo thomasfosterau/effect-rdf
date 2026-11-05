@@ -4,9 +4,11 @@
  * @internal
  */
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Arr from 'effect/Array';
 import { rdf } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Lexical from '@thomasfosterau/effect-ntriples/Lexical';
+import * as Arr from 'effect/Array';
+import * as Iterable from 'effect/Iterable';
+import * as Option from 'effect/Option';
 import { byPrefixName, checkQuad, isPrefixName, Writer, type WriterOptions } from './writer.ts';
 
 /**
@@ -17,10 +19,11 @@ import { byPrefixName, checkQuad, isPrefixName, Writer, type WriterOptions } fro
  * @internal
  */
 export class StreamWriter {
-  private writerInstance: Writer | undefined;
-  private graph: string | undefined;
-  private subject: string | undefined;
-  private predicate: string | undefined;
+  private writerInstance: Option.Option<Writer> = Option.none();
+  /** The keys of the open graph block, statement and predicate. */
+  private graph: Option.Option<string> = Option.none();
+  private subject: Option.Option<string> = Option.none();
+  private predicate: Option.Option<string> = Option.none();
   private started = false;
 
   readonly options: WriterOptions;
@@ -30,34 +33,40 @@ export class StreamWriter {
 
   /** Created lazily so that option validation errors surface as failures. */
   private get writer(): Writer {
-    return (this.writerInstance ??= new Writer(
-      { ...this.options, autoPrefixes: false },
-      [],
-      false,
-    ));
+    if (Option.isSome(this.writerInstance)) return this.writerInstance.value;
+    const writer = new Writer({ ...this.options, autoPrefixes: false }, [], false);
+    this.writerInstance = Option.some(writer);
+    return writer;
   }
 
   /** The document header: base and all declared prefixes. */
   private header(): string {
-    let out = '';
     void this.writer;
     const sparql = this.options.sparqlDirectives;
-    if (this.options.baseIri !== undefined) {
-      const base = Term.escapeIri(this.options.baseIri);
-      out += sparql ? `BASE <${base}>\n` : `@base <${base}> .\n`;
-    }
-    if (this.options.prefixes !== undefined) {
-      const prefixes = Arr.sort(
-        Array.from(this.options.prefixes.prefixes).filter(
-          ([p, ns]) => isPrefixName(p) && Lexical.isWritableIri(ns),
-        ),
-        byPrefixName,
-      );
-      for (const [p, ns] of prefixes) {
-        const iri = Term.escapeIri(ns);
-        out += sparql ? `PREFIX ${p}: <${iri}>\n` : `@prefix ${p}: <${iri}> .\n`;
-      }
-    }
+    const base = Option.match(this.options.baseIri, {
+      onNone: () => '',
+      onSome: (iri) => {
+        const escaped = Term.escapeIri(iri);
+        return sparql ? `BASE <${escaped}>\n` : `@base <${escaped}> .\n`;
+      },
+    });
+    const prefixes = Option.match(this.options.prefixes, {
+      onNone: () => '',
+      onSome: (map) =>
+        Arr.sort(
+          Arr.filter(
+            Arr.fromIterable(map.prefixes),
+            ([p, ns]) => isPrefixName(p) && Lexical.isWritableIri(ns),
+          ),
+          byPrefixName,
+        )
+          .map(([p, ns]) => {
+            const iri = Term.escapeIri(ns);
+            return sparql ? `PREFIX ${p}: <${iri}>\n` : `@prefix ${p}: <${iri}> .\n`;
+          })
+          .join(''),
+    });
+    const out = base + prefixes;
     return out === '' ? '' : `${out}\n`;
   }
 
@@ -68,30 +77,31 @@ export class StreamWriter {
       out += this.header();
     }
     const indent = this.options.indent;
-    for (const q of quads) {
+    const writer = this.writer;
+    Iterable.forEach(quads, (q) => {
       checkQuad(q, this.options.trig);
       const graph = q.graph.key;
-      if (graph !== this.graph) {
+      if (Option.isNone(this.graph) || this.graph.value !== graph) {
         out += this.closeGraph();
-        this.graph = graph;
-        if (q.graph._tag !== 'DefaultGraph') out += `${this.writer.term(q.graph)} {\n`;
+        this.graph = Option.some(graph);
+        if (!Term.isDefaultGraph(q.graph)) out += `${writer.term(q.graph)} {\n`;
       }
-      const pad = q.graph._tag === 'DefaultGraph' ? '' : indent;
-      const object = this.writer.term(q.object);
-      if (q.subject.key === this.subject) {
-        if (q.predicate.key === this.predicate) {
+      const pad = Term.isDefaultGraph(q.graph) ? '' : indent;
+      const object = writer.term(q.object);
+      if (Option.isSome(this.subject) && this.subject.value === q.subject.key) {
+        if (Option.isSome(this.predicate) && this.predicate.value === q.predicate.key) {
           out += `, ${object}`;
         } else {
-          this.predicate = q.predicate.key;
+          this.predicate = Option.some(q.predicate.key);
           out += ` ;\n${pad}${indent}${this.verb(q.predicate)} ${object}`;
         }
       } else {
-        if (this.subject !== undefined) out += ' .\n';
-        this.subject = q.subject.key;
-        this.predicate = q.predicate.key;
-        out += `${pad}${this.writer.term(q.subject)} ${this.verb(q.predicate)} ${object}`;
+        if (Option.isSome(this.subject)) out += ' .\n';
+        this.subject = Option.some(q.subject.key);
+        this.predicate = Option.some(q.predicate.key);
+        out += `${pad}${writer.term(q.subject)} ${this.verb(q.predicate)} ${object}`;
       }
-    }
+    });
     return out;
   }
 
@@ -108,11 +118,11 @@ export class StreamWriter {
 
   private closeGraph(): string {
     let out = '';
-    if (this.subject !== undefined) out += ' .\n';
-    this.subject = undefined;
-    this.predicate = undefined;
-    if (this.graph !== undefined && this.graph !== '') out += '}\n';
-    this.graph = undefined;
+    if (Option.isSome(this.subject)) out += ' .\n';
+    this.subject = Option.none();
+    this.predicate = Option.none();
+    if (Option.isSome(this.graph) && this.graph.value !== '') out += '}\n';
+    this.graph = Option.none();
     return out;
   }
 }
