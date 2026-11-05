@@ -13,7 +13,7 @@ import {
   Vocab,
 } from '@thomasfosterau/effect-rdf';
 import { RdfXml } from '../src/index.ts';
-import { parseNTriples } from './support.ts';
+import { parseBothWays, parseNTriples } from './support.ts';
 
 const ex = Namespace.make('http://example.org/');
 const { rdf, xsd } = Vocab;
@@ -36,6 +36,50 @@ const expectGraph = (input: string, nt: string, options?: RdfXml.ParseOptions) =
   });
 
 describe('RdfXml.parse', () => {
+  describe('converting node elements as they are read', () => {
+    const xmlAfterRdfError = doc(
+      '<rdf:Description rdf:ID="1"/><rdf:Description rdf:about="x"></ex:p>',
+    );
+    const entity = `<!DOCTYPE rdf:RDF [<!ENTITY e "<rdf:Description><ex:p>e</ex:p></rdf:Description>">]>`;
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      [
+        'anonymous nodes in order, around a node element from an entity',
+        `<?xml version="1.0"?>${entity}<rdf:RDF ${RDF_NS} xmlns:ex="http://example.org/">` +
+          '<rdf:Description><ex:p>1</ex:p></rdf:Description>&e;' +
+          '<rdf:Description><ex:p>2</ex:p></rdf:Description></rdf:RDF>',
+      ],
+      ['an XML error after an RDF/XML one', xmlAfterRdfError],
+      ['the first of two RDF/XML errors', doc('<rdf:Description rdf:ID="1"/><rdf:li/>')],
+      ['text before a bad node element', doc('text<rdf:li/>')],
+      ['a bad node element before text', doc('<rdf:li/>text')],
+      ['text after the last node element', doc('<rdf:Description/>text')],
+      ['a bad attribute on rdf:RDF', doc('<rdf:li/>', ' ex:bad="1"')],
+      [
+        'prefixes declared on node elements and their properties',
+        doc(
+          '<rdf:Description xmlns:a="http://a/" xmlns:ex="http://other/">' +
+            '<ex:p xmlns:b="http://b/"><ex:q xmlns:c="http://c/"/></ex:p></rdf:Description>',
+        ),
+      ],
+      [
+        'a node element as the document element',
+        `<ex:Thing ${RDF_NS} xmlns:ex="http://example.org/"><ex:p>1</ex:p></ex:Thing>`,
+      ],
+    ];
+    it.each(cases)('agrees with the whole document: %s', (_name, input) => {
+      const { streamed, whole } = parseBothWays(input, { blankNodePrefix: 'b' });
+      expect(streamed).toEqual(whole);
+    });
+
+    it('reports an XML error over an earlier RDF/XML one', () => {
+      const { streamed } = parseBothWays(xmlAfterRdfError, { blankNodePrefix: 'b' });
+      expect(streamed).toMatchObject({
+        _tag: 'Failed',
+        error: expect.stringMatching(/Mismatched/),
+      });
+    });
+  });
+
   it.effect('parses typed nodes, property attributes and nested descriptions', () =>
     expectGraph(
       doc(`<ex:Person rdf:about="http://example.org/alice" ex:name="Alice" xml:lang="en">

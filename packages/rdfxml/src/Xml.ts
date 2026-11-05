@@ -271,23 +271,6 @@ export const isWhitespace = (value: string): boolean => /^[ \t\r\n]*$/.test(valu
 // Parser
 // -----------------------------------------------------------------------------
 
-const position = (lineStarts: ReadonlyArray<number>, offset: number): Position => {
-  let lo = 0;
-  let hi = lineStarts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (lineStarts[mid]! <= offset) lo = mid;
-    else hi = mid - 1;
-  }
-  return { offset, line: lo + 1, column: offset - lineStarts[lo]! + 1 };
-};
-
-const lineStartsOf = (text: string): Array<number> => {
-  const starts = [0];
-  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
-  return starts;
-};
-
 /**
  * Normalises line ends (`\r\n` and `\r` become `\n`) and strips a leading
  * byte order mark, as an XML processor does before parsing.
@@ -295,10 +278,7 @@ const lineStartsOf = (text: string): Array<number> => {
  * @since 0.1.0
  * @category parsing
  */
-export const normalizeInput = (input: string): string => {
-  const noBom = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
-  return noBom.includes('\r') ? noBom.replace(/\r\n?/g, '\n') : noBom;
-};
+export const normalizeInput: (input: string) => string = Internal.normalizeInput;
 
 /**
  * Parses an XML document, returning a `Result`.
@@ -306,29 +286,21 @@ export const normalizeInput = (input: string): string => {
  * @since 0.1.0
  * @category parsing
  */
-export const parseResult = (input: string): Result.Result<Document, XmlParseError> => {
-  const text = normalizeInput(input);
-  const lineStarts = lineStartsOf(text);
-  return Result.try({
-    try: () => {
-      const bad = Chars.INVALID_CHAR_RE.exec(text);
-      if (bad !== null) throw new Internal.Failure('Invalid XML character', bad.index);
-      return Internal.parse(text, lineStarts);
-    },
+export const parseResult = (input: string): Result.Result<Document, XmlParseError> =>
+  Result.try({
+    try: () => Internal.parseText(input),
     catch: (e) => {
       if (e instanceof Internal.Failure) {
-        const p = position(lineStarts, Math.min(e.offset, text.length));
         return new XmlParseError({
           message: e.message,
-          offset: p.offset,
-          line: p.line,
-          column: p.column,
+          offset: e.position.offset,
+          line: e.position.line,
+          column: e.position.column,
         });
       }
       throw e;
     },
   });
-};
 
 /**
  * Parses an XML document.

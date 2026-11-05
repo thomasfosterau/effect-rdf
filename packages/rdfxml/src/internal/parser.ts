@@ -28,6 +28,7 @@ import * as HashSet from 'effect/HashSet';
 import * as Result from 'effect/Result';
 import type * as Xml from '../Xml.ts';
 import {
+  INVALID_CHAR_RE,
   isName,
   isNCName,
   isValidText,
@@ -54,9 +55,12 @@ export const MAX_ELEMENT_DEPTH = 1024;
 export class Failure {
   readonly message: string;
   readonly offset: number;
+  /** Where in the document the error is: set by `parseText`, from `offset`. */
+  position: Xml.Position;
   constructor(message: string, offset: number) {
     this.message = message;
     this.offset = offset;
+    this.position = { offset, line: 0, column: 0 };
   }
 }
 
@@ -88,6 +92,8 @@ interface Frame {
   readonly children: Array<Xml.Node>;
   text: string;
   textStart: number;
+  /** How many children precede the last child taken by a `RootChildHook`: text never merges into them. */
+  floor: number;
 }
 
 const PREDEFINED = new Map([
@@ -110,11 +116,23 @@ const baseFrame = (inScope: ReadonlyMap<string, string>): Frame => ({
   children: [],
   text: '',
   textStart: -1,
+  floor: 0,
 });
 
 /** Whether `offset` is on line `l` (from 0) of the text whose line starts are `starts`. */
 const onLine = (starts: ReadonlyArray<number>, l: number, offset: number): boolean =>
   (starts[l] ?? Infinity) <= offset && offset < (starts[l + 1] ?? Infinity);
+
+/**
+ * Receives each child element of the root as soon as it is closed, with the
+ * root element as read so far (its `children` are those not taken). Returns
+ * `true` to take the child, which is then left out of the document.
+ *
+ * @internal
+ */
+export type RootChildHook = (child: Xml.Element, root: Xml.Element) => boolean;
+
+const keepChild: RootChildHook = () => false;
 
 /** Up to how many attributes a start tag's duplicates are found by searching its list. */
 const SMALL = 16;
@@ -130,6 +148,9 @@ class Context {
   readonly attributeTypes = new Map<string, Map<string, boolean>>();
   expanded = 0;
   hasExternalSubset = false;
+
+  /** Takes a finished child of the root element instead of adding it to the root (`true`). */
+  onRootChild: RootChildHook = keepChild;
 
   /** The frames of the open elements; those below `base` belong to enclosing text. */
   stack: Array<Frame>;
@@ -621,7 +642,7 @@ const flush = (frame: Frame): void => {
   if (frame.text !== '') {
     const children = frame.children;
     const prev = children[children.length - 1];
-    if (prev !== undefined && prev._tag === 'Text') {
+    if (prev !== undefined && prev._tag === 'Text' && children.length > frame.floor) {
       children[children.length - 1] = { ...prev, value: prev.value + frame.text };
     } else {
       children.push({ _tag: 'Text', value: frame.text, position: x.position(frame.textStart) });
@@ -742,6 +763,7 @@ const openElement = (empty: boolean): void => {
     children: [],
     text: '',
     textStart: -1,
+    floor: 0,
   };
   if (empty) {
     closeElement(frame);
@@ -766,7 +788,30 @@ const closeElement = (frame: Frame): void => {
     children: frame.children,
     position: x.position(frame.start),
   };
+  // A child of the root (not inside an entity's replacement text) may be taken as it closes
+  if (x.stack.length === 2 && x.entityStack.size === 0 && x.onRootChild(element, rootSoFar())) {
+    const root = x.top();
+    root.floor = root.children.length;
+    return;
+  }
   x.top().children.push(element);
+};
+
+/** The root element as read so far, for a `RootChildHook`. */
+const rootSoFar = (): Xml.Element => {
+  const frame = x.top();
+  return {
+    _tag: 'Element',
+    name: frame.qname,
+    prefix: frame.prefix,
+    localName: frame.localName,
+    namespace: frame.namespace,
+    attributes: frame.attributes,
+    namespaceDeclarations: frame.declarations,
+    inScopeNamespaces: frame.inScope,
+    children: frame.children,
+    position: x.position(frame.start),
+  };
 };
 
 const attribute: P<unknown> = Parser.seq(Parser.location, name, eq, attributeValue).pipe(
@@ -1058,8 +1103,13 @@ const document: P<unknown> = Compiler.jit(
 );
 
 /** Parses a (line-end normalised) document, throwing a `Failure`. */
-export const parse = (text: string, lineStarts: ReadonlyArray<number>): Xml.Document => {
+const parse = (
+  text: string,
+  lineStarts: ReadonlyArray<number>,
+  onRootChild: RootChildHook,
+): Xml.Document => {
   x = new Context(text, lineStarts);
+  x.onRootChild = onRootChild;
   const result = Parser.parse(document, text);
   if (Result.isFailure(result)) fail('Invalid XML', result.failure.offset);
   return {
@@ -1072,4 +1122,52 @@ export const parse = (text: string, lineStarts: ReadonlyArray<number>): Xml.Docu
     root: x.root!,
     epilog: x.epilog,
   };
+};
+
+/** The line and column of an offset, given the offsets at which lines start. */
+const positionAt = (lineStarts: ReadonlyArray<number>, offset: number): Xml.Position => {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((lineStarts[mid] ?? 0) <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return { offset, line: lo + 1, column: offset - (lineStarts[lo] ?? 0) + 1 };
+};
+
+const lineStartsOf = (text: string): Array<number> => {
+  const starts = [0];
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  return starts;
+};
+
+/** @internal */
+export const normalizeInput = (input: string): string => {
+  const noBom = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+  return noBom.includes('\r') ? noBom.replace(/\r\n?/g, '\n') : noBom;
+};
+
+/**
+ * Parses a document (normalising its line ends first), throwing a `Failure`
+ * with its position. `onRootChild` may take the root's children as they are
+ * read.
+ *
+ * @internal
+ */
+export const parseText = (input: string, onRootChild: RootChildHook = keepChild): Xml.Document => {
+  const text = normalizeInput(input);
+  const lineStarts = lineStartsOf(text);
+  const outcome = Result.try({
+    try: () => {
+      const bad = INVALID_CHAR_RE.exec(text);
+      if (bad !== null) fail('Invalid XML character', bad.index);
+      return parse(text, lineStarts, onRootChild);
+    },
+    catch: (e) => e,
+  });
+  if (Result.isSuccess(outcome)) return outcome.success;
+  const e = outcome.failure;
+  if (e instanceof Failure) e.position = positionAt(lineStarts, Math.min(e.offset, text.length));
+  throw e;
 };

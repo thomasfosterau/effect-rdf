@@ -7,7 +7,12 @@ import { assert } from '@effect/vitest';
 import * as Match from 'effect/Match';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Dataset, Iri, Term } from '@thomasfosterau/effect-rdf';
+import * as Cause from 'effect/Cause';
+import * as Effect from 'effect/Effect';
+import * as Exit from 'effect/Exit';
+import * as Option from 'effect/Option';
+import { Dataset, Iri, Serialization, Term } from '@thomasfosterau/effect-rdf';
+import { RdfXml, Xml } from '../src/index.ts';
 
 // -----------------------------------------------------------------------------
 // N-Triples
@@ -316,3 +321,66 @@ export const readManifest = (file: string): Array<TestCase> => {
   }
   return out;
 };
+
+// -----------------------------------------------------------------------------
+// Streamed and whole-document parsing
+// -----------------------------------------------------------------------------
+
+/** What a parse produced, in a form `toEqual` compares exactly (the base is `''` when unset). */
+export type Outcome =
+  | {
+      readonly _tag: 'Parsed';
+      readonly nquads: string;
+      readonly prefixes: ReadonlyArray<readonly [string, string]>;
+      readonly baseIri: string;
+    }
+  | { readonly _tag: 'Failed'; readonly error: string };
+
+const outcome = (
+  exit: Exit.Exit<Serialization.ParseResult, Serialization.RdfParseError>,
+): Outcome =>
+  Exit.isSuccess(exit)
+    ? {
+        _tag: 'Parsed',
+        nquads: Dataset.toNQuads(exit.value.dataset),
+        prefixes: Array.from(exit.value.prefixes.prefixes),
+        baseIri: exit.value.baseIri ?? '',
+      }
+    : {
+        _tag: 'Failed',
+        error: Option.match(Cause.findErrorOption(exit.cause), {
+          onNone: () => Cause.pretty(exit.cause),
+          onSome: (e) => `${e.message} @ ${e.line}:${e.column}`,
+        }),
+      };
+
+/** A document parsed both ways. */
+export interface BothWays {
+  readonly streamed: Outcome;
+  readonly whole: Outcome;
+}
+
+/**
+ * Parses `input` both as `RdfXml.parse` does (converting node elements as
+ * the XML is read) and by parsing the whole XML document first, which
+ * `RdfXml.parse` must agree with exactly.
+ */
+export const parseBothWays = (input: string, options: RdfXml.ParseOptions): BothWays => ({
+  streamed: outcome(Effect.runSyncExit(RdfXml.parse(input, options))),
+  whole: outcome(
+    Effect.runSyncExit(
+      Xml.parse(input).pipe(
+        Effect.mapError(
+          (e) =>
+            new Serialization.RdfParseError({
+              format: 'RDF/XML',
+              message: e.message,
+              line: e.line,
+              column: e.column,
+            }),
+        ),
+        Effect.flatMap((doc) => RdfXml.parseDocument(doc, options)),
+      ),
+    ),
+  ),
+});

@@ -19,6 +19,7 @@ import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Result from 'effect/Result';
 import * as Order from 'effect/Order';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
@@ -26,6 +27,7 @@ import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import * as Xml from './Xml.ts';
+import * as XmlParser from './internal/parser.ts';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const ITS = 'http://www.w3.org/2005/11/its';
@@ -224,6 +226,9 @@ const propertyAttribute = Match.fn(
   }),
 );
 
+const isRdfRoot = (root: Xml.Element): boolean =>
+  root.namespace === RDF && root.localName === 'RDF';
+
 class RdfXmlParser {
   sink: Array<Term.Triple> = [];
   readonly ids = new Set<string>();
@@ -344,15 +349,17 @@ class RdfXmlParser {
   document(doc: Xml.Document, base: string | undefined): void {
     const root = doc.root;
     const ctx: Context = { base, language: '', direction: '', version: this.defaultVersion };
-    if (root.namespace === RDF && root.localName === 'RDF') {
-      const rootCtx = this.context(root, ctx);
-      for (const a of this.attributes(root)) {
-        if (a.iri !== rdf('version')) this.fail(`Unexpected attribute on rdf:RDF`, a.attribute);
-      }
-      this.nodeElementList(root.children, rootCtx);
-    } else {
-      this.nodeElement(root, ctx);
+    if (isRdfRoot(root)) this.nodeElementList(root.children, this.rdfRoot(root, ctx));
+    else this.nodeElement(root, ctx);
+  }
+
+  /** The context of the node elements in an `rdf:RDF` root, after checking its attributes. */
+  rdfRoot(root: Xml.Element, ctx: Context): Context {
+    const rootCtx = this.context(root, ctx);
+    for (const a of this.attributes(root)) {
+      if (a.iri !== rdf('version')) this.fail(`Unexpected attribute on rdf:RDF`, a.attribute);
     }
+    return rootCtx;
   }
 
   nodeElementList(children: ReadonlyArray<Xml.Node>, ctx: Context): Array<Term.Subject> {
@@ -610,19 +617,117 @@ const parseTriples = (
     },
   });
 
-const collectPrefixes = (doc: Xml.Document): PrefixMap.PrefixMap => {
-  const prefixes = new Map<string, string>();
-  const go = (el: Xml.Element, depth: number) => {
-    for (const d of el.namespaceDeclarations) {
-      if (d.prefix !== '' && d.namespace !== '' && !prefixes.has(d.prefix)) {
-        prefixes.set(d.prefix, d.namespace);
+/** Prefixes in the order first declared, each with its first namespace. */
+type Prefixes = Array<readonly [prefix: string, namespace: string]>;
+
+/**
+ * Adds the namespace declarations of the elements among `nodes` (at
+ * `depth`, the root's being 0) and of their descendants down to `maxDepth`
+ * to `prefixes`, keeping the first declaration of each prefix.
+ */
+const declarePrefixes = (
+  prefixes: Prefixes,
+  nodes: ReadonlyArray<Xml.Node>,
+  depth: number,
+  maxDepth: number,
+): void => {
+  for (const node of nodes) {
+    if (node._tag !== 'Element') continue;
+    for (const d of node.namespaceDeclarations) {
+      if (d.prefix !== '' && d.namespace !== '' && !prefixes.some(([p]) => p === d.prefix)) {
+        prefixes.push([d.prefix, d.namespace]);
       }
     }
-    if (depth < 2) for (const c of el.children) if (c._tag === 'Element') go(c, depth + 1);
-  };
-  go(doc.root, 0);
+    if (depth < maxDepth) declarePrefixes(prefixes, node.children, depth + 1, maxDepth);
+  }
+};
+
+/** The prefixes declared on the root, its children and their children. */
+const collectPrefixes = (doc: Xml.Document): PrefixMap.PrefixMap => {
+  const prefixes: Prefixes = [];
+  declarePrefixes(prefixes, [doc.root], 0, 2);
   return PrefixMap.make(prefixes);
 };
+
+/**
+ * Converts the node elements of an `rdf:RDF` root while the XML is read, as
+ * each one is closed, so that no more than one of them is held at a time.
+ * The order of conversion (and so of triples, blank nodes and prefixes) and
+ * which error is reported are as for a whole document: an XML error anywhere
+ * comes first, so the first RDF/XML error is kept until the XML has been
+ * read.
+ */
+class RootStream {
+  readonly parser: RdfXmlParser;
+  /** The context outside the root, and then that of its node elements. */
+  private ctx: Context;
+  readonly prefixes: Prefixes = [];
+  readonly failures: Array<ParseFailure> = [];
+  /** Whether the root has been seen, and whether it is `rdf:RDF`. */
+  private started = false;
+  private streaming = false;
+  /** How many of the children the root kept have been converted. */
+  private converted = 0;
+
+  constructor(parser: RdfXmlParser, ctx: Context) {
+    this.parser = parser;
+    this.ctx = ctx;
+  }
+
+  /** The `RootChildHook`: takes the child if the root is `rdf:RDF`. */
+  readonly take = (child: Xml.Element, root: Xml.Element): boolean => {
+    if (!this.begin(root)) return false;
+    this.guard(() => {
+      this.drain(root);
+      declarePrefixes(this.prefixes, [child], 1, 2);
+      this.parser.nodeElement(child, this.ctx);
+    });
+    return true;
+  };
+
+  /** Converts what is left once the document has been read. */
+  finish(doc: Xml.Document): void {
+    if (this.begin(doc.root)) {
+      this.guard(() => this.drain(doc.root));
+    } else {
+      this.parser.document(doc, this.ctx.base);
+      declarePrefixes(this.prefixes, [doc.root], 0, 2);
+    }
+    const failure = this.failures.at(0);
+    if (failure !== undefined) throw failure;
+  }
+
+  private begin(root: Xml.Element): boolean {
+    if (!this.started) {
+      this.started = true;
+      this.streaming = isRdfRoot(root);
+      if (this.streaming) {
+        declarePrefixes(this.prefixes, [root], 0, 0);
+        this.guard(() => {
+          this.ctx = this.parser.rdfRoot(root, this.ctx);
+        });
+      }
+    }
+    return this.streaming;
+  }
+
+  /** Converts the children the root kept (text, and elements from entities) since the last time. */
+  private drain(root: Xml.Element): void {
+    const pending = root.children.slice(this.converted);
+    this.converted = root.children.length;
+    declarePrefixes(this.prefixes, pending, 1, 2);
+    this.parser.nodeElementList(pending, this.ctx);
+  }
+
+  /** Runs a conversion step unless one has failed, keeping its failure. */
+  private guard(step: () => void): void {
+    if (Arr.isReadonlyArrayNonEmpty(this.failures)) return;
+    const outcome = Result.try({ try: step, catch: (e) => e });
+    if (Result.isSuccess(outcome)) return;
+    if (!(outcome.failure instanceof ParseFailure)) throw outcome.failure;
+    this.failures.push(outcome.failure);
+  }
+}
 
 /**
  * Parses an already-parsed XML document as RDF/XML. The root element is
@@ -638,23 +743,31 @@ export const parseDocument = (
   doc: Xml.Document,
   options?: ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
-  Effect.gen(function* () {
-    const triples = yield* parseTriples(doc, options);
-    const graph = options?.graph ?? Term.defaultGraph;
-    let baseIri = options?.baseIri;
-    const xmlBase = doc.root.attributes.find(
-      (a) => a.namespace === Xml.XML_NAMESPACE && a.localName === 'base',
-    );
-    if (xmlBase !== undefined) baseIri = Iri.resolve(xmlBase.value, baseIri);
-    const prefixes = collectPrefixes(doc);
-    return {
-      dataset: Dataset.mutate(Dataset.empty, (b) => {
-        for (const t of triples) b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
-      }),
-      prefixes,
-      baseIri,
-    };
-  });
+  Effect.map(parseTriples(doc, options), (triples) =>
+    toResult(triples, doc, collectPrefixes(doc), options),
+  );
+
+/** The result of a parse: the triples in their graph, with the document's prefixes and base. */
+const toResult = (
+  triples: ReadonlyArray<Term.Triple>,
+  doc: Xml.Document,
+  prefixes: PrefixMap.PrefixMap,
+  options?: ParseOptions,
+): Serialization.ParseResult => {
+  const graph = options?.graph ?? Term.defaultGraph;
+  let baseIri = options?.baseIri;
+  const xmlBase = doc.root.attributes.find(
+    (a) => a.namespace === Xml.XML_NAMESPACE && a.localName === 'base',
+  );
+  if (xmlBase !== undefined) baseIri = Iri.resolve(xmlBase.value, baseIri);
+  return {
+    dataset: Dataset.mutate(Dataset.empty, (b) => {
+      for (const t of triples) b.add(new Term.Quad(t.subject, t.predicate, t.object, graph));
+    }),
+    prefixes,
+    baseIri,
+  };
+};
 
 /**
  * Parses a complete RDF/XML document. Namespace declarations on the root
@@ -667,13 +780,27 @@ export const parse = (
   input: string,
   options?: ParseOptions,
 ): Effect.Effect<Serialization.ParseResult, Serialization.RdfParseError> =>
-  Effect.gen(function* () {
-    const doc = yield* Xml.parse(input).pipe(
-      Effect.mapError((e) =>
-        toParseError(e.message, { offset: e.offset, line: e.line, column: e.column }),
-      ),
-    );
-    return yield* parseDocument(doc, options);
+  Effect.try({
+    try: () => {
+      const parser = new RdfXmlParser(
+        options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
+        options?.version,
+      );
+      const stream = new RootStream(parser, {
+        base: options?.baseIri,
+        language: '',
+        direction: '',
+        version: options?.version,
+      });
+      const doc = XmlParser.parseText(input, stream.take);
+      stream.finish(doc);
+      return toResult(parser.sink, doc, PrefixMap.make(stream.prefixes), options);
+    },
+    catch: (e) => {
+      if (e instanceof XmlParser.Failure) return toParseError(e.message, e.position);
+      if (e instanceof ParseFailure) return toParseError(e.message, e.position);
+      throw e;
+    },
   });
 
 /**
