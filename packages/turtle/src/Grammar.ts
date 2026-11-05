@@ -19,7 +19,7 @@ import * as Token from '@thomasfosterau/effect-parse/Token';
 import {
   alphanumeric,
   digit,
-  dottedTail,
+  dottedRun,
   hex,
   pnChars,
   pnCharsBase,
@@ -86,7 +86,7 @@ export const skip: Parser.Parser<void> = Parser.asVoid(
  * @category terminals
  */
 export const pnPrefix: Parser.Parser<string> = Parser.taken(
-  Parser.seq(Token.oneOf(pnCharsBase), dottedTail(Token.oneOf(pnChars))),
+  Parser.seq(Token.oneOf(pnCharsBase), dottedRun(pnChars)),
 );
 
 /**
@@ -109,10 +109,7 @@ export const plx: Parser.Parser<unknown> = Parser.alt(
  * @category terminals
  */
 export const pnLocal: Parser.Parser<string> = Parser.taken(
-  Parser.seq(
-    Parser.alt(Token.oneOf([pnCharsU, ':', digit]), plx),
-    dottedTail(Parser.alt(Token.oneOf([pnChars, ':']), plx)),
-  ),
+  Parser.seq(Parser.alt(Token.oneOf([pnCharsU, ':', digit]), plx), dottedRun([pnChars, ':'], plx)),
 ).pipe(Parser.map((s) => (s.indexOf('\\') === -1 ? s : s.replace(/\\(.)/gu, '$1'))));
 
 /**
