@@ -15,6 +15,7 @@
  */
 import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import { rdf } from '@thomasfosterau/effect-rdf/Vocab';
@@ -38,26 +39,26 @@ const hasNodes = (t: Model.N3Term): boolean =>
   Arr.isReadonlyArrayNonEmpty(Model.blankNodes(t)) ||
   Arr.isReadonlyArrayNonEmpty(Model.variables(t));
 
-const countBlanks = (self: Model.N3Term | Model.Statement, out: Map<string, number>): void => {
-  switch (self._tag) {
-    case 'BlankNode':
+// Built once: `countBlanks` runs for every term of the formula.
+const countBlanks: (self: Model.N3Term | Model.Statement, out: Map<string, number>) => void =
+  Match.fn((self: Model.N3Term | Model.Statement, _out: Map<string, number>) => self).pipe(
+    Match.withReturnType<void>(),
+    Match.tag('BlankNode', (self, _self, out) => {
       out.set(self.value, (out.get(self.value) ?? 0) + 1);
-      return;
-    case 'Collection':
+    }),
+    Match.tag('Collection', (self, _self, out) => {
       for (const i of self.items) countBlanks(i, out);
-      return;
-    case 'Formula':
+    }),
+    Match.tag('Formula', (self, _self, out) => {
       for (const st of self.statements) countBlanks(st, out);
-      return;
-    case 'Statement':
+    }),
+    Match.tag('Statement', (self, _self, out) => {
       countBlanks(self.subject, out);
       countBlanks(self.predicate, out);
       countBlanks(self.object, out);
-      return;
-    default:
-      return;
-  }
-};
+    }),
+    Match.orElse(() => undefined),
+  );
 
 /**
  * Rewrites well-formed `rdf:first`/`rdf:rest` chains of blank nodes into
@@ -113,32 +114,37 @@ const normalizeLists = (root: Model.Formula): Model.Formula => {
         consumed.add(rest.get(c)![0]!);
       }
     }
-    const term = (t: Model.N3Term): Model.N3Term => {
-      switch (t._tag) {
-        case 'BlankNode': {
-          const items = heads.get(t.value);
-          return items === undefined
-            ? t
-            : Arr.isReadonlyArrayEmpty(items)
-              ? rdf.nil
-              : new Model.Collection(items.map(term));
-        }
-        case 'Collection':
-          return Arr.isReadonlyArrayEmpty(t.items)
-            ? rdf.nil
-            : new Model.Collection(t.items.map(term));
-        case 'Formula':
-          return normalizeFormula(t);
-        default:
-          return t;
-      }
-    };
+    const term = (t: Model.N3Term): Model.N3Term => normalizeTerm(t, heads);
     return new Model.Formula(
       f.statements
         .filter((st) => !consumed.has(st))
         .map((st) => new Model.Statement(term(st.subject), term(st.predicate), term(st.object))),
     );
   };
+  // Built once per normalisation, not per term.
+  const normalizeTerm: (
+    t: Model.N3Term,
+    heads: ReadonlyMap<string, Array<Model.N3Term>>,
+  ) => Model.N3Term = Match.fn(
+    (t: Model.N3Term, _heads: ReadonlyMap<string, Array<Model.N3Term>>) => t,
+  ).pipe(
+    Match.withReturnType<Model.N3Term>(),
+    Match.tag('BlankNode', (t, _t, heads) => {
+      const items = heads.get(t.value);
+      return items === undefined
+        ? t
+        : Arr.isReadonlyArrayEmpty(items)
+          ? rdf.nil
+          : new Model.Collection(items.map((i) => normalizeTerm(i, heads)));
+    }),
+    Match.tag('Collection', (t, _t, heads) =>
+      Arr.isReadonlyArrayEmpty(t.items)
+        ? rdf.nil
+        : new Model.Collection(t.items.map((i) => normalizeTerm(i, heads))),
+    ),
+    Match.tag('Formula', (t) => normalizeFormula(t)),
+    Match.orElse((t) => t),
+  );
   return normalizeFormula(root);
 };
 
@@ -147,34 +153,31 @@ const flatten = (self: Model.Formula): Array<Tuple> => {
   let counter = 0;
   const formulaNodes = new Map<string, string>();
   const add = (t: Tuple) => out.set(t.join('\u0001'), t);
-  const atom = (t: Model.N3Term): string => {
-    switch (t._tag) {
-      case 'BlankNode':
-        return `b:${t.value}`;
-      case 'Variable':
-        return `v:${t.value}`;
-      case 'Collection': {
-        if (Arr.isReadonlyArrayEmpty(t.items)) return RDF_NIL;
-        if (!hasNodes(t)) return `=${t.key}`;
-        const l = `l:${counter++}`;
-        t.items.forEach((item, i) => add([l, `=#${i}`, atom(item), '=list']));
-        add([l, '=length', `=${t.items.length}`, '=list']);
-        return l;
-      }
-      case 'Formula': {
-        if (!hasNodes(t)) return `=${t.key}`;
-        // Formulas are values: equal formulas share one node.
-        const known = formulaNodes.get(t.key);
-        if (known !== undefined) return known;
-        const g = `f:${counter++}`;
-        formulaNodes.set(t.key, g);
-        statements(t, g);
-        return g;
-      }
-      default:
-        return `=${t.key}`;
-    }
-  };
+  // Built once per flattening, not per term.
+  const atom: (t: Model.N3Term) => string = Match.type<Model.N3Term>().pipe(
+    Match.withReturnType<string>(),
+    Match.tag('BlankNode', (t) => `b:${t.value}`),
+    Match.tag('Variable', (t) => `v:${t.value}`),
+    Match.tag('Collection', (t) => {
+      if (Arr.isReadonlyArrayEmpty(t.items)) return RDF_NIL;
+      if (!hasNodes(t)) return `=${t.key}`;
+      const l = `l:${counter++}`;
+      t.items.forEach((item, i) => add([l, `=#${i}`, atom(item), '=list']));
+      add([l, '=length', `=${t.items.length}`, '=list']);
+      return l;
+    }),
+    Match.tag('Formula', (t) => {
+      if (!hasNodes(t)) return `=${t.key}`;
+      // Formulas are values: equal formulas share one node.
+      const known = formulaNodes.get(t.key);
+      if (known !== undefined) return known;
+      const g = `f:${counter++}`;
+      formulaNodes.set(t.key, g);
+      statements(t, g);
+      return g;
+    }),
+    Match.orElse((t) => `=${t.key}`),
+  );
   const statements = (f: Model.Formula, graph: string) => {
     for (const st of f.statements) {
       add([atom(st.subject), atom(st.predicate), atom(st.object), graph]);

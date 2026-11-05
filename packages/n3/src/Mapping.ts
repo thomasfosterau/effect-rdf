@@ -29,6 +29,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -75,6 +76,44 @@ export interface ToDatasetOptions {
   readonly blankNodePrefix?: string | undefined;
 }
 
+/** The state of one `toQuadsUnsafe` conversion, threaded through `rdfTerm`. */
+interface Conversion {
+  readonly fresh: () => Term.BlankNode;
+  readonly out: Array<Term.Quad>;
+  readonly statements: (f: Model.Formula, graph: Term.Graph) => void;
+}
+
+// Built once: `toQuadsUnsafe` runs it for every term it converts.
+const rdfTerm: (
+  t: Model.N3Term,
+  graph: Term.Graph,
+  conversion: Conversion,
+) => Term.NamedNode | Term.BlankNode | Term.Literal = Match.fn(
+  (t: Model.N3Term, _graph: Term.Graph, _conversion: Conversion) => t,
+).pipe(
+  Match.withReturnType<Term.NamedNode | Term.BlankNode | Term.Literal>(),
+  Match.tag('Variable', (t) => {
+    throw new Failure(`Variable ${t.key} cannot be represented in RDF`);
+  }),
+  Match.tag('Collection', (t, _t, graph, conversion) => {
+    if (Arr.isReadonlyArrayEmpty(t.items)) return rdf.nil;
+    const nodes = t.items.map(conversion.fresh);
+    t.items.forEach((item, i) => {
+      conversion.out.push(
+        new Term.Quad(nodes[i]!, rdf.first, rdfTerm(item, graph, conversion), graph),
+      );
+      conversion.out.push(new Term.Quad(nodes[i]!, rdf.rest, nodes[i + 1] ?? rdf.nil, graph));
+    });
+    return nodes[0]!;
+  }),
+  Match.tag('Formula', (t, _t, _graph, conversion) => {
+    const g = conversion.fresh();
+    conversion.statements(t, g);
+    return g;
+  }),
+  Match.orElse((t) => t),
+);
+
 /**
  * Converts a formula (or document) to quads, failing with
  * `UnrepresentableError` for constructs that are not RDF. Throws the
@@ -96,31 +135,8 @@ export const toQuadsUnsafe = (
     }
   };
   const out: Array<Term.Quad> = [];
-  const term = (
-    t: Model.N3Term,
-    graph: Term.Graph,
-  ): Term.NamedNode | Term.BlankNode | Term.Literal => {
-    switch (t._tag) {
-      case 'Variable':
-        throw new Failure(`Variable ${t.key} cannot be represented in RDF`);
-      case 'Collection': {
-        if (Arr.isReadonlyArrayEmpty(t.items)) return rdf.nil;
-        const nodes = t.items.map(fresh);
-        t.items.forEach((item, i) => {
-          out.push(new Term.Quad(nodes[i]!, rdf.first, term(item, graph), graph));
-          out.push(new Term.Quad(nodes[i]!, rdf.rest, nodes[i + 1] ?? rdf.nil, graph));
-        });
-        return nodes[0]!;
-      }
-      case 'Formula': {
-        const g = fresh();
-        statements(t, g);
-        return g;
-      }
-      default:
-        return t;
-    }
-  };
+  const conversion: Conversion = { fresh, out, statements: (f, g) => statements(f, g) };
+  const term = (t: Model.N3Term, graph: Term.Graph) => rdfTerm(t, graph, conversion);
   const statements = (f: Model.Formula, graph: Term.Graph) => {
     for (const s of f.statements) {
       const subject = term(s.subject, graph);

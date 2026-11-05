@@ -30,6 +30,7 @@ import * as Arr from 'effect/Array';
 import * as Equal from 'effect/Equal';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
+import * as Match from 'effect/Match';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import * as Order from 'effect/Order';
 import { hasProperty } from 'effect/Predicate';
@@ -311,42 +312,47 @@ export const isN3Term = (u: unknown): u is N3Term =>
  * @since 0.1.0
  * @category predicates
  */
-export const isGround = (self: N3Term | Statement): boolean => {
-  switch (self._tag) {
-    case 'Variable':
-      return false;
-    case 'Collection':
-      return self.items.every(isGround);
-    case 'Formula':
-      return self.statements.every(isGround);
-    case 'Statement':
-      return isGround(self.subject) && isGround(self.predicate) && isGround(self.object);
-    default:
-      return true;
-  }
-};
+export const isGround = (self: N3Term | Statement): boolean => groundness(self);
 
-const collect = (
+// Built once: `isGround` runs for every term it visits.
+const groundness: (self: N3Term | Statement) => boolean = Match.type<N3Term | Statement>().pipe(
+  Match.withReturnType<boolean>(),
+  Match.tag('NamedNode', 'BlankNode', 'Literal', () => true),
+  Match.tag('Variable', () => false),
+  Match.tag('Collection', (self) => self.items.every(isGround)),
+  Match.tag('Formula', (self) => self.statements.every(isGround)),
+  Match.tag(
+    'Statement',
+    (self) => isGround(self.subject) && isGround(self.predicate) && isGround(self.object),
+  ),
+  Match.exhaustive,
+);
+
+// Built once: `collect` runs for every term it visits.
+const collect: (
   self: N3Term | Statement,
   test: (t: N3Term) => boolean,
   out: Map<string, N3Term>,
-): void => {
-  switch (self._tag) {
-    case 'Collection':
-      for (const i of self.items) collect(i, test, out);
-      return;
-    case 'Formula':
-      for (const s of self.statements) collect(s, test, out);
-      return;
-    case 'Statement':
-      collect(self.subject, test, out);
-      collect(self.predicate, test, out);
-      collect(self.object, test, out);
-      return;
-    default:
-      if (test(self)) out.set(self.key, self);
-  }
-};
+) => void = Match.fn(
+  (self: N3Term | Statement, _test: (t: N3Term) => boolean, _out: Map<string, N3Term>) => self,
+).pipe(
+  Match.withReturnType<void>(),
+  Match.tag('NamedNode', 'BlankNode', 'Literal', 'Variable', (self, _self, test, out) => {
+    if (test(self)) out.set(self.key, self);
+  }),
+  Match.tag('Collection', (self, _self, test, out) => {
+    for (const i of self.items) collect(i, test, out);
+  }),
+  Match.tag('Formula', (self, _self, test, out) => {
+    for (const s of self.statements) collect(s, test, out);
+  }),
+  Match.tag('Statement', (self, _self, test, out) => {
+    collect(self.subject, test, out);
+    collect(self.predicate, test, out);
+    collect(self.object, test, out);
+  }),
+  Match.exhaustive,
+);
 
 /**
  * All distinct variables occurring in a term, statement or formula
@@ -396,27 +402,42 @@ export function mapTerms(
   self: N3Term | Statement,
   f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
 ): N3Term | Statement {
-  const go = (t: N3Term | Statement): N3Term | Statement => {
-    switch (t._tag) {
-      case 'Collection':
-        // SAFETY: `go` maps a term to a term.
-        return new Collection(t.items.map((i) => go(i) as N3Term));
-      case 'Formula':
-        // SAFETY: `go` maps a statement to a statement.
-        return new Formula(t.statements.map((s) => go(s) as Statement));
-      case 'Statement':
-        // SAFETY: `go` maps a term to a term.
-        return new Statement(
-          go(t.subject) as N3Term,
-          go(t.predicate) as N3Term,
-          go(t.object) as N3Term,
-        );
-      default:
-        return f(t);
-    }
-  };
-  return go(self);
+  return mapAtoms(self, f);
 }
+
+// Built once: `mapTerms` runs it for every term it visits.
+const mapAtoms: (
+  t: N3Term | Statement,
+  f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
+) => N3Term | Statement = Match.fn(
+  (
+    t: N3Term | Statement,
+    _f: (term: Term.NamedNode | Term.BlankNode | Term.Literal | Term.Variable) => N3Term,
+  ) => t,
+).pipe(
+  Match.withReturnType<N3Term | Statement>(),
+  Match.tag(
+    'Collection',
+    // SAFETY: `mapAtoms` maps a term to a term.
+    (t, _t, f) => new Collection(t.items.map((i) => mapAtoms(i, f) as N3Term)),
+  ),
+  Match.tag(
+    'Formula',
+    // SAFETY: `mapAtoms` maps a statement to a statement.
+    (t, _t, f) => new Formula(t.statements.map((s) => mapAtoms(s, f) as Statement)),
+  ),
+  Match.tag(
+    'Statement',
+    // SAFETY: `mapAtoms` maps a term to a term.
+    (t, _t, f) =>
+      new Statement(
+        mapAtoms(t.subject, f) as N3Term,
+        mapAtoms(t.predicate, f) as N3Term,
+        mapAtoms(t.object, f) as N3Term,
+      ),
+  ),
+  Match.orElse((t, _t, f) => f(t)),
+);
 
 /**
  * Replaces variables by the terms bound to them (by variable name); unbound
