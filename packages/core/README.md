@@ -46,6 +46,19 @@ Schema.encodeSync(Schema.toCodecJson(Dataset.DatasetSchema))(Dataset.make()); //
 
 Decoding rejects triple terms whose positions don't fit RDF (a literal subject, a non-IRI predicate).
 
+### Property testing
+
+The same schemas derive arbitraries for Effect's native property testing (`effect/Arbitrary`, `@effect/vitest`'s `it.prop`): `Term.TermSchema`, `GroundTermSchema`, each term kind, `QuadSchema` and `Dataset.DatasetSchema` generate realistic RDF 1.2 values — IRIs from a small pool (so quads share subjects, objects and graphs), BCP 47 language tags, both base directions, valid lexical forms for common XSD datatypes, triple terms (as objects) nested up to two deep, and datasets of up to a dozen quads with named graphs:
+
+```ts
+import { it } from '@effect/vitest';
+import { Dataset, Isomorphism } from '@thomasfosterau/effect-rdf';
+
+it.prop('my transform keeps the graph', { ds: Dataset.DatasetSchema }, ({ ds }) =>
+  Isomorphism.isomorphic(myTransform(ds), ds),
+);
+```
+
 ## Example
 
 ```ts
