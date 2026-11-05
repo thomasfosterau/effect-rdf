@@ -6,6 +6,7 @@
  */
 import * as Str from 'effect/String';
 import * as Option from 'effect/Option';
+import * as Schema from 'effect/Schema';
 
 interface Parts {
   scheme: string | undefined;
@@ -235,14 +236,14 @@ const IUNRESERVED = `A-Za-z0-9\\-._~${UCSCHAR}`;
 const SUBDELIMS = "!$&'()*+,;=";
 const PCT = '%[0-9A-Fa-f]{2}';
 const IPCHAR = `(?:[${IUNRESERVED}${SUBDELIMS}:@]|${PCT})`;
-const IRI_RE = new RegExp(
-  `^[A-Za-z][A-Za-z0-9+.\\-]*:` +
-    `(?://(?:(?:[${IUNRESERVED}${SUBDELIMS}:]|${PCT})*@)?(?:\\[[0-9A-Fa-f:.vV${IUNRESERVED}${SUBDELIMS}]*\\]|(?:[${IUNRESERVED}${SUBDELIMS}]|${PCT})*)(?::[0-9]*)?)?` +
-    `(?:/?${IPCHAR}*)*` +
-    `(?:\\?(?:${IPCHAR}|[/?${IPRIVATE}])*)?` +
-    `(?:#(?:${IPCHAR}|[/?])*)?$`,
-  'u',
-);
+// `ihier-part` / `irelative-part` (optional authority, then a path), query and fragment: the
+// IRI grammar after the scheme, shared by absolute IRIs and relative references.
+const IRI_AFTER_SCHEME =
+  `(?://(?:(?:[${IUNRESERVED}${SUBDELIMS}:]|${PCT})*@)?(?:\\[[0-9A-Fa-f:.vV${IUNRESERVED}${SUBDELIMS}]*\\]|(?:[${IUNRESERVED}${SUBDELIMS}]|${PCT})*)(?::[0-9]*)?)?` +
+  `(?:/?${IPCHAR}*)*` +
+  `(?:\\?(?:${IPCHAR}|[/?${IPRIVATE}])*)?` +
+  `(?:#(?:${IPCHAR}|[/?])*)?`;
+const IRI_RE = new RegExp(`^[A-Za-z][A-Za-z0-9+.\\-]*:${IRI_AFTER_SCHEME}$`, 'u');
 
 /**
  * Whether a string is a syntactically valid absolute IRI (RFC 3987).
@@ -250,3 +251,68 @@ const IRI_RE = new RegExp(
  * @since 0.1.0
  */
 export const isValid = (iri: string): boolean => IRI_RE.test(iri);
+
+// A relative reference (RFC 3987 `irelative-ref`): the IRI grammar without the scheme.
+const RELATIVE_RE = new RegExp(`^${IRI_AFTER_SCHEME}$`, 'u');
+
+/**
+ * Whether a string is a syntactically valid IRI reference (RFC 3987): an
+ * absolute IRI, or a relative reference whose first path segment has no `:`.
+ *
+ * @since 0.1.0
+ */
+export const isValidReference = (reference: string): boolean =>
+  isAbsolute(reference)
+    ? isValid(reference)
+    : !/^[^/?#]*:/.test(reference) && RELATIVE_RE.test(reference);
+
+/**
+ * Schema of an absolute IRI (`isValid`): a string, with JSON Schema
+ * `format: "iri"`. Use it to validate IRIs from `Config`, CLI flags or HTTP
+ * parameters.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export const IriSchema: Schema.String = Schema.String.check(
+  Schema.makeFilter((s: string) => isValid(s), {
+    identifier: 'isIri',
+    title: 'IRI',
+    description: 'An absolute IRI (RFC 3987).',
+    expected: 'an absolute IRI',
+    toJsonSchema: () => ({ format: 'iri' }),
+  }),
+).annotate({ identifier: 'Iri' });
+
+/**
+ * The type `IriSchema` decodes to: a string.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type IriSchema = typeof IriSchema.Type;
+
+/**
+ * Schema of an IRI reference, absolute or relative (`isValidReference`): a
+ * string, with JSON Schema `format: "iri-reference"`.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export const IriReferenceSchema: Schema.String = Schema.String.check(
+  Schema.makeFilter((s: string) => isValidReference(s), {
+    identifier: 'isIriReference',
+    title: 'IRI reference',
+    description: 'An absolute IRI or relative reference (RFC 3987).',
+    expected: 'an IRI reference',
+    toJsonSchema: () => ({ format: 'iri-reference' }),
+  }),
+).annotate({ identifier: 'IriReference' });
+
+/**
+ * The type `IriReferenceSchema` decodes to: a string.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export type IriReferenceSchema = typeof IriReferenceSchema.Type;

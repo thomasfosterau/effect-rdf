@@ -13,6 +13,8 @@ export * as Iri from './Iri.ts';
 /** @since 0.1.0 */
 export * as Isomorphism from './Isomorphism.ts';
 /** @since 0.1.0 */
+export * as LanguageTag from './LanguageTag.ts';
+/** @since 0.1.0 */
 export * as Namespace from './Namespace.ts';
 /** @since 0.1.0 */
 export * as PrefixMap from './PrefixMap.ts';

@@ -426,10 +426,12 @@ class SerializeFailure {
   }
 }
 
+// Subject, predicate, object only — not `Term.QuadOrder`, which sorts by graph first: RDF/JSON
+// has no graphs, so quads from every graph interleave by their triple.
 const quadOrder: Order.Order<Term.Quad> = Order.combineAll([
-  Order.mapInput(Term.compare, (q: Term.Quad) => q.subject),
-  Order.mapInput(Term.compare, (q: Term.Quad) => q.predicate),
-  Order.mapInput(Term.compare, (q: Term.Quad) => q.object),
+  Order.mapInput(Term.Order, (q: Term.Quad) => q.subject),
+  Order.mapInput(Term.Order, (q: Term.Quad) => q.predicate),
+  Order.mapInput(Term.Order, (q: Term.Quad) => q.object),
 ]);
 
 const failSerialize = (message: string): never => {

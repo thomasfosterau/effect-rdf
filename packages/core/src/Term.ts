@@ -13,9 +13,11 @@
  */
 import * as Effect from 'effect/Effect';
 import * as Equal from 'effect/Equal';
+import * as equivalence from 'effect/Equivalence';
 import * as Hash from 'effect/Hash';
 import { NodeInspectSymbol } from 'effect/Inspectable';
 import * as Match from 'effect/Match';
+import * as order from 'effect/Order';
 import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty, isString } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
@@ -739,6 +741,45 @@ export const compareQuads = (a: Quad, b: Quad): -1 | 0 | 1 =>
   compare(a.subject, b.subject) ||
   compare(a.predicate, b.predicate) ||
   compare(a.object, b.object);
+
+/**
+ * The `compare` ordering of terms as an Effect `Order`, for `Array.sort`,
+ * `Order.mapInput` and the other `Order` combinators.
+ *
+ * @since 0.1.0
+ * @category ordering
+ */
+export const Order: order.Order<Term> = order.make(compare);
+
+/**
+ * The `compareQuads` ordering (graph, subject, predicate, object) as an
+ * Effect `Order`.
+ *
+ * @since 0.1.0
+ * @category ordering
+ */
+export const QuadOrder: order.Order<Quad> = order.make(compareQuads);
+
+/**
+ * Term equality as an Effect `Equivalence`: the same as `Equal.equals`
+ * (equal canonical keys).
+ *
+ * @since 0.1.0
+ * @category equivalence
+ */
+export const Equivalence: equivalence.Equivalence<Term> = equivalence.make(
+  (a, b) => a.key === b.key,
+);
+
+/**
+ * Quad equality as an Effect `Equivalence`: the same as `Equal.equals`.
+ *
+ * @since 0.1.0
+ * @category equivalence
+ */
+export const QuadEquivalence: equivalence.Equivalence<Quad> = equivalence.make(
+  (a, b) => a.key === b.key,
+);
 
 // -----------------------------------------------------------------------------
 // Escaping
