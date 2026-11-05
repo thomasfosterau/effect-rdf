@@ -16,6 +16,7 @@
 import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Option from 'effect/Option';
 import {
   alphanumeric,
   digit,
@@ -136,8 +137,8 @@ export const prefixedName: Parser.Parser<PrefixedName> = Parser.seq(
   Parser.opt(pnLocal),
 ).pipe(
   Parser.map(([prefix, , local]) => ({
-    prefix: prefix._tag === 'Some' ? prefix.value : '',
-    local: local._tag === 'Some' ? local.value : '',
+    prefix: Option.getOrElse(prefix, () => ''),
+    local: Option.getOrElse(local, () => ''),
   })),
 );
 

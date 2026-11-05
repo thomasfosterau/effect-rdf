@@ -26,8 +26,9 @@ const loadEntries = (manifest: string): ReadonlyArray<Manifest.Entry> =>
   exists ? Effect.runSync(Manifest.load(`${IRI_ROOT}${manifest}`, read)) : [];
 
 const chunked = (text: string, size: number): Stream.Stream<string> => {
-  const chunks: Array<string> = [];
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  const chunks = Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+    text.slice(i * size, (i + 1) * size),
+  );
   return Stream.fromIterable(chunks);
 };
 

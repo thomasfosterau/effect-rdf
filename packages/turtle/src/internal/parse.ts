@@ -2,7 +2,9 @@ import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Stream from 'effect/Stream';
 import { SyntaxFailure, TurtleParser } from './parser.ts';
@@ -11,8 +13,8 @@ import { SyntaxFailure, TurtleParser } from './parser.ts';
 export interface Syntax {
   readonly name: string;
   readonly trig: boolean;
-  /** The span prefix and format for tracing (`<module>.parse`, …); untraced when absent. */
-  readonly trace?: Serialization.SpanTarget | undefined;
+  /** The span prefix and format for tracing (`<module>.parse`, …); untraced when `None`. */
+  readonly trace: Option.Option<Serialization.SpanTarget>;
 }
 
 /**
@@ -29,7 +31,7 @@ export interface QuadsResult {
 const makeParser = (syntax: Syntax, options?: Serialization.ParseOptions): TurtleParser =>
   new TurtleParser({
     trig: syntax.trig,
-    baseIri: options?.baseIri,
+    baseIri: Option.fromUndefinedOr(options?.baseIri),
     blankNodePrefix: options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
     graph: (syntax.trig ? undefined : options?.graph) ?? Term.defaultGraph,
   });
@@ -64,7 +66,7 @@ export const parseQuads = (
       return {
         quads,
         prefixes: PrefixMap.make(parser.prefixes),
-        baseIri: parser.base,
+        baseIri: Option.getOrUndefined(parser.base),
       };
     },
     catch: (error) => toParseError(syntax, Predicate.isError(error) ? error : String(error)),
@@ -80,7 +82,7 @@ export const parse = (
     dataset: Dataset.fromIterable(result.quads),
     prefixes: result.prefixes,
     baseIri: result.baseIri,
-  })).pipe(Serialization.withParseSpan(syntax.trace, input));
+  })).pipe(Serialization.withParseSpan(Option.getOrUndefined(syntax.trace), input));
 
 const END: unique symbol = Symbol('end');
 
@@ -93,27 +95,18 @@ export const parseStream =
   ): Stream.Stream<Term.Quad, Serialization.RdfParseError | E, R> =>
     Stream.suspend(() => {
       const parser = makeParser(syntax, options);
-      // SAFETY: an input that never emits `END` is a subtype of one that may; the cast only widens
-      // the element type.
-      return Stream.concat(
-        input as Stream.Stream<string | typeof END, E, R>,
-        Stream.succeed(END),
-      ).pipe(
+      return Stream.concat(input, Stream.succeed(END)).pipe(
         Stream.mapAccumArrayEffect(
           () => undefined,
           (_, chunks) =>
             Effect.try({
-              try: () => {
-                const out: Array<Term.Quad> = [];
-                for (const chunk of chunks) {
-                  const quads = chunk === END ? parser.end() : parser.feed(chunk);
-                  for (const q of quads) out.push(q);
-                }
-                return [undefined, out] as const;
-              },
+              try: (): readonly [undefined, ReadonlyArray<Term.Quad>] => [
+                undefined,
+                Arr.flatMap(chunks, (chunk) => (chunk === END ? parser.end() : parser.feed(chunk))),
+              ],
               catch: (error) =>
                 toParseError(syntax, Predicate.isError(error) ? error : String(error)),
             }),
         ),
       );
-    }).pipe(Serialization.withStreamSpan(syntax.trace, 'parseStream'));
+    }).pipe(Serialization.withStreamSpan(Option.getOrUndefined(syntax.trace), 'parseStream'));

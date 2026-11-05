@@ -1,6 +1,7 @@
 import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, PrefixMap, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import * as Effect from 'effect/Effect';
+import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import { Manifest, TriG, Turtle } from '../src/index.ts';
@@ -228,7 +229,7 @@ describe('TriG', () => {
 describe('Manifest', () => {
   it.effect('reads entries and includes', () =>
     Effect.gen(function* () {
-      const files = new Map([
+      const files = MutableHashMap.make(
         [
           'http://t/manifest.ttl',
           `
@@ -246,9 +247,13 @@ describe('Manifest', () => {
           <> a mf:Manifest ; mf:entries ( <#t2> ) .
           <#t2> a rdft:TestTurtleNegativeSyntax ; mf:action <b.ttl> .`,
         ],
-      ]);
+      );
       const entries = yield* Manifest.load('http://t/manifest.ttl', (iri) =>
-        Effect.succeed(files.get(iri) ?? assert.fail(`No fixture for ${iri}`)),
+        Effect.succeed(
+          Option.getOrElse(MutableHashMap.get(files, iri), () =>
+            assert.fail(`No fixture for ${iri}`),
+          ),
+        ),
       );
       expect(entries.map((e) => [e.name, e.kind, Option.getOrNull(e.action)])).toEqual([
         ['t1', 'TestTurtleEval', 'http://t/a.ttl'],

@@ -33,6 +33,7 @@
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
 import type * as Stream from 'effect/Stream';
 import * as internal from './internal/parse.ts';
 import * as internalSerialize from './internal/serialize.ts';
@@ -70,7 +71,7 @@ export const format: Serialization.Format = Serialization.makeFormat({
 const syntax: internal.Syntax = {
   name: 'Turtle',
   trig: false,
-  trace: { module: 'Turtle', format },
+  trace: Option.some({ module: 'Turtle', format }),
 };
 
 /**

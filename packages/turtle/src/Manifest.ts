@@ -29,6 +29,7 @@ import * as Term from '@thomasfosterau/effect-rdf/Term';
 import { rdf, rdfs } from '@thomasfosterau/effect-rdf/Vocab';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
 import * as Turtle from './Turtle.ts';
 
@@ -98,10 +99,10 @@ export interface Manifest {
 const localName = (iri: string): string => iri.replace(/^.*[#/]/, '');
 
 const iriOf = (term: Option.Option<Term.Object>): Option.Option<string> =>
-  Option.flatMap(term, (t) => (t._tag === 'NamedNode' ? Option.some(t.value) : Option.none()));
+  Option.flatMap(term, (t) => (Term.isNamedNode(t) ? Option.some(t.value) : Option.none()));
 
 const stringOf = (term: Option.Option<Term.Object>): Option.Option<string> =>
-  Option.flatMap(term, (t) => (t._tag === 'Literal' ? Option.some(t.value) : Option.none()));
+  Option.flatMap(term, (t) => (Term.isLiteral(t) ? Option.some(t.value) : Option.none()));
 
 /**
  * Parses a manifest document. `iri` is the manifest's own IRI, used as the
@@ -117,7 +118,7 @@ export const parse = (
   Effect.map(Turtle.parse(text, { baseIri: iri }), ({ dataset }) => {
     const subjects = Dataset.subjectsOf(dataset, rdf.type, mf.Manifest);
     const manifest: Term.Subject =
-      subjects.find((s) => s._tag === 'NamedNode' && s.value === iri) ??
+      subjects.find((s) => Term.isNamedNode(s) && s.value === iri) ??
       subjects[0] ??
       Term.namedNode(iri);
     const listAt = (p: Term.NamedNode): ReadonlyArray<Term.Object> =>
@@ -125,9 +126,9 @@ export const parse = (
         Option.getOrElse(Dataset.list(dataset, head), () => []),
       );
     const entries = listAt(mf.entries).flatMap((node): ReadonlyArray<Entry> => {
-      if (node._tag !== 'NamedNode' && node._tag !== 'BlankNode') return [];
+      if (!Term.isResource(node)) return [];
       const type = iriOf(Dataset.objectOf(dataset, node, rdf.type));
-      const id = node._tag === 'NamedNode' ? node.value : node.key;
+      const id = Term.isNamedNode(node) ? node.value : node.key;
       return [
         {
           id,
@@ -150,7 +151,7 @@ export const parse = (
       label: stringOf(Dataset.objectOf(dataset, manifest, rdfs.label)),
       assumedTestBase: iriOf(Dataset.objectOf(dataset, manifest, mf.assumedTestBase)),
       entries,
-      includes: listAt(mf.include).flatMap((t) => (t._tag === 'NamedNode' ? [t.value] : [])),
+      includes: listAt(mf.include).flatMap((t) => (Term.isNamedNode(t) ? [t.value] : [])),
       dataset,
     };
   });
@@ -166,19 +167,26 @@ export const load = <E, R>(
   iri: string,
   read: (iri: string) => Effect.Effect<string, E, R>,
 ): Effect.Effect<ReadonlyArray<Entry>, E | Serialization.RdfParseError, R> =>
-  Effect.gen(function* () {
-    const seen = new Set<string>();
+  Effect.suspend(() => {
+    const seen = MutableHashSet.empty<string>();
     const entries: Array<Entry> = [];
-    const queue = [iri];
-    while (Arr.isReadonlyArrayNonEmpty(queue)) {
-      const next = queue.shift()!;
-      if (seen.has(next)) continue;
-      seen.add(next);
-      const manifest = yield* parse(yield* read(next), next);
-      entries.push(...manifest.entries);
-      queue.push(...manifest.includes);
-    }
-    return entries;
+    // Breadth first: a manifest's entries, then those of each include in turn
+    const visit = (
+      queue: ReadonlyArray<string>,
+    ): Effect.Effect<ReadonlyArray<Entry>, E | Serialization.RdfParseError, R> => {
+      if (!Arr.isReadonlyArrayNonEmpty(queue)) return Effect.succeed(entries);
+      const [next, ...rest] = queue;
+      if (MutableHashSet.has(seen, next)) return visit(rest);
+      MutableHashSet.add(seen, next);
+      return read(next).pipe(
+        Effect.flatMap((text) => parse(text, next)),
+        Effect.flatMap((manifest) => {
+          entries.push(...manifest.entries);
+          return visit([...rest, ...manifest.includes]);
+        }),
+      );
+    };
+    return visit([iri]);
   });
 
 /**
