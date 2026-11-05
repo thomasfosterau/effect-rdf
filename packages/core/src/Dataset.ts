@@ -80,17 +80,97 @@ const indexes = new WeakMap<Dataset, Spog>();
 /**
  * A parser's dataset is often only iterated or serialized once, or not at
  * all, so `fromIterable` keeps its quads (`pendingQuads`) and the persistent
- * map is built the first time it is needed, with the same contents and
- * order as if built at once.
+ * map is built the first time it is needed (a lookup, a match or an update),
+ * with the same contents.
  */
 const pending = pendingQuads;
 
+/**
+ * The distinct quads of the datasets made by `fromIterable`, in the order
+ * first given: what such a dataset iterates (before and after its quad set
+ * is built), so that iterating, counting or serializing it never builds the
+ * persistent map.
+ */
+const ordered = new WeakMap<Dataset, ReadonlyArray<Term.Quad>>();
+
+/** Combines two hashes (a multiply-rotate step); `distinct` finishes them with `avalanche`. */
+const mix = (a: number, b: number): number => Math.imul((a << 5) | (a >>> 27), 0x9e3779b1) ^ b;
+
+/** The final mixing of a hash (MurmurHash3's), so that its low bits pick table slots well. */
+const avalanche = (h: number): number => {
+  let x = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35);
+  return x ^ (x >>> 16);
+};
+
+/**
+ * A hash of a subject or object (equal terms hash equally), from its value
+ * rather than its key, which is not built for this. A literal's datatype is
+ * usually one shared node, whose own (cached) hash is used.
+ */
+const termHash = (t: Term.Term): number =>
+  t instanceof Term.Triple
+    ? mix(mix(termHash(t.subject), t.predicate[Hash.symbol]()), termHash(t.object))
+    : t instanceof Term.Literal
+      ? mix(mix(Hash.string(t.value), t.datatype[Hash.symbol]()), Hash.string(t.language))
+      : mix(Hash.string(t.value), t instanceof Term.BlankNode ? 1 : 0);
+
+/**
+ * A quad's hash for `distinct`: its predicate and graph, usually shared
+ * nodes, by their own cached hashes; its subject and object by `termHash`.
+ * Each position is hashed the same way for every quad, so equal quads hash
+ * equally.
+ */
+const quadHash = (q: Term.Quad): number =>
+  mix(
+    mix(mix(termHash(q.subject), q.predicate[Hash.symbol]()), termHash(q.object)),
+    q.graph[Hash.symbol](),
+  );
+
+/**
+ * The distinct quads of `quads` (equal keys), keeping the first of each in
+ * order: open addressing over their structural hashes, comparing keys only
+ * when two hashes are equal, so that no key is built for quads that differ.
+ */
+const distinct = (quads: ReadonlyArray<Term.Quad>): ReadonlyArray<Term.Quad> => {
+  const n = quads.length;
+  if (n < 2) return quads;
+  const mask = 2 ** Math.ceil(Math.log2(n * 2)) - 1;
+  const hashes = new Int32Array(mask + 1);
+  const slots = new Int32Array(mask + 1);
+  const out: Array<Term.Quad> = [];
+  quads.forEach((q, k) => {
+    const hash = avalanche(quadHash(q));
+    let i = hash & mask;
+    let slot = slots[i] ?? 0;
+    while (slot !== 0) {
+      if (hashes[i] === hash && (quads[slot - 1] ?? q).key === q.key) return;
+      i = (i + 1) & mask;
+      slot = slots[i] ?? 0;
+    }
+    hashes[i] = hash;
+    slots[i] = k + 1;
+    out.push(q);
+  });
+  return out.length === n ? quads : out;
+};
+
+/** The distinct quads, in order, of a dataset made by `fromIterable` (none for any other). */
+const orderedOf = (self: Dataset): Option.Option<ReadonlyArray<Term.Quad>> => {
+  const known = ordered.get(self);
+  if (known !== undefined) return Option.some(known);
+  const given = pending.get(self);
+  if (given === undefined) return Option.none();
+  const quads = distinct(given);
+  ordered.set(self, quads);
+  return Option.some(quads);
+};
+
 /** Builds a pending dataset's quad set, making it like any other dataset. */
 const materialize = (self: Dataset): HashMap.HashMap<string, Term.Quad> => {
-  const quads = buildQuads(pending.get(self) ?? []);
+  const quads = buildQuads(Option.getOrElse(orderedOf(self), () => []));
   pending.delete(self);
   Object.defineProperty(self, 'quads', { value: quads, enumerable: true });
-  Object.defineProperty(self, 'size', { value: HashMap.size(quads), enumerable: true });
   return quads;
 };
 
@@ -103,17 +183,18 @@ const Proto: Omit<Dataset, 'size' | 'quads'> & Pick<Dataset, 'size' | 'quads'> =
   },
   get size(): number {
     // SAFETY: as for `quads`.
-    return HashMap.size(materialize(this));
+    const size = Option.getOrElse(orderedOf(this), () => []).length;
+    Object.defineProperty(this, 'size', { value: size, enumerable: true });
+    return size;
   },
   [Symbol.iterator](this: Dataset): Iterator<Term.Quad> {
-    return HashMap.values(this.quads)[Symbol.iterator]();
+    // A dataset made by `fromIterable` iterates its quads in the order first given
+    return Option.getOrElse(orderedOf(this), () => HashMap.values(this.quads))[Symbol.iterator]();
   },
   [Equal.symbol](this: Dataset, that: Equal.Equal): boolean {
     if (!hasDatasetTypeId(that) || that.size !== this.size) return false;
-    for (const key of HashMap.keys(this.quads)) {
-      if (!HashMap.has(that.quads, key)) return false;
-    }
-    return true;
+    const theirs = that.quads;
+    return HashMap.every(this.quads, (_quad, key) => HashMap.has(theirs, key));
   },
   [Hash.symbol](this: Dataset): number {
     let h = 0;
