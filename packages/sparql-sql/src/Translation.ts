@@ -141,8 +141,11 @@ const unsupported = (reason: string): never => {
 // Constants
 // -----------------------------------------------------------------------------
 
-const collectTerm = (t: Ast.TermPattern | Term.Term, out: Map<string, Term.GroundTerm>): void => {
-  return Match.value(t).pipe(
+const collectTerm = (
+  term: Ast.TermPattern | Term.Term,
+  out: Map<string, Term.GroundTerm>,
+): void => {
+  return Match.value(term).pipe(
     Match.tag('NamedNode', 'Literal', (t) => {
       out.set(t.key, t);
       return;
@@ -172,8 +175,11 @@ const collectExpression = (e: Algebra.Expression, out: Map<string, Term.GroundTe
   );
 };
 
-const collectOperation = (op: Algebra.Operation, out: Map<string, Term.GroundTerm>): void => {
-  return Match.value(op).pipe(
+const collectOperation = (
+  operation: Algebra.Operation,
+  out: Map<string, Term.GroundTerm>,
+): void => {
+  return Match.value(operation).pipe(
     Match.tag('Bgp', (op) => {
       for (const p of op.patterns) {
         collectTerm(p.subject, out);
@@ -576,8 +582,8 @@ class Compiler {
 
   // --- operators --------------------------------------------------------------
 
-  op(op: Algebra.Operation, g: GraphCtx, unit: Block): Block {
-    return Match.value(op).pipe(
+  op(operation: Algebra.Operation, g: GraphCtx, unit: Block): Block {
+    return Match.value(operation).pipe(
       Match.tag('Bgp', (op) =>
         Arr.isReadonlyArrayEmpty(op.patterns) ? unit : this.bgp(op.patterns, g),
       ),
@@ -631,7 +637,7 @@ class Compiler {
 
   // --- BGP --------------------------------------------------------------------
 
-  bgp(patterns: ReadonlyArray<Ast.TriplePattern>, g: GraphCtx): Block {
+  bgp(patterns: ReadonlyArray<Ast.TriplePattern>, ctx: GraphCtx): Block {
     const items: Array<Item> = [];
     const where: Array<string> = [];
     const cols = new Map<string, Col>();
@@ -640,29 +646,29 @@ class Compiler {
       if (c === undefined) cols.set(name, { sql, nullable: false, type: 'id' });
       else where.push(`${c.sql} = ${sql}`);
     };
-    const position = (t: Ast.TermPattern, sql: string, constants: Array<string>): void => {
+    const position = (t: Ast.TermPattern, sql: string, bound: Array<string>): void => {
       return Match.value(t).pipe(
-        Match.tag('Variable', (t) => {
-          bind(t.value, sql);
+        Match.tag('Variable', (pattern) => {
+          bind(pattern.value, sql);
           return;
         }),
         Match.tag('BlankNode', () => unsupported('Blank node in a pattern')),
-        Match.tag('NamedNode', 'Literal', (t) => {
-          constants.push(`${sql} = ${this.idOf(t)}`);
+        Match.tag('NamedNode', 'Literal', (pattern) => {
+          bound.push(`${sql} = ${this.idOf(pattern)}`);
           return;
         }),
-        Match.tag('Triple', (t) => {
-          if (Term.isGround(t)) {
+        Match.tag('Triple', (pattern) => {
+          if (Term.isGround(pattern)) {
             // SAFETY: `Term.isGround` holds, so the triple pattern has no variables.
-            constants.push(`${sql} = ${this.idOf(t as Term.Triple)}`);
+            bound.push(`${sql} = ${this.idOf(pattern as Term.Triple)}`);
             return;
           }
           const ta = this.alias('t');
           items.push({ source: this.T, alias: ta });
           where.push(`${ta}.id = ${sql}`, `${ta}.kind = ${Enc.Kind.Triple}`);
-          position(t.subject, `${ta}.sub`, where);
-          position(t.predicate, `${ta}.pre`, where);
-          position(t.object, `${ta}.obj`, where);
+          position(pattern.subject, `${ta}.sub`, where);
+          position(pattern.predicate, `${ta}.pre`, where);
+          position(pattern.object, `${ta}.obj`, where);
           return;
         }),
         Match.exhaustive,
@@ -672,7 +678,7 @@ class Compiler {
     for (const p of patterns) {
       const a = this.alias('q');
       const merged =
-        g.kind === 'default' &&
+        ctx.kind === 'default' &&
         (defaultGraph === 'union' || (Array.isArray(defaultGraph) && defaultGraph.length > 1));
       if (merged) {
         // The default graph is a merge of several graphs: match each triple once.
@@ -701,7 +707,7 @@ class Compiler {
         continue;
       }
       items.push({ source: this.Q, alias: a });
-      Match.value(g).pipe(
+      Match.value(ctx).pipe(
         Match.when({ kind: 'default' }, () => {
           if (defaultGraph === 'default') where.push(`${a}.g = 0`);
           else if (Array.isArray(defaultGraph) && defaultGraph.length === 1) {
@@ -1062,18 +1068,18 @@ class Compiler {
     };
   }
 
-  constOperand(term: Term.GroundTerm): Operand {
-    const { cls, num } = Enc.classify(term);
+  constOperand(constant: Term.GroundTerm): Operand {
+    const { cls, num } = Enc.classify(constant);
     const base = {
       tag: 'const' as const,
       classes: [cls],
       isNull: S(false),
       cls: S(cls),
       num: S(num),
-      id: S(this.idOf(term)),
-      term,
+      id: S(this.idOf(constant)),
+      term: constant,
     };
-    return Match.value(term).pipe(
+    return Match.value(constant).pipe(
       Match.tag('NamedNode', 'BlankNode', (term) => ({
         ...base,
         kind: S(term._tag === 'NamedNode' ? Enc.Kind.NamedNode : Enc.Kind.BlankNode),
@@ -1178,8 +1184,8 @@ class Compiler {
   };
 
   /** A term-valued expression as a column (for `BIND`). */
-  termValued(o: Operand): Col {
-    return Match.value(o).pipe(
+  termValued(operand: Operand): Col {
+    return Match.value(operand).pipe(
       Match.withReturnType<Col>(),
       Match.when({ tag: 'term' }, (o) => ({
         sql: this.f(o.id!),
@@ -1207,8 +1213,8 @@ class Compiler {
   }
 
   /** Compiles an expression to an operand. */
-  operand(e: Algebra.Expression, env: Env): Operand {
-    return Match.value(e).pipe(
+  operand(expr: Algebra.Expression, env: Env): Operand {
+    return Match.value(expr).pipe(
       Match.tag('Variable', (e) => {
         const c = env.cols.get(e.value);
         if (c === undefined) return this.NULL;
@@ -1230,11 +1236,11 @@ class Compiler {
     );
   }
 
-  operation(e: Algebra.OperationExpression, env: Env): Operand {
-    const args = e.args;
+  operation(expr: Algebra.OperationExpression, env: Env): Operand {
+    const args = expr.args;
     const arg = (i: number) => this.operand(args[i]!, env);
     const bool = (sql: string) => this.boolOperand(sql);
-    return Match.value(e)
+    return Match.value(expr)
       .pipe(
         Match.when({ operator: '&&' }, () => bool(`(${this.ebv(arg(0))} AND ${this.ebv(arg(1))})`)),
         Match.when({ operator: '||' }, () => bool(`(${this.ebv(arg(0))} OR ${this.ebv(arg(1))})`)),
@@ -1580,8 +1586,8 @@ class Compiler {
   }
 
   /** The effective boolean value (SQL boolean, `NULL` = error). */
-  ebv(o: Operand): string {
-    return Match.value(o).pipe(
+  ebv(operand: Operand): string {
+    return Match.value(operand).pipe(
       Match.when({ tag: 'bool' }, (o) => o.bool!),
       Match.when({ tag: Match.is('null', 'iri') }, () => 'NULL'),
       Match.when({ tag: 'const' }, (o) => {

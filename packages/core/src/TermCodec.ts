@@ -334,11 +334,11 @@ export const value: TermCodec<string | number | bigint | boolean | Date> = make(
  * @category schemas
  */
 export const typed = (datatype: string | Term.NamedNode): TermCodec<string> => {
-  const iri = Predicate.isString(datatype) ? datatype : datatype.value;
+  const datatypeIri = Predicate.isString(datatype) ? datatype : datatype.value;
   return make(Schema.String, {
-    expected: `a literal of type <${iri}>`,
-    decode: (t) => (t._tag === 'Literal' && t.datatype.value === iri ? t.value : undefined),
-    encode: (s) => Term.literal(s, Term.namedNode(iri)),
+    expected: `a literal of type <${datatypeIri}>`,
+    decode: (t) => (t._tag === 'Literal' && t.datatype.value === datatypeIri ? t.value : undefined),
+    encode: (s) => Term.literal(s, Term.namedNode(datatypeIri)),
   });
 };
 

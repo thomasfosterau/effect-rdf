@@ -113,9 +113,9 @@ export interface ZeroOrOnePath {
  * @since 0.1.0
  * @category constructors
  */
-export const predicate = (predicate: Term.NamedNode): PredicatePath => ({
+export const predicate = (iri: Term.NamedNode): PredicatePath => ({
   _tag: 'PredicatePath',
-  predicate,
+  predicate: iri,
 });
 
 /**
@@ -173,18 +173,18 @@ export const zeroOrOne = (path: Path): ZeroOrOnePath => ({ _tag: 'ZeroOrOnePath'
 export const equals = (a: Path, b: Path): boolean => {
   if (a._tag !== b._tag) return false;
   return Match.value(a).pipe(
-    Match.tag('PredicatePath', (a) => {
+    Match.tag('PredicatePath', (first) => {
       // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
-      return a.predicate.value === (b as PredicatePath).predicate.value;
+      return first.predicate.value === (b as PredicatePath).predicate.value;
     }),
-    Match.tag('SequencePath', 'AlternativePath', (a) => {
+    Match.tag('SequencePath', 'AlternativePath', (first) => {
       // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
       const bs = (b as SequencePath | AlternativePath).paths;
-      return a.paths.length === bs.length && a.paths.every((p, i) => equals(p, bs[i]!));
+      return first.paths.length === bs.length && first.paths.every((p, i) => equals(p, bs[i]!));
     }),
-    Match.orElse((a) => {
+    Match.orElse((first) => {
       // SAFETY: `equals` compared the tags first, so `b` has the same kind as `a`.
-      return equals(a.path, (b as InversePath).path);
+      return equals(first.path, (b as InversePath).path);
     }),
   );
 };
@@ -199,13 +199,13 @@ export const toSparql = (self: Path): string => {
   const wrap = (p: Path) =>
     p._tag === 'SequencePath' || p._tag === 'AlternativePath' ? `(${toSparql(p)})` : toSparql(p);
   return Match.value(self).pipe(
-    Match.tag('PredicatePath', (self) => self.predicate.key),
-    Match.tag('SequencePath', (self) => self.paths.map(wrap).join('/')),
-    Match.tag('AlternativePath', (self) => self.paths.map(wrap).join('|')),
-    Match.tag('InversePath', (self) => `^${wrap(self.path)}`),
-    Match.tag('ZeroOrMorePath', (self) => `${wrap(self.path)}*`),
-    Match.tag('OneOrMorePath', (self) => `${wrap(self.path)}+`),
-    Match.tag('ZeroOrOnePath', (self) => `${wrap(self.path)}?`),
+    Match.tag('PredicatePath', (node) => node.predicate.key),
+    Match.tag('SequencePath', (node) => node.paths.map(wrap).join('/')),
+    Match.tag('AlternativePath', (node) => node.paths.map(wrap).join('|')),
+    Match.tag('InversePath', (node) => `^${wrap(node.path)}`),
+    Match.tag('ZeroOrMorePath', (node) => `${wrap(node.path)}*`),
+    Match.tag('OneOrMorePath', (node) => `${wrap(node.path)}+`),
+    Match.tag('ZeroOrOnePath', (node) => `${wrap(node.path)}?`),
     Match.exhaustive,
   );
 };
@@ -219,14 +219,14 @@ type Node = Term.GroundTerm;
 const step = (
   data: Dataset.Dataset,
   nodes: ReadonlyMap<string, Node>,
-  path: Path,
-  inverse: boolean,
+  segment: Path,
+  isInverse: boolean,
 ): Map<string, Node> => {
   const out = new Map<string, Node>();
-  return Match.value(path).pipe(
+  return Match.value(segment).pipe(
     Match.tag('PredicatePath', (path) => {
       for (const node of nodes.values()) {
-        if (inverse) {
+        if (isInverse) {
           // SAFETY: path values are nodes, which can be objects.
           for (const q of Dataset.match(data, {
             predicate: path.predicate,
@@ -244,26 +244,27 @@ const step = (
       return out;
     }),
     Match.tag('SequencePath', (path) => {
-      const parts = inverse ? path.paths.toReversed() : path.paths;
+      const parts = isInverse ? path.paths.toReversed() : path.paths;
       let current: ReadonlyMap<string, Node> = nodes;
-      for (const p of parts) current = step(data, current, p, inverse);
+      for (const p of parts) current = step(data, current, p, isInverse);
       // SAFETY: `step` returns a fresh map for every path kind.
       return current as Map<string, Node>;
     }),
     Match.tag('AlternativePath', (path) => {
-      for (const p of path.paths) for (const [k, v] of step(data, nodes, p, inverse)) out.set(k, v);
+      for (const p of path.paths)
+        for (const [k, v] of step(data, nodes, p, isInverse)) out.set(k, v);
       return out;
     }),
-    Match.tag('InversePath', (path) => step(data, nodes, path.path, !inverse)),
+    Match.tag('InversePath', (path) => step(data, nodes, path.path, !isInverse)),
     Match.tag('ZeroOrOnePath', (path) => {
       for (const [k, v] of nodes) out.set(k, v);
-      for (const [k, v] of step(data, nodes, path.path, inverse)) out.set(k, v);
+      for (const [k, v] of step(data, nodes, path.path, isInverse)) out.set(k, v);
       return out;
     }),
     Match.tag('ZeroOrMorePath', 'OneOrMorePath', (path) => {
       if (path._tag === 'ZeroOrMorePath') for (const [k, v] of nodes) out.set(k, v);
       // Breadth-first closure, starting from each node's one-step successors.
-      let frontier = step(data, nodes, path.path, inverse);
+      let frontier = step(data, nodes, path.path, isInverse);
       while (frontier.size > 0) {
         const next = new Map<string, Node>();
         for (const [k, v] of frontier) {
@@ -271,7 +272,7 @@ const step = (
           out.set(k, v);
           next.set(k, v);
         }
-        frontier = next.size > 0 ? step(data, next, path.path, inverse) : next;
+        frontier = next.size > 0 ? step(data, next, path.path, isInverse) : next;
       }
       return out;
     }),
@@ -408,8 +409,8 @@ export const toRdf = (self: Path, graph: Term.Graph = Term.defaultGraph): PathRd
     quads.push(Term.quad(b, p, go(inner), graph));
     return b;
   };
-  const go = (p: Path): Term.NamedNode | Term.BlankNode => {
-    return Match.value(p).pipe(
+  const go = (node: Path): Term.NamedNode | Term.BlankNode => {
+    return Match.value(node).pipe(
       Match.tag('PredicatePath', (p) => p.predicate),
       Match.tag('SequencePath', (p) => list(p.paths)),
       Match.tag('AlternativePath', (p) => {

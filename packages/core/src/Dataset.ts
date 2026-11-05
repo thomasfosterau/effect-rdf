@@ -571,7 +571,9 @@ export const graphs = (self: Dataset): ReadonlyArray<Term.Graph> =>
 export const graph: {
   (graph: Term.Graph): (self: Dataset) => Dataset;
   (self: Dataset, graph: Term.Graph): Dataset;
-} = dual(2, (self: Dataset, graph: Term.Graph): Dataset => filterMatches(self, { graph }));
+} = dual(2, (self: Dataset, graphName: Term.Graph): Dataset =>
+  filterMatches(self, { graph: graphName }),
+);
 
 /**
  * The triples of the dataset, ignoring graph names (duplicates across graphs
@@ -598,8 +600,8 @@ export const triples = (self: Dataset): ReadonlyArray<Term.Triple> => {
 export const withGraph: {
   (graph: Term.Graph): (self: Dataset) => Dataset;
   (self: Dataset, graph: Term.Graph): Dataset;
-} = dual(2, (self: Dataset, graph: Term.Graph): Dataset =>
-  fromIterable(Array.from(self, (q) => new Term.Quad(q.subject, q.predicate, q.object, graph))),
+} = dual(2, (self: Dataset, graphName: Term.Graph): Dataset =>
+  fromIterable(Array.from(self, (q) => new Term.Quad(q.subject, q.predicate, q.object, graphName))),
 );
 
 /**
@@ -613,7 +615,7 @@ export const withGraph: {
 export const list = (
   self: Dataset,
   head: Term.Object,
-  graph?: Term.Graph,
+  graphName?: Term.Graph,
 ): Option.Option<ReadonlyArray<Term.Object>> => {
   const items: Array<Term.Object> = [];
   const seen = new Set<string>();
@@ -621,8 +623,8 @@ export const list = (
   while (!(node._tag === 'NamedNode' && node.value === rdf.nil.value)) {
     if (node._tag === 'Literal' || seen.has(node.key)) return Option.none();
     seen.add(node.key);
-    const first = objectsOf(self, node, rdf.first, graph);
-    const rest = objectsOf(self, node, rdf.rest, graph);
+    const first = objectsOf(self, node, rdf.first, graphName);
+    const rest = objectsOf(self, node, rdf.rest, graphName);
     if (first.length !== 1 || rest.length !== 1) return Option.none();
     items.push(first[0]!);
     node = rest[0]!;

@@ -124,8 +124,8 @@ const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
   const variable = (name: string) => report(visitor.variable?.(name));
   const term = (t: Ast.TermPattern | Term.Term) => termVariables(t, variable);
 
-  const expression = (e: Ast.Expression): void => {
-    return Match.value(e).pipe(
+  const expression = (expr: Ast.Expression): void => {
+    return Match.value(expr).pipe(
       Match.tag('Variable', 'Triple', (e) => {
         term(e);
         return;
@@ -154,9 +154,9 @@ const walk = (root: Ast.Query, visitor: Visitor): string | undefined => {
     );
   };
 
-  const pattern = (p: Ast.Pattern): void => {
-    report(visitor.pattern?.(p));
-    return Match.value(p).pipe(
+  const pattern = (pat: Ast.Pattern): void => {
+    report(visitor.pattern?.(pat));
+    return Match.value(pat).pipe(
       Match.tag('Bgp', (p) => {
         for (const t of p.triples) {
           term(t.subject);
@@ -252,8 +252,8 @@ export const checkPrebinding = (
       ? `the pre-bound variable ?${v.value} must not be assigned with AS`
       : undefined;
   const error = walk(query, {
-    pattern: (p) => {
-      return Match.value(p).pipe(
+    pattern: (pat) => {
+      return Match.value(pat).pipe(
         Match.tag(
           'Minus',
           () => 'MINUS is not allowed in SHACL-SPARQL queries with pre-bound variables',
@@ -312,13 +312,13 @@ export const checkPrebinding = (
  */
 export const toSparqlPath = (path: Path.Path): Ast.Path => {
   return Match.value(path).pipe(
-    Match.tag('PredicatePath', (path) => Ast.link(path.predicate)),
-    Match.tag('SequencePath', (path) => Ast.sequence(...path.paths.map(toSparqlPath))),
-    Match.tag('AlternativePath', (path) => Ast.alternative(...path.paths.map(toSparqlPath))),
-    Match.tag('InversePath', (path) => Ast.inverse(toSparqlPath(path.path))),
-    Match.tag('ZeroOrMorePath', (path) => Ast.zeroOrMore(toSparqlPath(path.path))),
-    Match.tag('OneOrMorePath', (path) => Ast.oneOrMore(toSparqlPath(path.path))),
-    Match.tag('ZeroOrOnePath', (path) => Ast.zeroOrOne(toSparqlPath(path.path))),
+    Match.tag('PredicatePath', (step) => Ast.link(step.predicate)),
+    Match.tag('SequencePath', (step) => Ast.sequence(...step.paths.map(toSparqlPath))),
+    Match.tag('AlternativePath', (step) => Ast.alternative(...step.paths.map(toSparqlPath))),
+    Match.tag('InversePath', (step) => Ast.inverse(toSparqlPath(step.path))),
+    Match.tag('ZeroOrMorePath', (step) => Ast.zeroOrMore(toSparqlPath(step.path))),
+    Match.tag('OneOrMorePath', (step) => Ast.oneOrMore(toSparqlPath(step.path))),
+    Match.tag('ZeroOrOnePath', (step) => Ast.zeroOrOne(toSparqlPath(step.path))),
     Match.exhaustive,
   );
 };
@@ -331,10 +331,10 @@ const mapGroup = (
 ): Ast.GroupPattern => ({ ...g, patterns: g.patterns.map((p) => mapPattern(p, f)) });
 
 const mapExpression = (
-  e: Ast.Expression,
+  expr: Ast.Expression,
   f: (t: Ast.TriplePattern | Ast.PathPattern) => Ast.TriplePattern | Ast.PathPattern,
 ): Ast.Expression => {
-  return Match.value(e).pipe(
+  return Match.value(expr).pipe(
     Match.tag('Operation', (e) => ({ ...e, args: e.args.map((a) => mapExpression(a, f)) })),
     Match.tag('FunctionCall', (e) => ({ ...e, args: e.args.map((a) => mapExpression(a, f)) })),
     Match.tag('Aggregate', (e) =>
@@ -346,10 +346,10 @@ const mapExpression = (
 };
 
 const mapPattern = (
-  p: Ast.Pattern,
+  pat: Ast.Pattern,
   f: (t: Ast.TriplePattern | Ast.PathPattern) => Ast.TriplePattern | Ast.PathPattern,
 ): Ast.Pattern => {
-  return Match.value(p).pipe(
+  return Match.value(pat).pipe(
     Match.tag('Bgp', (p) => ({ ...p, triples: p.triples.map(f) })),
     Match.tag('Group', (p) => mapGroup(p, f)),
     Match.tag('Optional', 'Minus', 'Graph', 'Service', (p) => ({

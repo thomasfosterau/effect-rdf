@@ -134,8 +134,8 @@ const iri = (
 ): Parser.Parser<string, string, Options> =>
   Parser.alt(
     Parser.seq(Parser.service(Options), TurtleGrammar.iriRef).pipe(
-      Parser.map(([{ baseIri }, iri]) =>
-        baseIri === undefined || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, baseIri),
+      Parser.map(([{ baseIri }, value]) =>
+        baseIri === undefined || Iri.isAbsolute(value) ? value : Iri.resolve(value, baseIri),
       ),
     ),
     // Once a prefixed name has matched, an unknown prefix is an error.
@@ -221,10 +221,15 @@ const triplePattern = Parser.preceded(
       ),
       lex(Token.literal('}')),
     ).pipe(
-      Parser.tryMap(([subject, predicate, object]) =>
+      Parser.tryMap(([subject, verb, object]) =>
         (subject === 'FOCUS') === (object === 'FOCUS')
           ? Result.fail('a triple pattern needs exactly one FOCUS')
-          : Result.succeed<NodeSelector>({ _tag: 'TriplePattern', subject, predicate, object }),
+          : Result.succeed<NodeSelector>({
+              _tag: 'TriplePattern',
+              subject,
+              predicate: verb,
+              object,
+            }),
       ),
     ),
   ),

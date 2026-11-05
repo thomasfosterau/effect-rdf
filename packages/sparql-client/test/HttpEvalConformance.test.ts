@@ -165,11 +165,11 @@ const runQueryTest = (t: TestCase, accept: string) =>
   Effect.gen(function* () {
     const text = fs.readFileSync(t.query!, 'utf8');
     const baseIri = pathToFileURL(t.query!).href;
-    const query = yield* Parser.parseQuery(text, { baseIri });
+    const parsed = yield* Parser.parseQuery(text, { baseIri });
     const expected = readExpected(t.result!);
     yield* Effect.gen(function* () {
       const client = yield* SparqlClient.SparqlClient;
-      return yield* Match.value(query).pipe(
+      return yield* Match.value(parsed).pipe(
         Match.tag('Ask', () =>
           Effect.gen(function* () {
             const value = yield* client.ask(text);
@@ -206,7 +206,7 @@ const runQueryTest = (t: TestCase, accept: string) =>
         ),
         Match.exhaustive,
       );
-    }).pipe(Effect.provide(clientLayer(loadDataset(t, query), baseIri, accept)));
+    }).pipe(Effect.provide(clientLayer(loadDataset(t, parsed), baseIri, accept)));
   });
 
 const runUpdateTest = (t: TestCase) =>

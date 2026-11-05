@@ -40,9 +40,9 @@ const placeholder = /\{[?$]([\p{L}\p{N}_\p{M}]+)\}/gu;
  */
 export const display = (term: Term.Term): string => {
   return Match.value(term).pipe(
-    Match.tag('Literal', 'NamedNode', (term) => term.value),
-    Match.tag('BlankNode', (term) => `_:${term.value}`),
-    Match.orElse((term) => term.toString()),
+    Match.tag('Literal', 'NamedNode', (node) => node.value),
+    Match.tag('BlankNode', (node) => `_:${node.value}`),
+    Match.orElse((node) => node.toString()),
   );
 };
 
