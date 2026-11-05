@@ -25,6 +25,7 @@ import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
 import type * as SchemaAST from 'effect/SchemaAST';
 import * as TermJson from './TermJson.ts';
+import { representations as Generate } from './internal/arbitrary.ts';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
@@ -1027,8 +1028,9 @@ const wellFormedCheck: (self: Term | Quad) => boolean = Match.type<Term | Quad>(
 );
 
 /**
- * The `toCodecJson` link of a term declaration: decodes through `fromJson`
- * and fails unless the result is the declared kind and well formed.
+ * The `toCodecJson` (and `toCodecArbitrary`) link of a term declaration, to a
+ * `TermJson`-shaped schema: decodes through `fromJson` and fails unless the
+ * result is the declared kind and well formed.
  */
 const jsonLink =
   <T extends Term, J extends TermJson.Term>(
@@ -1051,6 +1053,23 @@ const jsonLink =
       }),
     );
 
+/** The `toCodecJson` / `toCodecArbitrary` link of `QuadSchema`. */
+const quadLink = (json: Schema.Codec<TermJson.Quad>) => (): SchemaAST.Link =>
+  Schema.link<Quad>()(
+    json,
+    SchemaTransformation.transformEffect<Quad, TermJson.Quad>({
+      decode: (j, options) => {
+        const q = quadFromJson(j);
+        return isWellFormed(q)
+          ? Effect.succeed(q)
+          : Effect.fail(
+              new SchemaIssue.InvalidValue({ expected: 'a well-formed quad' }, j, options),
+            );
+      },
+      encode: (q) => Effect.succeed(quadToJson(q)),
+    }),
+  );
+
 // -----------------------------------------------------------------------------
 // Schemas
 // -----------------------------------------------------------------------------
@@ -1064,6 +1083,7 @@ const jsonLink =
 export const NamedNodeSchema: Schema.declare<NamedNode> = Schema.declare(isNamedNode, {
   identifier: 'NamedNode',
   toCodecJson: jsonLink(TermJson.NamedNodeSchema, isNamedNode, namedNodeToJson, 'an IRI'),
+  toCodecArbitrary: jsonLink(Generate.NamedNode, isNamedNode, namedNodeToJson, 'an IRI'),
 });
 
 /**
@@ -1083,6 +1103,7 @@ export type NamedNodeSchema = typeof NamedNodeSchema.Type;
 export const BlankNodeSchema: Schema.declare<BlankNode> = Schema.declare(isBlankNode, {
   identifier: 'BlankNode',
   toCodecJson: jsonLink(TermJson.BlankNodeSchema, isBlankNode, blankNodeToJson, 'a blank node'),
+  toCodecArbitrary: jsonLink(Generate.BlankNode, isBlankNode, blankNodeToJson, 'a blank node'),
 });
 
 /**
@@ -1102,6 +1123,7 @@ export type BlankNodeSchema = typeof BlankNodeSchema.Type;
 export const LiteralSchema: Schema.declare<Literal> = Schema.declare(isLiteral, {
   identifier: 'Literal',
   toCodecJson: jsonLink(TermJson.LiteralSchema, isLiteral, literalToJson, 'a literal'),
+  toCodecArbitrary: jsonLink(Generate.Literal, isLiteral, literalToJson, 'a literal'),
 });
 
 /**
@@ -1121,6 +1143,7 @@ export type LiteralSchema = typeof LiteralSchema.Type;
 export const VariableSchema: Schema.declare<Variable> = Schema.declare(isVariable, {
   identifier: 'Variable',
   toCodecJson: jsonLink(TermJson.VariableSchema, isVariable, variableToJson, 'a variable'),
+  toCodecArbitrary: jsonLink(Generate.Variable, isVariable, variableToJson, 'a variable'),
 });
 
 /**
@@ -1140,6 +1163,7 @@ export type VariableSchema = typeof VariableSchema.Type;
 export const TripleSchema: Schema.declare<Triple> = Schema.declare(isTriple, {
   identifier: 'Triple',
   toCodecJson: jsonLink(TermJson.TripleSchema, isTriple, tripleToJson, 'a well-formed triple term'),
+  toCodecArbitrary: jsonLink(Generate.Triple, isTriple, tripleToJson, 'a well-formed triple term'),
 });
 
 /**
@@ -1158,21 +1182,8 @@ export type TripleSchema = typeof TripleSchema.Type;
  */
 export const QuadSchema: Schema.declare<Quad> = Schema.declare(isQuad, {
   identifier: 'Quad',
-  toCodecJson: () =>
-    Schema.link<Quad>()(
-      TermJson.QuadSchema,
-      SchemaTransformation.transformEffect<Quad, TermJson.Quad>({
-        decode: (j, options) => {
-          const q = quadFromJson(j);
-          return isWellFormed(q)
-            ? Effect.succeed(q)
-            : Effect.fail(
-                new SchemaIssue.InvalidValue({ expected: 'a well-formed quad' }, j, options),
-              );
-        },
-        encode: (q) => Effect.succeed(quadToJson(q)),
-      }),
-    ),
+  toCodecJson: quadLink(TermJson.QuadSchema),
+  toCodecArbitrary: quadLink(Generate.Quad),
 });
 
 /**
@@ -1192,6 +1203,7 @@ export type QuadSchema = typeof QuadSchema.Type;
 export const TermSchema: Schema.declare<Term> = Schema.declare(isTerm, {
   identifier: 'Term',
   toCodecJson: jsonLink(TermJson.TermSchema, isTerm, termToJson, 'a well-formed term'),
+  toCodecArbitrary: jsonLink(Generate.Term, isTerm, termToJson, 'a well-formed term'),
 });
 
 /**
@@ -1212,6 +1224,12 @@ export const GroundTermSchema: Schema.declare<GroundTerm> = Schema.declare(isGro
   identifier: 'GroundTerm',
   toCodecJson: jsonLink(
     TermJson.GroundTermSchema,
+    isGroundTerm,
+    groundToJson,
+    'a well-formed ground term',
+  ),
+  toCodecArbitrary: jsonLink(
+    Generate.GroundTerm,
     isGroundTerm,
     groundToJson,
     'a well-formed ground term',

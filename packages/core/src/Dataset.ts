@@ -20,6 +20,7 @@ import { pipeArguments, type Pipeable } from 'effect/Pipeable';
 import { hasProperty } from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
+import { MAX_DATASET_SIZE } from './internal/arbitrary.ts';
 import * as Term from './Term.ts';
 import { rdf } from './Vocab.ts';
 
@@ -796,6 +797,13 @@ export const DatasetSchema: Schema.declare<Dataset> = Schema.declare(isDataset, 
   toCodecJson: () =>
     Schema.link<Dataset>()(
       Schema.Array(Term.QuadSchema),
+      SchemaTransformation.transform({ decode: fromIterable, encode: toSortedArray }),
+    ),
+  // Up to a dozen generated quads, whose terms are drawn from small pools so they share
+  // subjects, objects and graphs.
+  toCodecArbitrary: () =>
+    Schema.link<Dataset>()(
+      Schema.Array(Term.QuadSchema).check(Schema.isMaxLength(MAX_DATASET_SIZE)),
       SchemaTransformation.transform({ decode: fromIterable, encode: toSortedArray }),
     ),
 });
