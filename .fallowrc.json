@@ -49,6 +49,10 @@
         "patterns": ["packages/core/**"]
       },
       {
+        "name": "csvw",
+        "patterns": ["packages/csvw/**"]
+      },
+      {
         "name": "jsonld",
         "patterns": ["packages/jsonld/**"]
       },
@@ -105,6 +109,10 @@
       {
         "from": "core",
         "allow": []
+      },
+      {
+        "from": "csvw",
+        "allow": ["core", "turtle"]
       },
       {
         "from": "jsonld",

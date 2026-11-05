@@ -33,5 +33,8 @@ fetch_sparse() {
   git -C "$DIR/$name" checkout -q
   git -C "$DIR/$name" pull -q --depth 1 || true
 }
+# The W3C CSV on the Web suite (effect-csvw): only its tests/ directory (the
+# repository also holds the specifications' sources).
+fetch_sparse csvw w3c/csvw '/tests/'
 fetch_sparse veraPDF-corpus veraPDF/veraPDF-corpus '/*/*Metadata/' '/Isartor test files/*/*Metadata/'
 echo "Test suites available in $DIR"
