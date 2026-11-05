@@ -461,6 +461,19 @@ describe('RdfXml.serialize', () => {
     }),
   );
 
+  it.effect('serialises more lines than a call can take arguments', () =>
+    Effect.gen(function* () {
+      const quads = Array.from({ length: 200_000 }, (_, i) =>
+        Term.quad(ex(`s${i}`), ex('p'), Term.literal(`${i}`)),
+      );
+      const xml = yield* RdfXml.serialize(quads, {
+        prefixes: PrefixMap.make([['ex', 'http://example.org/']]),
+      });
+      expect(xml.split('</ex:p>').length).toBe(quads.length + 1);
+      expect(xml.endsWith('</rdf:RDF>\n')).toBe(true);
+    }),
+  );
+
   it('splits IRIs into namespace and local name', () => {
     expect(RdfXml.splitIri('http://example.org/ns#local')).toEqual(
       Option.some(['http://example.org/ns#', 'local']),

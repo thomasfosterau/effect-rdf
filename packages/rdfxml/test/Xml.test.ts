@@ -1,5 +1,7 @@
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import { Xml } from '../src/index.ts';
 
@@ -16,7 +18,7 @@ const parseErr = (input: string): Xml.XmlParseError => {
 };
 
 const elements = (el: Xml.Element): Array<Xml.Element> =>
-  el.children.filter((c): c is Xml.Element => c._tag === 'Element');
+  el.children.filter((c): c is Xml.Element => Predicate.isTagged(c, 'Element'));
 
 const laughs = (body: string) =>
   `<!DOCTYPE a [<!ENTITY l0 "${body}">${Array.from(
@@ -106,7 +108,7 @@ describe('Xml.parse', () => {
 <r tok="  a  " a="&greeting;">&greeting;! &markup; &amp2;</r>`);
     expect(doc.doctype?.name).toBe('r');
     expect(doc.doctype?.entities.get('name')).toBe('World');
-    const attrs = Object.fromEntries(doc.root.attributes.map((a) => [a.localName, a.value]));
+    const attrs = Record.fromEntries(doc.root.attributes.map((a) => [a.localName, a.value]));
     expect(attrs).toEqual({ tok: 'a', a: 'Hello World', kind: 'default' });
     expect(doc.root.attributes.find((a) => a.localName === 'kind')?.defaulted).toBe(true);
     expect(doc.root.children).toMatchObject([
