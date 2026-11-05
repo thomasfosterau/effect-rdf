@@ -130,8 +130,37 @@ effect-sparql-server --read-only --timeout 10000 --graph-per-file a.ttl b.nt
 ```
 
 Files are parsed by extension with the default formats; run
-`effect-sparql-server --help` for every option. (From the repository:
+`effect-sparql-server --help` for every option (the help, `--version` and
+`--completions <shell>` come from `effect/cli`). (From the repository:
 `pnpm --filter @thomasfosterau/effect-sparql-server start -- data.ttl`.)
+
+Every flag can also be set by an environment variable — `SPARQL_SERVER_`
+followed by the flag name in upper snake case — which suits containers. A flag
+on the command line wins over the environment, which wins over the default:
+
+| Flag                    | Environment variable                | Default            |
+| ----------------------- | ----------------------------------- | ------------------ |
+| `-p`, `--port`          | `SPARQL_SERVER_PORT`                | `3030`             |
+| `--host`                | `SPARQL_SERVER_HOST`                | all interfaces     |
+| `--path`                | `SPARQL_SERVER_PATH`                | `/sparql`          |
+| `--update-path`         | `SPARQL_SERVER_UPDATE_PATH`         | the query path     |
+| `--graph-store`         | `SPARQL_SERVER_GRAPH_STORE`         | `/rdf-graph-store` |
+| `--no-graph-store`      | `SPARQL_SERVER_NO_GRAPH_STORE`      | `false`            |
+| `--read-only`           | `SPARQL_SERVER_READ_ONLY`           | `false`            |
+| `--timeout`             | `SPARQL_SERVER_TIMEOUT`             | none               |
+| `--max-results`         | `SPARQL_SERVER_MAX_RESULTS`         | none               |
+| `--cors`                | `SPARQL_SERVER_CORS`                | `false`            |
+| `--union-default-graph` | `SPARQL_SERVER_UNION_DEFAULT_GRAPH` | `false`            |
+| `--graph-per-file`      | `SPARQL_SERVER_GRAPH_PER_FILE`      | `false`            |
+| `--base-url`            | `SPARQL_SERVER_BASE_URL`            | the request origin |
+
+```sh
+SPARQL_SERVER_PORT=8080 SPARQL_SERVER_READ_ONLY=true effect-sparql-server data.ttl
+```
+
+Programmatically, `Cli.command` is the `effect/cli` command, `Cli.parse(argv)`
+validates arguments (and the environment) into `Cli.Arguments`, and
+`Cli.run(argv, { version })` runs the server.
 
 ## Testing
 
