@@ -94,11 +94,8 @@ export default defineConfig({
       // autofixable findings (unnecessary assertions, type arguments and
       // template expressions) are fixed; these sit at `warn` with their count
       // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
-      // narrowing casts the parsers and evaluators rely on; `consistent-return`
-      // on exhaustive `switch`es native `tsc` already proves total
-      // (`noImplicitReturns`).
-      'typescript/no-unsafe-type-assertion': 'warn', // 222
-      'typescript/consistent-return': 'warn', // 12
+      // narrowing casts the parsers and evaluators rely on.
+      'typescript/no-unsafe-type-assertion': 'warn', // 220
       // `casting-awareness` is an awareness prompt, not a defect rule — it
       // fires on every `as`. Stays visible as a warning.
       'effect/casting-awareness': 'warn',
@@ -130,10 +127,9 @@ export default defineConfig({
       'effect/imperative-loops': 'warn', // 833
       // 631 at adoption; dropping the unnecessary `a!` in `a!._tag` (sparql
       // Functions.ts) made 15 existing checks visible to the rule.
-      'effect/avoid-direct-tag-checks': 'warn', // 646
+      'effect/avoid-direct-tag-checks': 'warn', // 619
       'effect/avoid-non-null-assertion': 'warn', // 558
       'effect/avoid-native-object-helpers': 'warn', // 539
-      'effect/prefer-match-over-switch': 'warn', // 56
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
