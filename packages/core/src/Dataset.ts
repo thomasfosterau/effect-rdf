@@ -46,8 +46,6 @@ export interface Dataset extends Iterable<Term.Quad>, Equal.Equal, Pipeable, Ins
   readonly size: number;
   /** @internal */
   readonly quads: HashMap.HashMap<string, Term.Quad>;
-  /** @internal */
-  readonly spog: readonly [s: Index, p: Index, o: Index, g: Index];
 }
 
 /**
@@ -67,7 +65,17 @@ export interface Pattern {
 /** `isDataset` for a value already known to be an object. */
 const hasDatasetTypeId = (u: Equal.Equal | Iterable<Term.Quad>): u is Dataset => TypeId in u;
 
-const Proto: Omit<Dataset, 'size' | 'quads' | 'spog'> = {
+type Spog = readonly [Index, Index, Index, Index];
+
+/**
+ * The indexes of the datasets that have been matched against, built on
+ * first use: parsing a document and serializing it never pays for them. A
+ * `WeakMap` rather than a field, so a dataset's own properties do not depend
+ * on whether it has been matched.
+ */
+const indexes = new WeakMap<Dataset, Spog>();
+
+const Proto: Omit<Dataset, 'size' | 'quads'> = {
   [TypeId]: TypeId,
   [Symbol.iterator](this: Dataset): Iterator<Term.Quad> {
     return HashMap.values(this.quads)[Symbol.iterator]();
@@ -98,18 +106,16 @@ const Proto: Omit<Dataset, 'size' | 'quads' | 'spog'> = {
   },
 };
 
-const makeDataset = (
-  quads: HashMap.HashMap<string, Term.Quad>,
-  spog: readonly [Index, Index, Index, Index],
-): Dataset => {
+const makeDataset = (quads: HashMap.HashMap<string, Term.Quad>): Dataset => {
   const self = Object.create(Proto);
   self.quads = quads;
-  self.spog = spog;
   self.size = HashMap.size(quads);
   return self;
 };
 
 const emptyIndex: Index = HashMap.empty();
+
+const emptySpog: Spog = [emptyIndex, emptyIndex, emptyIndex, emptyIndex];
 
 /**
  * @since 0.1.0
@@ -121,12 +127,7 @@ export const isDataset = (u: unknown): u is Dataset => hasProperty(u, TypeId);
  * @since 0.1.0
  * @category constructors
  */
-export const empty: Dataset = makeDataset(HashMap.empty(), [
-  emptyIndex,
-  emptyIndex,
-  emptyIndex,
-  emptyIndex,
-]);
+export const empty: Dataset = makeDataset(HashMap.empty());
 
 // -----------------------------------------------------------------------------
 // Mutation (internal builder)
@@ -146,21 +147,10 @@ export interface Builder {
   readonly size: () => number;
 }
 
-const indexAdd = (index: Index, termKey: string, quadKey: string, quad: Term.Quad): Index => {
-  const inner = Option.getOrElse(HashMap.get(index, termKey), () =>
-    HashMap.empty<string, Term.Quad>(),
-  );
-  return HashMap.set(index, termKey, HashMap.set(inner, quadKey, quad));
-};
+/** The inner maps of one index made mutable during a batch, by term key. */
+type Transients = Map<string, HashMap.HashMap<string, Term.Quad>>;
 
-const indexRemove = (index: Index, termKey: string, quadKey: string): Index => {
-  const inner = HashMap.get(index, termKey);
-  if (Option.isNone(inner)) return index;
-  const next = HashMap.remove(inner.value, quadKey);
-  return HashMap.size(next) === 0
-    ? HashMap.remove(index, termKey)
-    : HashMap.set(index, termKey, next);
-};
+const transients = (): Transients => new Map();
 
 const positions = (q: Term.Quad): readonly [string, string, string, string] => [
   q.subject.key,
@@ -168,6 +158,95 @@ const positions = (q: Term.Quad): readonly [string, string, string, string] => [
   q.object.key,
   q.graph.key,
 ];
+
+/** Updates to a dataset's four indexes, applied in place until `finish`. */
+interface IndexBatch {
+  readonly add: (quad: Term.Quad, key: string) => void;
+  readonly remove: (quad: Term.Quad, key: string) => void;
+  readonly finish: () => Spog;
+}
+
+const indexBatch = (spog: Spog): IndexBatch => {
+  const idx: [Index, Index, Index, Index] = [
+    HashMap.beginMutation(spog[0]),
+    HashMap.beginMutation(spog[1]),
+    HashMap.beginMutation(spog[2]),
+    HashMap.beginMutation(spog[3]),
+  ];
+  // The inner maps this batch has made mutable, per position, so that adding
+  // a quad updates its four inner maps in place instead of copying a path of
+  // each (they are frozen again by `finish`).
+  const open: [Transients, Transients, Transients, Transients] = [
+    transients(),
+    transients(),
+    transients(),
+    transients(),
+  ];
+  const inner = (i: 0 | 1 | 2 | 3, termKey: string): HashMap.HashMap<string, Term.Quad> => {
+    const opened = open[i];
+    let map = opened.get(termKey);
+    if (map === undefined) {
+      map = HashMap.beginMutation(
+        Option.getOrElse(HashMap.get(idx[i], termKey), () => HashMap.empty<string, Term.Quad>()),
+      );
+      opened.set(termKey, map);
+      idx[i] = HashMap.set(idx[i], termKey, map);
+    }
+    return map;
+  };
+  // A mutable map is updated in place, so the results of `set` and `remove` are the map itself
+  const addAt = (i: 0 | 1 | 2 | 3, termKey: string, key: string, quad: Term.Quad): void => {
+    HashMap.set(inner(i, termKey), key, quad);
+  };
+  const removeAt = (i: 0 | 1 | 2 | 3, termKey: string, key: string): void => {
+    if (open[i].has(termKey) || HashMap.has(idx[i], termKey)) {
+      HashMap.remove(inner(i, termKey), key);
+    }
+  };
+  const close = (i: 0 | 1 | 2 | 3): void => {
+    open[i].forEach((map, termKey) => {
+      HashMap.endMutation(map);
+      if (HashMap.size(map) === 0) idx[i] = HashMap.remove(idx[i], termKey);
+    });
+  };
+  return {
+    add(quad, key) {
+      addAt(0, quad.subject.key, key, quad);
+      addAt(1, quad.predicate.key, key, quad);
+      addAt(2, quad.object.key, key, quad);
+      addAt(3, quad.graph.key, key, quad);
+    },
+    remove(quad, key) {
+      removeAt(0, quad.subject.key, key);
+      removeAt(1, quad.predicate.key, key);
+      removeAt(2, quad.object.key, key);
+      removeAt(3, quad.graph.key, key);
+    },
+    finish() {
+      close(0);
+      close(1);
+      close(2);
+      close(3);
+      return [
+        HashMap.endMutation(idx[0]),
+        HashMap.endMutation(idx[1]),
+        HashMap.endMutation(idx[2]),
+        HashMap.endMutation(idx[3]),
+      ];
+    },
+  };
+};
+
+/** The indexes of a dataset, built the first time they are needed. */
+const indexesOf = (self: Dataset): Spog => {
+  const built = indexes.get(self);
+  if (built !== undefined) return built;
+  const batch = indexBatch(emptySpog);
+  HashMap.forEach(self.quads, (quad, key) => batch.add(quad, key));
+  const spog = batch.finish();
+  indexes.set(self, spog);
+  return spog;
+};
 
 /**
  * Applies a batch of updates to a dataset using a transient builder.
@@ -180,20 +259,17 @@ export const mutate: {
   (self: Dataset, f: (builder: Builder) => void): Dataset;
 } = dual(2, (self: Dataset, f: (builder: Builder) => void): Dataset => {
   let quads = HashMap.beginMutation(self.quads);
-  const [s0, p0, o0, g0] = self.spog;
-  const idx: [Index, Index, Index, Index] = [
-    HashMap.beginMutation(s0),
-    HashMap.beginMutation(p0),
-    HashMap.beginMutation(o0),
-    HashMap.beginMutation(g0),
-  ];
+  // Indexes already built are kept up to date; otherwise the result builds its own when matched
+  const spog = indexes.get(self);
+  const batch = spog === undefined ? undefined : indexBatch(spog);
   const builder: Builder = {
     add(quad) {
       const key = quad.key;
-      if (HashMap.has(quads, key)) return builder;
+      // One lookup: `set` on the mutable map grows it only if the quad is new. A duplicate
+      // replaces the stored quad with an equal one.
+      const before = HashMap.size(quads);
       quads = HashMap.set(quads, key, quad);
-      const ks = positions(quad);
-      for (let i = 0; i < 4; i++) idx[i] = indexAdd(idx[i]!, ks[i]!, key, quad);
+      if (HashMap.size(quads) !== before) batch?.add(quad, key);
       return builder;
     },
     addAll(iterable) {
@@ -204,21 +280,16 @@ export const mutate: {
       const key = quad.key;
       if (!HashMap.has(quads, key)) return builder;
       quads = HashMap.remove(quads, key);
-      const ks = positions(quad);
-      for (let i = 0; i < 4; i++) idx[i] = indexRemove(idx[i]!, ks[i]!, key);
+      batch?.remove(quad, key);
       return builder;
     },
     has: (quad) => HashMap.has(quads, quad.key),
     size: () => HashMap.size(quads),
   };
   f(builder);
-  quads = HashMap.endMutation(quads);
-  return makeDataset(quads, [
-    HashMap.endMutation(idx[0]),
-    HashMap.endMutation(idx[1]),
-    HashMap.endMutation(idx[2]),
-    HashMap.endMutation(idx[3]),
-  ]);
+  const result = makeDataset(HashMap.endMutation(quads));
+  if (batch !== undefined) indexes.set(result, batch.finish());
+  return result;
 });
 
 // -----------------------------------------------------------------------------
@@ -345,7 +416,7 @@ export const match: {
     if (!bound(t)) continue;
     const key = t.key;
     checks.push([i, key]);
-    const inner = HashMap.get(self.spog[i]!, key);
+    const inner = HashMap.get(indexesOf(self)[i]!, key);
     if (Option.isNone(inner)) return [];
     const size = HashMap.size(inner.value);
     if (size < candidateSize) {
@@ -448,7 +519,7 @@ const termsAt = <T extends Term.Term>(
   i: number,
   pick: (q: Term.Quad) => T,
 ): ReadonlyArray<T> =>
-  Array.from(HashMap.values(self.spog[i]!), (inner) =>
+  Array.from(HashMap.values(indexesOf(self)[i]!), (inner) =>
     // SAFETY: an inner map is removed from the index when its last quad goes, so it always holds
     // one.
     pick(HashMap.values(inner).next().value as Term.Quad),

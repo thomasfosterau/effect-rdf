@@ -31,6 +31,27 @@ describe('Dataset', () => {
     expect(Dataset.match(ds, { subject: ex('zzz') })).toEqual([]);
   });
 
+  it('keeps built indexes up to date across later updates', () => {
+    const ds = Dataset.make(a, b);
+    // The first match builds the indexes; the updates below then maintain them in place
+    expect(Dataset.match(ds, { subject: ex('a') })).toHaveLength(2);
+    const added = Dataset.add(ds, c);
+    expect(Dataset.match(added, { predicate: ex('p') })).toHaveLength(2);
+    expect(Dataset.match(ds, { predicate: ex('p') })).toHaveLength(1);
+    const removed = Dataset.mutate(added, (builder) => builder.remove(a).remove(c).add(a));
+    expect(Dataset.match(removed, { object: ex('b') })).toEqual([a]);
+    expect(Dataset.subjects(Dataset.remove(removed, b))).toEqual([ex('a')]);
+    expect(Dataset.match(Dataset.remove(added, c), { subject: ex('c') })).toEqual([]);
+    expect(Dataset.graphs(Dataset.remove(added, b))).toEqual([Term.defaultGraph]);
+  });
+
+  it('builds indexes on the first match of an unmatched dataset', () => {
+    const ds = Dataset.mutate(Dataset.make(a, b, c), (builder) => builder.remove(c).add(c).add(c));
+    expect(ds.size).toBe(3);
+    expect(Dataset.match(ds, { subject: ex('c'), object: ex('b') })).toEqual([c]);
+    expect(Dataset.match(ds, { graph: ex('g') })).toEqual([b]);
+  });
+
   it('has value equality', () => {
     expect(Equal.equals(Dataset.make(a, b), Dataset.make(b, a))).toBe(true);
     expect(Equal.equals(Dataset.make(a, b), Dataset.make(a))).toBe(false);

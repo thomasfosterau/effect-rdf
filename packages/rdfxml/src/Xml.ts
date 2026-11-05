@@ -284,7 +284,7 @@ const position = (lineStarts: ReadonlyArray<number>, offset: number): Position =
 
 const lineStartsOf = (text: string): Array<number> => {
   const starts = [0];
-  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
   return starts;
 };
 

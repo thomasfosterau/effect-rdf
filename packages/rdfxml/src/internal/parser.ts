@@ -112,6 +112,13 @@ const baseFrame = (inScope: ReadonlyMap<string, string>): Frame => ({
   textStart: -1,
 });
 
+/** Whether `offset` is on line `l` (from 0) of the text whose line starts are `starts`. */
+const onLine = (starts: ReadonlyArray<number>, l: number, offset: number): boolean =>
+  (starts[l] ?? Infinity) <= offset && offset < (starts[l + 1] ?? Infinity);
+
+/** Up to how many attributes a start tag's duplicates are found by searching its list. */
+const SMALL = 16;
+
 /** The document being parsed. */
 class Context {
   /** The text being parsed: the document, or an entity's replacement text. */
@@ -143,7 +150,8 @@ class Context {
   tagStart = 0;
   qname = '';
   raw: Array<RawAttribute> = [];
-  seen = new Set<string>();
+  /** The names in `raw`, once it is too long to search (empty until then). */
+  readonly names = new Set<string>();
   attlistElement = '';
   attributeName = '';
   attributeType = '';
@@ -161,15 +169,34 @@ class Context {
     this.stack = [baseFrame(new Map())];
   }
 
+  /** The line of the last position, where the next one usually is (offsets mostly increase). */
+  private line = 0;
+
   position(offset: number): Xml.Position {
-    let lo = 0;
-    let hi = this.lineStarts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (this.lineStarts[mid]! <= offset) lo = mid;
-      else hi = mid - 1;
+    const starts = this.lineStarts;
+    // The last position's line, or the one after it, before a binary search
+    const line = this.line;
+    let lo = onLine(starts, line, offset) ? line : onLine(starts, line + 1, offset) ? line + 1 : -1;
+    if (lo === -1) {
+      lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if ((starts[mid] ?? 0) <= offset) lo = mid;
+        else hi = mid - 1;
+      }
     }
-    return { offset, line: lo + 1, column: offset - this.lineStarts[lo]! + 1 };
+    this.line = lo;
+    return { offset, line: lo + 1, column: offset - (starts[lo] ?? 0) + 1 };
+  }
+
+  /** Whether the start tag being read has an attribute `name` (adding it if not). */
+  hasAttribute(name: string): boolean {
+    if (this.raw.length < SMALL) return this.raw.some((a) => a.name === name);
+    if (this.names.size === 0) this.raw.forEach((a) => this.names.add(a.name));
+    if (this.names.has(name)) return true;
+    this.names.add(name);
+    return false;
   }
 
   top(): Frame {
@@ -637,14 +664,13 @@ const openElement = (empty: boolean): void => {
   const start = x.tagStart;
   const qname = x.qname;
   const raw = x.raw;
-  const seen = x.seen;
   // attribute types and defaults from the internal subset
   const types = x.attributeTypes.get(qname);
   if (types !== undefined) {
     for (const a of raw) if (types.get(a.name) === true) a.value = collapse(a.value);
   }
   for (const d of x.attributeDefaults.get(qname) ?? []) {
-    if (!seen.has(d.name))
+    if (!x.hasAttribute(d.name))
       raw.push({ name: d.name, value: d.value, offset: start, defaulted: true });
   }
 
@@ -682,13 +708,15 @@ const openElement = (empty: boolean): void => {
 
   const [prefix, localName, namespace] = resolveName(qname, inScope, true, start + 1);
   const attributes: Array<Xml.Attribute> = [];
-  const expanded = new Set<string>();
+  const expanded = raw.length < SMALL ? undefined : new Set<string>();
   for (const a of raw) {
     if (a.name === 'xmlns' || a.name.startsWith('xmlns:')) continue;
     const [ap, al, ans] = resolveName(a.name, inScope, false, a.offset);
-    const key = `${ans ?? ''} ${al}`;
-    if (expanded.has(key)) fail(`Duplicate attribute "{${ans ?? ''}}${al}"`, a.offset);
-    expanded.add(key);
+    const duplicate =
+      expanded === undefined
+        ? attributes.some((b) => b.localName === al && b.namespace === ans)
+        : expanded.size === expanded.add(`${ans ?? ''} ${al}`).size;
+    if (duplicate) fail(`Duplicate attribute "{${ans ?? ''}}${al}"`, a.offset);
     attributes.push({
       _tag: 'Attribute',
       name: a.name,
@@ -743,8 +771,7 @@ const closeElement = (frame: Frame): void => {
 
 const attribute: P<unknown> = Parser.seq(Parser.location, name, eq, attributeValue).pipe(
   Parser.tap(([offset, name, , value]) => {
-    if (x.seen.has(name)) fail(`Duplicate attribute "${name}"`, offset);
-    x.seen.add(name);
+    if (x.hasAttribute(name)) fail(`Duplicate attribute "${name}"`, offset);
     x.raw.push({ name, value, offset, defaulted: false });
   }),
 );
@@ -754,7 +781,7 @@ const startTag: P<unknown> = Parser.seq(
     x.tagStart = start;
     x.qname = qname;
     x.raw = [];
-    x.seen = new Set();
+    x.names.clear();
   }),
   Parser.repeat(
     Parser.preceded(
