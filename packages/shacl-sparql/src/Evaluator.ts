@@ -36,7 +36,13 @@ import { Message, Path, Shapes, Sparql, Vocabulary } from '@thomasfosterau/effec
 import { type Ast, Bindings, Engine, Store } from '@thomasfosterau/effect-sparql';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import { pipe } from 'effect/Function';
+import * as HashSet from 'effect/HashSet';
 import * as Layer from 'effect/Layer';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
 import * as Stream from 'effect/Stream';
 import * as Query from './Query.ts';
 
@@ -70,13 +76,13 @@ export const defaultShapesGraphIri = 'urn:x-shacl:shapesGraph';
 /** The variables pre-bound for every constraint query. */
 const constraintVariables = ['this', 'shapesGraph', 'currentShape'] as const;
 /** Parameter names that would clash with SHACL-SPARQL variables. */
-const reservedNames = new Set(['this', 'shapesGraph', 'currentShape', 'path', 'PATH', 'value']);
+const reservedNames = HashSet.make('this', 'shapesGraph', 'currentShape', 'path', 'PATH', 'value');
 const varName = /^[\p{L}\p{N}_][\p{L}\p{N}_\p{M}]*$/u;
 
 type Node = Term.NamedNode | Term.BlankNode;
 type Solution = ReadonlyMap<string, Term.GroundTerm>;
 
-const isNode = (t: Term.Term): t is Node => t._tag === 'NamedNode' || t._tag === 'BlankNode';
+const isNode: (t: Term.Term) => t is Node = Term.isResource;
 
 const evaluationError = (message: string, cause?: unknown) =>
   new Sparql.SparqlEvaluationError(cause === undefined ? { message } : { message, cause });
@@ -89,44 +95,67 @@ interface Parameter {
   readonly optional: boolean;
 }
 
+/** Reads one `sh:parameter` declaration, given the parameters read before it. */
+const readParameter = (
+  shapes: Dataset.Dataset,
+  declaration: Node,
+  parameter: Term.GroundTerm,
+  out: ReadonlyArray<Parameter>,
+): Result.Result<ReadonlyArray<Parameter>, Sparql.SparqlEvaluationError> => {
+  const paths = isNode(parameter) ? Dataset.objectsOf(shapes, parameter, sh.path) : [];
+  const path =
+    paths.length === 1 ? Option.filter(Arr.head(paths), Term.isNamedNode) : Option.none();
+  if (Option.isNone(path)) {
+    return Result.fail(
+      evaluationError(`parameter ${parameter.key} of ${declaration.key} needs one IRI sh:path`),
+    );
+  }
+  const name = Message.localName(path.value);
+  if (!varName.test(name) || HashSet.has(reservedNames, name)) {
+    return Result.fail(
+      evaluationError(
+        `parameter ${path.value.key} of ${declaration.key} has invalid name "${name}"`,
+      ),
+    );
+  }
+  if (out.some((p) => p.name === name)) {
+    return Result.fail(
+      evaluationError(`${declaration.key} declares two parameters named "${name}"`),
+    );
+  }
+  const optional = isNode(parameter)
+    ? Dataset.objectsOf(shapes, parameter, sh.optional).some((o) => o.key === TRUE)
+    : false;
+  return Result.succeed(Arr.append(out, { path: path.value, name, optional }));
+};
+
+const noParameters: Result.Result<
+  ReadonlyArray<Parameter>,
+  Sparql.SparqlEvaluationError
+> = Result.succeed([]);
+
 /** The declared parameters of a constraint component or target type, with their names. */
 const parametersOf = (
   shapes: Dataset.Dataset,
   declaration: Node,
 ): Effect.Effect<ReadonlyArray<Parameter>, Sparql.SparqlEvaluationError> =>
-  Effect.suspend(() => {
-    const out: Array<Parameter> = [];
-    for (const parameter of Dataset.objectsOf(shapes, declaration, sh.parameter)) {
-      const paths = isNode(parameter) ? Dataset.objectsOf(shapes, parameter, sh.path) : [];
-      const path = paths[0];
-      if (paths.length !== 1 || path === undefined || path._tag !== 'NamedNode') {
-        return Effect.fail(
-          evaluationError(`parameter ${parameter.key} of ${declaration.key} needs one IRI sh:path`),
-        );
-      }
-      const name = Message.localName(path);
-      if (!varName.test(name) || reservedNames.has(name)) {
-        return Effect.fail(
-          evaluationError(`parameter ${path.key} of ${declaration.key} has invalid name "${name}"`),
-        );
-      }
-      if (out.some((p) => p.name === name)) {
-        return Effect.fail(
-          evaluationError(`${declaration.key} declares two parameters named "${name}"`),
-        );
-      }
-      const optional = isNode(parameter)
-        ? Dataset.objectsOf(shapes, parameter, sh.optional).some((o) => o.key === TRUE)
-        : false;
-      out.push({ path, name, optional });
-    }
-    return Effect.succeed(out);
-  });
+  Effect.suspend(() =>
+    Effect.fromResult(
+      Arr.reduce(
+        Dataset.objectsOf(shapes, declaration, sh.parameter),
+        noParameters,
+        (acc, parameter) =>
+          Result.flatMap(acc, (out) => readParameter(shapes, declaration, parameter, out)),
+      ),
+    ),
+  );
 
 const literals = (shapes: Dataset.Dataset, node: Node, p: Term.NamedNode) =>
   Dataset.objectsOf(shapes, node, p).filter(Term.isLiteral);
 
-const prebinding = (record: Iterable<readonly [string, Term.GroundTerm | undefined]>) => ({
+type Bound = Iterable<readonly [string, Term.GroundTerm]>;
+
+const prebinding = (record: Bound) => ({
   bindings: Bindings.fromEntries(record),
 });
 
@@ -146,34 +175,41 @@ const toViolation = (
   const path = solution.get('path');
   const value = solution.get('value');
   const message = solution.get('message');
-  const bindings = new Map<string, Term.GroundTerm>(parameters);
-  for (const [k, v] of solution) bindings.set(k, v);
+  // Solution bindings take precedence over parameter values of the same name.
+  const bindings = Bindings.fromEntries([...parameters, ...solution]).map;
   return Effect.succeed({
     focusNode: solution.get('this'),
-    path: path !== undefined && path._tag === 'NamedNode' ? Path.predicate(path) : undefined,
-    value: value ?? (shape._tag === 'NodeShape' ? solution.get('this') : undefined),
-    messages: message !== undefined && message._tag === 'Literal' ? [message] : messages,
+    path: Term.isNamedNode(path) ? Path.predicate(path) : undefined,
+    value: value ?? (Predicate.isTagged(shape, 'NodeShape') ? solution.get('this') : undefined),
+    messages: Term.isLiteral(message) ? [message] : messages,
     bindings,
   });
 };
+
+interface ValidatorQuery {
+  readonly node: Node;
+  readonly form: 'select' | 'ask';
+}
 
 /** Selects the validator of a constraint component for a shape (§6.2.3). */
 const validatorOf = (
   shapes: Dataset.Dataset,
   component: Node,
   shape: Shapes.Shape,
-): { readonly node: Node; readonly form: 'select' | 'ask' } | undefined => {
-  const withQuery = (p: Term.NamedNode, query: Term.NamedNode) =>
-    Dataset.objectsOf(shapes, component, p)
-      .filter(isNode)
-      .find((v) => Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, v, query)));
-  const specific =
-    shape._tag === 'NodeShape'
-      ? withQuery(sh.nodeValidator, sh.select)
-      : withQuery(sh.propertyValidator, sh.select);
-  if (specific !== undefined) return { node: specific, form: 'select' };
-  const general = withQuery(sh.validator, sh.ask);
-  return general === undefined ? undefined : { node: general, form: 'ask' };
+): Option.Option<ValidatorQuery> => {
+  const withQuery = (p: Term.NamedNode, query: Term.NamedNode, form: ValidatorQuery['form']) =>
+    Option.map(
+      Arr.findFirst(Dataset.objectsOf(shapes, component, p).filter(isNode), (v) =>
+        Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, v, query)),
+      ),
+      (node): ValidatorQuery => ({ node, form }),
+    );
+  return pipe(
+    Predicate.isTagged(shape, 'NodeShape')
+      ? withQuery(sh.nodeValidator, sh.select, 'select')
+      : withQuery(sh.propertyValidator, sh.select, 'select'),
+    Option.orElse(() => withQuery(sh.validator, sh.ask, 'ask')),
+  );
 };
 
 const focusNodes = (solutions: ReadonlyArray<Solution>) =>
@@ -199,7 +235,7 @@ export const make = (
 
   interface Context {
     readonly engine: Engine.SparqlEngineShape;
-    readonly queries: Map<string, Ast.Query>;
+    readonly queries: MutableHashMap.MutableHashMap<string, Ast.Query>;
   }
   const contexts = new WeakMap<Dataset.Dataset, WeakMap<Dataset.Dataset, Context>>();
 
@@ -209,15 +245,20 @@ export const make = (
       if (byShapes === undefined) contexts.set(data, (byShapes = new WeakMap()));
       const cached = byShapes.get(shapes);
       if (cached !== undefined) return Effect.succeed(cached);
-      const quads: Array<Term.Quad> = [];
-      for (const q of data)
-        quads.push(new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph));
-      for (const q of shapes)
-        quads.push(new Term.Quad(q.subject, q.predicate, q.object, shapesGraphNode));
+      const quads = [
+        ...Arr.map(
+          Arr.fromIterable(data),
+          (q) => new Term.Quad(q.subject, q.predicate, q.object, Term.defaultGraph),
+        ),
+        ...Arr.map(
+          Arr.fromIterable(shapes),
+          (q) => new Term.Quad(q.subject, q.predicate, q.object, shapesGraphNode),
+        ),
+      ];
       return Effect.map(Store.makeMemory(Dataset.fromIterable(quads)), (store) => {
         const context: Context = {
           engine: Engine.make(store, { ...options.engine, unionDefaultGraph: false }),
-          queries: new Map(),
+          queries: MutableHashMap.empty(),
         };
         byShapes.set(shapes, context);
         return context;
@@ -236,17 +277,19 @@ export const make = (
       compileOptions.path === undefined ? '' : Path.toSparql(compileOptions.path),
       ...compileOptions.prebound,
     ].join(' ');
-    const cached = context.queries.get(key);
-    if (cached !== undefined) return Effect.succeed(cached);
-    return Effect.tap(Query.compile(shapes, node, compileOptions), (q) =>
-      Effect.sync(() => context.queries.set(key, q)),
-    );
+    return Option.match(MutableHashMap.get(context.queries, key), {
+      onSome: Effect.succeed,
+      onNone: () =>
+        Effect.tap(Query.compile(shapes, node, compileOptions), (q) =>
+          Effect.sync(() => MutableHashMap.set(context.queries, key, q)),
+        ),
+    });
   };
 
   const select = (
     context: Context,
     query: Ast.Query,
-    bound: Iterable<readonly [string, Term.GroundTerm | undefined]>,
+    bound: Bound,
   ): Effect.Effect<ReadonlyArray<Solution>, Sparql.SparqlEvaluationError> =>
     context.engine.select(query, prebinding(bound)).pipe(
       Effect.flatMap((result) => Stream.runCollect(result.bindings)),
@@ -257,7 +300,7 @@ export const make = (
   const ask = (
     context: Context,
     query: Ast.Query,
-    bound: Iterable<readonly [string, Term.GroundTerm | undefined]>,
+    bound: Bound,
   ): Effect.Effect<boolean, Sparql.SparqlEvaluationError> =>
     context.engine
       .ask(query, prebinding(bound))
@@ -273,7 +316,7 @@ export const make = (
       form: 'select',
       prebound: constraintVariables,
       project: ['this'],
-      path: input.shape._tag === 'PropertyShape' ? input.shape.path : undefined,
+      path: Predicate.isTagged(input.shape, 'PropertyShape') ? input.shape.path : undefined,
     });
     const solutions = yield* select(context, query, [
       ['this', input.focusNode],
@@ -291,8 +334,9 @@ export const make = (
     constraint: Shapes.ComponentConstraint,
   ) {
     const shapes = input.shapesGraph.dataset;
-    const validator = validatorOf(shapes, constraint.component, input.shape);
-    if (validator === undefined) return [];
+    const found = validatorOf(shapes, constraint.component, input.shape);
+    if (Option.isNone(found)) return [];
+    const validator = found.value;
     const declared = yield* parametersOf(shapes, constraint.component);
     const parameters = constraint.parameters.map((p) => {
       const name =
@@ -310,7 +354,7 @@ export const make = (
       prebound: potentiallyBound,
       project: validator.form === 'select' ? ['this'] : [],
       path:
-        validator.form === 'select' && input.shape._tag === 'PropertyShape'
+        validator.form === 'select' && Predicate.isTagged(input.shape, 'PropertyShape')
           ? input.shape.path
           : undefined,
     });
@@ -339,10 +383,10 @@ export const make = (
       failing,
       (value) =>
         toViolation(
-          new Map([
+          Bindings.fromEntries([
             ['this', input.focusNode],
             ['value', value],
-          ]),
+          ]).map,
           input.shape,
           messages,
           parameters,
@@ -354,7 +398,7 @@ export const make = (
   const evaluateConstraint: Sparql.SparqlConstraintEvaluator['Service']['evaluateConstraint'] = (
     input,
   ) =>
-    input.constraint._tag === 'Sparql'
+    Predicate.isTagged(input.constraint, 'Sparql')
       ? evaluateSparqlConstraint(input, input.constraint)
       : evaluateComponent(input, input.constraint);
 
@@ -396,7 +440,7 @@ export const make = (
         values: Dataset.objectsOf(shapes, target, parameter.path),
       }));
       const invalid = ({ values }: (typeof supplied)[number]) =>
-        values.length > 1 || values.some((v) => v._tag === 'BlankNode');
+        values.length > 1 || values.some(Term.isBlankNode);
       // The first parameter that is ill-valued or required but missing decides,
       // in declaration order.
       const problem = supplied.find(

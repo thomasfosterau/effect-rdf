@@ -366,7 +366,7 @@ describe('RdfJson schemas', () => {
       const merged = yield* Schema.encodeEffect(RdfJson.makeDatasetSchema({ mergeGraphs: true }))(
         named,
       );
-      expect(Object.keys(merged)).toEqual(['http://example.org/s']);
+      expect(merged).toEqual({ 'http://example.org/s': expect.anything() });
     }),
   );
 

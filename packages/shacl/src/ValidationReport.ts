@@ -220,11 +220,11 @@ export const hasNoViolations = (self: ValidationReport): boolean =>
 export const format = (self: ValidationReport): string => {
   if (self.conforms) return 'Conforms';
   const lines = [`Does not conform (${self.results.length} result(s))`];
-  const go = (r: ValidationResult, indent: string) => {
+  const go = (indent: string) => (r: ValidationResult) => {
     lines.push(`${indent}- ${formatResult(r)}`);
-    for (const d of r.details) go(d, `${indent}  `);
+    Arr.forEach(r.details, go(`${indent}  `));
   };
-  for (const r of self.results) go(r, '');
+  Arr.forEach(self.results, go(''));
   return lines.join('\n');
 };
 
@@ -309,14 +309,14 @@ export const toRdf = (self: ValidationReport, options: ToDatasetOptions = {}): R
     add(node, sh.sourceConstraintComponent, r.sourceConstraintComponent);
     if (Option.isSome(r.sourceConstraint)) add(node, sh.sourceConstraint, r.sourceConstraint.value);
     add(node, sh.resultSeverity, r.severity);
-    if (includeMessages) for (const m of r.messages) add(node, sh.resultMessage, m);
-    if (includeDetails) for (const d of r.details) add(node, sh.detail, writeResult(d));
+    if (includeMessages) Arr.forEach(r.messages, (m) => add(node, sh.resultMessage, m));
+    if (includeDetails) Arr.forEach(r.details, (d) => add(node, sh.detail, writeResult(d)));
     return node;
   };
   const report = Term.blankNode();
   add(report, rdf.type, sh.ValidationReport);
   add(report, sh.conforms, Term.literal(String(self.conforms), xsd.boolean));
-  for (const r of self.results) add(report, sh.result, writeResult(r));
+  Arr.forEach(self.results, (r) => add(report, sh.result, writeResult(r)));
   return { node: report, dataset: Dataset.fromIterable(quads) };
 };
 
@@ -354,69 +354,85 @@ export const fromDataset = (
   reportNode?: Term.NamedNode | Term.BlankNode,
 ): Result.Result<ValidationReport, ReportSyntaxError> => {
   const err = (message: string) => Result.fail(new ReportSyntaxError({ message }));
-  let node: Term.Term | undefined = reportNode;
-  if (node === undefined) {
-    const reports = Dataset.subjectsOf(dataset, rdf.type, sh.ValidationReport);
-    if (reports.length !== 1)
-      return err(`expected exactly one sh:ValidationReport, found ${reports.length}`);
-    node = reports[0]!;
-  }
-  if (node._tag !== 'NamedNode' && node._tag !== 'BlankNode') return err('invalid report node');
-  const one = (s: Term.Subject, p: Term.NamedNode) => Dataset.objectsOf(dataset, s, p)[0];
-  const conformsNode = one(node, sh.conforms);
-  if (conformsNode === undefined || conformsNode._tag !== 'Literal')
-    return err('the report has no sh:conforms literal');
-  const readResult = (r: Term.GroundTerm, depth: number): ValidationResult | string => {
-    if (r._tag === 'Literal' || depth > 64) return `invalid result node ${r.key}`;
-    const focusNode = one(r, sh.focusNode);
-    const sourceShape = one(r, sh.sourceShape);
-    const component = one(r, sh.sourceConstraintComponent);
-    const severity = one(r, sh.resultSeverity);
-    if (focusNode === undefined) return `result ${r.key} has no sh:focusNode`;
-    if (sourceShape === undefined || !Term.isResource(sourceShape))
-      return `result ${r.key} has no valid sh:sourceShape`;
-    if (component === undefined || !Term.isResource(component))
-      return `result ${r.key} has no valid sh:sourceConstraintComponent`;
-    if (severity === undefined || severity._tag !== 'NamedNode')
-      return `result ${r.key} has no valid sh:resultSeverity`;
+  const node = Option.match(Option.fromUndefinedOr(reportNode), {
+    onSome: (n): Result.Result<Term.Resource, string> => Result.succeed(n),
+    onNone: () => {
+      const reports = Dataset.subjectsOf(dataset, rdf.type, sh.ValidationReport);
+      return Result.fromOption(
+        Option.filter(Arr.head(reports), () => reports.length === 1),
+        () => `expected exactly one sh:ValidationReport, found ${reports.length}`,
+      ).pipe(
+        Result.flatMap((n) =>
+          Term.isResource(n) ? Result.succeed(n) : Result.fail('invalid report node'),
+        ),
+      );
+    },
+  });
+  if (Result.isFailure(node)) return err(node.failure);
+  const one = (s: Term.Subject, p: Term.NamedNode) => Arr.head(Dataset.objectsOf(dataset, s, p));
+  const conformsNode = Option.filter(one(node.success, sh.conforms), Term.isLiteral);
+  if (Option.isNone(conformsNode)) return err('the report has no sh:conforms literal');
+  const readResults = (
+    nodes: ReadonlyArray<Term.GroundTerm>,
+    depth: number,
+  ): Result.Result<ReadonlyArray<ValidationResult>, string> =>
+    Result.all(Arr.map(nodes, (r) => readResult(r, depth)));
+  const readResult = (
+    r: Term.GroundTerm,
+    depth: number,
+  ): Result.Result<ValidationResult, string> => {
+    if (Term.isLiteral(r) || depth > 64) return Result.fail(`invalid result node ${r.key}`);
+    const required = <A extends Term.GroundTerm>(
+      p: Term.NamedNode,
+      refinement: (t: Term.GroundTerm) => t is A,
+      message: string,
+    ): Result.Result<A, string> =>
+      Result.fromOption(Option.filter(one(r, p), refinement), () => `result ${r.key} ${message}`);
     const pathNode = one(r, sh.resultPath);
-    let resultPath = Option.none<Path.Path>();
-    if (pathNode !== undefined) {
-      const p = Path.fromRdf(dataset, pathNode);
-      if (Result.isFailure(p)) return `result ${r.key} has an invalid sh:resultPath`;
-      resultPath = Option.some(p.success);
-    }
-    const sourceConstraint = one(r, sh.sourceConstraint);
-    const details: Array<ValidationResult> = [];
-    for (const d of Dataset.objectsOf(dataset, r, sh.detail)) {
-      const detail = readResult(d, depth + 1);
-      if (Predicate.isString(detail)) return detail;
-      details.push(detail);
-    }
-    return makeResult({
-      focusNode,
-      sourceShape,
-      sourceConstraintComponent: component,
-      severity,
-      resultPath,
-      value: Option.fromNullishOr(one(r, sh.value)),
-      sourceConstraint:
-        sourceConstraint !== undefined && Term.isResource(sourceConstraint)
-          ? Option.some(sourceConstraint)
-          : Option.none(),
-      messages: Dataset.objectsOf(dataset, r, sh.resultMessage).filter(Term.isLiteral),
-      details,
+    return Result.gen(function* () {
+      const focusNode = yield* required(sh.focusNode, Term.isGroundTerm, 'has no sh:focusNode');
+      const sourceShape = yield* required(
+        sh.sourceShape,
+        Term.isResource,
+        'has no valid sh:sourceShape',
+      );
+      const component = yield* required(
+        sh.sourceConstraintComponent,
+        Term.isResource,
+        'has no valid sh:sourceConstraintComponent',
+      );
+      const severity = yield* required(
+        sh.resultSeverity,
+        Term.isNamedNode,
+        'has no valid sh:resultSeverity',
+      );
+      const resultPath = Option.isNone(pathNode)
+        ? Option.none<Path.Path>()
+        : Option.some(
+            yield* Result.mapError(
+              Path.fromRdf(dataset, pathNode.value),
+              () => `result ${r.key} has an invalid sh:resultPath`,
+            ),
+          );
+      const details = yield* readResults(Dataset.objectsOf(dataset, r, sh.detail), depth + 1);
+      return makeResult({
+        focusNode,
+        sourceShape,
+        sourceConstraintComponent: component,
+        severity,
+        resultPath,
+        value: one(r, sh.value),
+        sourceConstraint: Option.filter(one(r, sh.sourceConstraint), Term.isResource),
+        messages: Dataset.objectsOf(dataset, r, sh.resultMessage).filter(Term.isLiteral),
+        details,
+      });
     });
   };
-  const results: Array<ValidationResult> = [];
-  for (const r of Dataset.objectsOf(dataset, node, sh.result)) {
-    const result = readResult(r, 0);
-    if (Predicate.isString(result)) return err(result);
-    results.push(result);
-  }
+  const results = readResults(Dataset.objectsOf(dataset, node.success, sh.result), 0);
+  if (Result.isFailure(results)) return err(results.failure);
   return Result.succeed({
     _tag: 'ValidationReport',
-    conforms: conformsNode.value === 'true' || conformsNode.value === '1',
-    results,
+    conforms: conformsNode.value.value === 'true' || conformsNode.value.value === '1',
+    results: results.success,
   });
 };

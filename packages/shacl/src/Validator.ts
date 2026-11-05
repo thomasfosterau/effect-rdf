@@ -25,12 +25,18 @@
  * @since 0.1.0
  */
 import { Dataset, Term, Vocab, Xsd } from '@thomasfosterau/effect-rdf';
-import * as Match from 'effect/Match';
 import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import { constVoid, identity, pipe } from 'effect/Function';
+import * as Iterable from 'effect/Iterable';
 import * as Layer from 'effect/Layer';
+import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
@@ -163,46 +169,55 @@ const langMatches = (tag: string, range: string): boolean => {
   return t === r || t.startsWith(`${r}-`);
 };
 
-const nodeKindOf = (t: Term.Term): 'IRI' | 'BlankNode' | 'Literal' | undefined =>
-  t._tag === 'NamedNode'
-    ? 'IRI'
-    : t._tag === 'BlankNode'
-      ? 'BlankNode'
-      : t._tag === 'Literal'
-        ? 'Literal'
-        : undefined;
+type BasicNodeKind = 'IRI' | 'BlankNode' | 'Literal';
 
-const matchesNodeKind = (t: Term.Term, kind: Shapes.NodeKind): boolean => {
-  const k = nodeKindOf(t);
-  return k !== undefined && kind.includes(k);
-};
+const IRI = Option.some<BasicNodeKind>('IRI');
+const BLANK_NODE = Option.some<BasicNodeKind>('BlankNode');
+const LITERAL = Option.some<BasicNodeKind>('Literal');
+
+const nodeKindOf = (t: Term.Term): Option.Option<BasicNodeKind> =>
+  Term.isNamedNode(t)
+    ? IRI
+    : Term.isBlankNode(t)
+      ? BLANK_NODE
+      : Term.isLiteral(t)
+        ? LITERAL
+        : Option.none();
+
+const matchesNodeKind = (t: Term.Term, kind: Shapes.NodeKind): boolean =>
+  Option.exists(nodeKindOf(t), (k) => kind.includes(k));
 
 const hasDatatype = (v: Term.Term, datatype: Term.NamedNode): boolean => {
-  if (v._tag !== 'Literal' || v.datatype.value !== datatype.value) return false;
+  if (!Term.isLiteral(v) || v.datatype.value !== datatype.value) return false;
   if (datatype.value === rdf.langString.value || datatype.value === rdf.dirLangString.value)
     return v.language !== '';
   if (v.language !== '') return false;
   return Xsd.isWellFormed(v);
 };
 
-const stringValue = (v: Term.Term): string | undefined =>
-  v._tag === 'NamedNode' || v._tag === 'Literal' ? v.value : undefined;
+const stringValue = (v: Term.Term): Option.Option<string> =>
+  Term.isNamedNode(v) || Term.isLiteral(v) ? Option.some(v.value) : Option.none();
+
+/** Whether a value node has no string value, or one that fails `ok`. */
+const failsString = (v: Term.Term, ok: (s: string) => boolean): boolean =>
+  !Option.exists(stringValue(v), ok);
 
 const show = (t: Term.Term) => t.key;
 
-/** The length of a string in Unicode code points (as XPath `fn:string-length`). */
-const codePointLength = (s: string): number => {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) i++;
-    n++;
-  }
-  return n;
-};
+/** A high surrogate and the code unit after it: one code point. */
+const surrogatePair = /[\uD800-\uDBFF][\s\S]/g;
 
-const defaultMessage = (constraint: Shapes.Constraint, value: Term.Term | undefined): string => {
-  const v = value === undefined ? 'Value' : `Value ${show(value)}`;
+/** The length of a string in Unicode code points (as XPath `fn:string-length`). */
+const codePointLength = (s: string): number => s.replace(surrogatePair, '_').length;
+
+type Sign = -1 | 0 | 1;
+
+/** Whether `a` and `b` are comparable and their order satisfies `ok`. */
+const ordered = (a: Term.Term, b: Term.Term, ok: (sign: Sign) => boolean): boolean =>
+  Option.exists(compareTerms(a, b), ok);
+
+const defaultMessage = (constraint: Shapes.Constraint, value: Option.Option<Term.Term>): string => {
+  const v = Option.match(value, { onNone: () => 'Value', onSome: (t) => `Value ${show(t)}` });
   return Match.value(constraint)
     .pipe(
       Match.tag('Class', (c) => `${v} is not an instance of ${show(c.class)}`),
@@ -248,7 +263,7 @@ const defaultMessage = (constraint: Shapes.Constraint, value: Term.Term | undefi
       Match.tag(
         'Closed',
         () =>
-          `Predicate is not allowed by the closed shape (value ${value === undefined ? '' : show(value)})`,
+          `Predicate is not allowed by the closed shape (value ${Option.match(value, { onNone: () => '', onSome: show })})`,
       ),
       Match.tag('HasValue', (c) => `Missing expected value ${show(c.value)}`),
       Match.tag('In', () => `${v} is not one of the allowed values`),
@@ -324,13 +339,39 @@ const coreParameters = (
 
 /** The `path` variable of message templates: the predicate, or the path in SPARQL syntax. */
 const pathTerm = (path: Path.Path): Term.Term =>
-  path._tag === 'PredicatePath' ? path.predicate : Term.literal(Path.toSparql(path));
+  Predicate.isTagged(path, 'PredicatePath') ? path.predicate : Term.literal(Path.toSparql(path));
 
 /** Substitutes `{?var}` / `{$var}` placeholders of result messages. */
 const substituteMessages = (
   messages: ReadonlyArray<Term.Literal>,
-  lookup: (name: string) => Term.Term | undefined,
-): ReadonlyArray<Term.Literal> => messages.map((m) => Message.substitute(m, lookup));
+  lookup: (name: string) => Option.Option<Term.Term>,
+): ReadonlyArray<Term.Literal> =>
+  messages.map((m) => Message.substitute(m, (name) => Option.getOrUndefined(lookup(name))));
+
+/** The value of the last parameter of that name. */
+const parameterNamed = (
+  parameters: ReadonlyArray<readonly [string, Term.Term]>,
+  name: string,
+): Option.Option<Term.Term> =>
+  Option.map(
+    Arr.findLast(parameters, ([n]) => n === name),
+    ([, t]) => t,
+  );
+
+/** The built-in template variables `this`, `value` and `path`. */
+const builtinVariable = (
+  name: string,
+  focus: Term.Term,
+  value: Option.Option<Term.Term>,
+  resultPath: Option.Option<Path.Path>,
+): Option.Option<Option.Option<Term.Term>> =>
+  Match.value(name).pipe(
+    Match.withReturnType<Option.Option<Option.Option<Term.Term>>>(),
+    Match.when('this', () => Option.some(Option.some(focus))),
+    Match.when('value', () => Option.some(value)),
+    Match.when('path', () => Option.some(Option.map(resultPath, pathTerm))),
+    Match.orElse(() => Option.none()),
+  );
 
 interface Engine {
   readonly validateShape: (
@@ -342,62 +383,101 @@ interface Engine {
   ) => Effect.Effect<ReadonlyArray<Term.GroundTerm>, EngineError>;
 }
 
+const noValue = Option.none<Term.GroundTerm>();
+
+type Keys = MutableHashSet.MutableHashSet<string>;
+
+const keysOf = (terms: ReadonlyArray<Term.Term>): Keys =>
+  MutableHashSet.fromIterable(Arr.map(terms, (t) => t.key));
+
+/** Ground terms by their N-Triples form, in insertion order. */
+type Nodes = MutableHashMap.MutableHashMap<string, Term.GroundTerm>;
+
+const addNew = (out: Nodes) => (t: Term.GroundTerm) => {
+  if (!MutableHashMap.has(out, t.key)) MutableHashMap.set(out, t.key, t);
+};
+
+const valuesOf = (nodes: Nodes): ReadonlyArray<Term.GroundTerm> =>
+  Arr.fromIterable(MutableHashMap.values(nodes));
+
+/** Number of value nodes conforming to each member shape, for `sh:and` / `sh:or` / `sh:xone`. */
+type LogicalTest = (conforming: number, members: number) => boolean;
+
+const andFails: LogicalTest = (conforming, members) => conforming < members;
+const orFails: LogicalTest = (conforming) => conforming === 0;
+const xoneFails: LogicalTest = (conforming) => conforming !== 1;
+
 const makeEngine = (
   data: Dataset.Dataset,
   shapes: Shapes.ShapesGraph,
   options: ValidateOptions,
   evaluator: Option.Option<Sparql.SparqlConstraintEvaluator['Service']>,
 ): Engine => {
-  const memo = new Map<string, Results>();
-  const active = new Set<string>();
-  const superClassCache = new Map<string, ReadonlySet<string>>();
+  const memo = MutableHashMap.empty<string, Results>();
+  const active: Keys = MutableHashSet.empty();
+  const superClassCache = MutableHashMap.empty<string, Keys>();
   const withDetails = options.details === true;
 
   // -- RDFS reasoning (SHACL instances / SHACL types, §1.5) ------------------
-  const superClassesOf = (cls: Term.GroundTerm): ReadonlySet<string> => {
-    const cached = superClassCache.get(cls.key);
-    if (cached !== undefined) return cached;
-    const seen = new Set<string>([cls.key]);
-    const stack: Array<Term.GroundTerm> = [cls];
-    while (Arr.isReadonlyArrayNonEmpty(stack)) {
-      const c = stack.pop()!;
-      if (c._tag === 'Literal') continue;
-      for (const sup of Dataset.objectsOf(data, c, rdfs.subClassOf)) {
-        if (!seen.has(sup.key)) {
-          seen.add(sup.key);
-          stack.push(sup);
-        }
-      }
-    }
-    superClassCache.set(cls.key, seen);
+  const computeSuperClasses = (cls: Term.GroundTerm): Keys => {
+    const seen: Keys = MutableHashSet.make(cls.key);
+    const unseen = (sup: Term.GroundTerm): boolean => {
+      if (MutableHashSet.has(seen, sup.key)) return false;
+      MutableHashSet.add(seen, sup.key);
+      return true;
+    };
+    const nextLevel = (
+      frontier: ReadonlyArray<Term.GroundTerm>,
+    ): Option.Option<readonly [void, ReadonlyArray<Term.GroundTerm>]> =>
+      Arr.isReadonlyArrayEmpty(frontier)
+        ? Option.none()
+        : Option.some([
+            undefined,
+            Arr.flatMap(frontier, (c) =>
+              Term.isLiteral(c)
+                ? []
+                : Arr.filter(Dataset.objectsOf(data, c, rdfs.subClassOf), unseen),
+            ),
+          ]);
+    Iterable.forEach(
+      Iterable.unfold<ReadonlyArray<Term.GroundTerm>, void>([cls], nextLevel),
+      constVoid,
+    );
+    MutableHashMap.set(superClassCache, cls.key, seen);
     return seen;
   };
+  const superClassesOf = (cls: Term.GroundTerm): Keys =>
+    Option.getOrElse(MutableHashMap.get(superClassCache, cls.key), () => computeSuperClasses(cls));
   const isInstanceOf = (node: Term.GroundTerm, cls: Term.Term): boolean =>
-    node._tag !== 'Literal' &&
-    Dataset.objectsOf(data, node, rdf.type).some((t) => superClassesOf(t).has(cls.key));
+    !Term.isLiteral(node) &&
+    Dataset.objectsOf(data, node, rdf.type).some((t) =>
+      MutableHashSet.has(superClassesOf(t), cls.key),
+    );
   const instancesOf = (cls: Term.Resource): ReadonlyArray<Term.GroundTerm> => {
-    const out = new Map<string, Term.GroundTerm>();
-    for (const q of Dataset.match(data, { predicate: rdf.type })) {
-      if (!out.has(q.subject.key) && superClassesOf(q.object).has(cls.key))
-        out.set(q.subject.key, q.subject);
-    }
-    return Array.from(out.values());
+    const out: Nodes = MutableHashMap.empty();
+    Arr.forEach(Dataset.match(data, { predicate: rdf.type }), (q) => {
+      if (
+        !MutableHashMap.has(out, q.subject.key) &&
+        MutableHashSet.has(superClassesOf(q.object), cls.key)
+      )
+        MutableHashMap.set(out, q.subject.key, q.subject);
+    });
+    return valuesOf(out);
   };
 
   const objectsOf = (s: Term.GroundTerm, p: Term.NamedNode): ReadonlyArray<Term.GroundTerm> =>
-    s._tag === 'Literal' ? [] : Dataset.objectsOf(data, s, p);
+    Term.isLiteral(s) ? [] : Dataset.objectsOf(data, s, p);
 
-  // SAFETY: a shape id is an IRI or blank node, and only those index the shapes.
-  const shapeById = (id: Term.Term): Shapes.Shape =>
-    shapes.index.get(id.key) ?? {
+  const shapeById = (id: Shapes.ShapeId): Shapes.Shape =>
+    Option.getOrElse(Shapes.get(shapes, id), (): Shapes.Shape => ({
       _tag: 'NodeShape',
-      id: id as Shapes.ShapeId,
+      id,
       targets: [],
       constraints: [],
       severity: sh.Violation,
       messages: [],
       deactivated: false,
-    };
+    }));
 
   const unsupported = (
     shape: Shapes.Shape,
@@ -413,6 +493,20 @@ const makeEngine = (
           }),
         );
 
+  const recursive = (
+    shape: Shapes.Shape,
+    focus: Term.GroundTerm,
+  ): Effect.Effect<Results, EngineError> =>
+    options.recursion === 'ignore'
+      ? Effect.succeed([])
+      : Effect.fail(
+          new RecursiveShapeError({
+            message: `shape ${shape.id.key} is recursive for focus node ${focus.key}`,
+            shape: shape.id.key,
+            focusNode: focus.key,
+          }),
+        );
+
   const validateShape = (
     shape: Shapes.Shape,
     focus: Term.GroundTerm,
@@ -420,38 +514,32 @@ const makeEngine = (
     Effect.suspend(() => {
       if (shape.deactivated) return Effect.succeed([]);
       const key = `${shape.id.key} ${focus.key}`;
-      const cached = memo.get(key);
-      if (cached !== undefined) return Effect.succeed(cached);
-      if (active.has(key)) {
-        return options.recursion === 'ignore'
-          ? Effect.succeed([])
-          : Effect.fail(
-              new RecursiveShapeError({
-                message: `shape ${shape.id.key} is recursive for focus node ${focus.key}`,
-                shape: shape.id.key,
-                focusNode: focus.key,
-              }),
-            );
-      }
-      active.add(key);
-      const valueNodes =
-        shape._tag === 'PropertyShape' ? Path.evaluate(data, focus, shape.path) : [focus];
+      const cached = MutableHashMap.get(memo, key);
+      if (Option.isSome(cached)) return Effect.succeed(cached.value);
+      if (MutableHashSet.has(active, key)) return recursive(shape, focus);
+      MutableHashSet.add(active, key);
+      const valueNodes = Predicate.isTagged(shape, 'PropertyShape')
+        ? Path.evaluate(data, focus, shape.path)
+        : [focus];
       return Effect.forEach(shape.constraints, (c) => evaluate(shape, focus, valueNodes, c), {
         concurrency: 1,
       }).pipe(
         Effect.map((rs) => {
           const results = rs.flat();
-          active.delete(key);
-          memo.set(key, results);
+          MutableHashSet.remove(active, key);
+          MutableHashMap.set(memo, key, results);
           return results;
         }),
       );
     });
 
-  const conforms = (id: Term.Term, node: Term.GroundTerm): Effect.Effect<boolean, EngineError> =>
+  const conforms = (
+    id: Shapes.ShapeId,
+    node: Term.GroundTerm,
+  ): Effect.Effect<boolean, EngineError> =>
     Effect.map(validateShape(shapeById(id), node), (rs) => Arr.isReadonlyArrayEmpty(rs));
 
-  const nestedResults = (id: Term.Term, v: Term.GroundTerm) => validateShape(shapeById(id), v);
+  const nestedResults = (id: Shapes.ShapeId, v: Term.GroundTerm) => validateShape(shapeById(id), v);
 
   const evaluate = Effect.fnUntraced(function* (
     shape: Shapes.Shape,
@@ -460,11 +548,12 @@ const makeEngine = (
     constraint: Shapes.Constraint,
   ): Effect.fn.Return<Results, EngineError> {
     const component = Shapes.componentOf(constraint);
-    const shapePath =
-      shape._tag === 'PropertyShape' ? Option.some(shape.path) : Option.none<Path.Path>();
-    const parameters = new Map(coreParameters(constraint));
+    const shapePath = Predicate.isTagged(shape, 'PropertyShape')
+      ? Option.some(shape.path)
+      : Option.none<Path.Path>();
+    const parameters = coreParameters(constraint);
     const result = (
-      value: Term.GroundTerm | undefined,
+      value: Option.Option<Term.GroundTerm>,
       extra: { readonly path?: Path.Path; readonly details?: Results } = {},
     ) => {
       const resultPath = extra.path === undefined ? shapePath : Option.some(extra.path);
@@ -474,24 +563,67 @@ const makeEngine = (
         sourceConstraintComponent: component,
         severity: shape.severity,
         resultPath,
-        value: Option.fromNullishOr(value),
+        value,
         messages: Arr.isReadonlyArrayNonEmpty(shape.messages)
-          ? substituteMessages(shape.messages, (name) => {
-              return Match.value(name).pipe(
-                Match.when('this', () => focus),
-                Match.when('value', () => value),
-                Match.when('path', () =>
-                  Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined,
-                ),
-                Match.orElse(() => parameters.get(name)),
-              );
-            })
+          ? substituteMessages(shape.messages, (name) =>
+              Option.getOrElse(builtinVariable(name, focus, value, resultPath), () =>
+                parameterNamed(parameters, name),
+              ),
+            )
           : [Term.literal(defaultMessage(constraint, value))],
         details: withDetails ? (extra.details ?? []) : [],
       });
     };
     const each = (failed: (v: Term.GroundTerm) => boolean): Results =>
-      valueNodes.filter(failed).map((v) => result(v));
+      valueNodes.filter(failed).map((v) => result(Option.some(v)));
+    const logical = (members: ReadonlyArray<Shapes.ShapeId>, fails: LogicalTest) =>
+      Effect.map(
+        Effect.forEach(
+          valueNodes,
+          (v) =>
+            Effect.map(
+              Effect.forEach(members, (s) => nestedResults(s, v), { concurrency: 1 }),
+              (nested) => {
+                const conforming = nested.filter((rs) => Arr.isReadonlyArrayEmpty(rs)).length;
+                return fails(conforming, members.length)
+                  ? [result(Option.some(v), { details: nested.flat() })]
+                  : [];
+              },
+            ),
+          { concurrency: 1 },
+        ),
+        (perNode) => perNode.flat(),
+      );
+    // A value node counts when it conforms to the qualified shape and, with
+    // `sh:qualifiedValueShapesDisjoint`, to none of the sibling shapes.
+    const qualifiedCount = (c: {
+      readonly shape: Shapes.ShapeId;
+      readonly disjoint: boolean;
+      readonly siblings: ReadonlyArray<Shapes.ShapeId>;
+    }) =>
+      Effect.map(
+        Effect.filter(valueNodes, (v) =>
+          Effect.flatMap(conforms(c.shape, v), (ok) =>
+            !ok || !c.disjoint
+              ? Effect.succeed(ok)
+              : Effect.map(
+                  Effect.findFirst(c.siblings, (s) => conforms(s, v)),
+                  Option.isNone,
+                ),
+          ),
+        ),
+        (counted) => counted.length,
+      );
+    const lessThan = (predicate: Term.NamedNode, ok: (sign: Sign) => boolean) =>
+      Effect.sync(() => {
+        const others = objectsOf(focus, predicate);
+        return Arr.flatMap(valueNodes, (v) =>
+          Arr.map(
+            Arr.filter(others, (o) => !ordered(v, o, ok)),
+            () => result(Option.some(v)),
+          ),
+        );
+      });
 
     return yield* Match.value(constraint)
       .pipe(
@@ -501,144 +633,85 @@ const makeEngine = (
           Effect.sync(() => each((v) => !matchesNodeKind(v, c.nodeKind))),
         ),
         Match.tag('MinCount', (c) =>
-          Effect.sync(() => (valueNodes.length < c.minCount ? [result(undefined)] : [])),
+          Effect.sync(() => (valueNodes.length < c.minCount ? [result(noValue)] : [])),
         ),
         Match.tag('MaxCount', (c) =>
-          Effect.sync(() => (valueNodes.length > c.maxCount ? [result(undefined)] : [])),
+          Effect.sync(() => (valueNodes.length > c.maxCount ? [result(noValue)] : [])),
         ),
         Match.tag('MinExclusive', (c) =>
-          Effect.sync(() => each((v) => compareTerms(v, c.value) !== 1)),
+          Effect.sync(() => each((v) => !ordered(v, c.value, (s) => s === 1))),
         ),
         Match.tag('MinInclusive', (c) =>
-          Effect.sync(() =>
-            each((v) => {
-              const r = compareTerms(v, c.value);
-              return r !== 1 && r !== 0;
-            }),
-          ),
+          Effect.sync(() => each((v) => !ordered(v, c.value, (s) => s !== -1))),
         ),
         Match.tag('MaxExclusive', (c) =>
-          Effect.sync(() => each((v) => compareTerms(v, c.value) !== -1)),
+          Effect.sync(() => each((v) => !ordered(v, c.value, (s) => s === -1))),
         ),
         Match.tag('MaxInclusive', (c) =>
-          Effect.sync(() =>
-            each((v) => {
-              const r = compareTerms(v, c.value);
-              return r !== -1 && r !== 0;
-            }),
-          ),
+          Effect.sync(() => each((v) => !ordered(v, c.value, (s) => s !== 1))),
         ),
         Match.tag('MinLength', (c) =>
-          Effect.sync(() =>
-            each((v) => {
-              const s = stringValue(v);
-              return s === undefined || codePointLength(s) < c.minLength;
-            }),
-          ),
+          Effect.sync(() => each((v) => failsString(v, (s) => codePointLength(s) >= c.minLength))),
         ),
         Match.tag('MaxLength', (c) =>
-          Effect.sync(() =>
-            each((v) => {
-              const s = stringValue(v);
-              return s === undefined || codePointLength(s) > c.maxLength;
-            }),
-          ),
+          Effect.sync(() => each((v) => failsString(v, (s) => codePointLength(s) <= c.maxLength))),
         ),
         Match.tag('Pattern', (c) =>
-          Effect.sync(() =>
-            each((v) => {
-              const s = stringValue(v);
-              return s === undefined || !c.regex.test(s);
-            }),
-          ),
+          Effect.sync(() => each((v) => failsString(v, (s) => c.regex.test(s)))),
         ),
         Match.tag('LanguageIn', (c) =>
           Effect.sync(() =>
             each(
               (v) =>
-                v._tag !== 'Literal' ||
-                !c.languages.some((range) => langMatches(v.language, range)),
+                !Term.isLiteral(v) || !c.languages.some((range) => langMatches(v.language, range)),
             ),
           ),
         ),
         Match.tag('UniqueLang', () =>
           Effect.sync(() => {
-            const counts = new Map<string, number>();
-            for (const v of valueNodes) {
-              if (v._tag === 'Literal' && v.language !== '') {
-                const lang = v.language.toLowerCase();
-                counts.set(lang, (counts.get(lang) ?? 0) + 1);
-              }
-            }
-            return Array.from(counts.values())
-              .filter((n) => n > 1)
-              .map(() => result(undefined));
+            const languages = Arr.flatMap(valueNodes, (v) =>
+              Term.isLiteral(v) && v.language !== '' ? [v.language.toLowerCase()] : [],
+            );
+            return Arr.map(
+              Arr.filter(Record.values(Arr.groupBy(languages, identity)), (g) => g.length > 1),
+              () => result(noValue),
+            );
           }),
         ),
         Match.tag('Equals', (c) =>
           Effect.sync(() => {
             const others = objectsOf(focus, c.predicate);
-            const otherKeys = new Set(others.map((o) => o.key));
-            const valueKeys = new Set(valueNodes.map((v) => v.key));
+            const otherKeys = keysOf(others);
+            const valueKeys = keysOf(valueNodes);
             return [
-              ...valueNodes.filter((v) => !otherKeys.has(v.key)).map((v) => result(v)),
-              ...others.filter((o) => !valueKeys.has(o.key)).map((o) => result(o)),
+              ...valueNodes
+                .filter((v) => !MutableHashSet.has(otherKeys, v.key))
+                .map((v) => result(Option.some(v))),
+              ...others
+                .filter((o) => !MutableHashSet.has(valueKeys, o.key))
+                .map((o) => result(Option.some(o))),
             ];
           }),
         ),
         Match.tag('Disjoint', (c) =>
           Effect.sync(() => {
-            const otherKeys = new Set(objectsOf(focus, c.predicate).map((o) => o.key));
-            return each((v) => otherKeys.has(v.key));
+            const otherKeys = keysOf(objectsOf(focus, c.predicate));
+            return each((v) => MutableHashSet.has(otherKeys, v.key));
           }),
         ),
-        Match.tag('LessThan', 'LessThanOrEquals', (c) =>
-          Effect.sync(() => {
-            const others = objectsOf(focus, c.predicate);
-            const ok = (r: -1 | 0 | 1 | undefined) =>
-              r === -1 || (c._tag === 'LessThanOrEquals' && r === 0);
-            const out: Array<ValidationReport.ValidationResult> = [];
-            for (const v of valueNodes) {
-              for (const o of others) {
-                if (!ok(compareTerms(v, o))) out.push(result(v));
-              }
-            }
-            return out;
-          }),
-        ),
+        Match.tag('LessThan', (c) => lessThan(c.predicate, (s) => s === -1)),
+        Match.tag('LessThanOrEquals', (c) => lessThan(c.predicate, (s) => s !== 1)),
         Match.tag('Not', (c) =>
           Effect.gen(function* () {
             const conforming = yield* Effect.filter(valueNodes, (v) => conforms(c.shape, v));
-            return conforming.map((v) => result(v));
+            return conforming.map((v) => result(Option.some(v)));
           }),
         ),
       )
       .pipe(
-        Match.tag('And', 'Or', 'Xone', (c) =>
-          Effect.gen(function* () {
-            const members = c.shapes;
-            const tag = c._tag;
-            const perNode = yield* Effect.forEach(
-              valueNodes,
-              (v) =>
-                Effect.map(
-                  Effect.forEach(members, (s) => nestedResults(s, v), { concurrency: 1 }),
-                  (nested) => {
-                    const conforming = nested.filter((rs) => Arr.isReadonlyArrayEmpty(rs)).length;
-                    const failed =
-                      tag === 'And'
-                        ? conforming < members.length
-                        : tag === 'Or'
-                          ? conforming === 0
-                          : conforming !== 1;
-                    return failed ? [result(v, { details: nested.flat() })] : [];
-                  },
-                ),
-              { concurrency: 1 },
-            );
-            return perNode.flat();
-          }),
-        ),
+        Match.tag('And', (c) => logical(c.shapes, andFails)),
+        Match.tag('Or', (c) => logical(c.shapes, orFails)),
+        Match.tag('Xone', (c) => logical(c.shapes, xoneFails)),
         Match.tag('Node', (c) =>
           Effect.gen(function* () {
             const nested = c.shape;
@@ -646,7 +719,7 @@ const makeEngine = (
               valueNodes,
               (v) =>
                 Effect.map(nestedResults(nested, v), (rs) =>
-                  Arr.isReadonlyArrayNonEmpty(rs) ? [result(v, { details: rs })] : [],
+                  Arr.isReadonlyArrayNonEmpty(rs) ? [result(Option.some(v), { details: rs })] : [],
                 ),
               { concurrency: 1 },
             );
@@ -662,49 +735,35 @@ const makeEngine = (
             return perNode.flat();
           }),
         ),
-        Match.tag('QualifiedMinCount', 'QualifiedMaxCount', (c) =>
-          Effect.gen(function* () {
-            const { shape: nested, disjoint, siblings } = c;
-            // A value node counts when it conforms to the qualified shape and, with
-            // `sh:qualifiedValueShapesDisjoint`, to none of the sibling shapes.
-            const counted = yield* Effect.filter(valueNodes, (v) =>
-              Effect.flatMap(conforms(nested, v), (ok) =>
-                !ok || !disjoint
-                  ? Effect.succeed(ok)
-                  : Effect.map(
-                      Effect.findFirst(siblings, (s) => conforms(s, v)),
-                      Option.isNone,
-                    ),
-              ),
-            );
-            const count = counted.length;
-            const failed = c._tag === 'QualifiedMinCount' ? count < c.count : count > c.count;
-            return failed ? [result(undefined)] : [];
-          }),
+        Match.tag('QualifiedMinCount', (c) =>
+          Effect.map(qualifiedCount(c), (count) => (count < c.count ? [result(noValue)] : [])),
+        ),
+        Match.tag('QualifiedMaxCount', (c) =>
+          Effect.map(qualifiedCount(c), (count) => (count > c.count ? [result(noValue)] : [])),
         ),
         Match.tag('Closed', (c) =>
           Effect.sync(() => {
-            const allowed = new Set(c.allowedProperties.map((p) => p.key));
-            const out: Array<ValidationReport.ValidationResult> = [];
-            for (const v of valueNodes) {
-              if (v._tag === 'Literal') continue;
-              for (const q of Dataset.match(data, { subject: v })) {
-                if (!allowed.has(q.predicate.key))
-                  out.push(result(q.object, { path: Path.predicate(q.predicate) }));
-              }
-            }
-            return out;
+            const allowed = keysOf(c.allowedProperties);
+            return Arr.flatMap(valueNodes, (v) =>
+              Term.isLiteral(v)
+                ? []
+                : Arr.flatMap(Dataset.match(data, { subject: v }), (q) =>
+                    MutableHashSet.has(allowed, q.predicate.key)
+                      ? []
+                      : [result(Option.some(q.object), { path: Path.predicate(q.predicate) })],
+                  ),
+            );
           }),
         ),
         Match.tag('HasValue', (c) =>
           Effect.sync(() =>
-            valueNodes.some((v) => v.key === c.value.key) ? [] : [result(undefined)],
+            valueNodes.some((v) => v.key === c.value.key) ? [] : [result(noValue)],
           ),
         ),
         Match.tag('In', (c) =>
           Effect.sync(() => {
-            const allowed = new Set(c.values.map((v) => v.key));
-            return each((v) => !allowed.has(v.key));
+            const allowed = keysOf(c.values);
+            return each((v) => !MutableHashSet.has(allowed, v.key));
           }),
         ),
         Match.tag('Sparql', 'Component', (c) =>
@@ -712,7 +771,9 @@ const makeEngine = (
             if (Option.isNone(evaluator)) {
               return yield* unsupported(
                 shape,
-                c._tag === 'Sparql' ? 'sh:sparql' : `constraint component ${c.component.key}`,
+                Predicate.isTagged(c, 'Sparql')
+                  ? 'sh:sparql'
+                  : `constraint component ${c.component.key}`,
               );
             }
             const violations = yield* evaluator.value.evaluateConstraint({
@@ -725,20 +786,17 @@ const makeEngine = (
             });
             return violations.map((violation) => {
               const focusNode = violation.focusNode ?? focus;
+              const value = Option.fromNullishOr(violation.value);
               const resultPath =
                 violation.path !== undefined ? Option.some(violation.path) : shapePath;
-              const lookup = (name: string): Term.Term | undefined => {
-                const bound = violation.bindings?.get(name) ?? parameters.get(name);
-                if (bound !== undefined) return bound;
-                return Match.value(name).pipe(
-                  Match.when('this', () => focusNode),
-                  Match.when('value', () => violation.value),
-                  Match.when('path', () =>
-                    Option.isSome(resultPath) ? pathTerm(resultPath.value) : undefined,
+              const lookup = (name: string): Option.Option<Term.Term> =>
+                pipe(
+                  Option.fromNullishOr(violation.bindings?.get(name)),
+                  Option.orElse(() => parameterNamed(parameters, name)),
+                  Option.orElse(() =>
+                    Option.flatten(builtinVariable(name, focusNode, value, resultPath)),
                   ),
-                  Match.orElse(() => undefined),
                 );
-              };
               const templates =
                 violation.messages !== undefined && Arr.isReadonlyArrayNonEmpty(violation.messages)
                   ? violation.messages
@@ -747,13 +805,15 @@ const makeEngine = (
                 focusNode,
                 sourceShape: shape.id,
                 sourceConstraintComponent: component,
-                sourceConstraint: c._tag === 'Sparql' ? Option.some(c.node) : Option.none(),
+                sourceConstraint: Predicate.isTagged(c, 'Sparql')
+                  ? Option.some(c.node)
+                  : Option.none(),
                 severity: violation.severity ?? shape.severity,
                 resultPath,
-                value: Option.fromNullishOr(violation.value),
+                value,
                 messages: Arr.isReadonlyArrayNonEmpty(templates)
                   ? substituteMessages(templates, lookup)
-                  : [Term.literal(defaultMessage(c, violation.value))],
+                  : [Term.literal(defaultMessage(c, value))],
               });
             });
           }),
@@ -765,25 +825,25 @@ const makeEngine = (
   const focusNodes = Effect.fnUntraced(function* (
     shape: Shapes.Shape,
   ): Effect.fn.Return<ReadonlyArray<Term.GroundTerm>, EngineError> {
-    const out = new Map<string, Term.GroundTerm>();
-    const add = (t: Term.GroundTerm) => {
-      if (!out.has(t.key)) out.set(t.key, t);
-    };
+    const out: Nodes = MutableHashMap.empty();
+    const add = addNew(out);
     yield* Effect.forEach(
       shape.targets,
       Effect.fnUntraced(function* (target) {
         yield* Match.value(target).pipe(
           Match.tag('TargetNode', (t) => Effect.sync(() => add(t.node))),
-          Match.tag('TargetClass', (t) => Effect.sync(() => instancesOf(t.class).forEach(add))),
+          Match.tag('TargetClass', (t) =>
+            Effect.sync(() => Arr.forEach(instancesOf(t.class), add)),
+          ),
           Match.tag('TargetSubjectsOf', (t) =>
-            Effect.sync(() => {
-              for (const q of Dataset.match(data, { predicate: t.predicate })) add(q.subject);
-            }),
+            Effect.sync(() =>
+              Arr.forEach(Dataset.match(data, { predicate: t.predicate }), (q) => add(q.subject)),
+            ),
           ),
           Match.tag('TargetObjectsOf', (t) =>
-            Effect.sync(() => {
-              for (const q of Dataset.match(data, { predicate: t.predicate })) add(q.object);
-            }),
+            Effect.sync(() =>
+              Arr.forEach(Dataset.match(data, { predicate: t.predicate }), (q) => add(q.object)),
+            ),
           ),
           Match.tag('SparqlTarget', (t) =>
             Option.match(evaluator, {
@@ -791,7 +851,7 @@ const makeEngine = (
               onSome: (ev) =>
                 Effect.map(
                   ev.selectTargets({ dataGraph: data, shapesGraph: shapes, shape, target: t.node }),
-                  (nodes) => nodes.forEach(add),
+                  (nodes) => Arr.forEach(nodes, add),
                 ),
             }),
           ),
@@ -800,7 +860,7 @@ const makeEngine = (
       }),
       { concurrency: 1, discard: true },
     );
-    return Array.from(out.values());
+    return valuesOf(out);
   });
 
   return { validateShape, focusNodes };
@@ -974,7 +1034,7 @@ export const make: (
   defaults = {},
 ) {
   const compiled = yield* resolveShapes(shapesGraph);
-  const merge = (options: ValidateOptions | undefined) => ({ ...defaults, ...options });
+  const merge = (options?: ValidateOptions) => ({ ...defaults, ...options });
   return Validator.of({
     shapesGraph: compiled,
     validate: (data, options) => validate(data, compiled, merge(options)),
