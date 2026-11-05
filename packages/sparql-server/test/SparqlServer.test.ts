@@ -1,7 +1,12 @@
-import { assert, describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it, layer } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as FileSystem from 'effect/FileSystem';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
+import * as Path from 'effect/Path';
+import * as PlatformError from 'effect/PlatformError';
 import * as Stream from 'effect/Stream';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
@@ -536,6 +541,53 @@ describe('CLI', () => {
       expect(error._tag).toBe('CliError');
       const unknown = yield* Effect.flip(Cli.parse(['--nope']));
       expect(unknown._tag).toBe('CliError');
+    }),
+  );
+});
+
+const files = [
+  ['/data/a.ttl', '<s> <http://example.org/p> "a" .'],
+  ['/data/b.nt', '<http://example.org/s> <http://example.org/p> "b" .\n'],
+] as const;
+
+const fileSystem = FileSystem.layerNoop({
+  readFile: (file) =>
+    Option.match(
+      Arr.findFirst(files, ([name]) => name === file),
+      {
+        onNone: () =>
+          Effect.fail(
+            PlatformError.systemError({
+              _tag: 'NotFound',
+              module: 'FileSystem',
+              method: 'readFile',
+              pathOrDescriptor: file,
+            }),
+          ),
+        onSome: ([, text]) => Effect.succeed(new TextEncoder().encode(text)),
+      },
+    ),
+});
+
+layer(Layer.mergeAll(Formats.layer, Path.layer, fileSystem))('CLI files', (withFiles) => {
+  withFiles.effect('loads files through the FileSystem service, one graph per file', () =>
+    Effect.gen(function* () {
+      const loaded = yield* Cli.load(['/data/a.ttl', '/data/b.nt'], true);
+      expect(loaded.size).toBe(2);
+      const graphs = Arr.map(Arr.fromIterable(loaded), (quad) => quad.graph.value);
+      expect(Arr.sort(graphs, Order.String)).toEqual(['file:///data/a.ttl', 'file:///data/b.nt']);
+      // Relative IRIs resolve against the file's URL.
+      expect(Arr.map(Arr.fromIterable(loaded), (quad) => quad.subject.key)).toContain(
+        '<file:///data/s>',
+      );
+      const merged = yield* Cli.load(['/data/a.ttl'], false);
+      expect(
+        Option.map(Arr.head(Arr.fromIterable(merged)), (quad) => quad.graph._tag),
+      ).toStrictEqual(Option.some('DefaultGraph'));
+      const unknown = yield* Effect.flip(Cli.load(['/data/c.unknown'], false));
+      expect(unknown.message).toContain('Unknown RDF file extension');
+      const missing = yield* Effect.flip(Cli.load(['/data/missing.ttl'], false));
+      expect(missing.message).toContain('Cannot read /data/missing.ttl');
     }),
   );
 });
