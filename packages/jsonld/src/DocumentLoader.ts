@@ -324,7 +324,12 @@ export const fromFetch = (
         return load(r.url, options, depth + 1);
       }),
     );
-  return { load: (url, options) => load(url, options, 0) };
+  return {
+    load: (url, options) =>
+      load(url, options, 0).pipe(
+        Effect.withSpan('DocumentLoader.load', { attributes: { 'url.full': url } }),
+      ),
+  };
 };
 
 /**

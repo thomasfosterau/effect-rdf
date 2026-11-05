@@ -121,6 +121,30 @@ const program = Effect.fn('program')(function* () {
 Effect.runPromise(program()).then(console.log);
 ```
 
+## Tracing
+
+Every public, coarse-grained operation opens a span; nothing is traced per token, quad or binding, and with no tracer installed the spans cost next to nothing. The span names are `<Module>.<operation>`:
+
+- **Syntaxes:** `NTriples.parse`, `NQuads.parseStream`, `Turtle.serialize`, `TriG.serializeStream`, `N3.parse`, `JsonLd.parse`, `RdfXml.parse`, `RdfJson.serialize`, `Xmp.parse`, and so on (`parse`, `parseStream`, `serialize` and `serializeStream` where a syntax has them). Attributes: `rdf.format`, `rdf.media_type`, `rdf.input.length` (characters, never the content), and on completion `rdf.quads` (parse) or `rdf.output.length` (serialise).
+- **SPARQL:** `SparqlEngine.query` (`sparql.query.form`) and `SparqlEngine.update` (`sparql.update.operations`). The query text is recorded (`sparql.query.text`) only when `Engine.make(store, { traceQueryText: true })` opts in, since queries may contain user data. `SparqlClient.*`, `Federation.*`, `SparqlServer.*` and `SqlStore.query` trace the HTTP and SQL edges.
+- **Validation and reasoning:** `Shacl.validate` (`shacl.shapes`, `shacl.results`, `shacl.conforms`), `ShEx.validate` (`shex.associations`, `shex.nonconformant`, `shex.conformant`), `Reasoner.reason` (`n3.input.statements`, `n3.statements`) and `DocumentLoader.load` (`url.full`).
+
+To see them, provide a tracer: for example Effect's OTLP exporter from `effect/observability`:
+
+```ts
+import { Effect, Layer } from 'effect';
+import * as Otlp from 'effect/observability/Otlp';
+import * as OtlpSerialization from 'effect/observability/OtlpSerialization';
+import * as FetchHttpClient from 'effect/http/FetchHttpClient';
+
+const Observability = Otlp.layer({
+  baseUrl: 'http://localhost:4318',
+  resource: { serviceName: 'my-rdf-app' },
+}).pipe(Layer.provide([OtlpSerialization.layerJson, FetchHttpClient.layer]));
+
+program.pipe(Effect.provide(Observability));
+```
+
 ## Development
 
 The repository is a pnpm 11 workspace driven by [Vite+](https://viteplus.dev)

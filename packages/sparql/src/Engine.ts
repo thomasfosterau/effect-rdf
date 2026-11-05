@@ -86,6 +86,11 @@ export interface EngineOptions {
   readonly load?: Loader | undefined;
   /** Whether to run the algebra optimizer (default `true`). */
   readonly optimize?: boolean | undefined;
+  /**
+   * Record the text of string queries and updates on their spans
+   * (`sparql.query.text`). Off by default: query text may contain user data.
+   */
+  readonly traceQueryText?: boolean | undefined;
 }
 
 /**
@@ -377,10 +382,17 @@ export const make = (
       return { algebra, env, input };
     });
 
+  // Span attributes for a request: its text only when `traceQueryText` opts in.
+  const textAttributes = (text: string | Ast.Query | Ast.Update): Record<string, string> =>
+    options.traceQueryText === true && Predicate.isString(text)
+      ? { 'sparql.query.text': text }
+      : {};
+
   const query: SparqlEngineShape['query'] = (q, request) =>
     Effect.gen(function* () {
       const ast = yield* parseQuery(q, request);
       const { algebra, env, input } = yield* run(ast, request);
+      yield* Effect.annotateCurrentSpan('sparql.query.form', algebra._tag);
       const solutions = Evaluator.evaluate(input, env);
       return yield* Match.value(algebra).pipe(
         Match.tag('Select', (s) =>
@@ -428,7 +440,7 @@ export const make = (
         ),
         Match.exhaustive,
       );
-    });
+    }).pipe(Effect.withSpan('SparqlEngine.query', { attributes: textAttributes(q) }));
 
   const select: SparqlEngineShape['select'] = (q, request) =>
     Effect.flatMap(query(q, request), (r) =>
@@ -604,13 +616,14 @@ export const make = (
           })
         : u;
       const baseIri = ast.prologue.base ?? request?.baseIri ?? options.baseIri;
+      yield* Effect.annotateCurrentSpan('sparql.update.operations', ast.operations.length);
       yield* store.transaction(
         Effect.forEach(ast.operations, (op) => executeOperation(op, baseIri, request), {
           concurrency: 1,
           discard: true,
         }),
       );
-    });
+    }).pipe(Effect.withSpan('SparqlEngine.update', { attributes: textAttributes(u) }));
 
   const evaluate: SparqlEngineShape['evaluate'] = (op, request) =>
     Evaluator.evaluate(

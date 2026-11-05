@@ -37,8 +37,6 @@ import type * as Stream from 'effect/Stream';
 import * as internal from './internal/parse.ts';
 import * as internalSerialize from './internal/serialize.ts';
 
-const syntax: internal.Syntax = { name: 'Turtle', trig: false };
-
 /**
  * The result of `parseQuads`: statements in document order with the
  * document's prefixes and final base IRI.
@@ -67,6 +65,13 @@ export const format: Serialization.Format = Serialization.makeFormat({
   extensions: ['ttl'],
   datasets: false,
 });
+
+// The span names are `Turtle.parse`, `Turtle.serialize`, …
+const syntax: internal.Syntax = {
+  name: 'Turtle',
+  trig: false,
+  trace: { module: 'Turtle', format },
+};
 
 /**
  * Parses a Turtle document, returning the dataset together with the

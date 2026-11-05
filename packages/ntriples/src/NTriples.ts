@@ -26,8 +26,6 @@ import type * as Effect from 'effect/Effect';
 import type * as Stream from 'effect/Stream';
 import * as internal from './internal/codec.ts';
 
-const syntax: internal.Syntax = { name: 'N-Triples', quads: false };
-
 /**
  * Options for the N-Triples serializer.
  *
@@ -46,6 +44,13 @@ export const format: Serialization.Format = Serialization.makeFormat({
   extensions: ['nt'],
   datasets: false,
 });
+
+// The span names are `NTriples.parse`, `NTriples.serialize`, …
+const syntax: internal.Syntax = {
+  name: 'N-Triples',
+  quads: false,
+  trace: { module: 'NTriples', format },
+};
 
 /**
  * Parses an N-Triples document. Triples are placed in `options.graph`

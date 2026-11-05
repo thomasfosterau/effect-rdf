@@ -840,27 +840,36 @@ export const validate: (
   dataGraph: Dataset.Dataset,
   shapesGraph: Dataset.Dataset | Shapes.ShapesGraph,
   options?: ValidateOptions,
-) => Effect.Effect<ValidationReport.ValidationReport, ValidationError> = Effect.fnUntraced(
-  function* (dataGraph, shapesGraph, options = {}) {
-    const { shapes, engine } = yield* prepare(dataGraph, shapesGraph, options);
-    const perShape = yield* Effect.forEach(
-      shapes.shapes,
-      (shape) =>
-        shape.deactivated || Arr.isReadonlyArrayEmpty(shape.targets)
-          ? Effect.succeed<ReadonlyArray<ValidationReport.ValidationResult>>([])
-          : Effect.flatMap(engine.focusNodes(shape), (foci) =>
-              Effect.map(
-                Effect.forEach(foci, (focus) => engine.validateShape(shape, focus), {
-                  concurrency: 1,
-                }),
-                (rs) => rs.flat(),
-              ),
+) => Effect.Effect<ValidationReport.ValidationReport, ValidationError> = Effect.fn(
+  'Shacl.validate',
+)(function* (dataGraph, shapesGraph, options = {}) {
+  const { shapes, engine } = yield* prepare(dataGraph, shapesGraph, options);
+  yield* Effect.annotateCurrentSpan({
+    'shacl.shapes': shapes.shapes.length,
+    'rdf.quads': dataGraph.size,
+  });
+  const perShape = yield* Effect.forEach(
+    shapes.shapes,
+    (shape) =>
+      shape.deactivated || Arr.isReadonlyArrayEmpty(shape.targets)
+        ? Effect.succeed<ReadonlyArray<ValidationReport.ValidationResult>>([])
+        : Effect.flatMap(engine.focusNodes(shape), (foci) =>
+            Effect.map(
+              Effect.forEach(foci, (focus) => engine.validateShape(shape, focus), {
+                concurrency: 1,
+              }),
+              (rs) => rs.flat(),
             ),
-      { concurrency: 1 },
-    );
-    return ValidationReport.make(perShape.flat());
-  },
-);
+          ),
+    { concurrency: 1 },
+  );
+  const report = ValidationReport.make(perShape.flat());
+  yield* Effect.annotateCurrentSpan({
+    'shacl.results': report.results.length,
+    'shacl.conforms': report.conforms,
+  });
+  return report;
+});
 
 /**
  * Validates a single focus node against one shape of a shapes graph,

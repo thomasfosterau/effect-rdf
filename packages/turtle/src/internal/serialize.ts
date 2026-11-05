@@ -52,7 +52,7 @@ export const serialize = (
   Effect.try({
     try: () => new Writer(writerOptions(syntax, options), prepare(quads)).write(),
     catch: (error) => toSerializeError(syntax, Predicate.isError(error) ? error : String(error)),
-  });
+  }).pipe(Serialization.withSerializeSpan(syntax.trace));
 
 /** @internal */
 export const serializeStream =
@@ -75,4 +75,4 @@ export const serializeStream =
         Stream.concat(Stream.fromEffect(write(() => writer.end()))),
         Stream.filter((s) => s !== ''),
       );
-    });
+    }).pipe(Serialization.withStreamSpan(syntax.trace, 'serializeStream'));

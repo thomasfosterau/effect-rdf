@@ -72,6 +72,9 @@ export const format: Serialization.Format = Serialization.makeFormat({
   datasets: false,
 });
 
+// Spans are named `RdfJson.parse`, `RdfJson.serialize`.
+const trace: Serialization.SpanTarget = { module: 'RdfJson', format };
+
 // -----------------------------------------------------------------------------
 // Document model
 // -----------------------------------------------------------------------------
@@ -732,7 +735,7 @@ export const parse = (
       prefixes: PrefixMap.empty,
       baseIri: options?.baseIri,
     };
-  });
+  }).pipe(Serialization.withParseSpan(trace, input));
 
 /**
  * Options for serialising RDF/JSON.
@@ -766,6 +769,7 @@ export const serialize = (
       ),
     ),
     Effect.map((text) => `${text}\n`),
+    Serialization.withSerializeSpan(trace),
   );
 
 /**

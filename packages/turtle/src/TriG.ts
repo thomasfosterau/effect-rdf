@@ -29,8 +29,6 @@ import type * as Stream from 'effect/Stream';
 import * as internal from './internal/parse.ts';
 import * as internalSerialize from './internal/serialize.ts';
 
-const syntax: internal.Syntax = { name: 'TriG', trig: true };
-
 /**
  * The result of `parseQuads`: statements in document order with the
  * document's prefixes and final base IRI.
@@ -58,6 +56,9 @@ export const format: Serialization.Format = Serialization.makeFormat({
   extensions: ['trig'],
   datasets: true,
 });
+
+// The span names are `TriG.parse`, `TriG.serialize`, …
+const syntax: internal.Syntax = { name: 'TriG', trig: true, trace: { module: 'TriG', format } };
 
 /**
  * Parses a TriG document, returning the dataset together with the declared

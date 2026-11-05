@@ -256,11 +256,16 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
           ? { node: a.node, shape: a.shape, status: 'conformant' }
           : { node: a.node, shape: a.shape, status: 'nonconformant', reason };
       });
-      return Effect.succeed({
-        results,
-        conformant: results.every((r) => r.status === 'conformant'),
-      });
-    });
+      const conformant = results.every((r) => r.status === 'conformant');
+      return Effect.as(
+        Effect.annotateCurrentSpan({
+          'shex.associations': results.length,
+          'shex.nonconformant': results.filter((r) => r.status === 'nonconformant').length,
+          'shex.conformant': conformant,
+        }),
+        { results, conformant },
+      );
+    }).pipe(Effect.withSpan('ShEx.validate'));
 
   // SAFETY: `satisfies Validator` checks the literal; the assertion only widens it to the
   // interface.
