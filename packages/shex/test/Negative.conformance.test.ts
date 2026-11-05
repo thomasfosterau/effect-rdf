@@ -20,7 +20,7 @@ const parseAndCheck = (dir: string, file: string) =>
   );
 
 describe.skipIf(!hasShexTest)('shexTest negativeSyntax', () => {
-  for (const entry of load('negativeSyntax')) {
+  load('negativeSyntax').forEach((entry) => {
     it(entry.name, () => {
       const exit = Effect.runSyncExit(
         ShExC.parse(readText('negativeSyntax', entry.shex), {
@@ -29,16 +29,16 @@ describe.skipIf(!hasShexTest)('shexTest negativeSyntax', () => {
       );
       expect(Exit.isFailure(exit)).toBe(true);
     });
-  }
+  });
 });
 
 describe.skipIf(!hasShexTest)('shexTest negativeStructure', () => {
-  for (const entry of load('negativeStructure')) {
+  load('negativeStructure').forEach((entry) => {
     it(entry.name, () => {
       const exit = Effect.runSyncExit(parseAndCheck('negativeStructure', entry.shex));
       expect(Exit.isFailure(exit)).toBe(true);
     });
-  }
+  });
 });
 
 describe.skipIf(!hasShexTest)('shexTest schemas are structurally valid', () => {
@@ -50,7 +50,7 @@ describe.skipIf(!hasShexTest)('shexTest schemas are structurally valid', () => {
   const notStructural: Reasons = {
     TwoNegation_pass: 'S -> NOT T -> NOT U -> S is a reference cycle through negation',
   };
-  for (const entry of entries) {
+  entries.forEach((entry) => {
     it.skipIf(entry.name in notStructural)(entry.name, () => {
       const exit = Effect.runSyncExit(
         ShExC.parse(readText('schemas', entry.shex), {
@@ -63,5 +63,5 @@ describe.skipIf(!hasShexTest)('shexTest schemas are structurally valid', () => {
       );
       if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
     });
-  }
+  });
 });

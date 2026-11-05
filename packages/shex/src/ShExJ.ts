@@ -749,18 +749,20 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
   const label = (l: string) => (isBlankLabel(l) ? l : f(l));
   const objectValue = (v: ObjectValue): ObjectValue =>
     Predicate.isString(v) ? f(v) : v.type === undefined ? v : { ...v, type: f(v.type) };
-  const semActs = (acts: ReadonlyArray<SemAct> | undefined) =>
-    acts?.map((a) => ({ ...a, name: f(a.name) }));
-  const annotations = (as: ReadonlyArray<Annotation> | undefined) =>
-    as?.map((a) => ({ ...a, predicate: f(a.predicate), object: objectValue(a.object) }));
-  const withMeta = <T extends { semActs?: unknown; annotations?: unknown }>(
+  const semActs = (acts: ReadonlyArray<SemAct>) => acts.map((a) => ({ ...a, name: f(a.name) }));
+  const annotations = (as: ReadonlyArray<Annotation>) =>
+    as.map((a) => ({ ...a, predicate: f(a.predicate), object: objectValue(a.object) }));
+  const withMeta = <
+    T extends {
+      readonly semActs?: ReadonlyArray<SemAct>;
+      readonly annotations?: ReadonlyArray<Annotation>;
+    },
+  >(
     t: T,
-    acts: ReadonlyArray<SemAct> | undefined,
-    annots: ReadonlyArray<Annotation> | undefined,
   ): T => {
     let out: T = { ...t };
-    if (acts !== undefined) out = { ...out, semActs: semActs(acts) };
-    if (annots !== undefined) out = { ...out, annotations: annotations(annots) };
+    if (t.semActs !== undefined) out = { ...out, semActs: semActs(t.semActs) };
+    if (t.annotations !== undefined) out = { ...out, annotations: annotations(t.annotations) };
     return out;
   };
   const value = (v: ValueSetValue): ValueSetValue => {
@@ -794,13 +796,13 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
       })),
       Match.discriminator('type')('ShapeExternal', (expr): ShapeExprOrRef => expr),
       Match.discriminator('type')('NodeConstraint', (expr): ShapeExprOrRef => {
-        const out: any = withMeta(expr, expr.semActs, expr.annotations);
+        const out: any = withMeta(expr);
         if (expr.datatype !== undefined) out.datatype = f(expr.datatype);
         if (expr.values !== undefined) out.values = expr.values.map(value);
         return out;
       }),
       Match.discriminator('type')('Shape', (expr): ShapeExprOrRef => {
-        const out: any = withMeta(expr, expr.semActs, expr.annotations);
+        const out: any = withMeta(expr);
         if (expr.extends !== undefined) out.extends = expr.extends.map(shapeExpr);
         if (expr.extra !== undefined) out.extra = expr.extra.map(f);
         if (expr.expression !== undefined) out.expression = tripleExpr(expr.expression);
@@ -811,7 +813,7 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
   };
   const tripleExpr = (t: TripleExprOrRef): TripleExprOrRef => {
     if (Predicate.isString(t)) return label(t);
-    const out: any = withMeta(t, t.semActs, t.annotations);
+    const out: any = withMeta(t);
     if (t.id !== undefined) out.id = label(t.id);
     if (t.type === 'TripleConstraint') {
       out.predicate = f(t.predicate);

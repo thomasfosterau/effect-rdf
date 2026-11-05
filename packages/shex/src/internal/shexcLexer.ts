@@ -12,8 +12,12 @@ import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
+import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
+import * as Arr from 'effect/Array';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import { quote, unescapeCode, unescapeRegexp } from './lexer.ts';
 import * as TurtleGrammar from '@thomasfosterau/effect-turtle/Grammar';
@@ -59,7 +63,7 @@ export interface Tok {
    */
   iri: string;
   /** PNAME / ATPNAME: why the name could not be expanded. */
-  error: string | undefined;
+  error: Option.Option<string>;
   /** LANG_STRING: the language tag; REGEXP: the flags. */
   readonly suffix: string;
   /** REPEAT_RANGE: the bounds (`max` is -1 when unbounded). */
@@ -85,13 +89,13 @@ const make = (t: Partial, start: number, end: number): Tok => ({
   start,
   end,
   iri: t.iri ?? '',
-  error: undefined,
+  error: Option.none(),
   suffix: t.suffix ?? '',
   min: t.min ?? 0,
   max: t.max ?? 0,
 });
 
-const KEYWORDS = new Set([
+const KEYWORDS = MutableHashSet.fromIterable([
   'BASE',
   'PREFIX',
   'IMPORT',
@@ -135,7 +139,7 @@ const numeric = Parser.map(TurtleGrammar.numericLiteral, ([text, type]): Partial
 const string = Parser.map(
   Parser.seq(TurtleGrammar.stringLiteral, Parser.opt(TurtleGrammar.langTag)),
   ([text, lang]): Partial =>
-    lang._tag === 'Some'
+    Option.isSome(lang)
       ? { type: 'LANG_STRING', text, suffix: lang.value }
       : { type: 'STRING', text },
 );
@@ -196,12 +200,14 @@ const repeatRange = Parser.delimited(
 ).pipe(
   Parser.map(([min, rest]): Partial => {
     const lo = parseInt(min, 10);
-    const hi =
-      rest._tag === 'None'
-        ? lo
-        : rest.value._tag === 'None' || rest.value.value === '*'
-          ? -1
-          : parseInt(rest.value.value, 10);
+    const hi = Option.match(rest, {
+      onNone: () => lo,
+      onSome: (upper) =>
+        Option.match(upper, {
+          onNone: () => -1,
+          onSome: (u) => (u === '*' ? -1 : parseInt(u, 10)),
+        }),
+    });
     return { type: 'REPEAT_RANGE', text: '', min: lo, max: hi };
   }),
 );
@@ -210,7 +216,9 @@ const word = Token.takeWhile(TurtleGrammar.alpha, { min: 1 }).pipe(
   Parser.filterMap((w): Option.Option<Partial> => {
     if (w === 'a' || w === 'true' || w === 'false') return Option.some({ type: 'PUNCT', text: w });
     const upper = w.toUpperCase();
-    return KEYWORDS.has(upper) ? Option.some({ type: 'KEYWORD', text: upper }) : Option.none();
+    return MutableHashSet.has(KEYWORDS, upper)
+      ? Option.some({ type: 'KEYWORD', text: upper })
+      : Option.none();
   }),
 );
 
@@ -251,8 +259,10 @@ const token: Parser.Parser<Partial> = Parser.dispatch(
     '.': numericOr('.'),
     '+': numericOr('+'),
     '-': numericOr('-'),
-    ...Object.fromEntries('0123456789'.split('').map((d) => [d, numeric])),
-    ...Object.fromEntries('=}&,()[]$!~;*?%'.split('').map((p) => [p, punctuation(p)])),
+    ...Record.fromEntries(Arr.map('0123456789'.split(''), (d) => [d, numeric] as const)),
+    ...Record.fromEntries(
+      Arr.map('=}&,()[]$!~;*?%'.split(''), (p) => [p, punctuation(p)] as const),
+    ),
   },
   prefixedOrWord,
 );
@@ -274,13 +284,13 @@ const lexer = Compiler.jit(
 
 /** Why no token could be read at `offset` (the messages of the ShEx 2 lexer). */
 const describe = (input: string, offset: number): string => {
-  const c = input[offset]!;
+  const c = input.charAt(offset);
   if (c === '<') return 'invalid IRI reference';
   if (c === '/') return 'invalid regular expression';
   if (c === '"' || c === "'") return 'invalid string literal';
   const w = /^[A-Za-z]+/.exec(input.slice(offset, offset + 64));
   if (w !== null) return `unexpected word "${w[0]}"`;
-  return `invalid character ${quote(String.fromCodePoint(input.codePointAt(offset)!))}`;
+  return `invalid character ${quote(String.fromCodePoint(input.codePointAt(offset) ?? 0))}`;
 };
 
 /**
@@ -301,8 +311,8 @@ export const tokenize = (input: string): Array<Tok> => {
 
 /** The base IRI and prefixes after resolving a document's tokens. */
 export interface Resolved {
-  readonly baseIri: string | undefined;
-  readonly prefixes: Map<string, string>;
+  readonly baseIri: Option.Option<string>;
+  readonly prefixes: PrefixMap.PrefixMap;
 }
 
 /** Resolves token `i` (`t`); returns how many of the tokens after it the step consumed. */
@@ -319,20 +329,20 @@ const skip: Step = () => 0;
  */
 export const resolve = (
   tokens: Array<Tok>,
-  baseIri: string | undefined,
-  initialPrefixes: Readonly<Record<string, string>> | undefined,
+  baseIri: Option.Option<string>,
+  initialPrefixes: PrefixMap.PrefixMap,
 ): Resolved => {
   let base = baseIri;
-  const prefixes = new Map(Object.entries(initialPrefixes ?? {}));
+  let prefixes = initialPrefixes;
   const resolveRef = (iri: string) =>
-    base === undefined || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, base);
+    Option.isNone(base) || Iri.isAbsolute(iri) ? iri : Iri.resolve(iri, base.value);
   const expand = (t: Tok): boolean => {
-    const ns = prefixes.get(t.text);
-    if (ns === undefined) {
-      t.error = `unknown prefix "${t.text}:"`;
+    const ns = PrefixMap.get(prefixes, t.text);
+    if (Option.isNone(ns)) {
+      t.error = Option.some(`unknown prefix "${t.text}:"`);
       return false;
     }
-    t.iri = ns + t.iri;
+    t.iri = ns.value + t.iri;
     return true;
   };
   const resolveIri: Step = (t) => {
@@ -347,14 +357,14 @@ export const resolve = (
     const next = tokens[i + 1];
     if (t.text === 'BASE' && next?.type === 'IRIREF') {
       next.iri = resolveRef(next.iri);
-      base = next.iri;
+      base = Option.some(next.iri);
       return 1;
     }
     if (t.text === 'PREFIX' && next?.type === 'PNAME' && next.iri === '') {
       const value = tokens[i + 2];
       if (value?.type === 'IRIREF') value.iri = resolveRef(value.iri);
       else if (value?.type !== 'PNAME' || !expand(value)) return 0;
-      prefixes.set(next.text, value.iri);
+      prefixes = PrefixMap.set(prefixes, next.text, value.iri);
       return 2;
     }
     return 0;
@@ -369,10 +379,9 @@ export const resolve = (
     Match.orElse(() => skip),
   );
   const steps: { [K in TokenType]?: Step } = {};
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i]!;
-    const step = (steps[t.type] ??= stepOf(t.type));
-    i += step(t, i);
-  }
+  // The accumulator counts the tokens after a directive that its step consumed.
+  Arr.reduce(tokens, 0, (consumed, t, i) =>
+    consumed > 0 ? consumed - 1 : (steps[t.type] ??= stepOf(t.type))(t, i),
+  );
   return { baseIri: base, prefixes };
 };

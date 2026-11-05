@@ -7,6 +7,7 @@
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
@@ -41,15 +42,16 @@ export interface ParseResult {
   readonly baseIri: string | undefined;
 }
 
-const toRecord = (
-  prefixes: ParseOptions['prefixes'],
-): Readonly<Record<string, string>> | undefined =>
-  // SAFETY: not a `PrefixMap`, so it is the plain record form.
+const isPrefixMap = (
+  prefixes: Readonly<Record<string, string>> | PrefixMap.PrefixMap,
+): prefixes is PrefixMap.PrefixMap => 'prefixes' in prefixes && prefixes.prefixes instanceof Map;
+
+const toPrefixMap = (prefixes: ParseOptions['prefixes']): PrefixMap.PrefixMap =>
   prefixes === undefined
-    ? undefined
-    : 'prefixes' in prefixes && prefixes.prefixes instanceof Map
-      ? Object.fromEntries(prefixes.prefixes)
-      : (prefixes as Readonly<Record<string, string>>);
+    ? PrefixMap.empty
+    : isPrefixMap(prefixes)
+      ? prefixes
+      : PrefixMap.make(prefixes);
 
 /**
  * Parses a ShExC document, returning the schema together with its prefixes
@@ -64,8 +66,8 @@ export const parseWithMetadata = (
 ): Effect.Effect<ParseResult, RdfParseError> =>
   Effect.suspend(() => {
     const result = parseShExC(input, {
-      baseIri: options.baseIri,
-      prefixes: toRecord(options.prefixes),
+      baseIri: Option.fromUndefinedOr(options.baseIri),
+      prefixes: toPrefixMap(options.prefixes),
     });
     if (Result.isFailure(result)) {
       const { line, column } = lineColumn(input, result.failure.offset);
@@ -75,8 +77,8 @@ export const parseWithMetadata = (
     }
     return Effect.succeed({
       schema: result.success.schema,
-      prefixes: PrefixMap.make(result.success.prefixes),
-      baseIri: result.success.baseIri,
+      prefixes: result.success.prefixes,
+      baseIri: Option.getOrUndefined(result.success.baseIri),
     });
   });
 
@@ -143,25 +145,32 @@ const escapeCode = (s: string): string => s.replace(/\\/g, '\\\\').replace(/%/g,
 
 const quoteLiteral = (s: string): string => `"${escapeString(s)}"`;
 
+/** A value without a string `type`, or with a `value`, is an object literal in ShExJ. */
+const isObjectLiteral = (v: Exclude<ShExJ.ValueSetValue, string>): v is ShExJ.ObjectLiteral =>
+  !Predicate.isString(v.type) || 'value' in v;
+
 class Printer {
   readonly prefixes: PrefixMap.PrefixMap;
-  readonly base: string | undefined;
+  readonly base: Option.Option<string>;
   readonly unit: string;
 
   constructor(options: PrintOptions) {
     this.prefixes = options.prefixes ?? PrefixMap.empty;
-    this.base = options.baseIri;
+    this.base = Option.fromUndefinedOr(options.baseIri);
     this.unit = options.indent ?? '  ';
   }
 
   iri(iri: string): string {
-    const compact = PrefixMap.compact(this.prefixes, iri);
-    if (compact._tag === 'Some') return `${compact.value[0]}:${compact.value[1]}`;
-    if (this.base !== undefined) {
-      const rel = Iri.relativize(iri, this.base);
-      if (rel._tag === 'Some') return `<${escapeIri(rel.value)}>`;
-    }
-    return `<${escapeIri(iri)}>`;
+    return Option.match(PrefixMap.compact(this.prefixes, iri), {
+      onSome: ([prefix, local]) => `${prefix}:${local}`,
+      onNone: () =>
+        `<${escapeIri(
+          Option.getOrElse(
+            Option.flatMap(this.base, (base) => Iri.relativize(iri, base)),
+            () => iri,
+          ),
+        )}>`,
+    });
   }
 
   label(label: string): string {
@@ -188,15 +197,13 @@ class Printer {
     return Predicate.isString(v) ? this.iri(v) : this.literal(v);
   }
 
-  semActs(acts: ReadonlyArray<ShExJ.SemAct> | undefined): string {
-    if (acts === undefined) return '';
+  semActs(acts: ReadonlyArray<ShExJ.SemAct> = []): string {
     return acts
       .map((a) => ` %${this.iri(a.name)}${a.code === undefined ? '%' : `{${escapeCode(a.code)}%}`}`)
       .join('');
   }
 
-  annotations(annots: ReadonlyArray<ShExJ.Annotation> | undefined): string {
-    if (annots === undefined) return '';
+  annotations(annots: ReadonlyArray<ShExJ.Annotation> = []): string {
     return annots
       .map((a) => ` // ${this.predicate(a.predicate)} ${this.objectValue(a.object)}`)
       .join('');
@@ -216,10 +223,7 @@ class Printer {
 
   valueSetValue(v: ShExJ.ValueSetValue): string {
     if (Predicate.isString(v)) return this.iri(v);
-    if (!('type' in v) || !Predicate.isString(v.type) || 'value' in v) {
-      // SAFETY: a value without a string `type`, or with a `value`, is an object literal in ShExJ.
-      return this.literal(v as ShExJ.ObjectLiteral);
-    }
+    if (isObjectLiteral(v)) return this.literal(v);
     return Match.value(v).pipe(
       Match.withReturnType<string>(),
       Match.discriminator('type')('IriStem', (member) => `${this.iri(member.stem)}~`),
@@ -322,11 +326,13 @@ class Printer {
   }
 
   shape(s: ShExJ.Shape, indent: string): string {
-    const head: Array<string> = [];
-    for (const ext of s.extends ?? []) head.push(`EXTENDS ${this.junct(ext, indent, 'ShapeNot')}`);
-    if (s.extra !== undefined)
-      head.push(`EXTRA ${s.extra.map((p) => this.predicate(p)).join(' ')}`);
-    if (s.closed === true) head.push('CLOSED');
+    const head = [
+      ...Arr.map(s.extends ?? [], (ext) => `EXTENDS ${this.junct(ext, indent, 'ShapeNot')}`),
+      ...(s.extra === undefined
+        ? []
+        : [`EXTRA ${s.extra.map((p) => this.predicate(p)).join(' ')}`]),
+      ...(s.closed === true ? ['CLOSED'] : []),
+    ];
     const inner = indent + this.unit;
     const body =
       s.expression === undefined
@@ -365,27 +371,36 @@ class Printer {
   }
 
   schema(schema: ShExJ.Schema): string {
-    const out: Array<string> = [];
-    if (this.base !== undefined) out.push(`BASE <${escapeIri(this.base)}>`);
-    for (const [p, ns] of this.prefixes.prefixes) out.push(`PREFIX ${p}: <${escapeIri(ns)}>`);
-    for (const imp of schema.imports ?? []) out.push(`IMPORT ${this.iri(imp)}`);
-    if (Arr.isReadonlyArrayNonEmpty(out)) out.push('');
-    if (schema.startActs !== undefined) out.push(this.semActs(schema.startActs).trim());
-    if (schema.start !== undefined) out.push(`start = ${this.shapeExpr(schema.start, '', false)}`);
-    for (const decl of schema.shapes ?? []) {
-      const head = `${decl.abstract === true ? 'ABSTRACT ' : ''}${this.label(decl.id)}`;
-      const restricts = (decl.restricts ?? [])
-        .map((r) => ` RESTRICTS ${this.junct(r, '', 'ShapeNot')}`)
-        .join('');
-      const body =
-        !Predicate.isString(decl.shapeExpr) && decl.shapeExpr.type === 'ShapeExternal'
-          ? 'EXTERNAL'
-          : Predicate.isString(decl.shapeExpr)
-            ? `@${this.label(decl.shapeExpr)}`
-            : this.shapeExpr(decl.shapeExpr, '', false);
-      out.push(`${head}${restricts} ${body}`);
-    }
+    const header = [
+      ...Arr.fromOption(Option.map(this.base, (base) => `BASE <${escapeIri(base)}>`)),
+      ...Arr.map(
+        Arr.fromIterable(this.prefixes.prefixes),
+        ([p, ns]) => `PREFIX ${p}: <${escapeIri(ns)}>`,
+      ),
+      ...Arr.map(schema.imports ?? [], (imp) => `IMPORT ${this.iri(imp)}`),
+    ];
+    const out = [
+      ...header,
+      ...(Arr.isReadonlyArrayNonEmpty(header) ? [''] : []),
+      ...(schema.startActs === undefined ? [] : [this.semActs(schema.startActs).trim()]),
+      ...(schema.start === undefined ? [] : [`start = ${this.shapeExpr(schema.start, '', false)}`]),
+      ...Arr.map(schema.shapes ?? [], (decl) => this.decl(decl)),
+    ];
     return `${out.join('\n')}\n`;
+  }
+
+  decl(decl: ShExJ.ShapeDecl): string {
+    const head = `${decl.abstract === true ? 'ABSTRACT ' : ''}${this.label(decl.id)}`;
+    const restricts = (decl.restricts ?? [])
+      .map((r) => ` RESTRICTS ${this.junct(r, '', 'ShapeNot')}`)
+      .join('');
+    const body =
+      !Predicate.isString(decl.shapeExpr) && decl.shapeExpr.type === 'ShapeExternal'
+        ? 'EXTERNAL'
+        : Predicate.isString(decl.shapeExpr)
+          ? `@${this.label(decl.shapeExpr)}`
+          : this.shapeExpr(decl.shapeExpr, '', false);
+    return `${head}${restricts} ${body}`;
   }
 }
 

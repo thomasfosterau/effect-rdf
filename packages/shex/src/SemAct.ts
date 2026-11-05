@@ -8,10 +8,12 @@
  *
  * @since 0.1.0
  */
+import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
-import type * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Record from 'effect/Record';
+import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as ShExJ from './ShExJ.ts';
 
 /**
@@ -73,18 +75,22 @@ export const SemActHandler: Context.Reference<Handler> = Context.Reference<Handl
  * @category constructors
  */
 export const make = (
-  handlers: Readonly<Record<string, (code: string | undefined, context: SemActContext) => boolean>>,
+  handlers: Record.ReadonlyRecord<
+    string,
+    (code: string | undefined, context: SemActContext) => boolean
+  >,
 ): Handler => {
-  const entries = Object.entries(handlers);
+  const prefixes = Arr.filter(
+    Record.toEntries(handlers),
+    ([name]) => name.endsWith('/') || name.endsWith('#'),
+  );
   return (action, context) => {
     const exact = handlers[action.name];
     if (exact !== undefined) return Option.some(exact(action.code, context));
-    for (const [name, h] of entries) {
-      if ((name.endsWith('/') || name.endsWith('#')) && action.name.startsWith(name)) {
-        return Option.some(h(action.code, context));
-      }
-    }
-    return Option.none();
+    return Option.map(
+      Arr.findFirst(prefixes, ([name]) => action.name.startsWith(name)),
+      ([, h]) => h(action.code, context),
+    );
   };
 };
 
@@ -96,13 +102,8 @@ export const make = (
  */
 export const combine =
   (...handlers: ReadonlyArray<Handler>): Handler =>
-  (action, context) => {
-    for (const h of handlers) {
-      const r = h(action, context);
-      if (Option.isSome(r)) return r;
-    }
-    return Option.none();
-  };
+  (action, context) =>
+    Arr.findFirst(handlers, (h) => h(action, context));
 
 /**
  * Supplies code for actions written without code (`%<name>%`), e.g. from an
@@ -142,18 +143,16 @@ export const layer = (handler: Handler): Layer.Layer<never> =>
  */
 export const testExtensionIri = 'http://shex.io/extensions/Test/';
 
-const termText = (t: Term.Term | undefined): string =>
-  t === undefined
-    ? ''
-    : t._tag === 'Literal'
-      ? t.language !== ''
-        ? `"${t.value}"@${t.language}`
-        : t.datatype.value === 'http://www.w3.org/2001/XMLSchema#string'
-          ? t.value
-          : `"${t.value}"^^${t.datatype.value}`
-      : t._tag === 'NamedNode' || t._tag === 'BlankNode'
+const termText = (t: Term.Term): string =>
+  Term.isLiteral(t)
+    ? t.language !== ''
+      ? `"${t.value}"@${t.language}`
+      : t.datatype.value === 'http://www.w3.org/2001/XMLSchema#string'
         ? t.value
-        : t.key;
+        : `"${t.value}"^^${t.datatype.value}`
+    : Term.isResource(t)
+      ? t.value
+      : t.key;
 
 const unescapeBackslashes = (s: string) => s.replace(/\\(.)/gs, '$1');
 
@@ -179,14 +178,17 @@ export const testExtension = (
     let line: string;
     if (v !== undefined) {
       const t = context.triple;
-      line = termText(
-        v === 's'
-          ? (t?.subject ?? context.node)
-          : v === 'p'
-            ? t?.predicate
-            : v === 'o'
-              ? (t?.object ?? context.node)
-              : context.node,
+      line = Option.match(
+        Option.fromUndefinedOr(
+          v === 's'
+            ? (t?.subject ?? context.node)
+            : v === 'p'
+              ? t?.predicate
+              : v === 'o'
+                ? (t?.object ?? context.node)
+                : context.node,
+        ),
+        { onNone: () => '', onSome: termText },
       );
     } else line = unescapeBackslashes(dq ?? sq ?? '');
     onPrint(line, action.name);

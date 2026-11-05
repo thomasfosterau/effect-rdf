@@ -32,7 +32,7 @@ export const shexrSkips: Reasons = {
 };
 
 describe.skipIf(!hasShexTest)('shexTest schemas (ShExR → ShExJ)', () => {
-  for (const entry of entries) {
+  entries.forEach((entry) => {
     it.skipIf(entry.name in shexrSkips)(entry.name, () => {
       const base = `${suiteBase}schemas/${entry.ttl}`;
       const dataset = parseTurtle(readText('schemas', entry.ttl), base);
@@ -40,16 +40,16 @@ describe.skipIf(!hasShexTest)('shexTest schemas (ShExR → ShExJ)', () => {
       if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
       expect(canonical(exit.value)).toEqual(canonical(expectedJson(entry)));
     });
-  }
+  });
 });
 
 describe.skipIf(!hasShexTest)('shexTest schemas (ShExJ → ShExR → ShExJ)', () => {
-  for (const entry of entries) {
+  entries.forEach((entry) => {
     it.skipIf(entry.name in shexrSkips)(entry.name, () => {
       const schema = expectedJson(entry);
       const exit = Effect.runSyncExit(ShExR.fromDataset(ShExR.toDataset(schema)));
       if (Exit.isFailure(exit)) assert.fail(String(exit.cause));
       expect(canonical(exit.value)).toEqual(canonical(schema));
     });
-  }
+  });
 });

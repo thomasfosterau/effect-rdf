@@ -7,7 +7,10 @@
  * @since 0.1.0
  */
 import * as Context from 'effect/Context';
+import * as Iterable from 'effect/Iterable';
 import * as Effect from 'effect/Effect';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
@@ -130,7 +133,7 @@ const lex = Tokens.lexeme;
  * expanded with `prefixes` (falling back to the options' prefixes).
  */
 const iri = (
-  prefixes: (options: ParseOptions) => Readonly<Record<string, string>> | undefined,
+  prefixes: (options: ParseOptions) => Option.Option<Readonly<Record<string, string>>>,
 ): Parser.Parser<string, string, Options> =>
   Parser.alt(
     Parser.seq(Parser.service(Options), TurtleGrammar.iriRef).pipe(
@@ -144,17 +147,21 @@ const iri = (
       Parser.cut(
         Parser.seq(Parser.service(Options), TurtleGrammar.prefixedName).pipe(
           Parser.tryMap(([options, { prefix, local }]) => {
-            const ns = prefixes(options)?.[prefix] ?? options.prefixes?.[prefix];
-            return ns === undefined
-              ? Result.fail(`unknown prefix "${prefix}:"`)
-              : Result.succeed(ns + local);
+            const ns = Option.orElse(
+              Option.flatMap(prefixes(options), (p) => Option.fromUndefinedOr(p[prefix])),
+              () => Option.fromUndefinedOr(options.prefixes?.[prefix]),
+            );
+            return Option.match(ns, {
+              onNone: () => Result.fail(`unknown prefix "${prefix}:"`),
+              onSome: (namespace) => Result.succeed(namespace + local),
+            });
           }),
         ),
       ),
     ),
   );
 
-const noPrefixes = () => undefined;
+const noPrefixes = () => Option.none();
 
 const namedNode = iri(noPrefixes).pipe(Parser.map((value) => Term.namedNode(value)));
 
@@ -171,8 +178,11 @@ const literal = Parser.seq(
   ),
 ).pipe(
   Parser.map(([value, suffix]) =>
-    // SAFETY: the suffix is a language tag string or a datatype named node.
-    suffix._tag === 'None' ? Term.literal(value) : Term.literal(value, suffix.value),
+    // The suffix is a language tag string or a datatype named node.
+    Option.match(suffix, {
+      onNone: () => Term.literal(value),
+      onSome: (s) => Term.literal(value, s),
+    }),
   ),
 );
 
@@ -212,7 +222,7 @@ const triplePattern = Parser.preceded(
           focus,
           wildcard,
           term.pipe(
-            Parser.filter((t): t is Term.Subject => t._tag !== 'Literal'),
+            Parser.filter((t): t is Term.Subject => !Term.isLiteral(t)),
             Parser.expected('a subject'),
           ),
         ),
@@ -245,7 +255,7 @@ const shapeSelector: Parser.Parser<ShapeSelector, string, Options> = Parser.prec
   Parser.cut(
     Parser.alt(
       lex(Tokens.keyword('START')).pipe(Parser.as(start)),
-      lex(iri((options) => options.shapePrefixes)),
+      lex(iri((options) => Option.fromUndefinedOr(options.shapePrefixes))),
       lex(TurtleGrammar.blankNodeLabel).pipe(Parser.map((label) => `_:${label}`)),
     ).pipe(Parser.expected('a shape label')),
   ),
@@ -335,27 +345,24 @@ export const fromJson = (json: unknown, options: ParseOptions = {}): FixedShapeM
  */
 export const resolve = (map: QueryShapeMap, dataset: Dataset.Dataset): FixedShapeMap => {
   const out: Array<Association> = [];
-  const seen = new Set<string>();
+  const seen = MutableHashSet.empty<string>();
   const push = (node: Term.GroundTerm, shape: ShapeSelector) => {
     const key = `${node.key} ${isStart(shape) ? '' : shape}`;
-    if (seen.has(key)) return;
-    seen.add(key);
+    if (MutableHashSet.has(seen, key)) return;
+    MutableHashSet.add(seen, key);
     out.push({ node, shape });
   };
-  for (const { node, shape } of map) {
-    if (node._tag !== 'TriplePattern') {
-      push(node, shape);
-      continue;
-    }
+  map.forEach(({ node, shape }) => {
+    if (!Predicate.isTagged(node, 'TriplePattern')) return push(node, shape);
     const pattern: Dataset.Pattern = {
       predicate: node.predicate,
       subject: node.subject !== 'FOCUS' && node.subject !== '_' ? node.subject : undefined,
       object: node.object !== 'FOCUS' && node.object !== '_' ? node.object : undefined,
     };
-    for (const q of Dataset.match(dataset, pattern)) {
-      push(node.subject === 'FOCUS' ? q.subject : q.object, shape);
-    }
-  }
+    Iterable.forEach(Dataset.match(dataset, pattern), (q) =>
+      push(node.subject === 'FOCUS' ? q.subject : q.object, shape),
+    );
+  });
   return out;
 };
 
