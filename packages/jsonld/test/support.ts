@@ -13,6 +13,7 @@ import * as DocumentLoader from '../src/DocumentLoader.ts';
 import * as JsonLdError from '../src/JsonLdError.ts';
 import type { Json } from '../src/internal/util.ts';
 import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
 
 export type { Json };
 
@@ -57,88 +58,74 @@ const unescape = (s: string): string =>
   });
 
 const TERM =
-  /\s*(?:<([^>]*)>|_:([^\s.]+(?:\.[^\s.]+)*)|"((?:[^"\\]|\\.)*)"(?:@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)|\^\^<([^>]*)>)?)/y;
+  /\s*(?:<([^>]*)>|_:([^\s.]+(?:\.[^\s.]+)*)|"((?:[^"\\]|\\.)*)"(?:@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)|\^\^<([^>]*)>)?)/gy;
 
 class BadNQuadsLine extends Schema.TaggedError<BadNQuadsLine>()('BadNQuadsLine', {
   message: Schema.String,
 }) {}
 
-export const parseNQuads = (text: string): Array<Term.Quad> => {
-  const quads: Array<Term.Quad> = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line === '' || line.startsWith('#')) continue;
-    const terms: Array<Term.Term> = [];
-    TERM.lastIndex = 0;
-    let rest = line;
-    for (;;) {
-      TERM.lastIndex = 0;
-      const m = TERM.exec(rest);
-      if (m === null) break;
-      rest = rest.slice(m[0].length);
-      if (m[1] !== undefined) terms.push(Term.namedNode(unescape(m[1])));
-      else if (m[2] !== undefined) terms.push(Term.blankNode(m[2]));
-      else {
-        const value = unescape(m[3] ?? '');
-        if (m[4] !== undefined) terms.push(Term.literal(value, m[4]));
-        else if (m[5] !== undefined)
-          terms.push(Term.literal(value, Term.namedNode(unescape(m[5]))));
-        else terms.push(Term.literal(value));
-      }
-    }
-    if (rest.trim() !== '.') throw new BadNQuadsLine({ message: `Bad N-Quads line: ${line}` });
-    const [s, p, o, g] = terms;
-    // SAFETY: the test's N-Quads reader yields a subject, an IRI predicate, an object and an
-    // optional graph in that order.
-    quads.push(
-      Term.quad(
-        s as Term.Subject,
-        p as Term.NamedNode,
-        o as Term.Object,
-        (g as Term.Graph | undefined) ?? Term.defaultGraph,
-      ),
-    );
-  }
-  return quads;
+const termOf = (m: RegExpMatchArray): Term.Term => {
+  if (m[1] !== undefined) return Term.namedNode(unescape(m[1]));
+  if (m[2] !== undefined) return Term.blankNode(m[2]);
+  const value = unescape(m[3] ?? '');
+  if (m[4] !== undefined) return Term.literal(value, m[4]);
+  if (m[5] !== undefined) return Term.literal(value, Term.namedNode(unescape(m[5])));
+  return Term.literal(value);
 };
+
+export const parseNQuads = (text: string): Array<Term.Quad> =>
+  text.split(/\r?\n/).flatMap((raw) => {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) return [];
+    // `TERM` is sticky and global: its matches are the terms that follow one another from the
+    // start of the line.
+    const matches = Array.from(line.matchAll(TERM));
+    const rest = line.slice(matches.reduce((n, m) => n + m[0].length, 0));
+    const bad = new BadNQuadsLine({ message: `Bad N-Quads line: ${line}` });
+    if (rest.trim() !== '.') throw bad;
+    const [s, p, o, g] = matches.map(termOf);
+    if (
+      !Term.isSubject(s) ||
+      !Term.isNamedNode(p) ||
+      !Term.isObject(o) ||
+      (g !== undefined && !Term.isGraph(g))
+    ) {
+      throw bad;
+    }
+    return [Term.quad(s, p, o, g ?? Term.defaultGraph)];
+  });
 
 // -----------------------------------------------------------------------------
 // JSON-LD object comparison
 // -----------------------------------------------------------------------------
 
-export const jsonLdEqual = (a: Json, b: Json, key: string | null = null): boolean => {
+export const jsonLdEqual = (a: Json, b: Json, key?: string): boolean => {
   if (a === b) return true;
   if (Array.isArray(a)) {
     if (!Array.isArray(b) || a.length !== b.length) return false;
     if (key === '@list') return a.every((x, i) => jsonLdEqual(x, b[i]));
+    // Each item of `a` matches the first item of `b` not matched yet.
     const used = Array.from({ length: b.length }, () => false);
-    outer: for (const x of a) {
-      for (let i = 0; i < b.length; i++) {
-        if (!used[i] && jsonLdEqual(x, b[i], key)) {
-          used[i] = true;
-          continue outer;
-        }
-      }
-      return false;
-    }
-    return true;
+    return a.every((x) => {
+      const i = b.findIndex((y, j) => !used[j] && jsonLdEqual(x, y, key));
+      if (i === -1) return false;
+      used[i] = true;
+      return true;
+    });
   }
   if (Predicate.isObject(a)) {
     if (!Predicate.isObject(b)) return false;
-    const ka = Object.keys(a);
-    const kb = Object.keys(b);
-    if (ka.length !== kb.length) return false;
-    for (const k of ka) {
+    const ka = Record.keys(a);
+    if (ka.length !== Record.keys(b).length) return false;
+    return ka.every((k) => {
       if (!(k in b)) return false;
       const va = a[k];
       const vb = b[k];
       if (k === '@language' && Predicate.isString(va) && Predicate.isString(vb)) {
-        if (va.toLowerCase() !== vb.toLowerCase()) return false;
-        continue;
+        return va.toLowerCase() === vb.toLowerCase();
       }
-      if (!jsonLdEqual(va, vb, k)) return false;
-    }
-    return true;
+      return jsonLdEqual(va, vb, k);
+    });
   }
   return false;
 };
@@ -171,15 +158,9 @@ export const makeLoader = (
       const hash = url.indexOf('#');
       const bare = hash === -1 ? url : url.slice(0, hash);
       const fragment = hash === -1 ? '' : url.slice(hash);
-      let finalUrl = bare;
-      let contentType: string | undefined;
-      let link: string | ReadonlyArray<string> | undefined;
-      if (input !== undefined && bare === input.url) {
-        const o = input.options;
-        if (o.redirectTo !== undefined) finalUrl = new URL(o.redirectTo, baseUrl).href;
-        contentType = o.contentType;
-        link = o.httpLink;
-      }
+      // The test's own input is served with the test's HTTP options.
+      const o: RemoteOptions = input !== undefined && bare === input.url ? input.options : {};
+      const finalUrl = o.redirectTo !== undefined ? new URL(o.redirectTo, baseUrl).href : bare;
       if (!finalUrl.startsWith(baseUrl)) {
         return Effect.fail(JsonLdError.make('loading document failed', url));
       }
@@ -190,8 +171,8 @@ export const makeLoader = (
       return Effect.succeed({
         url: finalUrl + fragment,
         status: 200,
-        contentType: contentType ?? contentTypeFor(file),
-        link,
+        contentType: o.contentType ?? contentTypeFor(file),
+        link: o.httpLink,
         body: fs.readFileSync(file, 'utf8'),
       });
     }),

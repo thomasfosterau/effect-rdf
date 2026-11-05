@@ -5,12 +5,16 @@
  */
 import * as Arr from 'effect/Array';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import {
   type ActiveContext,
   applyTypeScopedContexts,
   type Env,
   expandIri,
   processContext,
+  scopedTermOf,
+  termOf,
 } from './context.ts';
 import {
   type Json,
@@ -30,6 +34,12 @@ import {
   isValueObject,
   getOrInit,
   hasOwn,
+  pushAll,
+  type ActiveProperty,
+  GRAPH_PROPERTY,
+  REVERSE_PROPERTY,
+  isProperty,
+  isTopLevel,
   stringifyJson,
 } from './util.ts';
 
@@ -47,7 +57,7 @@ export interface ExpandOptions {
 export const expandElement = (
   env: Env,
   active: ActiveContext,
-  activeProperty: string | null,
+  activeProperty: ActiveProperty,
   element: Json,
   baseUrl: string | null,
   options: ExpandOptions,
@@ -56,55 +66,49 @@ export const expandElement = (
   // 1
   if (element === null || element === undefined) return null;
   // 2
-  if (activeProperty === '@default') options = { ...options, frameExpansion: false };
+  if (isProperty(activeProperty, '@default')) options = { ...options, frameExpansion: false };
   // 3
-  const propDef = activeProperty === null ? undefined : active.terms.get(activeProperty);
-  const propertyScoped = propDef?.hasContext === true ? propDef : undefined;
+  const propDef = Option.isNone(activeProperty)
+    ? Option.none()
+    : termOf(active, activeProperty.value);
+  const propertyScoped = Option.filter(propDef, (def) => def.hasContext);
   // 4
   if (isScalar(element)) {
-    if (activeProperty === null || activeProperty === '@graph') return null;
-    if (propertyScoped !== undefined) {
-      active = processContext(env, active, propertyScoped.context, propertyScoped.baseUrl ?? null);
+    if (Option.isNone(activeProperty) || activeProperty.value === '@graph') return null;
+    if (Option.isSome(propertyScoped)) {
+      const def = propertyScoped.value;
+      active = processContext(env, active, def.context, def.baseUrl ?? null);
     }
-    return expandValue(env, active, activeProperty, element);
+    return expandValue(env, active, activeProperty.value, element);
   }
   // 5
   if (Array.isArray(element)) {
     const result: Array<Json> = [];
-    const container = propDef?.container ?? [];
-    for (const item of element) {
-      let expanded = expandElement(env, active, activeProperty, item, baseUrl, options, fromMap);
-      if (container.includes('@list') && Array.isArray(expanded)) expanded = { '@list': expanded };
-      if (Array.isArray(expanded)) result.push(...expanded);
-      else if (expanded !== null) result.push(expanded);
-    }
+    const isList = Option.isSome(propDef) && propDef.value.container.includes('@list');
+    element.forEach((item) => {
+      const expanded = expandElement(env, active, activeProperty, item, baseUrl, options, fromMap);
+      if (Array.isArray(expanded)) {
+        if (isList) result.push({ '@list': expanded });
+        else pushAll(result, expanded);
+      } else if (expanded !== null) result.push(expanded);
+    });
     return result;
   }
   // 6
   if (!isObject(element)) fail('invalid local context');
   // 7
   if (active.previous !== undefined && !fromMap) {
-    let revert = true;
-    const keys = Object.keys(element);
-    for (const key of keys) {
+    const keys = Record.keys(element);
+    const keep = keys.some((key) => {
       const exp = expandIri(env, active, key, true);
-      if (exp === '@value' || (keys.length === 1 && exp === '@id')) {
-        revert = false;
-        break;
-      }
-    }
-    if (revert) active = active.previous;
+      return exp === '@value' || (keys.length === 1 && exp === '@id');
+    });
+    if (!keep) active = active.previous;
   }
   // 8
-  if (propertyScoped !== undefined) {
-    active = processContext(
-      env,
-      active,
-      propertyScoped.context,
-      propertyScoped.baseUrl ?? null,
-      [],
-      true,
-    );
+  if (Option.isSome(propertyScoped)) {
+    const def = propertyScoped.value;
+    active = processContext(env, active, def.context, def.baseUrl ?? null, [], true);
   }
   // 9
   if ('@context' in element) {
@@ -113,10 +117,9 @@ export const expandElement = (
   // 10
   const typeScoped = active;
   // 11
-  let inputType: string | null = null;
-  const keys = Arr.sort(Object.keys(element), compareStrings);
-  for (const key of keys) {
-    if (expandIri(env, active, key, true) !== '@type') continue;
+  const keys = Arr.sort(Record.keys(element), compareStrings);
+  keys.forEach((key) => {
+    if (expandIri(env, active, key, true) !== '@type') return;
     const values = asArray(element[key]);
     active = applyTypeScopedContexts(
       env,
@@ -124,15 +127,11 @@ export const expandElement = (
       typeScoped,
       Arr.sort(Arr.filter(values, isString), compareStrings),
     );
-  }
+  });
   // 12
-  for (const key of keys) {
-    if (expandIri(env, active, key, true) !== '@type') continue;
-    const values = asArray(element[key]);
-    const lastValue = values[values.length - 1];
-    if (isString(lastValue)) inputType = expandIri(env, active, lastValue, true);
-    break;
-  }
+  const typeKey = keys.find((key) => expandIri(env, active, key, true) === '@type');
+  const lastType = typeKey === undefined ? undefined : asArray(element[typeKey]).at(-1);
+  const inputIsJson = isString(lastType) && expandIri(env, active, lastType, true) === '@json';
   // 13, 14
   const result: JsonObject = {};
   expandObject(
@@ -142,23 +141,21 @@ export const expandElement = (
     activeProperty,
     element,
     result,
-    inputType,
+    inputIsJson,
     baseUrl,
     options,
   );
   // 15
   if ('@value' in result) {
-    for (const k of Object.keys(result)) {
-      if (
+    const extra = Record.keys(result).find(
+      (k) =>
         k !== '@direction' &&
         k !== '@index' &&
         k !== '@language' &&
         k !== '@type' &&
-        k !== '@value'
-      ) {
-        fail('invalid value object', k);
-      }
-    }
+        k !== '@value',
+    );
+    if (extra !== undefined) fail('invalid value object', extra);
     if ('@type' in result && ('@language' in result || '@direction' in result)) {
       fail('invalid value object');
     }
@@ -184,7 +181,7 @@ export const expandElement = (
     if (!Array.isArray(result['@type'])) result['@type'] = [result['@type']];
   } else if ('@set' in result || '@list' in result) {
     // 17
-    const n = Object.keys(result).length;
+    const n = Record.keys(result).length;
     if (n > 2 || (n === 2 && !('@index' in result))) fail('invalid set or list object');
     if ('@set' in result) {
       const set = result['@set'];
@@ -194,13 +191,13 @@ export const expandElement = (
   return finalize(result, activeProperty, options);
 };
 
-const finalize = (result: Json, activeProperty: string | null, options: ExpandOptions): Json => {
+const finalize = (result: Json, activeProperty: ActiveProperty, options: ExpandOptions): Json => {
   // 18
   if (isObject(result)) {
-    const keys = Object.keys(result);
+    const keys = Record.keys(result);
     if (keys.length === 1 && keys[0] === '@language') return null;
     // 19 (free-floating nodes are kept in frames)
-    if (!options.frameExpansion && (activeProperty === null || activeProperty === '@graph')) {
+    if (!options.frameExpansion && isTopLevel(activeProperty)) {
       if (Arr.isReadonlyArrayEmpty(keys) || '@value' in result || '@list' in result) return null;
       if (keys.length === 1 && keys[0] === '@id') return null;
     }
@@ -217,7 +214,8 @@ interface KeywordScope {
   readonly typeScoped: ActiveContext;
   readonly activeProperty: ExpandObjectArguments[3];
   readonly result: JsonObject;
-  readonly inputType: ExpandObjectArguments[6];
+  /** The object's last `@type` expands to `@json`. */
+  readonly inputIsJson: ExpandObjectArguments[6];
   readonly baseUrl: ExpandObjectArguments[7];
   readonly options: ExpandOptions;
   readonly nests: Array<string>;
@@ -231,13 +229,7 @@ const expandKeyword = Match.fn(
   Match.withReturnType<Json>(),
   Match.when('@id', (_p, _ep, _key, value, kw) => {
     if (isString(value)) return expandIri(kw.env, kw.active, value, false, true);
-    if (
-      kw.options.frameExpansion &&
-      isObject(value) &&
-      Arr.isReadonlyArrayEmpty(Object.keys(value))
-    ) {
-      return [value];
-    }
+    if (kw.options.frameExpansion && isEmptyObject(value)) return [value];
     if (kw.options.frameExpansion && Array.isArray(value) && value.every(isString)) {
       return value.map((v) => expandIri(kw.env, kw.active, v, false, true));
     }
@@ -245,17 +237,13 @@ const expandKeyword = Match.fn(
   }),
   Match.when('@type', (_p, _ep, _key, value, kw) => {
     let expandedValue: Json = undefined;
-    if (
-      kw.options.frameExpansion &&
-      isObject(value) &&
-      Arr.isReadonlyArrayEmpty(Object.keys(value))
-    ) {
+    if (kw.options.frameExpansion && isEmptyObject(value)) {
       expandedValue = value;
     } else if (
       kw.options.frameExpansion &&
       isObject(value) &&
       '@default' in value &&
-      Object.keys(value).length === 1
+      Record.keys(value).length === 1
     ) {
       expandedValue = {
         '@default': expandIri(kw.env, kw.typeScoped, value['@default'], true, true),
@@ -273,23 +261,21 @@ const expandKeyword = Match.fn(
     return expandedValue;
   }),
   Match.when('@graph', (_p, _ep, _key, value, kw) =>
-    asArray(expandElement(kw.env, kw.active, '@graph', value, kw.baseUrl, kw.options)),
+    asArray(expandElement(kw.env, kw.active, GRAPH_PROPERTY, value, kw.baseUrl, kw.options)),
   ),
   Match.when('@included', (_p, _ep, _key, value, kw) => {
     if (kw.env.processingMode === 'json-ld-1.0') return undefined;
     const expandedValue = asArray(
       expandElement(kw.env, kw.active, kw.activeProperty, value, kw.baseUrl, kw.options),
     );
-    for (const v of expandedValue) {
-      if (!isObject(v) || '@value' in v || '@list' in v || '@set' in v) {
-        fail('invalid @included value');
-      }
+    if (expandedValue.some((v) => !isObject(v) || '@value' in v || '@list' in v || '@set' in v)) {
+      fail('invalid @included value');
     }
     return '@included' in kw.result ? [...kw.result['@included'], ...expandedValue] : expandedValue;
   }),
   Match.when('@value', (_p, _ep, _key, value, kw) => {
     let expandedValue: Json = undefined;
-    if (kw.inputType === '@json') {
+    if (kw.inputIsJson) {
       if (kw.env.processingMode === 'json-ld-1.0') fail('invalid value object value');
       expandedValue = value;
     } else if (value === null || isScalar(value)) {
@@ -324,7 +310,7 @@ const expandKeyword = Match.fn(
     return value;
   }),
   Match.when('@list', (_p, _ep, _key, value, kw) => {
-    if (kw.activeProperty === null || kw.activeProperty === '@graph') return undefined;
+    if (isTopLevel(kw.activeProperty)) return undefined;
     const expandedValue = asArray(
       expandElement(kw.env, kw.active, kw.activeProperty, value, kw.baseUrl, kw.options),
     );
@@ -338,26 +324,27 @@ const expandKeyword = Match.fn(
   ),
   Match.when('@reverse', (_p, _ep, _key, value, kw) => {
     if (!isObject(value)) fail('invalid @reverse value');
-    const ev = expandElement(kw.env, kw.active, '@reverse', value, kw.baseUrl, kw.options);
+    const ev = expandElement(kw.env, kw.active, REVERSE_PROPERTY, value, kw.baseUrl, kw.options);
     if (isObject(ev)) {
       if ('@reverse' in ev) {
-        // SAFETY: an expanded `@reverse` value is a JSON object of reverse properties.
-        for (const [property, items] of Object.entries(ev['@reverse'] as JsonObject)) {
+        // An expanded `@reverse` value is a JSON object of reverse properties.
+        const reversed: JsonObject = ev['@reverse'];
+        Record.keys(reversed).forEach((property) => {
           if (!hasOwn(kw.result, property)) kw.result[property] = [];
-          kw.result[property].push(...asArray(items));
-        }
+          pushAll(kw.result[property], asArray(reversed[property]));
+        });
       }
-      const others = Object.keys(ev).filter((k) => k !== '@reverse');
+      const others = Record.keys(ev).filter((k) => k !== '@reverse');
       if (Arr.isReadonlyArrayNonEmpty(others)) {
         const reverseMap: JsonObject = getOrInit(kw.result, '@reverse', () => ({}));
-        for (const property of others) {
-          for (const item of asArray(ev[property])) {
+        others.forEach((property) =>
+          asArray(ev[property]).forEach((item) => {
             if (isValueObject(item) || isListObject(item)) {
               fail('invalid reverse property value');
             }
             getOrInit(reverseMap, property, () => []).push(item);
-          }
-        }
+          }),
+        );
       }
     }
     return undefined;
@@ -382,10 +369,10 @@ const expandObject = (
   env: Env,
   active: ActiveContext,
   typeScoped: ActiveContext,
-  activeProperty: string | null,
+  activeProperty: ActiveProperty,
   element: JsonObject,
   result: JsonObject,
-  inputType: string | null,
+  inputIsJson: boolean,
   baseUrl: string | null,
   options: ExpandOptions,
 ): void => {
@@ -396,18 +383,18 @@ const expandObject = (
     typeScoped,
     activeProperty,
     result,
-    inputType,
+    inputIsJson,
     baseUrl,
     options,
     nests,
   };
   const keys = options.ordered
-    ? Arr.sort(Object.keys(element), compareStrings)
-    : Object.keys(element);
-  for (const key of keys) {
+    ? Arr.sort(Record.keys(element), compareStrings)
+    : Record.keys(element);
+  keys.forEach((key) => {
     const value = element[key];
     // 13.1
-    if (key === '@context') continue;
+    if (key === '@context') return;
     // 13.2
     const expandedProperty = expandIri(env, active, key, true);
     // 13.3
@@ -415,11 +402,11 @@ const expandObject = (
       expandedProperty === null ||
       (!expandedProperty.includes(':') && !isKeyword(expandedProperty))
     ) {
-      continue;
+      return;
     }
     // 13.4
     if (isKeyword(expandedProperty)) {
-      if (activeProperty === '@reverse') fail('invalid reverse property map');
+      if (isProperty(activeProperty, '@reverse')) fail('invalid reverse property map');
       if (
         hasOwn(result, expandedProperty) &&
         expandedProperty !== '@included' &&
@@ -436,79 +423,84 @@ const expandObject = (
       }
       const expandedValue = expandKeyword(expandedProperty, key, value, scope);
       if (expandedValue !== undefined) result[expandedProperty] = expandedValue;
-      continue;
+      return;
     }
     // 13.5
-    const def = active.terms.get(key);
-    const container = def?.container ?? [];
+    const def = termOf(active, key);
+    const container = Option.isSome(def) ? def.value.container : [];
     let expandedValue: Json;
-    if (def?.type === '@json') {
+    if (Option.isSome(def) && def.value.type === '@json') {
       // 13.6
       expandedValue = { '@value': value, '@type': '@json' };
     } else if (container.includes('@language') && isObject(value)) {
       // 13.7
-      expandedValue = [];
-      let direction: string | null | undefined = active.direction;
-      if (def !== undefined && 'direction' in def) direction = def.direction;
+      const values: Array<Json> = [];
+      expandedValue = values;
+      const direction =
+        Option.isSome(def) && 'direction' in def.value ? def.value.direction : active.direction;
       const langs = options.ordered
-        ? Arr.sort(Object.keys(value), compareStrings)
-        : Object.keys(value);
-      for (const language of langs) {
-        for (const item of asArray(value[language])) {
-          if (item === null) continue;
+        ? Arr.sort(Record.keys(value), compareStrings)
+        : Record.keys(value);
+      langs.forEach((language) =>
+        asArray(value[language]).forEach((item) => {
+          if (item === null) return;
           if (!isString(item)) fail('invalid language map value');
           const v: JsonObject = { '@value': item, '@language': language };
           if (language === '@none' || expandIri(env, active, language, true) === '@none') {
             delete v['@language'];
           }
           if (direction !== null && direction !== undefined) v['@direction'] = direction;
-          expandedValue.push(v);
-        }
-      }
+          values.push(v);
+        }),
+      );
     } else if (
       (container.includes('@index') || container.includes('@type') || container.includes('@id')) &&
       isObject(value)
     ) {
       // 13.8
-      expandedValue = [];
-      const indexKey = def?.index ?? '@index';
+      const values: Array<Json> = [];
+      expandedValue = values;
+      const indexKey = Option.isSome(def) ? (def.value.index ?? '@index') : '@index';
       const indexes = options.ordered
-        ? Arr.sort(Object.keys(value), compareStrings)
-        : Object.keys(value);
-      for (const index of indexes) {
-        let mapContext: ActiveContext;
-        if (container.includes('@id') || container.includes('@type')) {
-          mapContext = active.previous ?? active;
-        } else {
-          mapContext = active;
-        }
+        ? Arr.sort(Record.keys(value), compareStrings)
+        : Record.keys(value);
+      indexes.forEach((index) => {
+        let mapContext: ActiveContext = active;
         if (container.includes('@type')) {
-          const indexDef = mapContext.terms.get(index);
-          if (indexDef?.hasContext === true) {
+          mapContext = active.previous ?? active;
+          const indexDef = scopedTermOf(mapContext, index);
+          if (Option.isSome(indexDef)) {
             mapContext = processContext(
               env,
               mapContext,
-              indexDef.context,
-              indexDef.baseUrl ?? null,
+              indexDef.value.context,
+              indexDef.value.baseUrl ?? null,
             );
           }
-        } else {
-          mapContext = active;
         }
         const expandedIndex = expandIri(env, active, index, true);
         const indexValue = asArray(
-          expandElement(env, mapContext, key, asArray(value[index]), baseUrl, options, true),
+          expandElement(
+            env,
+            mapContext,
+            Option.some(key),
+            asArray(value[index]),
+            baseUrl,
+            options,
+            true,
+          ),
         );
-        for (let item of indexValue) {
-          if (container.includes('@graph') && !isGraphObject(item)) {
-            item = { '@graph': asArray(item) };
-          }
+        indexValue.forEach((expandedItem) => {
+          const item =
+            container.includes('@graph') && !isGraphObject(expandedItem)
+              ? { '@graph': asArray(expandedItem) }
+              : expandedItem;
           if (container.includes('@index') && indexKey !== '@index' && expandedIndex !== '@none') {
             const reExpanded = expandValue(env, active, indexKey, index);
-            const expandedIndexKey = expandIri(env, active, indexKey, true)!;
+            const expandedIndexKey = expandIri(env, active, indexKey, true) ?? indexKey;
             const existing = hasOwn(item, expandedIndexKey) ? asArray(item[expandedIndexKey]) : [];
             item[expandedIndexKey] = [reExpanded, ...existing];
-            if (isValueObject(item) && Object.keys(item).length > 1) {
+            if (isValueObject(item) && Record.keys(item).length > 1) {
               fail('invalid value object');
             }
           } else if (
@@ -522,15 +514,15 @@ const expandObject = (
           } else if (container.includes('@type') && expandedIndex !== '@none') {
             item['@type'] = [expandedIndex, ...(item['@type'] ? asArray(item['@type']) : [])];
           }
-          expandedValue.push(item);
-        }
-      }
+          values.push(item);
+        });
+      });
     } else {
       // 13.9
-      expandedValue = expandElement(env, active, key, value, baseUrl, options);
+      expandedValue = expandElement(env, active, Option.some(key), value, baseUrl, options);
     }
     // 13.10
-    if (expandedValue === null) continue;
+    if (expandedValue === null) return;
     // 13.11
     if (container.includes('@list') && !isListObject(expandedValue)) {
       expandedValue = { '@list': asArray(expandedValue) };
@@ -544,30 +536,33 @@ const expandObject = (
       expandedValue = asArray(expandedValue).map((ev) => ({ '@graph': asArray(ev) }));
     }
     // 13.13
-    if (def?.reverse === true) {
+    if (Option.isSome(def) && def.value.reverse) {
       const reverseMap: JsonObject = getOrInit(result, '@reverse', () => ({}));
-      for (const item of asArray(expandedValue)) {
+      asArray(expandedValue).forEach((item) => {
         if (isValueObject(item) || isListObject(item)) fail('invalid reverse property value');
         getOrInit(reverseMap, expandedProperty, () => []).push(item);
-      }
+      });
     } else {
       // 13.14
-      getOrInit(result, expandedProperty, () => []).push(...asArray(expandedValue));
+      pushAll(
+        getOrInit(result, expandedProperty, () => []),
+        asArray(expandedValue),
+      );
     }
-  }
+  });
   // 14
   const nestKeys = options.ordered ? Arr.sort(nests, compareStrings) : nests;
-  for (const nestKey of nestKeys) {
-    for (const nested of asArray(element[nestKey])) {
+  nestKeys.forEach((nestKey) =>
+    asArray(element[nestKey]).forEach((nested) => {
       if (!isObject(nested)) fail('invalid @nest value');
-      for (const k of Object.keys(nested)) {
-        if (expandIri(env, active, k, true) === '@value') fail('invalid @nest value');
+      if (Record.keys(nested).some((k) => expandIri(env, active, k, true) === '@value')) {
+        fail('invalid @nest value');
       }
-      const nestDef = active.terms.get(nestKey);
-      const nestContext =
-        nestDef?.hasContext === true
-          ? processContext(env, active, nestDef.context, nestDef.baseUrl ?? null, [], true)
-          : active;
+      const nestContext = Option.match(scopedTermOf(active, nestKey), {
+        onNone: () => active,
+        onSome: (nestDef) =>
+          processContext(env, active, nestDef.context, nestDef.baseUrl ?? null, [], true),
+      });
       expandObject(
         env,
         nestContext,
@@ -575,12 +570,12 @@ const expandObject = (
         activeProperty,
         nested,
         result,
-        inputType,
+        inputIsJson,
         baseUrl,
         options,
       );
-    }
-  }
+    }),
+  );
 };
 
 /**
@@ -594,28 +589,24 @@ export const expandValue = (
   activeProperty: string,
   value: Json,
 ): JsonObject => {
-  const def = active.terms.get(activeProperty);
+  const def = Option.getOrNull(termOf(active, activeProperty));
+  const type = def === null ? undefined : def.type;
   // 1, 2
-  if (def?.type === '@id' && isString(value)) {
+  if (type === '@id' && isString(value)) {
     return { '@id': expandIri(env, active, value, false, true) };
   }
-  if (def?.type === '@vocab' && isString(value)) {
+  if (type === '@vocab' && isString(value)) {
     return { '@id': expandIri(env, active, value, true, true) };
   }
   // 3
   const result: JsonObject = { '@value': value };
   // 4
-  if (
-    def?.type !== undefined &&
-    def.type !== '@id' &&
-    def.type !== '@vocab' &&
-    def.type !== '@none'
-  ) {
-    result['@type'] = def.type;
+  if (type !== undefined && type !== '@id' && type !== '@vocab' && type !== '@none') {
+    result['@type'] = type;
   } else if (isString(value)) {
     // 5
-    const language = def !== undefined && 'language' in def ? def.language : active.language;
-    const direction = def !== undefined && 'direction' in def ? def.direction : active.direction;
+    const language = def !== null && 'language' in def ? def.language : active.language;
+    const direction = def !== null && 'direction' in def ? def.direction : active.direction;
     if (language !== null && language !== undefined) result['@language'] = language;
     if (direction !== null && direction !== undefined) result['@direction'] = direction;
   }

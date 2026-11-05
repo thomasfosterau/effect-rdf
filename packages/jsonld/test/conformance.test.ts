@@ -8,6 +8,7 @@ import * as Isomorphism from '@thomasfosterau/effect-rdf/Isomorphism';
 import { afterAll, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Record from 'effect/Record';
 import * as JsonLd from '../src/JsonLd.ts';
 import * as JsonLdError from '../src/JsonLdError.ts';
 import {
@@ -25,7 +26,7 @@ const BASE = 'https://w3c.github.io/json-ld-api/tests/';
 const exists = fs.existsSync(path.join(DIR, 'expand-manifest.jsonld'));
 
 /** Tests deliberately skipped, with the reason. */
-const SKIP: Record<string, string> = {};
+const SKIP: globalThis.Record<string, string> = {};
 
 interface TestEntry {
   readonly '@id': string;
@@ -36,13 +37,13 @@ interface TestEntry {
   readonly context?: string;
   readonly expectErrorCode?: string;
   readonly requires?: string;
-  readonly option?: Record<string, Json>;
+  readonly option?: globalThis.Record<string, Json>;
 }
 
 const readJson = (file: string): Json =>
   parseJsonText(fs.readFileSync(path.join(DIR, file), 'utf8'));
 
-const stats: Record<string, { pass: number; fail: number; skip: number }> = {};
+const stats: globalThis.Record<string, { pass: number; fail: number; skip: number }> = {};
 
 const runManifest = (
   name: string,
@@ -56,8 +57,9 @@ const runManifest = (
     if (!exists) return;
     const manifest = readJson(manifestFile);
     const entry = (stats[name] = { pass: 0, fail: 0, skip: 0 });
-    // SAFETY: the JSON-LD test manifests' `sequence` is an array of test entries.
-    for (const test of manifest.sequence as ReadonlyArray<TestEntry>) {
+    // The JSON-LD test manifests' `sequence` is an array of test entries.
+    const sequence: ReadonlyArray<TestEntry> = manifest.sequence;
+    sequence.forEach((test) => {
       const id = `${manifestFile.replace('-manifest.jsonld', '')}${test['@id']}`;
       const option = test.option ?? {};
       const skipReason =
@@ -76,7 +78,7 @@ const runManifest = (
         entry[result.ok ? 'pass' : 'fail']++;
         expect(result.ok ? 'ok' : result.detail).toBe('ok');
       });
-    }
+    });
   });
 };
 
@@ -100,11 +102,11 @@ async function evaluate(
   ) => Effect.Effect<{ readonly ok: boolean; readonly actual?: unknown }, JsonLdError.JsonLdError>,
 ): Promise<{ ok: boolean; detail: string }> {
   const option = test.option ?? {};
-  const options: Record<string, Json> = {};
+  const options: globalThis.Record<string, Json> = {};
   options['documentLoader'] = makeLoader(BASE, DIR, { url: BASE + test.input, options: option });
-  for (const key of OPTION_KEYS) {
+  OPTION_KEYS.forEach((key) => {
     if (key in option) options[key] = option[key];
-  }
+  });
   if ('expandContext' in option) options['expandContext'] = BASE + option['expandContext'];
   const exit = await Effect.runPromiseExit(run(test, options));
   if (test['@type'].includes('jld:NegativeEvaluationTest')) {
@@ -178,7 +180,7 @@ afterAll(() => {
   if (!exists) return;
   // eslint-disable-next-line no-console
   console.log(
-    Object.entries(stats)
+    Record.toEntries(stats)
       .map(([k, v]) => `${k}: ${v.pass} passed, ${v.fail} failed, ${v.skip} skipped`)
       .join('\n'),
   );

@@ -41,9 +41,9 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
   const option = test.option ?? {};
   const options: Record<string, Json> = {};
   options['documentLoader'] = makeLoader(BASE, DIR, { url: BASE + test.input, options: option });
-  for (const key of ['base', 'processingMode', 'omitGraph', 'ordered', 'compactArrays']) {
+  ['base', 'processingMode', 'omitGraph', 'ordered', 'compactArrays'].forEach((key) => {
     if (key in option) options[key] = option[key];
-  }
+  });
   const exit = await Effect.runPromiseExit(
     JsonLd.frame(BASE + test.input, BASE + test.frame, options),
   );
@@ -68,8 +68,9 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
 
 (exists ? describe : describe.skip)('frame', () => {
   const manifest = exists ? readJson('frame-manifest.jsonld') : { sequence: [] };
-  // SAFETY: the JSON-LD test manifests' `sequence` is an array of test entries.
-  for (const test of manifest.sequence as ReadonlyArray<TestEntry>) {
+  // The JSON-LD test manifests' `sequence` is an array of test entries.
+  const sequence: ReadonlyArray<TestEntry> = manifest.sequence;
+  sequence.forEach((test) => {
     const id = `frame${test['@id']}`;
     const skipReason =
       SKIP[id] ?? (test.option?.['specVersion'] === 'json-ld-1.0' ? 'JSON-LD 1.0 only' : undefined);
@@ -77,5 +78,5 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
       const result = await evaluate(test);
       expect(result.ok ? 'ok' : result.detail).toBe('ok');
     });
-  }
+  });
 });

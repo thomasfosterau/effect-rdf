@@ -4,6 +4,9 @@
  * @internal
  */
 import * as Arr from 'effect/Array';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Record from 'effect/Record';
 import { type NodeMap, generateNodeMap, mergeNodeMaps } from './flatten.ts';
 import {
   IdIssuer,
@@ -23,6 +26,7 @@ import {
   isObject,
   isString,
   isValueObject,
+  getOrInit,
   stringifyJson,
 } from './util.ts';
 import * as Predicate from 'effect/Predicate';
@@ -48,16 +52,22 @@ interface Flags {
   readonly requireAll: boolean;
 }
 
+/** Where a framed node was embedded: its parent, under a property (none at the top level). */
+interface EmbedSite {
+  readonly parent: Json;
+  readonly property: Option.Option<string>;
+}
+
 interface State {
   readonly options: FrameOptions;
   readonly graphMap: NodeMap;
-  readonly subjects: Record<string, JsonObject>;
+  readonly subjects: globalThis.Record<string, JsonObject>;
   readonly graph: string;
   readonly embedded: boolean;
   readonly subjectStack: Array<{ subject: JsonObject; graph: string }>;
-  readonly link: Record<string, Record<string, JsonObject>>;
-  readonly bnodeMap: Record<string, Array<JsonObject>>;
-  uniqueEmbeds: Record<string, Record<string, { parent: Json; property: string | null }>>;
+  readonly link: globalThis.Record<string, globalThis.Record<string, JsonObject>>;
+  readonly bnodeMap: globalThis.Record<string, Array<JsonObject>>;
+  uniqueEmbeds: globalThis.Record<string, globalThis.Record<string, EmbedSite>>;
 }
 
 /**
@@ -78,7 +88,7 @@ export const frame = (expanded: Json, expandedFrame: Json, options: FrameOptions
   const state: State = {
     options,
     graphMap,
-    subjects: graphMap[graph]!,
+    subjects: graphMap[graph] ?? {},
     graph,
     embedded: false,
     subjectStack: [],
@@ -89,25 +99,28 @@ export const frame = (expanded: Json, expandedFrame: Json, options: FrameOptions
   const framed: Array<Json> = [];
   frameSubjects(
     state,
-    Arr.sort(Object.keys(state.subjects), compareStrings),
+    Arr.sort(Record.keys(state.subjects), compareStrings),
     asArray(expandedFrame),
     framed,
-    null,
+    Option.none(),
   );
-  const bnodesToClear = options.is11
-    ? new Set(Object.keys(state.bnodeMap).filter((id) => state.bnodeMap[id]!.length === 1))
-    : new Set<string>();
-  // SAFETY: framing's top level is an array of node objects, and cleanup keeps it an array.
-  return cleanupPreserve(framed, bnodesToClear, new Set()) as Array<Json>;
+  const bnodesToClear = MutableHashSet.fromIterable(
+    options.is11
+      ? Record.keys(state.bnodeMap).filter((id) => state.bnodeMap[id]?.length === 1)
+      : [],
+  );
+  // Framing's top level is an array of node objects, and cleanup keeps it an array.
+  const cleaned: Array<Json> = cleanupPreserve(framed, bnodesToClear, new WeakSet());
+  return cleaned;
 };
 
 const getFlag = (
-  frame: JsonObject,
+  pattern: JsonObject,
   options: FrameOptions,
   name: 'embed' | 'explicit' | 'omitDefault' | 'requireAll',
 ): any => {
   const flag = `@${name}`;
-  let value: Json = hasOwn(frame, flag) ? asArray(frame[flag])[0] : options[name];
+  let value: Json = hasOwn(pattern, flag) ? asArray(pattern[flag])[0] : options[name];
   if (isValueObject(value)) value = value['@value'];
   if (name === 'embed') {
     if (value === true) value = '@once';
@@ -121,27 +134,27 @@ const getFlag = (
   return value;
 };
 
-const validateFrame = (frame: Json): void => {
-  if (!Array.isArray(frame) || frame.length !== 1 || !isObject(frame[0])) {
+const validateFrame = (frameValue: Json): void => {
+  if (!Array.isArray(frameValue) || frameValue.length !== 1 || !isObject(frameValue[0])) {
     fail('invalid frame', 'a frame must be a single object');
   }
-  const f = frame[0];
+  const f = frameValue[0];
   if (hasOwn(f, '@id')) {
-    for (const id of asArray(f['@id'])) {
+    asArray(f['@id']).forEach((id) => {
       if (!(isObject(id) || (isString(id) && isAbsoluteIri(id))) || isBlankNodeId(id)) {
         fail('invalid frame', `invalid @id ${stringifyJson(id)}`);
       }
-    }
+    });
   }
   if (hasOwn(f, '@type')) {
-    for (const type of asArray(f['@type'])) {
+    asArray(f['@type']).forEach((type) => {
       if (
         !(isObject(type) || (isString(type) && isAbsoluteIri(type)) || type === '@json') ||
         isBlankNodeId(type)
       ) {
         fail('invalid frame', `invalid @type ${stringifyJson(type)}`);
       }
-    }
+    });
   }
 };
 
@@ -157,63 +170,58 @@ const createsCircularReference = (
   subject: JsonObject,
   graph: string,
   stack: ReadonlyArray<{ subject: JsonObject; graph: string }>,
-): boolean => {
-  for (let i = stack.length - 1; i >= 0; i--) {
-    const entry = stack[i]!;
-    if (entry.graph === graph && entry.subject['@id'] === subject['@id']) return true;
-  }
-  return false;
-};
+): boolean =>
+  stack.some((entry) => entry.graph === graph && entry.subject['@id'] === subject['@id']);
 
-const addFrameOutput = (parent: Json, property: string | null, output: Json): void => {
-  if (isObject(parent)) addValue(parent, property!, output, true);
-  else {
-    // SAFETY: a non-object parent in framing output is the top-level array.
-    (parent as Array<Json>).push(output);
+const addFrameOutput = (parent: Json, property: Option.Option<string>, output: Json): void => {
+  if (isObject(parent)) {
+    if (Option.isSome(property)) addValue(parent, property.value, output, true);
+  } else {
+    // A non-object parent in framing output is the top-level array.
+    const top: Array<Json> = parent;
+    top.push(output);
   }
 };
 
 const isSubjectReference = (v: Json): boolean =>
-  isObject(v) && Object.keys(v).length === 1 && hasOwn(v, '@id');
+  isObject(v) && Record.keys(v).length === 1 && hasOwn(v, '@id');
 
 const frameSubjects = (
   state: State,
   subjects: ReadonlyArray<string>,
   frameValue: Json,
   parent: Json,
-  property: string | null,
+  property: Option.Option<string>,
 ): void => {
   validateFrame(frameValue);
-  const frame: JsonObject = frameValue[0];
+  const pattern: JsonObject = frameValue[0];
   const options = state.options;
   const flags: Flags = {
-    embed: getFlag(frame, options, 'embed'),
-    explicit: getFlag(frame, options, 'explicit'),
-    requireAll: getFlag(frame, options, 'requireAll'),
+    embed: getFlag(pattern, options, 'embed'),
+    explicit: getFlag(pattern, options, 'explicit'),
+    requireAll: getFlag(pattern, options, 'requireAll'),
   };
-  if (!hasOwn(state.link, state.graph)) state.link[state.graph] = {};
-  const link = state.link[state.graph]!;
-  const matches = filterSubjects(state, subjects, frame, flags);
-  const ids = Arr.sort(Object.keys(matches), compareStrings);
-  for (const id of ids) {
-    const subject = matches[id]!;
-    if (property === null) state.uniqueEmbeds = { [state.graph]: {} };
-    else state.uniqueEmbeds[state.graph] ??= {};
-    const uniqueEmbeds = state.uniqueEmbeds[state.graph]!;
+  const link = getOrInit(state.link, state.graph, () => ({}));
+  const matches = filterSubjects(state, subjects, pattern, flags);
+  Arr.sort(Record.keys(matches), compareStrings).forEach((id) => {
+    const subject = matches[id];
+    if (subject === undefined) return;
+    if (Option.isNone(property)) state.uniqueEmbeds = { [state.graph]: {} };
+    const uniqueEmbeds = getOrInit(state.uniqueEmbeds, state.graph, () => ({}));
     const output: JsonObject = { '@id': id };
     if (isBlankNodeId(id)) addValue(state.bnodeMap, id, output, true);
     link[id] = output;
     if ((flags.embed === '@first' || flags.embed === '@last') && options.is11) {
       fail('invalid @embed value', flags.embed);
     }
-    if (!state.embedded && hasOwn(uniqueEmbeds, id)) continue;
+    if (!state.embedded && hasOwn(uniqueEmbeds, id)) return;
     if (
       state.embedded &&
       (flags.embed === '@never' ||
         createsCircularReference(subject, state.graph, state.subjectStack))
     ) {
       addFrameOutput(parent, property, output);
-      continue;
+      return;
     }
     if (
       state.embedded &&
@@ -221,98 +229,109 @@ const frameSubjects = (
       hasOwn(uniqueEmbeds, id)
     ) {
       addFrameOutput(parent, property, output);
-      continue;
+      return;
     }
     if (flags.embed === '@last' && hasOwn(uniqueEmbeds, id)) removeEmbed(state, id);
     uniqueEmbeds[id] = { parent, property };
     state.subjectStack.push({ subject, graph: state.graph });
     // the subject is also the name of a graph
-    if (hasOwn(state.graphMap, id)) {
+    const namedGraph = state.graphMap[id];
+    if (hasOwn(state.graphMap, id) && namedGraph !== undefined) {
       let recurse: boolean;
       let subframe: Json;
-      if (!hasOwn(frame, '@graph')) {
+      if (!hasOwn(pattern, '@graph')) {
         recurse = state.graph !== '@merged';
         subframe = {};
       } else {
-        subframe = asArray(frame['@graph'])[0];
+        subframe = asArray(pattern['@graph'])[0];
         recurse = !(id === '@merged' || id === '@default');
         if (!isObject(subframe)) subframe = {};
       }
       if (recurse) {
         frameSubjects(
-          { ...state, graph: id, subjects: state.graphMap[id]!, embedded: false },
-          Arr.sort(Object.keys(state.graphMap[id]!), compareStrings),
+          { ...state, graph: id, subjects: namedGraph, embedded: false },
+          Arr.sort(Record.keys(namedGraph), compareStrings),
           [subframe],
           output,
-          '@graph',
+          Option.some('@graph'),
         );
       }
     }
-    if (hasOwn(frame, '@included')) {
+    if (hasOwn(pattern, '@included')) {
       frameSubjects(
         { ...state, embedded: false },
         subjects,
-        frame['@included'],
+        pattern['@included'],
         output,
-        '@included',
+        Option.some('@included'),
       );
     }
-    for (const prop of Arr.sort(Object.keys(subject), compareStrings)) {
+    Arr.sort(Record.keys(subject), compareStrings).forEach((prop) => {
       if (isKeyword(prop)) {
         output[prop] = clone(subject[prop]);
         if (prop === '@type') {
-          for (const type of subject['@type']) {
+          asArray(subject['@type']).forEach((type) => {
             if (isBlankNodeId(type)) addValue(state.bnodeMap, type, output, true);
-          }
+          });
         }
-        continue;
+        return;
       }
-      if (flags.explicit && !hasOwn(frame, prop)) continue;
-      // SAFETY: properties of a flattened subject hold arrays of values.
-      for (const o of subject[prop] as Array<Json>) {
-        const subframe = hasOwn(frame, prop) ? frame[prop] : createImplicitFrame(flags);
+      if (flags.explicit && !hasOwn(pattern, prop)) return;
+      const underProp = Option.some(prop);
+      // Properties of a flattened subject hold arrays of values.
+      const objects: Array<Json> = subject[prop];
+      objects.forEach((o) => {
+        const subframe = hasOwn(pattern, prop) ? pattern[prop] : createImplicitFrame(flags);
         if (isListObject(o)) {
-          const first = hasOwn(frame, prop) ? asArray(frame[prop])[0] : undefined;
+          const first = hasOwn(pattern, prop) ? asArray(pattern[prop])[0] : undefined;
           const listFrame =
             isObject(first) && hasOwn(first, '@list') ? first['@list'] : createImplicitFrame(flags);
           const list: JsonObject = { '@list': [] };
-          addFrameOutput(output, prop, list);
-          for (const oo of o['@list']) {
+          addFrameOutput(output, underProp, list);
+          const listProperty = Option.some('@list');
+          asArray(o['@list']).forEach((oo) => {
             if (isSubjectReference(oo)) {
-              frameSubjects({ ...state, embedded: true }, [oo['@id']], listFrame, list, '@list');
+              frameSubjects(
+                { ...state, embedded: true },
+                [oo['@id']],
+                listFrame,
+                list,
+                listProperty,
+              );
             } else {
-              addFrameOutput(list, '@list', clone(oo));
+              addFrameOutput(list, listProperty, clone(oo));
             }
-          }
+          });
         } else if (isSubjectReference(o)) {
-          frameSubjects({ ...state, embedded: true }, [o['@id']], subframe, output, prop);
+          frameSubjects({ ...state, embedded: true }, [o['@id']], subframe, output, underProp);
         } else if (valueMatch(asArray(subframe)[0], o)) {
-          addFrameOutput(output, prop, clone(o));
+          addFrameOutput(output, underProp, clone(o));
         }
-      }
-    }
+      });
+    });
     // defaults
-    for (const prop of Arr.sort(Object.keys(frame), compareStrings)) {
+    Arr.sort(Record.keys(pattern), compareStrings).forEach((prop) => {
       if (prop === '@type') {
-        const first = asArray(frame[prop])[0];
-        if (!isObject(first) || !hasOwn(first, '@default')) continue;
+        const first = asArray(pattern[prop])[0];
+        if (!isObject(first) || !hasOwn(first, '@default')) return;
       } else if (isKeyword(prop)) {
-        continue;
+        return;
       }
-      const next: JsonObject = asArray(frame[prop])[0] ?? {};
+      const next: JsonObject = asArray(pattern[prop])[0] ?? {};
       const omitDefaultOn = getFlag(next, options, 'omitDefault');
       if (!omitDefaultOn && !hasOwn(output, prop)) {
         let preserve: Json = '@null';
         if (hasOwn(next, '@default')) preserve = clone(next['@default']);
         output[prop] = [{ '@preserve': asArray(preserve) }];
       }
-    }
+    });
     // reverse properties
-    if (isObject(frame['@reverse'])) {
-      for (const reverseProp of Arr.sort(Object.keys(frame['@reverse']), compareStrings)) {
-        const subframe = frame['@reverse'][reverseProp];
-        for (const s of Object.keys(state.subjects)) {
-          const values = asArray(state.subjects[s]![reverseProp] ?? []);
+    if (isObject(pattern['@reverse'])) {
+      const reversePattern: JsonObject = pattern['@reverse'];
+      Arr.sort(Record.keys(reversePattern), compareStrings).forEach((reverseProp) => {
+        const subframe = reversePattern[reverseProp];
+        Record.keys(state.subjects).forEach((s) => {
+          const values = asArray(state.subjects[s]?.[reverseProp] ?? []);
           if (values.some((v: Json) => isObject(v) && v['@id'] === id)) {
             const reverse: JsonObject = (output['@reverse'] ??= {});
             addValue(reverse, reverseProp, [], true);
@@ -324,36 +343,37 @@ const frameSubjects = (
               property,
             );
           }
-        }
-      }
+        });
+      });
     }
     addFrameOutput(parent, property, output);
     state.subjectStack.pop();
-  }
+  });
 };
 
 const removeEmbed = (state: State, id: string): void => {
-  const embeds = state.uniqueEmbeds[state.graph]!;
-  const embed = embeds[id]!;
+  const embeds = state.uniqueEmbeds[state.graph];
+  const embed = embeds?.[id];
+  if (embeds === undefined || embed === undefined) return;
   const parent = embed.parent;
-  const property = embed.property;
   const subject = { '@id': id };
   if (Array.isArray(parent)) {
-    for (let i = 0; i < parent.length; i++) {
-      if (isObject(parent[i]) && parent[i]['@id'] === id) parent[i] = subject;
-    }
-  } else if (isObject(parent) && property !== null) {
+    parent.forEach((v, i) => {
+      if (isObject(v) && v['@id'] === id) parent[i] = subject;
+    });
+  } else if (isObject(parent) && Option.isSome(embed.property)) {
+    const property = embed.property.value;
     const values = asArray(parent[property]);
     parent[property] = values.map((v: Json) => (isObject(v) && v['@id'] === id ? subject : v));
   }
-  const removeDependents = (id: string): void => {
-    for (const next of Object.keys(embeds)) {
-      const e = embeds[next]!;
-      if (isObject(e.parent) && e.parent['@id'] === id) {
+  const removeDependents = (parentId: string): void => {
+    Record.keys(embeds).forEach((next) => {
+      const e = embeds[next];
+      if (e !== undefined && isObject(e.parent) && e.parent['@id'] === parentId) {
         delete embeds[next];
         removeDependents(next);
       }
-    }
+    });
   };
   removeDependents(id);
 };
@@ -361,50 +381,58 @@ const removeEmbed = (state: State, id: string): void => {
 const filterSubjects = (
   state: State,
   subjects: ReadonlyArray<string>,
-  frame: JsonObject,
+  pattern: JsonObject,
   flags: Flags,
 ) => {
-  const result: Record<string, JsonObject> = {};
-  for (const id of subjects) {
-    const subject = state.graphMap[state.graph]![id];
-    if (subject !== undefined && filterSubject(state, subject, frame, flags)) result[id] = subject;
-  }
+  const result: globalThis.Record<string, JsonObject> = {};
+  const graph = state.graphMap[state.graph];
+  subjects.forEach((id) => {
+    const subject = graph?.[id];
+    if (subject !== undefined && filterSubject(state, subject, pattern, flags))
+      result[id] = subject;
+  });
   return result;
 };
 
 const filterSubject = (
   state: State,
   subject: JsonObject,
-  frame: JsonObject,
+  pattern: JsonObject,
   flags: Flags,
 ): boolean => {
   let wildcard = true;
   let matchesSome = false;
-  for (const key of Object.keys(frame)) {
+  // Set when a key decides the match on its own, which ends the scan.
+  let decided = Option.none<boolean>();
+  const decide = (verdict: boolean): true => {
+    decided = Option.some(verdict);
+    return true;
+  };
+  Record.keys(pattern).some((key) => {
     let matchThis = false;
     const nodeValues = hasOwn(subject, key) ? asArray(subject[key]) : [];
-    const frameValues = asArray(frame[key]);
+    const frameValues = asArray(pattern[key]);
     const isEmpty = Arr.isReadonlyArrayEmpty(frameValues);
     if (key === '@id') {
       if (Arr.isReadonlyArrayEmpty(frameValues) || isObject(frameValues[0])) matchThis = true;
       else matchThis = frameValues.includes(nodeValues[0]);
-      if (!flags.requireAll) return matchThis;
+      if (!flags.requireAll) return decide(matchThis);
     } else if (key === '@type') {
       wildcard = false;
       if (isEmpty) {
-        if (Arr.isReadonlyArrayNonEmpty(nodeValues)) return false;
+        if (Arr.isReadonlyArrayNonEmpty(nodeValues)) return decide(false);
         matchThis = true;
       } else if (frameValues.length === 1 && isEmptyObject(frameValues[0])) {
         matchThis = Arr.isReadonlyArrayNonEmpty(nodeValues);
       } else {
-        for (const type of frameValues) {
+        frameValues.forEach((type) => {
           if (isObject(type) && hasOwn(type, '@default')) matchThis = true;
           else matchThis = matchThis || nodeValues.some((t) => t === type);
-        }
-        if (!flags.requireAll) return matchThis;
+        });
+        if (!flags.requireAll) return decide(matchThis);
       }
     } else if (isKeyword(key)) {
-      continue;
+      return false;
     } else {
       const thisFrame = frameValues[0];
       let hasDefault = false;
@@ -413,10 +441,10 @@ const filterSubject = (
         hasDefault = hasOwn(thisFrame, '@default');
       }
       wildcard = false;
-      if (Arr.isReadonlyArrayEmpty(nodeValues) && hasDefault) continue;
-      if (Arr.isReadonlyArrayNonEmpty(nodeValues) && isEmpty) return false;
+      if (Arr.isReadonlyArrayEmpty(nodeValues) && hasDefault) return false;
+      if (Arr.isReadonlyArrayNonEmpty(nodeValues) && isEmpty) return decide(false);
       if (thisFrame === undefined) {
-        if (Arr.isReadonlyArrayNonEmpty(nodeValues)) return false;
+        if (Arr.isReadonlyArrayNonEmpty(nodeValues)) return decide(false);
         matchThis = true;
       } else if (isListObject(thisFrame)) {
         const listValue = asArray(thisFrame['@list'])[0];
@@ -436,10 +464,11 @@ const filterSubject = (
         matchThis = Arr.isReadonlyArrayNonEmpty(nodeValues);
       }
     }
-    if (!matchThis && flags.requireAll) return false;
+    if (!matchThis && flags.requireAll) return decide(false);
     matchesSome = matchesSome || matchThis;
-  }
-  return wildcard || matchesSome;
+    return false;
+  });
+  return Option.getOrElse(decided, () => wildcard || matchesSome);
 };
 
 const nodeMatch = (state: State, pattern: JsonObject, value: Json, flags: Flags): boolean => {
@@ -484,8 +513,8 @@ const valueMatch = (pattern: Json, value: Json): boolean => {
 
 const cleanupPreserve = (
   input: Json,
-  bnodesToClear: ReadonlySet<string>,
-  seen: Set<Json>,
+  bnodesToClear: MutableHashSet.MutableHashSet<string>,
+  seen: WeakSet<JsonObject>,
 ): Json => {
   if (Array.isArray(input)) return input.map((v) => cleanupPreserve(v, bnodesToClear, seen));
   if (isObject(input)) {
@@ -497,13 +526,13 @@ const cleanupPreserve = (
     }
     if (seen.has(input)) return input;
     seen.add(input);
-    for (const prop of Object.keys(input)) {
-      if (prop === '@id' && bnodesToClear.has(input[prop])) {
+    Record.keys(input).forEach((prop) => {
+      if (prop === '@id' && MutableHashSet.has(bnodesToClear, input[prop])) {
         delete input['@id'];
-        continue;
+        return;
       }
       input[prop] = cleanupPreserve(input[prop], bnodesToClear, seen);
-    }
+    });
   }
   return input;
 };
@@ -514,7 +543,7 @@ const cleanupPreserve = (
  *
  * @internal
  */
-export const cleanupNull = (input: Json, seen: Set<Json> = new Set()): Json => {
+export const cleanupNull = (input: Json, seen: WeakSet<JsonObject> = new WeakSet()): Json => {
   if (Array.isArray(input)) {
     return input.map((v) => cleanupNull(v, seen)).filter((v) => v !== null);
   }
@@ -522,7 +551,9 @@ export const cleanupNull = (input: Json, seen: Set<Json> = new Set()): Json => {
   if (isObject(input)) {
     if (seen.has(input)) return input;
     seen.add(input);
-    for (const key of Object.keys(input)) input[key] = cleanupNull(input[key], seen);
+    Record.keys(input).forEach((key) => {
+      input[key] = cleanupNull(input[key], seen);
+    });
   }
   return input;
 };
