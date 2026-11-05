@@ -12,6 +12,7 @@
  */
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Result from 'effect/Result';
 import * as S from 'effect/Schema';
 import { ShExJError } from './ShExError.ts';
@@ -765,45 +766,48 @@ export const mapIris = (schema: Schema, f: (iri: string) => string): Schema => {
   const value = (v: ValueSetValue): ValueSetValue => {
     if (Predicate.isString(v)) return f(v);
     if ('value' in v) return objectValue(v);
-    switch (v.type) {
-      case 'IriStem':
-        return { ...v, stem: f(v.stem) };
-      case 'IriStemRange':
-        return {
-          ...v,
-          stem: Predicate.isString(v.stem) ? f(v.stem) : v.stem,
-          exclusions: v.exclusions.map((e) =>
-            Predicate.isString(e) ? f(e) : { ...e, stem: f(e.stem) },
-          ),
-        };
-      default:
-        return v;
-    }
+    return Match.value(v).pipe(
+      Match.discriminator('type')('IriStem', (member): ValueSetValue => ({
+        ...member,
+        stem: f(member.stem),
+      })),
+      Match.discriminator('type')('IriStemRange', (member): ValueSetValue => ({
+        ...member,
+        stem: Predicate.isString(member.stem) ? f(member.stem) : member.stem,
+        exclusions: member.exclusions.map((e) =>
+          Predicate.isString(e) ? f(e) : { ...e, stem: f(e.stem) },
+        ),
+      })),
+      Match.orElse((member): ValueSetValue => member),
+    );
   };
   const shapeExpr = (e: ShapeExprOrRef): ShapeExprOrRef => {
     if (Predicate.isString(e)) return label(e);
-    switch (e.type) {
-      case 'ShapeOr':
-      case 'ShapeAnd':
-        return { ...e, shapeExprs: e.shapeExprs.map(shapeExpr) };
-      case 'ShapeNot':
-        return { ...e, shapeExpr: shapeExpr(e.shapeExpr) };
-      case 'ShapeExternal':
-        return e;
-      case 'NodeConstraint': {
-        const out: any = withMeta(e, e.semActs, e.annotations);
-        if (e.datatype !== undefined) out.datatype = f(e.datatype);
-        if (e.values !== undefined) out.values = e.values.map(value);
+    return Match.value(e).pipe(
+      Match.discriminator('type')('ShapeOr', 'ShapeAnd', (expr): ShapeExprOrRef => ({
+        ...expr,
+        shapeExprs: expr.shapeExprs.map(shapeExpr),
+      })),
+      Match.discriminator('type')('ShapeNot', (expr): ShapeExprOrRef => ({
+        ...expr,
+        shapeExpr: shapeExpr(expr.shapeExpr),
+      })),
+      Match.discriminator('type')('ShapeExternal', (expr): ShapeExprOrRef => expr),
+      Match.discriminator('type')('NodeConstraint', (expr): ShapeExprOrRef => {
+        const out: any = withMeta(expr, expr.semActs, expr.annotations);
+        if (expr.datatype !== undefined) out.datatype = f(expr.datatype);
+        if (expr.values !== undefined) out.values = expr.values.map(value);
         return out;
-      }
-      case 'Shape': {
-        const out: any = withMeta(e, e.semActs, e.annotations);
-        if (e.extends !== undefined) out.extends = e.extends.map(shapeExpr);
-        if (e.extra !== undefined) out.extra = e.extra.map(f);
-        if (e.expression !== undefined) out.expression = tripleExpr(e.expression);
+      }),
+      Match.discriminator('type')('Shape', (expr): ShapeExprOrRef => {
+        const out: any = withMeta(expr, expr.semActs, expr.annotations);
+        if (expr.extends !== undefined) out.extends = expr.extends.map(shapeExpr);
+        if (expr.extra !== undefined) out.extra = expr.extra.map(f);
+        if (expr.expression !== undefined) out.expression = tripleExpr(expr.expression);
         return out;
-      }
-    }
+      }),
+      Match.exhaustive,
+    );
   };
   const tripleExpr = (t: TripleExprOrRef): TripleExprOrRef => {
     if (Predicate.isString(t)) return label(t);

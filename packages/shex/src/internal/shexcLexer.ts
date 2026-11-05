@@ -12,6 +12,7 @@ import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import { quote, unescapeCode, unescapeRegexp } from './lexer.ts';
@@ -304,6 +305,11 @@ export interface Resolved {
   readonly prefixes: Map<string, string>;
 }
 
+/** Resolves token `i` (`t`); returns how many of the tokens after it the step consumed. */
+type Step = (t: Tok, i: number) => number;
+
+const skip: Step = () => 0;
+
 /**
  * Resolves the IRIs of `tokens` in place, in document order: IRI references
  * against the base, and prefixed names against the prefixes, both as set by
@@ -329,34 +335,44 @@ export const resolve = (
     t.iri = ns + t.iri;
     return true;
   };
+  const resolveIri: Step = (t) => {
+    t.iri = resolveRef(t.iri);
+    return 0;
+  };
+  const expandName: Step = (t) => {
+    expand(t);
+    return 0;
+  };
+  const directive: Step = (t, i) => {
+    const next = tokens[i + 1];
+    if (t.text === 'BASE' && next?.type === 'IRIREF') {
+      next.iri = resolveRef(next.iri);
+      base = next.iri;
+      return 1;
+    }
+    if (t.text === 'PREFIX' && next?.type === 'PNAME' && next.iri === '') {
+      const value = tokens[i + 2];
+      if (value?.type === 'IRIREF') value.iri = resolveRef(value.iri);
+      else if (value?.type !== 'PNAME' || !expand(value)) return 0;
+      prefixes.set(next.text, value.iri);
+      return 2;
+    }
+    return 0;
+  };
+  // Built once per document, and run once per token type: a match per token
+  // would cost more than the resolution itself.
+  const stepOf = Match.type<TokenType>().pipe(
+    Match.withReturnType<Step>(),
+    Match.when('IRIREF', () => resolveIri),
+    Match.when(Match.is('PNAME', 'ATPNAME'), () => expandName),
+    Match.when('KEYWORD', () => directive),
+    Match.orElse(() => skip),
+  );
+  const steps: { [K in TokenType]?: Step } = {};
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
-    switch (t.type) {
-      case 'IRIREF':
-        t.iri = resolveRef(t.iri);
-        break;
-      case 'PNAME':
-      case 'ATPNAME':
-        expand(t);
-        break;
-      case 'KEYWORD': {
-        const next = tokens[i + 1];
-        if (t.text === 'BASE' && next?.type === 'IRIREF') {
-          next.iri = resolveRef(next.iri);
-          base = next.iri;
-          i++;
-        } else if (t.text === 'PREFIX' && next?.type === 'PNAME' && next.iri === '') {
-          const value = tokens[i + 2];
-          if (value?.type === 'IRIREF') value.iri = resolveRef(value.iri);
-          else if (value?.type !== 'PNAME' || !expand(value)) break;
-          prefixes.set(next.text, value.iri);
-          i += 2;
-        }
-        break;
-      }
-      default:
-        break;
-    }
+    const step = (steps[t.type] ??= stepOf(t.type));
+    i += step(t, i);
   }
   return { baseIri: base, prefixes };
 };

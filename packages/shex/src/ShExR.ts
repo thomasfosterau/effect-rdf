@@ -7,6 +7,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import * as Predicate from 'effect/Predicate';
@@ -257,25 +258,24 @@ class Reader {
               stem: this.str(this.one(e, 'stem'), 'sx:stem'),
             },
       );
-    switch (t) {
-      case 'IriStem':
-      case 'LiteralStem':
-      case 'LanguageStem':
+    return Match.value(t).pipe(
+      Match.withReturnType<ShExJ.ValueSetValue>(),
+      Match.when(
+        Match.is('IriStem', 'LiteralStem', 'LanguageStem'),
         // SAFETY: the stem kinds carry a string stem.
-        return { type: t, stem: stem() as string } as ShExJ.ValueSetValue;
-      case 'IriStemRange':
-      case 'LiteralStemRange':
-      case 'LanguageStemRange':
+        (kind) => ({ type: kind, stem: stem() as string }) as ShExJ.ValueSetValue,
+      ),
+      Match.when(
+        Match.is('IriStemRange', 'LiteralStemRange', 'LanguageStemRange'),
         // SAFETY: the stem-range kinds carry a stem and their exclusions.
-        return { type: t, stem: stem(), exclusions: exclusions() } as ShExJ.ValueSetValue;
-      case 'Language':
-        return {
-          type: 'Language',
-          languageTag: this.str(this.one(n, 'languageTag'), 'sx:languageTag'),
-        };
-      default:
-        return this.fail(`unknown value set value type ${t}`);
-    }
+        (kind) => ({ type: kind, stem: stem(), exclusions: exclusions() }) as ShExJ.ValueSetValue,
+      ),
+      Match.when('Language', () => ({
+        type: 'Language',
+        languageTag: this.str(this.one(n, 'languageTag'), 'sx:languageTag'),
+      })),
+      Match.orElse((kind) => this.fail(`unknown value set value type ${kind}`)),
+    );
   }
 
   shape(n: Term.Term): ShExJ.Shape {
@@ -485,26 +485,24 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
       return objectValue(v);
     const b = Term.blankNode();
     add(b, rdfType, sx(v.type));
-    switch (v.type) {
-      case 'Language':
-        add(b, sx('languageTag'), Term.literal(v.languageTag));
-        break;
-      case 'IriStem':
-      case 'LiteralStem':
-      case 'LanguageStem':
-        add(b, sx('stem'), stem(v.stem, false));
-        break;
-      default: {
-        add(b, sx('stem'), stem(v.stem, false));
-        const stemType = v.type.replace('Range', '');
+    Match.value(v).pipe(
+      Match.discriminator('type')('Language', (member) =>
+        add(b, sx('languageTag'), Term.literal(member.languageTag)),
+      ),
+      Match.discriminator('type')('IriStem', 'LiteralStem', 'LanguageStem', (member) =>
+        add(b, sx('stem'), stem(member.stem, false)),
+      ),
+      Match.orElse((member) => {
+        add(b, sx('stem'), stem(member.stem, false));
+        const stemType = member.type.replace('Range', '');
         // SAFETY: the stem-range kinds' exclusions are strings or stems.
         add(
           b,
           sx('exclusion'),
           list(
-            (v.exclusions as ReadonlyArray<string | { readonly stem: string }>).map((e) => {
+            (member.exclusions as ReadonlyArray<string | { readonly stem: string }>).map((e) => {
               if (Predicate.isString(e))
-                return v.type === 'IriStemRange' ? Term.namedNode(e) : Term.literal(e);
+                return member.type === 'IriStemRange' ? Term.namedNode(e) : Term.literal(e);
               const x = Term.blankNode();
               add(x, rdfType, sx(stemType));
               add(x, sx('stem'), Term.literal(e.stem));
@@ -512,27 +510,25 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
             }),
           ),
         );
-      }
-    }
+      }),
+    );
     return b;
   };
   const shapeExpr = (e: ShExJ.ShapeExprOrRef, subject?: Term.Subject): Term.Object => {
     if (Predicate.isString(e)) return node(e);
     const s = subject ?? Term.blankNode();
     add(s, rdfType, sx(e.type));
-    switch (e.type) {
-      case 'ShapeAnd':
-      case 'ShapeOr':
-        add(s, sx('shapeExprs'), list(e.shapeExprs.map((x) => shapeExpr(x))));
-        break;
-      case 'ShapeNot':
-        add(s, sx('shapeExpr'), shapeExpr(e.shapeExpr));
-        break;
-      case 'ShapeExternal':
-        break;
-      case 'NodeConstraint':
-        if (e.nodeKind !== undefined) add(s, sx('nodeKind'), sx(e.nodeKind));
-        if (e.datatype !== undefined) add(s, sx('datatype'), Term.namedNode(e.datatype));
+    Match.value(e).pipe(
+      Match.discriminator('type')('ShapeAnd', 'ShapeOr', (expr) =>
+        add(s, sx('shapeExprs'), list(expr.shapeExprs.map((x) => shapeExpr(x)))),
+      ),
+      Match.discriminator('type')('ShapeNot', (expr) =>
+        add(s, sx('shapeExpr'), shapeExpr(expr.shapeExpr)),
+      ),
+      Match.discriminator('type')('ShapeExternal', () => undefined),
+      Match.discriminator('type')('NodeConstraint', (expr) => {
+        if (expr.nodeKind !== undefined) add(s, sx('nodeKind'), sx(expr.nodeKind));
+        if (expr.datatype !== undefined) add(s, sx('datatype'), Term.namedNode(expr.datatype));
         for (const f of [
           'length',
           'minlength',
@@ -540,23 +536,24 @@ export const toQuads = (schema: ShExJ.Schema): ReadonlyArray<Term.Quad> => {
           'totaldigits',
           'fractiondigits',
         ] as const)
-          if (e[f] !== undefined) add(s, sx(f), int(e[f]));
+          if (expr[f] !== undefined) add(s, sx(f), int(expr[f]));
         for (const f of ['mininclusive', 'minexclusive', 'maxinclusive', 'maxexclusive'] as const)
-          if (e[f] !== undefined) add(s, sx(f), num(e[f]));
-        if (e.pattern !== undefined) add(s, sx('pattern'), Term.literal(e.pattern));
-        if (e.flags !== undefined) add(s, sx('flags'), Term.literal(e.flags));
-        if (e.values !== undefined) add(s, sx('values'), list(e.values.map(valueSetValue)));
-        meta(s, e);
-        break;
-      case 'Shape':
-        if (e.extends !== undefined)
-          add(s, sx('extends'), list(e.extends.map((x) => shapeExpr(x))));
-        if (e.closed !== undefined) add(s, sx('closed'), bool(e.closed));
-        for (const p of e.extra ?? []) add(s, sx('extra'), Term.namedNode(p));
-        if (e.expression !== undefined) add(s, sx('expression'), tripleExpr(e.expression));
-        meta(s, e);
-        break;
-    }
+          if (expr[f] !== undefined) add(s, sx(f), num(expr[f]));
+        if (expr.pattern !== undefined) add(s, sx('pattern'), Term.literal(expr.pattern));
+        if (expr.flags !== undefined) add(s, sx('flags'), Term.literal(expr.flags));
+        if (expr.values !== undefined) add(s, sx('values'), list(expr.values.map(valueSetValue)));
+        meta(s, expr);
+      }),
+      Match.discriminator('type')('Shape', (expr) => {
+        if (expr.extends !== undefined)
+          add(s, sx('extends'), list(expr.extends.map((x) => shapeExpr(x))));
+        if (expr.closed !== undefined) add(s, sx('closed'), bool(expr.closed));
+        for (const p of expr.extra ?? []) add(s, sx('extra'), Term.namedNode(p));
+        if (expr.expression !== undefined) add(s, sx('expression'), tripleExpr(expr.expression));
+        meta(s, expr);
+      }),
+      Match.exhaustive,
+    );
     return s;
   };
   const tripleExpr = (t: ShExJ.TripleExprOrRef): Term.Object => {

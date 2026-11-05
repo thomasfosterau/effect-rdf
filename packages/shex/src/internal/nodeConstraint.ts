@@ -4,6 +4,7 @@
  *
  * @internal
  */
+import * as Match from 'effect/Match';
 import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
@@ -177,6 +178,48 @@ const inStemRange = (value: string, range: ShExJ.IriStemRange | ShExJ.LiteralSte
   (!Predicate.isString(range.stem) || value.startsWith(range.stem)) &&
   !range.exclusions.some((e) => (Predicate.isString(e) ? value === e : value.startsWith(e.stem)));
 
+// Built once: `valueMatches` runs it for every value set value a node is checked against.
+const stemValueMatches: (
+  v: Exclude<ShExJ.ValueSetValue, ShExJ.ObjectValue>,
+  n: Term.Term,
+) => boolean = Match.fn(
+  (v: Exclude<ShExJ.ValueSetValue, ShExJ.ObjectValue>, _n: Term.Term) => v,
+).pipe(
+  Match.withReturnType<boolean>(),
+  Match.when(
+    { type: 'IriStem' },
+    (v, _v, n) => n._tag === 'NamedNode' && n.value.startsWith(v.stem),
+  ),
+  Match.when(
+    { type: 'IriStemRange' },
+    (v, _v, n) => n._tag === 'NamedNode' && inStemRange(n.value, v),
+  ),
+  Match.when(
+    { type: 'LiteralStem' },
+    (v, _v, n) => n._tag === 'Literal' && n.value.startsWith(v.stem),
+  ),
+  Match.when(
+    { type: 'LiteralStemRange' },
+    (v, _v, n) => n._tag === 'Literal' && inStemRange(n.value, v),
+  ),
+  Match.when(
+    { type: 'Language' },
+    (v, _v, n) => n._tag === 'Literal' && n.language !== '' && lowerEq(n.language, v.languageTag),
+  ),
+  Match.when(
+    { type: 'LanguageStem' },
+    (v, _v, n) => n._tag === 'Literal' && n.language !== '' && languageMatches(n.language, v.stem),
+  ),
+  Match.when({ type: 'LanguageStemRange' }, (v, _v, n) => {
+    if (n._tag !== 'Literal' || n.language === '') return false;
+    if (Predicate.isString(v.stem) && !languageMatches(n.language, v.stem)) return false;
+    return !v.exclusions.some((e) =>
+      Predicate.isString(e) ? lowerEq(n.language, e) : languageMatches(n.language, e.stem),
+    );
+  }),
+  Match.orElse(() => false),
+);
+
 /**
  * Whether a term matches a value set value.
  *
@@ -188,30 +231,27 @@ export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
     // SAFETY: a value without `type`, or with a `value`, is an object literal in ShExJ.
     return n._tag === 'Literal' && literalEquals(n, v);
   }
-  switch (v.type) {
-    case 'IriStem':
-      return n._tag === 'NamedNode' && n.value.startsWith(v.stem);
-    case 'IriStemRange':
-      return n._tag === 'NamedNode' && inStemRange(n.value, v);
-    case 'LiteralStem':
-      return n._tag === 'Literal' && n.value.startsWith(v.stem);
-    case 'LiteralStemRange':
-      return n._tag === 'Literal' && inStemRange(n.value, v);
-    case 'Language':
-      return n._tag === 'Literal' && n.language !== '' && lowerEq(n.language, v.languageTag);
-    case 'LanguageStem':
-      return n._tag === 'Literal' && n.language !== '' && languageMatches(n.language, v.stem);
-    case 'LanguageStemRange': {
-      if (n._tag !== 'Literal' || n.language === '') return false;
-      if (Predicate.isString(v.stem) && !languageMatches(n.language, v.stem)) return false;
-      return !v.exclusions.some((e) =>
-        Predicate.isString(e) ? lowerEq(n.language, e) : languageMatches(n.language, e.stem),
-      );
-    }
-    default:
-      return false;
-  }
+  return stemValueMatches(v, n);
 };
+
+// Built once: `checkNodeConstraint` runs it for every node constraint it evaluates.
+const nodeKindFailure = Match.fn((nc: ShExJ.NodeConstraint, _n: Term.Term) => nc.nodeKind).pipe(
+  Match.when('iri', (_kind, _nc, n) =>
+    n._tag !== 'NamedNode' ? `${n.key} is not an IRI` : undefined,
+  ),
+  Match.when('bnode', (_kind, _nc, n) =>
+    n._tag !== 'BlankNode' ? `${n.key} is not a blank node` : undefined,
+  ),
+  Match.when('literal', (_kind, _nc, n) =>
+    n._tag !== 'Literal' ? `${n.key} is not a literal` : undefined,
+  ),
+  Match.when('nonliteral', (_kind, _nc, n) =>
+    n._tag !== 'NamedNode' && n._tag !== 'BlankNode'
+      ? `${n.key} is not an IRI or blank node`
+      : undefined,
+  ),
+  Match.orElse(() => undefined),
+);
 
 /**
  * Evaluates a node constraint (without its semantic actions). Returns
@@ -220,23 +260,8 @@ export const valueMatches = (n: Term.Term, v: ShExJ.ValueSetValue): boolean => {
  * @internal
  */
 export const checkNodeConstraint = (n: Term.Term, nc: ShExJ.NodeConstraint): string | undefined => {
-  switch (nc.nodeKind) {
-    case 'iri':
-      if (n._tag !== 'NamedNode') return `${n.key} is not an IRI`;
-      break;
-    case 'bnode':
-      if (n._tag !== 'BlankNode') return `${n.key} is not a blank node`;
-      break;
-    case 'literal':
-      if (n._tag !== 'Literal') return `${n.key} is not a literal`;
-      break;
-    case 'nonliteral':
-      if (n._tag !== 'NamedNode' && n._tag !== 'BlankNode')
-        return `${n.key} is not an IRI or blank node`;
-      break;
-    default:
-      break;
-  }
+  const kindFailure = nodeKindFailure(nc, n);
+  if (kindFailure !== undefined) return kindFailure;
   if (nc.datatype !== undefined) {
     if (n._tag !== 'Literal') return `${n.key} is not a literal of datatype <${nc.datatype}>`;
     const actual = n.language !== '' ? RDF_LANG_STRING : n.datatype.value;

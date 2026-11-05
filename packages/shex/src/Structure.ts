@@ -9,6 +9,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as Match from 'effect/Match';
 import { ShExStructureError } from './ShExError.ts';
 import type * as ShExJ from './ShExJ.ts';
 import * as Predicate from 'effect/Predicate';
@@ -32,22 +33,14 @@ export interface SchemaIndex {
   readonly descendants: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
-const forEachShapeExprChild = (
+const forEachShapeExprChild: (
   e: ShExJ.ShapeExpr,
   f: (child: ShExJ.ShapeExprOrRef) => void,
-): void => {
-  switch (e.type) {
-    case 'ShapeAnd':
-    case 'ShapeOr':
-      e.shapeExprs.forEach(f);
-      break;
-    case 'ShapeNot':
-      f(e.shapeExpr);
-      break;
-    default:
-      break;
-  }
-};
+) => void = Match.fn((e: ShExJ.ShapeExpr, _f: (child: ShExJ.ShapeExprOrRef) => void) => e).pipe(
+  Match.when({ type: Match.is('ShapeAnd', 'ShapeOr') }, (e, _e, f) => e.shapeExprs.forEach(f)),
+  Match.when({ type: 'ShapeNot' }, (e, _e, f) => f(e.shapeExpr)),
+  Match.orElse(() => undefined),
+);
 
 /** Collects the labelled triple expressions of a shape expression tree. */
 const collectTripleExprs = (
@@ -242,24 +235,21 @@ export const problems = (
       if (isDirect) direct.get(from)!.push(e);
       return;
     }
-    switch (e.type) {
-      case 'ShapeAnd':
-      case 'ShapeOr':
-        for (const c of e.shapeExprs) walkShape(from, c, negative, isDirect, visitingIncludes);
-        return;
-      case 'ShapeNot':
-        walkShape(from, e.shapeExpr, true, isDirect, visitingIncludes);
-        return;
-      case 'Shape': {
-        for (const x of e.extends ?? []) walkShape(from, x, negative, false, visitingIncludes);
-        const extra = new Set(e.extra ?? []);
-        if (e.expression !== undefined)
-          walkTriple(from, e.expression, negative, extra, visitingIncludes);
-        return;
-      }
-      default:
-        return;
-    }
+    Match.value(e).pipe(
+      Match.discriminator('type')('ShapeAnd', 'ShapeOr', (expr) => {
+        for (const c of expr.shapeExprs) walkShape(from, c, negative, isDirect, visitingIncludes);
+      }),
+      Match.discriminator('type')('ShapeNot', (expr) =>
+        walkShape(from, expr.shapeExpr, true, isDirect, visitingIncludes),
+      ),
+      Match.discriminator('type')('Shape', (expr) => {
+        for (const x of expr.extends ?? []) walkShape(from, x, negative, false, visitingIncludes);
+        const extra = new Set(expr.extra ?? []);
+        if (expr.expression !== undefined)
+          walkTriple(from, expr.expression, negative, extra, visitingIncludes);
+      }),
+      Match.orElse(() => undefined),
+    );
   };
   const walkTriple = (
     from: string,
