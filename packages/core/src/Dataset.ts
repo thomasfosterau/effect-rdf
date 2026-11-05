@@ -106,16 +106,16 @@ const avalanche = (h: number): number => {
 };
 
 /**
- * A hash of a subject or object (equal terms hash equally), from its value
- * rather than its key, which is not built for this. A literal's datatype is
- * usually one shared node, whose own (cached) hash is used.
+ * A hash of a subject or object (equal terms hash equally) that builds no
+ * key: a term's own hash, which IRIs, blank nodes and literals compute from
+ * their values and cache, and for a triple term, its parts'.
  */
 const termHash = (t: Term.Term): number =>
   t instanceof Term.Triple
     ? mix(mix(termHash(t.subject), t.predicate[Hash.symbol]()), termHash(t.object))
-    : t instanceof Term.Literal
-      ? mix(mix(Hash.string(t.value), t.datatype[Hash.symbol]()), Hash.string(t.language))
-      : mix(Hash.string(t.value), t instanceof Term.BlankNode ? 1 : 0);
+    : // IRIs, blank nodes and literals hash their values and cache the result, so a node a
+      // parser shares between statements (a description's subject) is hashed once
+      t[Hash.symbol]();
 
 /**
  * A quad's hash for `distinct`: its predicate and graph, usually shared
