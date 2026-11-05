@@ -6,7 +6,7 @@
  */
 import * as Term from '@thomasfosterau/effect-rdf/Term';
 import type * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
-import * as Results from '@thomasfosterau/effect-sparql/Results';
+import * as Results from './Results.ts';
 
 /**
  * The service description namespace.

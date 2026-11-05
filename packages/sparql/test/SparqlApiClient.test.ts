@@ -10,8 +10,7 @@ import type * as Scope from 'effect/Scope';
 import * as Stream from 'effect/Stream';
 import * as HttpClient from 'effect/http/HttpClient';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
-import { Bindings } from '@thomasfosterau/effect-sparql';
-import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
+import { Bindings, SparqlServer, Testing } from '../src/index.ts';
 import * as SparqlApiClient from '../src/SparqlApiClient.ts';
 
 const ex = (s: string) => Term.namedNode(`http://example.org/${s}`);

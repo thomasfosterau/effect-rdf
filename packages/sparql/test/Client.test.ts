@@ -1,5 +1,5 @@
 /**
- * End-to-end tests: the client against the server package, in-process.
+ * End-to-end tests: the client against the server, in-process.
  */
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
@@ -14,11 +14,17 @@ import {
   Term,
   Xsd,
 } from '@thomasfosterau/effect-rdf';
-import { Parser, QueryBuilder as Q, Store, TermSchema } from '@thomasfosterau/effect-sparql';
-import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
-import * as Formats from '../src/Formats.ts';
+import {
+  Parser,
+  QueryBuilder as Q,
+  SparqlServer,
+  Store,
+  TermSchema,
+  Testing,
+} from '../src/index.ts';
+import * as ClientFormats from '../src/ClientFormats.ts';
 import * as SparqlClient from '../src/SparqlClient.ts';
-import { withLayer } from '../../sparql/test/support/layer.ts';
+import { withLayer } from './support/layer.ts';
 
 const ex = Namespace.make('http://example.org/');
 const foaf = Namespace.make('http://xmlns.com/foaf/0.1/');
@@ -156,7 +162,7 @@ describe('SparqlClient ↔ SparqlServer', () => {
 
   it.effect('streams CONSTRUCT / DESCRIBE results in every format', () =>
     Effect.gen(function* () {
-      const formats = Formats.defaults;
+      const formats = ClientFormats.defaults;
       yield* Effect.forEach(
         formats.parsers,
         Effect.fnUntraced(function* (parser) {

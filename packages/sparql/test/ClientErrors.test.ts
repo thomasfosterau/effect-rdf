@@ -11,9 +11,9 @@ import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientError from 'effect/http/HttpClientError';
 import type * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import * as HttpClientResponse from 'effect/http/HttpClientResponse';
-import * as Errors from '../src/Errors.ts';
+import * as ClientErrors from '../src/ClientErrors.ts';
 import * as SparqlClient from '../src/SparqlClient.ts';
-import { withLayer } from '../../sparql/test/support/layer.ts';
+import { withLayer } from './support/layer.ts';
 
 const ENDPOINT = 'http://mock.test/sparql';
 
@@ -69,8 +69,8 @@ describe('SparqlClient errors', () => {
         const error = yield* Effect.flip(selectAll);
         expect(error._tag).toBe('TransportError');
         expect(error.message).toContain('connection refused');
-        expect(Errors.isSparqlClientError(error)).toBe(true);
-        expect(Errors.isTransient(error)).toBe(true);
+        expect(ClientErrors.isSparqlClientError(error)).toBe(true);
+        expect(ClientErrors.isTransient(error)).toBe(true);
       }),
     ),
   );
@@ -86,7 +86,7 @@ describe('SparqlClient errors', () => {
           method: 'GET',
           body: 'Query timed out on the server',
         });
-        expect(Errors.isTransient(error)).toBe(false);
+        expect(ClientErrors.isTransient(error)).toBe(false);
       }),
     ),
   );

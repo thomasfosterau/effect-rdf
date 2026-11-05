@@ -22,8 +22,8 @@ import * as Effect from 'effect/Effect';
 import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import type * as Store from '@thomasfosterau/effect-sparql/Store';
-import * as Errors from './Errors.ts';
+import type * as Store from './Store.ts';
+import * as ProtocolErrors from './ProtocolErrors.ts';
 
 /**
  * The media type of a direct `POST` query body.
@@ -132,14 +132,14 @@ export const searchParams = (url: string): URLSearchParams => {
 const graphList = (
   values: ReadonlyArray<string>,
   baseIri: string,
-): Effect.Effect<Array<Term.NamedNode>, Errors.ProtocolError> =>
+): Effect.Effect<Array<Term.NamedNode>, ProtocolErrors.ProtocolError> =>
   Effect.forEach(
     values,
     (value) => {
       const iri = Iri.resolve(value, baseIri);
       return Iri.isAbsolute(iri) && !/[\s<>"{}|^`\\]/.test(iri)
         ? Effect.succeed(Term.namedNode(iri))
-        : Effect.fail(Errors.badRequest(`Invalid graph IRI: ${value}`));
+        : Effect.fail(ProtocolErrors.badRequest(`Invalid graph IRI: ${value}`));
     },
     { concurrency: 1 },
   );
@@ -157,7 +157,7 @@ export const datasetFromParams = (
   defaultName: string,
   namedName: string,
   baseIri: string,
-): Effect.Effect<Store.DatasetSpec | undefined, Errors.ProtocolError> =>
+): Effect.Effect<Store.DatasetSpec | undefined, ProtocolErrors.ProtocolError> =>
   Effect.gen(function* () {
     const defaults = params.getAll(defaultName);
     const named = params.getAll(namedName);
@@ -177,19 +177,19 @@ const merge = (a: URLSearchParams, b: URLSearchParams): URLSearchParams => {
 const single = (
   params: URLSearchParams,
   name: string,
-): Effect.Effect<string | undefined, Errors.ProtocolError> => {
+): Effect.Effect<string | undefined, ProtocolErrors.ProtocolError> => {
   const values = params.getAll(name);
   if (values.length > 1) {
-    return Effect.fail(Errors.badRequest(`Exactly one '${name}' parameter is allowed`));
+    return Effect.fail(ProtocolErrors.badRequest(`Exactly one '${name}' parameter is allowed`));
   }
   return Effect.succeed(values[0]);
 };
 
 const readBody = (
   request: HttpServerRequest.HttpServerRequest,
-): Effect.Effect<string, Errors.ProtocolError> =>
+): Effect.Effect<string, ProtocolErrors.ProtocolError> =>
   Effect.mapError(request.text, (e) =>
-    Errors.badRequest(`Could not read the request body: ${e.message}`),
+    ProtocolErrors.badRequest(`Could not read the request body: ${e.message}`),
   );
 
 /**
@@ -208,18 +208,19 @@ const fromParams = (
   kind: EndpointKind,
   method: string,
   baseIri: string,
-): Effect.Effect<Operation, Errors.ProtocolError> =>
+): Effect.Effect<Operation, ProtocolErrors.ProtocolError> =>
   Effect.gen(function* () {
     const query = yield* single(params, 'query');
     const update = yield* single(params, 'update');
     if (query !== undefined && update !== undefined) {
-      return yield* Errors.badRequest("A request cannot have both 'query' and 'update'");
+      return yield* ProtocolErrors.badRequest("A request cannot have both 'query' and 'update'");
     }
     if (update !== undefined) {
       if (method !== 'POST') {
-        return yield* Errors.badRequest('Updates must be sent with POST');
+        return yield* ProtocolErrors.badRequest('Updates must be sent with POST');
       }
-      if (!kind.update) return yield* Errors.badRequest('This endpoint does not accept updates');
+      if (!kind.update)
+        return yield* ProtocolErrors.badRequest('This endpoint does not accept updates');
       const using = yield* datasetFromParams(
         params,
         'using-graph-uri',
@@ -229,7 +230,8 @@ const fromParams = (
       return { _tag: 'Update', update, using } as const;
     }
     if (query !== undefined) {
-      if (!kind.query) return yield* Errors.badRequest('This endpoint does not accept queries');
+      if (!kind.query)
+        return yield* ProtocolErrors.badRequest('This endpoint does not accept queries');
       const dataset = yield* datasetFromParams(
         params,
         'default-graph-uri',
@@ -239,7 +241,7 @@ const fromParams = (
       return { _tag: 'Query', query, dataset } as const;
     }
     if (method === 'GET' || method === 'HEAD') return { _tag: 'ServiceDescription' } as const;
-    return yield* Errors.badRequest("Missing 'query' or 'update' parameter");
+    return yield* ProtocolErrors.badRequest("Missing 'query' or 'update' parameter");
   });
 
 /**
@@ -253,7 +255,7 @@ export const decode = (
   request: HttpServerRequest.HttpServerRequest,
   kind: EndpointKind,
   baseIri: string,
-): Effect.Effect<Operation, Errors.ProtocolError> =>
+): Effect.Effect<Operation, ProtocolErrors.ProtocolError> =>
   Effect.gen(function* () {
     const method = request.method;
     const urlParams = searchParams(request.url);
@@ -261,16 +263,16 @@ export const decode = (
       return yield* fromParams(urlParams, kind, method, baseIri);
     }
     if (method !== 'POST') {
-      return yield* Errors.methodNotAllowed(method, ['GET', 'POST']);
+      return yield* ProtocolErrors.methodNotAllowed(method, ['GET', 'POST']);
     }
     const contentType = parseContentType(request.headers['content-type']);
     if (contentType === undefined) {
-      return yield* Errors.unsupportedMediaType(
+      return yield* ProtocolErrors.unsupportedMediaType(
         `A POST request needs a Content-Type of ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
       );
     }
     if (isNonUtf8(contentType)) {
-      return yield* Errors.unsupportedMediaType(
+      return yield* ProtocolErrors.unsupportedMediaType(
         `Unsupported charset '${contentType.parameters['charset']}' (only UTF-8 is accepted)`,
       );
     }
@@ -289,10 +291,12 @@ export const decode = (
       Match.when({ mediaType: SPARQL_QUERY }, () =>
         Effect.gen(function* () {
           if (!kind.query) {
-            return yield* Errors.unsupportedMediaType('This endpoint does not accept queries');
+            return yield* ProtocolErrors.unsupportedMediaType(
+              'This endpoint does not accept queries',
+            );
           }
           if (urlParams.has('query') || urlParams.has('update')) {
-            return yield* Errors.badRequest(
+            return yield* ProtocolErrors.badRequest(
               `A ${SPARQL_QUERY} request cannot also have a 'query' or 'update' parameter`,
             );
           }
@@ -309,10 +313,12 @@ export const decode = (
       Match.when({ mediaType: SPARQL_UPDATE }, () =>
         Effect.gen(function* () {
           if (!kind.update) {
-            return yield* Errors.unsupportedMediaType('This endpoint does not accept updates');
+            return yield* ProtocolErrors.unsupportedMediaType(
+              'This endpoint does not accept updates',
+            );
           }
           if (urlParams.has('query') || urlParams.has('update')) {
-            return yield* Errors.badRequest(
+            return yield* ProtocolErrors.badRequest(
               `A ${SPARQL_UPDATE} request cannot also have a 'query' or 'update' parameter`,
             );
           }
@@ -328,7 +334,7 @@ export const decode = (
       ),
       Match.orElse((other) =>
         Effect.gen(function* () {
-          return yield* Errors.unsupportedMediaType(
+          return yield* ProtocolErrors.unsupportedMediaType(
             `Unsupported Content-Type '${other.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
           );
         }),

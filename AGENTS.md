@@ -4,24 +4,22 @@
 
 This repo publishes the `@thomasfosterau/effect-rdf` package family: an Effect 4-native RDF 1.2 / RDF-star toolkit — the data model, parsers and serialisers for every common syntax, a SPARQL 1.1 / 1.2 engine with storage, protocol server and client, and SHACL and ShEx validation. Every package is self-contained TypeScript checked against the W3C and community conformance suites; those suites are the behavioural spec.
 
-| Package                                | Directory                | Depends on (workspace)                               |
-| -------------------------------------- | ------------------------ | ---------------------------------------------------- |
-| `@thomasfosterau/effect-rdf`           | `packages/core`          | —                                                    |
-| `@thomasfosterau/effect-ntriples`      | `packages/ntriples`      | core                                                 |
-| `@thomasfosterau/effect-turtle`        | `packages/turtle`        | core, ntriples                                       |
-| `@thomasfosterau/effect-n3`            | `packages/n3`            | core, turtle                                         |
-| `@thomasfosterau/effect-jsonld`        | `packages/jsonld`        | core                                                 |
-| `@thomasfosterau/effect-rdfxml`        | `packages/rdfxml`        | core                                                 |
-| `@thomasfosterau/effect-rdfjson`       | `packages/rdfjson`       | core                                                 |
-| `@thomasfosterau/effect-xmp`           | `packages/xmp`           | core, rdfxml                                         |
-| `@thomasfosterau/effect-sparql`        | `packages/sparql`        | core, rdfxml, turtle                                 |
-| `@thomasfosterau/effect-shacl`         | `packages/shacl`         | core                                                 |
-| `@thomasfosterau/effect-shacl-sparql`  | `packages/shacl-sparql`  | core, shacl, sparql                                  |
-| `@thomasfosterau/effect-shex`          | `packages/shex`          | core, turtle                                         |
-| `@thomasfosterau/effect-sparql-sql`    | `packages/sparql-sql`    | core, sparql                                         |
-| `@thomasfosterau/effect-sparql-server` | `packages/sparql-server` | core, sparql and every syntax package                |
-| `@thomasfosterau/effect-sparql-client` | `packages/sparql-client` | core, sparql, sparql-server and every syntax package |
-| `@thomasfosterau/effect-sparql-ai`     | `packages/sparql-ai`     | core, sparql, turtle                                 |
+| Package                               | Directory               | Depends on (workspace)                                                        |
+| ------------------------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| `@thomasfosterau/effect-rdf`          | `packages/core`         | —                                                                             |
+| `@thomasfosterau/effect-ntriples`     | `packages/ntriples`     | core                                                                          |
+| `@thomasfosterau/effect-turtle`       | `packages/turtle`       | core, ntriples                                                                |
+| `@thomasfosterau/effect-n3`           | `packages/n3`           | core, turtle                                                                  |
+| `@thomasfosterau/effect-jsonld`       | `packages/jsonld`       | core                                                                          |
+| `@thomasfosterau/effect-rdfxml`       | `packages/rdfxml`       | core                                                                          |
+| `@thomasfosterau/effect-rdfjson`      | `packages/rdfjson`      | core                                                                          |
+| `@thomasfosterau/effect-xmp`          | `packages/xmp`          | core, rdfxml                                                                  |
+| `@thomasfosterau/effect-sparql`       | `packages/sparql`       | core and every syntax package (ntriples, turtle, n3, jsonld, rdfxml, rdfjson) |
+| `@thomasfosterau/effect-shacl`        | `packages/shacl`        | core                                                                          |
+| `@thomasfosterau/effect-shacl-sparql` | `packages/shacl-sparql` | core, shacl, sparql                                                           |
+| `@thomasfosterau/effect-shex`         | `packages/shex`         | core, turtle                                                                  |
+| `@thomasfosterau/effect-sparql-sql`   | `packages/sparql-sql`   | core, sparql                                                                  |
+| `@thomasfosterau/effect-sparql-ai`    | `packages/sparql-ai`    | core, sparql, turtle                                                          |
 
 Every module of a package is an entry point (`exports["./*"]` → `src/*.ts`; `src/index.ts` re-exports them as namespaces). Test-only workspace dependencies are `devDependencies`; `.fallowrc.json`'s boundary rules allow both.
 

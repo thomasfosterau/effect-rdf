@@ -9,8 +9,6 @@
 '@thomasfosterau/effect-shacl-sparql': minor
 '@thomasfosterau/effect-shex': minor
 '@thomasfosterau/effect-sparql': minor
-'@thomasfosterau/effect-sparql-client': minor
-'@thomasfosterau/effect-sparql-server': minor
 '@thomasfosterau/effect-sparql-sql': minor
 '@thomasfosterau/effect-turtle': minor
 ---

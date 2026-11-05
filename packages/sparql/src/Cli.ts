@@ -39,7 +39,7 @@ import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Formats from './Formats.ts';
+import * as ServerFormats from './ServerFormats.ts';
 import type * as Options from './Options.ts';
 import * as SparqlServer from './SparqlServer.ts';
 
@@ -338,7 +338,7 @@ export const command = Command.make('effect-sparql-server', config, (flags) =>
     const args = yield* toArguments(flags);
     const data = yield* Effect.provide(
       load(args.files, args.graphPerFile),
-      Layer.mergeAll(Formats.layer, NodeFileSystem.layer, NodePath.layer),
+      Layer.mergeAll(ServerFormats.layer, NodeFileSystem.layer, NodePath.layer),
     );
     const server = SparqlServer.layerMemory({
       ...args.serve,

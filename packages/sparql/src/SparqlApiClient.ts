@@ -1,13 +1,12 @@
 /**
- * A client derived with `HttpApiClient` from the `SparqlApi` definition of
- * `@thomasfosterau/effect-sparql-server`, alongside the hand-written
- * `SparqlClient`.
+ * A client derived with `HttpApiClient` from the `SparqlApi` definition,
+ * alongside the hand-written `SparqlClient`.
  *
  * `make` returns the generated client: one method per endpoint
  * (`client.sparql.query`, `client.sparql.post`, `client.graphStore.get`, …)
  * taking the endpoint's typed `query`, `headers` and `payload` and returning
  * response bodies as byte streams. Error statuses decode into the server's
- * `Errors.ProtocolError`. The helpers below (`query`, `results`,
+ * `ProtocolErrors.ProtocolError`. The helpers below (`query`, `results`,
  * `construct`, `update`, `readGraph`, `writeGraph`) send the common
  * requests and parse the bodies with the results parsers (`ResultsStream`)
  * and the default `Formats`.
@@ -29,10 +28,10 @@ import type * as HttpClientResponse from 'effect/http/HttpClientResponse';
 import * as HttpApiClient from 'effect/http-api/HttpApiClient';
 import type * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
-import type * as ServerErrors from '@thomasfosterau/effect-sparql-server/Errors';
-import * as SparqlApi from '@thomasfosterau/effect-sparql-server/SparqlApi';
-import * as Errors from './Errors.ts';
-import * as Formats from './Formats.ts';
+import type * as ProtocolErrors from './ProtocolErrors.ts';
+import * as SparqlApi from './SparqlApi.ts';
+import * as ClientErrors from './ClientErrors.ts';
+import * as ClientFormats from './ClientFormats.ts';
 import * as ResultsStream from './ResultsStream.ts';
 import * as SparqlClient from './SparqlClient.ts';
 
@@ -83,7 +82,7 @@ export const make = (options?: Options): Effect.Effect<Client, never, HttpClient
  * @category services
  */
 export class SparqlApiClient extends Context.Service<SparqlApiClient, Client>()(
-  '@thomasfosterau/effect-sparql-client/SparqlApiClient',
+  '@thomasfosterau/effect-sparql/SparqlApiClient',
 ) {}
 
 /**
@@ -109,11 +108,11 @@ export const layer = (
  * @category errors
  */
 export type ApiError =
-  | ServerErrors.ProtocolError
+  | ProtocolErrors.ProtocolError
   | HttpClientError.HttpClientError
   | Schema.SchemaError
-  | Errors.MalformedResponseError
-  | Errors.UnsupportedMediaTypeError;
+  | ClientErrors.MalformedResponseError
+  | ClientErrors.UnsupportedMediaTypeError;
 
 /**
  * A response body and its media type.
@@ -213,7 +212,7 @@ export const query = (
   return Effect.flatMap(sent, ([bytes, response]) =>
     bytes === undefined
       ? Effect.fail(
-          new Errors.MalformedResponseError({
+          new ClientErrors.MalformedResponseError({
             message: `Expected a query result, got status ${response.status}`,
           }),
         )
@@ -243,7 +242,7 @@ export const results = (
         Option.match(ResultsStream.parse(body.mediaType, Stream.decodeText(body.bytes)), {
           onNone: () =>
             Effect.fail(
-              new Errors.UnsupportedMediaTypeError({
+              new ClientErrors.UnsupportedMediaTypeError({
                 contentType: body.mediaType,
                 expected: SparqlApi.resultsMediaTypes,
               }),
@@ -251,9 +250,9 @@ export const results = (
           onSome: (events) =>
             Effect.succeed(
               Stream.mapError(events, (e) =>
-                Errors.isSparqlClientError(e)
+                ClientErrors.isSparqlClientError(e)
                   ? e
-                  : new Errors.MalformedResponseError({
+                  : new ClientErrors.MalformedResponseError({
                       message: e.message,
                       contentType: body.mediaType,
                       cause: e,
@@ -265,10 +264,10 @@ export const results = (
   );
 
 const parseRdf = (body: Body, baseIri: string): Effect.Effect<Dataset.Dataset, ApiError> =>
-  Option.match(Serialization.parserFor(Formats.defaults, body.mediaType), {
+  Option.match(Serialization.parserFor(ClientFormats.defaults, body.mediaType), {
     onNone: () =>
       Effect.fail(
-        new Errors.UnsupportedMediaTypeError({
+        new ClientErrors.UnsupportedMediaTypeError({
           contentType: body.mediaType,
           expected: SparqlApi.rdfMediaTypes,
         }),
@@ -279,7 +278,7 @@ const parseRdf = (body: Body, baseIri: string): Effect.Effect<Dataset.Dataset, A
           parser.parse(text, { baseIri }).pipe(
             Effect.mapError(
               (e) =>
-                new Errors.MalformedResponseError({
+                new ClientErrors.MalformedResponseError({
                   message: Serialization.formatError(e),
                   contentType: body.mediaType,
                   cause: e,
@@ -306,7 +305,7 @@ export const construct = (
   Effect.flatMap(
     query(client, sparql, {
       ...options,
-      accept: options?.accept ?? Formats.acceptHeader(Formats.defaults),
+      accept: options?.accept ?? ClientFormats.acceptHeader(ClientFormats.defaults),
     }),
     (body) => parseRdf(body, options?.baseIri ?? 'urn:x-base:'),
   );
@@ -345,7 +344,7 @@ export const readGraph = (
   client.graphStore
     .get({
       query: graphParams(target),
-      headers: { accept: options?.accept ?? Formats.acceptHeader(Formats.defaults) },
+      headers: { accept: options?.accept ?? ClientFormats.acceptHeader(ClientFormats.defaults) },
       responseMode: 'decoded-and-response',
     })
     .pipe(

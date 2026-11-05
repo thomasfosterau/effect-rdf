@@ -20,12 +20,12 @@ import * as HttpClient from 'effect/http/HttpClient';
 import * as HttpClientRequest from 'effect/http/HttpClientRequest';
 import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Engine from '@thomasfosterau/effect-sparql/Engine';
-import { EvaluationError, UpdateError } from '@thomasfosterau/effect-sparql/Errors';
-import * as Generator from '@thomasfosterau/effect-sparql/Generator';
-import * as Store from '@thomasfosterau/effect-sparql/Store';
-import type * as Errors from './Errors.ts';
-import * as Formats from './Formats.ts';
+import * as Engine from './Engine.ts';
+import { EvaluationError, UpdateError } from './Errors.ts';
+import * as Generator from './Generator.ts';
+import * as Store from './Store.ts';
+import type * as ClientErrors from './ClientErrors.ts';
+import * as ClientFormats from './ClientFormats.ts';
 import * as SparqlClient from './SparqlClient.ts';
 
 /**
@@ -54,7 +54,7 @@ export const serviceQuery = (service: Parameters<Engine.ServiceHandler>[1]): str
   return `${prologue}SELECT * WHERE ${Generator.printPattern(service.pattern, service.prefixes)}`;
 };
 
-const describeError = (e: Errors.SparqlClientError): string =>
+const describeError = (e: ClientErrors.SparqlClientError): string =>
   e._tag === 'HttpStatusError' ? e.message : `${e._tag}: ${e.message}`;
 
 /**
@@ -116,9 +116,9 @@ export const loader = (
     const http = yield* HttpClient.HttpClient;
     const formats = Option.getOrElse(
       yield* Effect.serviceOption(Serialization.Formats),
-      () => Formats.defaults,
+      () => ClientFormats.defaults,
     );
-    const accept = Formats.acceptHeader(formats);
+    const accept = ClientFormats.acceptHeader(formats);
     return (iri: Term.NamedNode) =>
       Effect.gen(function* () {
         const request = HttpClientRequest.get(iri.value, {

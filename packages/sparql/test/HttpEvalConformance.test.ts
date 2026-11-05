@@ -19,18 +19,20 @@ import * as Order from 'effect/Order';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
-import { type Ast, type Bindings, Parser, Results, Store } from '@thomasfosterau/effect-sparql';
-import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
-import * as SparqlClient from '../src/SparqlClient.ts';
-import { fromRdf, normalize, sameResults } from '../../sparql/test/support/compare.ts';
 import {
-  expectedResultFile,
-  queryFile,
-  readManifest,
-  type TestCase,
-} from '../../sparql/test/support/manifest.ts';
-import { withLayer } from '../../sparql/test/support/layer.ts';
-import { parseFile } from '../../sparql/test/support/rdf.ts';
+  type Ast,
+  type Bindings,
+  Parser,
+  Results,
+  SparqlServer,
+  Store,
+  Testing,
+} from '../src/index.ts';
+import * as SparqlClient from '../src/SparqlClient.ts';
+import { fromRdf, normalize, sameResults } from './support/compare.ts';
+import { expectedResultFile, queryFile, readManifest, type TestCase } from './support/manifest.ts';
+import { withLayer } from './support/layer.ts';
+import { parseFile } from './support/rdf.ts';
 
 const suitesDir =
   process.env.RDF_TEST_SUITES ??

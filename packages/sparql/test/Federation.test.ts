@@ -15,12 +15,11 @@ import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import * as HttpClient from 'effect/http/HttpClient';
 import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
-import { Engine, Results, Store } from '@thomasfosterau/effect-sparql';
-import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
+import { Engine, Results, SparqlServer, Store, Testing } from '../src/index.ts';
 import { Manifest, Turtle } from '@thomasfosterau/effect-turtle';
 import * as Federation from '../src/Federation.ts';
-import * as Formats from '../src/Formats.ts';
-import { withLayer } from '../../sparql/test/support/layer.ts';
+import * as ClientFormats from '../src/ClientFormats.ts';
+import { withLayer } from './support/layer.ts';
 
 const suitesDir =
   process.env.RDF_TEST_SUITES ??
@@ -54,7 +53,7 @@ const endpoints = (servers: Readonly<Record<string, Dataset.Dataset>>) =>
               Layer.provideMerge(Store.layerMemory(data)),
               Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
             ),
-            Formats.layer,
+            ClientFormats.layer,
           ),
         );
         // SAFETY: the endpoint URLs in the test are absolute, so their path starts with `/`.

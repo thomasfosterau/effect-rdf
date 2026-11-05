@@ -3,7 +3,7 @@ import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as Stream from 'effect/Stream';
 import { Term } from '@thomasfosterau/effect-rdf';
-import { Bindings, Results } from '@thomasfosterau/effect-sparql';
+import { Bindings, Results } from '../src/index.ts';
 import * as ResultsStream from '../src/ResultsStream.ts';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';

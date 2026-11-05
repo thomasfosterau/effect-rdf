@@ -29,8 +29,6 @@ const packages = [
   'effect-shacl-sparql',
   'effect-shex',
   'effect-sparql-sql',
-  'effect-sparql-server',
-  'effect-sparql-client',
   'effect-sparql-ai',
 ].map((name) => `@thomasfosterau/${name}`);
 
@@ -248,9 +246,9 @@ export default defineConfig({
       // (a server, not the HTTP client the rule is about).
       {
         files: [
-          'packages/sparql-server/bin/**',
-          'packages/sparql-server/src/Cli.ts',
-          'packages/sparql-server/src/SparqlServer.ts',
+          'packages/sparql/bin/**',
+          'packages/sparql/src/Cli.ts',
+          'packages/sparql/src/SparqlServer.ts',
         ],
         rules: {
           'effect/avoid-node-imports': 'off',
@@ -267,7 +265,7 @@ export default defineConfig({
       // `Results.serializeString` and the client's push-based `Incremental`
       // parser run the Effect-returning serializer / codec to completion.
       {
-        files: ['packages/sparql/src/Results.ts', 'packages/sparql-client/src/ResultsStream.ts'],
+        files: ['packages/sparql/src/Results.ts', 'packages/sparql/src/ResultsStream.ts'],
         rules: { 'effect/effect-run-in-body': 'off' },
       },
       // The SPARQL parser's per-token `hook` / `take` combinators catch the

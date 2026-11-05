@@ -4,7 +4,7 @@
  *
  * - JSON (`application/sparql-results+json`): an incremental scanner finds
  *   the `head`, `boolean` and each element of `results.bindings`, decoded
- *   with the `Results.JsonTermSchema` of the sparql package;
+ *   with `Results.JsonTermSchema`;
  * - XML (`application/sparql-results+xml`): complete `<result>` elements are
  *   cut from the input and parsed with `Results.Xml.parse`;
  * - TSV (`text/tab-separated-values`): line by line with
@@ -23,9 +23,9 @@ import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 import type * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as B from '@thomasfosterau/effect-sparql/Bindings';
+import * as B from './Bindings.ts';
 import * as Json from './internal/json.ts';
-import * as Results from '@thomasfosterau/effect-sparql/Results';
+import * as Results from './Results.ts';
 
 /**
  * An event of a results document.
@@ -137,7 +137,7 @@ export const json = (): Incremental => {
 
   const emit = (kind: CaptureKind, text: string, out: Array<ResultEvent>) => {
     const parsed = Json.parse(text);
-    if (Result.isFailure(parsed)) return fail('json', `Invalid JSON: ${String(parsed.failure)}`);
+    if (Result.isFailure(parsed)) return fail('json', `Invalid JSON: ${parsed.failure}`);
     const value = parsed.success;
     return Match.value(kind).pipe(
       Match.when('head', () => {
