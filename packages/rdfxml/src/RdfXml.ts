@@ -18,7 +18,10 @@
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Order from 'effect/Order';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
@@ -72,11 +75,8 @@ export interface ParseOptions extends Serialization.ParseOptions {
 
 const rdf = (local: string) => RDF + local;
 
-// `rdf` with a literal type, so `Match.when(rdfLiteral('ID'), …)` narrows to that one IRI.
-const rdfLiteral = <L extends string>(local: L): `${typeof RDF}${L}` => `${RDF}${local}`;
-
 /** The core syntax terms and the old terms, which are never node, property or attribute names. */
-const RESERVED_TERMS = new Set(
+const RESERVED_TERMS = MutableHashSet.fromIterable(
   [
     'RDF',
     'ID',
@@ -93,40 +93,56 @@ const RESERVED_TERMS = new Set(
     'bagID',
   ].map(rdf),
 );
-const UNQUALIFIED_RDF_ATTRIBUTES = new Set([
+const UNQUALIFIED_RDF_ATTRIBUTES = MutableHashSet.make(
   'ID',
   'about',
   'resource',
   'parseType',
   'type',
   'version',
-]);
+);
 
 const RDF_DESCRIPTION = rdf('Description');
 const RDF_LI = rdf('li');
 const RDF_TYPE = rdf('type');
+const RDF_ID = rdf('ID');
+const RDF_NODE_ID = rdf('nodeID');
+const RDF_ABOUT = rdf('about');
+const RDF_VERSION = rdf('version');
+const RDF_ANNOTATION = rdf('annotation');
+const RDF_ANNOTATION_NODE_ID = rdf('annotationNodeID');
+const RDF_PARSE_TYPE = rdf('parseType');
+const RDF_RESOURCE = rdf('resource');
+const RDF_DATATYPE = rdf('datatype');
 
-const isForbiddenNodeElement = (iri: string) => RESERVED_TERMS.has(iri) || iri === RDF_LI;
-const isForbiddenPropertyElement = (iri: string) =>
-  RESERVED_TERMS.has(iri) || iri === RDF_DESCRIPTION;
+const isReserved = (iri: string): boolean => MutableHashSet.has(RESERVED_TERMS, iri);
+const isForbiddenNodeElement = (iri: string) => isReserved(iri) || iri === RDF_LI;
+const isForbiddenPropertyElement = (iri: string) => isReserved(iri) || iri === RDF_DESCRIPTION;
 const isForbiddenPropertyAttribute = (iri: string) =>
-  RESERVED_TERMS.has(iri) || iri === RDF_DESCRIPTION || iri === RDF_LI;
+  isReserved(iri) || iri === RDF_DESCRIPTION || iri === RDF_LI;
+
+const isElement = Predicate.isTagged('Element');
+const isText = Predicate.isTagged('Text');
 
 class ParseFailure {
   readonly message: string;
-  readonly position: Xml.Position | undefined;
-  constructor(message: string, position: Xml.Position | undefined) {
+  readonly position: Xml.Position;
+  constructor(message: string, position: Xml.Position) {
     this.message = message;
     this.position = position;
   }
 }
 
 interface Context {
-  readonly base: string | undefined;
+  readonly base: Option.Option<string>;
   readonly language: string;
   readonly direction: '' | Term.Direction;
-  readonly version: string | undefined;
+  readonly version: Option.Option<string>;
 }
+
+/** Resolves `reference` against the base IRI of `ctx`, if it has one. */
+const resolveIn = (reference: string, base: Option.Option<string>): string =>
+  Iri.resolve(reference, Option.getOrUndefined(base));
 
 interface Attr {
   readonly iri: string;
@@ -134,8 +150,8 @@ interface Attr {
   readonly attribute: Xml.Attribute;
 }
 
-const isRdf12 = (version: string | undefined): boolean =>
-  version !== undefined && version !== '1.0' && version !== '1.1';
+const isRdf12 = (version: Option.Option<string>): boolean =>
+  Option.isSome(version) && version.value !== '1.0' && version.value !== '1.1';
 
 const rdfType = new Term.NamedNode(rdf('type'));
 const rdfFirst = new Term.NamedNode(rdf('first'));
@@ -150,102 +166,91 @@ const rdfXmlLiteral = new Term.NamedNode(rdf('XMLLiteral'));
 
 /** The syntax attributes of a node element, gathered by `nodeAttribute`. */
 interface NodeAttributes {
-  idAttr: Attr | undefined;
+  idAttr: Option.Option<Attr>;
   readonly props: Array<Attr>;
 }
 
-// Built once: `nodeElement` runs it for every attribute of a node element.
-const nodeAttribute = Match.fn(
-  (a: Attr, _parser: RdfXmlParser, _attrs: NodeAttributes): string => a.iri,
-).pipe(
-  Match.withReturnType<void>(),
-  Match.when(
-    Match.is(rdfLiteral('ID'), rdfLiteral('nodeID'), rdfLiteral('about')),
-    (_iri, a, parser, attrs) => {
-      if (attrs.idAttr !== undefined) {
-        parser.fail(
-          `rdf:${attrs.idAttr.attribute.localName} and rdf:${a.attribute.localName} cannot be used together`,
-          a.attribute,
-        );
-      }
-      attrs.idAttr = a;
-    },
-  ),
-  Match.when(rdfLiteral('version'), () => undefined),
-  Match.orElse((_iri, a, parser, attrs) => {
-    if (isForbiddenPropertyAttribute(a.iri)) {
-      parser.fail(`${a.attribute.name} is not allowed as a property attribute`, a.attribute);
-    }
-    attrs.props.push(a);
-  }),
-);
+/**
+ * Adds an attribute that is not a syntax attribute of its element to `props`
+ * (`rdf:version` aside, which `context` reads).
+ */
+const propertyAttr = (a: Attr, parser: RdfXmlParser, props: Array<Attr>): void => {
+  if (a.iri === RDF_VERSION) return;
+  if (isForbiddenPropertyAttribute(a.iri)) {
+    parser.fail(`${a.attribute.name} is not allowed as a property attribute`, a.attribute);
+  }
+  props.push(a);
+};
+
+/** Gathers an attribute of a node element (run for every one, so a chain of comparisons). */
+const nodeAttribute = (a: Attr, parser: RdfXmlParser, attrs: NodeAttributes): void => {
+  const iri = a.iri;
+  if (iri !== RDF_ID && iri !== RDF_NODE_ID && iri !== RDF_ABOUT) {
+    propertyAttr(a, parser, attrs.props);
+    return;
+  }
+  if (Option.isSome(attrs.idAttr)) {
+    parser.fail(
+      `rdf:${attrs.idAttr.value.attribute.localName} and rdf:${a.attribute.localName} cannot be used together`,
+      a.attribute,
+    );
+  }
+  attrs.idAttr = Option.some(a);
+};
 
 /** The syntax attributes of a property element, gathered by `propertyAttribute`. */
 interface PropertyAttributes {
-  id: Attr | undefined;
-  annotation: Attr | undefined;
-  parseType: Attr | undefined;
-  resource: Attr | undefined;
-  nodeId: Attr | undefined;
-  datatype: Attr | undefined;
+  id: Option.Option<Attr>;
+  annotation: Option.Option<Attr>;
+  parseType: Option.Option<Attr>;
+  resource: Option.Option<Attr>;
+  nodeId: Option.Option<Attr>;
+  datatype: Option.Option<Attr>;
   readonly props: Array<Attr>;
 }
 
-// Built once: `propertyElt` runs it for every attribute of a property element.
-const propertyAttribute = Match.fn(
-  (a: Attr, _parser: RdfXmlParser, _attrs: PropertyAttributes): string => a.iri,
-).pipe(
-  Match.withReturnType<void>(),
-  Match.when(rdfLiteral('ID'), (_iri, a, _parser, attrs) => {
-    attrs.id = a;
-  }),
-  Match.when(
-    Match.is(rdfLiteral('annotation'), rdfLiteral('annotationNodeID')),
-    (_iri, a, parser, attrs) => {
-      if (attrs.annotation !== undefined) {
-        parser.fail('rdf:annotation and rdf:annotationNodeID cannot be used together', a.attribute);
-      }
-      attrs.annotation = a;
-    },
-  ),
-  Match.when(rdfLiteral('parseType'), (_iri, a, _parser, attrs) => {
-    attrs.parseType = a;
-  }),
-  Match.when(rdfLiteral('resource'), (_iri, a, _parser, attrs) => {
-    attrs.resource = a;
-  }),
-  Match.when(rdfLiteral('nodeID'), (_iri, a, _parser, attrs) => {
-    attrs.nodeId = a;
-  }),
-  Match.when(rdfLiteral('datatype'), (_iri, a, _parser, attrs) => {
-    attrs.datatype = a;
-  }),
-  Match.when(rdfLiteral('version'), () => undefined),
-  Match.orElse((_iri, a, parser, attrs) => {
-    if (isForbiddenPropertyAttribute(a.iri)) {
-      parser.fail(`${a.attribute.name} is not allowed as a property attribute`, a.attribute);
+/** Gathers an attribute of a property element (run for every one, so a chain of comparisons). */
+const propertyAttribute = (a: Attr, parser: RdfXmlParser, attrs: PropertyAttributes): void => {
+  const iri = a.iri;
+  if (iri === RDF_ID) attrs.id = Option.some(a);
+  else if (iri === RDF_ANNOTATION || iri === RDF_ANNOTATION_NODE_ID) {
+    if (Option.isSome(attrs.annotation)) {
+      parser.fail('rdf:annotation and rdf:annotationNodeID cannot be used together', a.attribute);
     }
-    attrs.props.push(a);
-  }),
-);
+    attrs.annotation = Option.some(a);
+  } else if (iri === RDF_PARSE_TYPE) attrs.parseType = Option.some(a);
+  else if (iri === RDF_RESOURCE) attrs.resource = Option.some(a);
+  else if (iri === RDF_NODE_ID) attrs.nodeId = Option.some(a);
+  else if (iri === RDF_DATATYPE) attrs.datatype = Option.some(a);
+  else propertyAttr(a, parser, attrs.props);
+};
 
 const isRdfRoot = (root: Xml.Element): boolean =>
   root.namespace === RDF && root.localName === 'RDF';
 
 class RdfXmlParser {
   sink: Array<Term.Triple> = [];
-  readonly ids = new Set<string>();
+  readonly ids = MutableHashSet.empty<string>();
   counter = 0;
 
   readonly blankNodePrefix: string;
-  readonly defaultVersion: string | undefined;
-  constructor(blankNodePrefix: string, defaultVersion: string | undefined) {
+  readonly defaultVersion: Option.Option<string>;
+  constructor(blankNodePrefix: string, defaultVersion: Option.Option<string>) {
     this.blankNodePrefix = blankNodePrefix;
     this.defaultVersion = defaultVersion;
   }
 
-  fail(message: string, node?: { readonly position: Xml.Position }): never {
-    throw new ParseFailure(message, node?.position);
+  fail(message: string, node: { readonly position: Xml.Position }): never {
+    throw new ParseFailure(message, node.position);
+  }
+
+  /** Fails if any of `attrs` is present: the first `<name> <why>`. */
+  reject(attrs: Iterable<Option.Option<Attr>>, why: string): void {
+    const other = Option.firstSomeOf(attrs);
+    if (Option.isSome(other)) {
+      const { attribute } = other.value;
+      this.fail(`${attribute.name} ${why}`, attribute);
+    }
   }
 
   emit(s: Term.Subject, p: Term.NamedNode, o: Term.Object): Term.Triple {
@@ -264,13 +269,16 @@ class RdfXmlParser {
   }
 
   /** The IRIs of names and datatypes seen so far, which repeat throughout a document. */
-  private readonly names = new Map<string, Term.NamedNode>();
+  private readonly names = MutableHashMap.empty<string, Term.NamedNode>();
 
   /**
    * The IRIs of the names read so far, by local name, then namespace (a
    * local name rarely has more than one).
    */
-  private readonly qualifiedNames = new Map<string, Array<readonly [string, string]>>();
+  private readonly qualifiedNames = MutableHashMap.empty<
+    string,
+    Array<readonly [namespace: string, iri: string]>
+  >();
 
   /**
    * The IRI of a name (`namespace` + `localName`), the same string each time
@@ -278,11 +286,13 @@ class RdfXmlParser {
    * the IRI (in the reserved-term set, the node cache) then hashes nothing.
    */
   qualified(namespace: string, localName: string): string {
-    let byNamespace = this.qualifiedNames.get(localName);
-    if (byNamespace === undefined) {
-      byNamespace = [];
-      this.qualifiedNames.set(localName, byNamespace);
+    const byLocalName = MutableHashMap.get(this.qualifiedNames, localName);
+    if (Option.isNone(byLocalName)) {
+      const iri = namespace + localName;
+      MutableHashMap.set(this.qualifiedNames, localName, [[namespace, iri]]);
+      return iri;
     }
+    const byNamespace = byLocalName.value;
     const known = byNamespace.find(([ns]) => ns === namespace);
     if (known !== undefined) return known[1];
     const iri = namespace + localName;
@@ -292,23 +302,22 @@ class RdfXmlParser {
 
   /** The node for the IRI of an element or attribute name, or of a datatype. */
   named(iri: string): Term.NamedNode {
-    let node = this.names.get(iri);
-    if (node === undefined) {
-      node = new Term.NamedNode(iri);
-      this.names.set(iri, node);
-    }
+    const known = MutableHashMap.get(this.names, iri);
+    if (Option.isSome(known)) return known.value;
+    const node = new Term.NamedNode(iri);
+    MutableHashMap.set(this.names, iri, node);
     return node;
   }
 
   iri(value: string, ctx: Context): Term.NamedNode {
-    return new Term.NamedNode(Iri.resolve(value, ctx.base));
+    return new Term.NamedNode(resolveIn(value, ctx.base));
   }
 
   idIri(id: string, ctx: Context, node: { readonly position: Xml.Position }): Term.NamedNode {
     if (!Xml.isNCName(id)) this.fail(`Invalid rdf:ID "${id}"`, node);
-    const iri = Iri.resolve(`#${id}`, ctx.base);
-    if (this.ids.has(iri)) this.fail(`Duplicate rdf:ID "${id}"`, node);
-    this.ids.add(iri);
+    const iri = resolveIn(`#${id}`, ctx.base);
+    if (MutableHashSet.has(this.ids, iri)) this.fail(`Duplicate rdf:ID "${id}"`, node);
+    MutableHashSet.add(this.ids, iri);
     return new Term.NamedNode(iri);
   }
 
@@ -321,27 +330,29 @@ class RdfXmlParser {
 
   /** Computes the evaluation context of an element. */
   context(el: Xml.Element, parent: Context): Context {
+    if (Arr.isReadonlyArrayEmpty(el.attributes)) return parent;
     let base = parent.base;
     let language = parent.language;
     let direction = parent.direction;
     let version = parent.version;
-    let dir: Xml.Attribute | undefined;
-    for (const a of el.attributes) {
+    let dir = Option.none<Xml.Attribute>();
+    el.attributes.forEach((a) => {
       if (a.namespace === Xml.XML_NAMESPACE) {
-        if (a.localName === 'base') base = Iri.resolve(a.value, base);
+        if (a.localName === 'base') base = Option.some(resolveIn(a.value, base));
         else if (a.localName === 'lang') language = a.value;
       } else if (a.namespace === ITS && a.localName === 'dir') {
-        dir = a;
+        dir = Option.some(a);
       } else if ((a.namespace === RDF || a.namespace === undefined) && a.localName === 'version') {
-        version = a.value;
+        version = Option.some(a.value);
       }
-    }
-    if (dir !== undefined && isRdf12(version)) {
-      if (dir.value !== 'ltr' && dir.value !== 'rtl' && dir.value !== '') {
-        this.fail(`Invalid its:dir value "${dir.value}"`, dir);
+    });
+    if (Option.isSome(dir) && isRdf12(version)) {
+      const value = dir.value.value;
+      if (value !== 'ltr' && value !== 'rtl' && value !== '') {
+        this.fail(`Invalid its:dir value "${value}"`, dir.value);
       }
       // SAFETY: the value was checked to be `ltr` or `rtl` above.
-      direction = dir.value;
+      direction = value;
     }
     return { base, language, direction, version };
   }
@@ -349,20 +360,20 @@ class RdfXmlParser {
   /** The RDF-relevant attributes of an element, with their IRIs. */
   attributes(el: Xml.Element): Array<Attr> {
     const out: Array<Attr> = [];
-    for (const a of el.attributes) {
-      if (a.namespace === Xml.XML_NAMESPACE) continue;
-      if (a.prefix.toLowerCase().startsWith('xml')) continue;
+    el.attributes.forEach((a) => {
+      if (a.namespace === Xml.XML_NAMESPACE) return;
+      if (a.prefix.toLowerCase().startsWith('xml')) return;
       if (a.namespace === undefined) {
-        if (a.localName.toLowerCase().startsWith('xml')) continue;
-        if (!UNQUALIFIED_RDF_ATTRIBUTES.has(a.localName)) {
+        if (a.localName.toLowerCase().startsWith('xml')) return;
+        if (!MutableHashSet.has(UNQUALIFIED_RDF_ATTRIBUTES, a.localName)) {
           this.fail(`Unqualified attribute "${a.localName}" is not allowed`, a);
         }
         out.push({ iri: this.qualified(RDF, a.localName), value: a.value, attribute: a });
-        continue;
+        return;
       }
-      if (a.namespace === ITS && (a.localName === 'dir' || a.localName === 'version')) continue;
+      if (a.namespace === ITS && (a.localName === 'dir' || a.localName === 'version')) return;
       out.push({ iri: this.qualified(a.namespace, a.localName), value: a.value, attribute: a });
-    }
+    });
     return out;
   }
 
@@ -373,7 +384,7 @@ class RdfXmlParser {
     return this.qualified(el.namespace, el.localName);
   }
 
-  document(doc: Xml.Document, base: string | undefined): void {
+  document(doc: Xml.Document, base: Option.Option<string>): void {
     const root = doc.root;
     const ctx: Context = { base, language: '', direction: '', version: this.defaultVersion };
     if (isRdfRoot(root)) this.nodeElementList(root.children, this.rdfRoot(root, ctx));
@@ -383,67 +394,62 @@ class RdfXmlParser {
   /** The context of the node elements in an `rdf:RDF` root, after checking its attributes. */
   rdfRoot(root: Xml.Element, ctx: Context): Context {
     const rootCtx = this.context(root, ctx);
-    for (const a of this.attributes(root)) {
-      if (a.iri !== rdf('version')) this.fail(`Unexpected attribute on rdf:RDF`, a.attribute);
-    }
+    this.attributes(root).forEach((a) => {
+      if (a.iri !== RDF_VERSION) this.fail(`Unexpected attribute on rdf:RDF`, a.attribute);
+    });
     return rootCtx;
   }
 
   nodeElementList(children: ReadonlyArray<Xml.Node>, ctx: Context): Array<Term.Subject> {
     const subjects: Array<Term.Subject> = [];
-    for (const c of children) {
-      if (c._tag === 'Element') subjects.push(this.nodeElement(c, ctx));
-      else if (c._tag === 'Text' && !Xml.isWhitespace(c.value)) {
+    children.forEach((c) => {
+      if (isElement(c)) subjects.push(this.nodeElement(c, ctx));
+      else if (isText(c) && !Xml.isWhitespace(c.value)) {
         this.fail('Unexpected text where node elements are expected', c);
       }
-    }
+    });
     return subjects;
   }
 
-  nodeElement(el: Xml.Element, parentCtx: Context, given?: Term.Subject): Term.Subject {
-    const ctx = given === undefined ? this.context(el, parentCtx) : parentCtx;
-    const iri = given === undefined ? this.elementIri(el) : RDF_DESCRIPTION;
+  nodeElement(el: Xml.Element, parentCtx: Context): Term.Subject {
+    const ctx = this.context(el, parentCtx);
+    const iri = this.elementIri(el);
     if (isForbiddenNodeElement(iri)) this.fail(`<${el.name}> is not allowed as a node element`, el);
-    let subject: Term.Subject | undefined = given;
-    const attrs: NodeAttributes = { idAttr: undefined, props: [] };
-    const { props } = attrs;
-    if (given === undefined) {
-      for (const a of this.attributes(el)) nodeAttribute(a, this, attrs);
-      const { idAttr } = attrs;
-      if (idAttr !== undefined) {
+    const attrs: NodeAttributes = { idAttr: Option.none(), props: [] };
+    this.attributes(el).forEach((a) => nodeAttribute(a, this, attrs));
+    const s: Term.Subject = Option.match(attrs.idAttr, {
+      onNone: () => this.fresh(),
+      onSome: (idAttr) => {
         const local = idAttr.iri.slice(RDF.length);
-        subject =
-          local === 'ID'
-            ? this.idIri(idAttr.value, ctx, idAttr.attribute)
-            : local === 'nodeID'
-              ? this.blank(idAttr.value, idAttr.attribute)
-              : this.iri(idAttr.value, ctx);
-      }
-    }
-    const s = subject ?? this.fresh();
+        return local === 'ID'
+          ? this.idIri(idAttr.value, ctx, idAttr.attribute)
+          : local === 'nodeID'
+            ? this.blank(idAttr.value, idAttr.attribute)
+            : this.iri(idAttr.value, ctx);
+      },
+    });
     if (iri !== RDF_DESCRIPTION) this.emit(s, rdfType, this.named(iri));
-    for (const a of props) {
+    attrs.props.forEach((a) => {
       this.emit(
         s,
         this.named(a.iri),
         a.iri === RDF_TYPE ? this.iri(a.value, ctx) : this.literal(a.value, ctx),
       );
-    }
+    });
     this.propertyEltList(el, s, ctx);
     return s;
   }
 
   propertyEltList(el: Xml.Element, subject: Term.Subject, ctx: Context): void {
     let li = 1;
-    for (const c of el.children) {
-      if (c._tag === 'Element') {
-        let iri = this.elementIri(c);
-        if (iri === RDF_LI) iri = rdf(`_${li++}`);
-        this.propertyElt(c, iri, subject, ctx);
-      } else if (c._tag === 'Text' && !Xml.isWhitespace(c.value)) {
+    el.children.forEach((c) => {
+      if (isElement(c)) {
+        const name = this.elementIri(c);
+        this.propertyElt(c, name === RDF_LI ? rdf(`_${li++}`) : name, subject, ctx);
+      } else if (isText(c) && !Xml.isWhitespace(c.value)) {
         this.fail('Unexpected text where property elements are expected', c);
       }
-    }
+    });
   }
 
   propertyElt(el: Xml.Element, iri: string, subject: Term.Subject, parentCtx: Context): void {
@@ -453,64 +459,65 @@ class RdfXmlParser {
     const ctx = this.context(el, parentCtx);
     const predicate = this.named(iri);
     const attrs: PropertyAttributes = {
-      id: undefined,
-      annotation: undefined,
-      parseType: undefined,
-      resource: undefined,
-      nodeId: undefined,
-      datatype: undefined,
+      id: Option.none(),
+      annotation: Option.none(),
+      parseType: Option.none(),
+      resource: Option.none(),
+      nodeId: Option.none(),
+      datatype: Option.none(),
       props: [],
     };
-    for (const a of this.attributes(el)) propertyAttribute(a, this, attrs);
+    this.attributes(el).forEach((a) => propertyAttribute(a, this, attrs));
     const { id, annotation, parseType, resource, nodeId, datatype, props } = attrs;
     const elements: Array<Xml.Element> = [];
     let text = '';
     let hasText = false;
-    for (const c of el.children) {
-      if (c._tag === 'Element') elements.push(c);
-      else if (c._tag === 'Text') {
+    el.children.forEach((c) => {
+      if (isElement(c)) elements.push(c);
+      else if (isText(c)) {
         text += c.value;
         hasText = true;
       }
-    }
+    });
 
     const finish = (object: Term.Object) => {
       const statement = this.emit(subject, predicate, object);
       this.reify(statement, id, annotation, ctx);
     };
+    const firstProp = Arr.head(props);
 
-    if (parseType !== undefined) {
-      const other = resource ?? nodeId ?? datatype ?? props[0];
-      if (other !== undefined) {
-        this.fail(`${other.attribute.name} cannot be used with rdf:parseType`, other.attribute);
-      }
-      Match.value(parseType.value).pipe(
+    if (Option.isSome(parseType)) {
+      this.reject([resource, nodeId, datatype, firstProp], 'cannot be used with rdf:parseType');
+      Match.value(parseType.value.value).pipe(
         Match.when('Resource', () => {
           const n = this.fresh();
           finish(n);
-          this.nodeElement(el, ctx, n);
+          this.propertyEltList(el, n, ctx);
         }),
         Match.when('Collection', () => {
           const items = this.nodeElementList(el.children, ctx);
-          if (Arr.isReadonlyArrayEmpty(items)) {
+          if (!Arr.isArrayNonEmpty(items)) {
             finish(rdfNil);
             return;
           }
-          const cells = items.map(() => this.fresh());
-          finish(cells[0]!);
-          cells.forEach((cell, i) => {
-            this.emit(cell, rdfFirst, items[i]!);
+          const cells = Arr.map(items, () => this.fresh());
+          finish(Arr.headNonEmpty(cells));
+          Arr.zip(cells, items).forEach(([cell, item], i) => {
+            this.emit(cell, rdfFirst, item);
             this.emit(cell, rdfRest, cells[i + 1] ?? rdfNil);
           });
         }),
         Match.when('Triple', () => {
           const saved = this.sink;
           this.sink = [];
-          const nodes = elements.length;
-          if (nodes !== 1 || (hasText && !Xml.isWhitespace(text))) {
+          if (
+            !Arr.isArrayNonEmpty(elements) ||
+            elements.length !== 1 ||
+            (hasText && !Xml.isWhitespace(text))
+          ) {
             this.fail('rdf:parseType="Triple" must contain exactly one node element', el);
           }
-          this.nodeElement(elements[0]!, ctx);
+          this.nodeElement(Arr.headNonEmpty(elements), ctx);
           const triples = this.sink;
           this.sink = saved;
           if (!isRdf12(ctx.version)) {
@@ -518,13 +525,13 @@ class RdfXmlParser {
             // one the property element is ignored.
             return;
           }
-          if (triples.length !== 1) {
+          if (!Arr.isArrayNonEmpty(triples) || triples.length !== 1) {
             this.fail(
               `rdf:parseType="Triple" content must describe exactly one triple, found ${triples.length}`,
               el,
             );
           }
-          finish(triples[0]!);
+          finish(Arr.headNonEmpty(triples));
         }),
         Match.orElse(() => {
           finish(new Term.Literal(Xml.canonicalize(el.children), rdfXmlLiteral));
@@ -533,109 +540,97 @@ class RdfXmlParser {
       return;
     }
 
-    if (Arr.isReadonlyArrayNonEmpty(elements)) {
+    if (Arr.isArrayNonEmpty(elements)) {
       if (elements.length > 1)
         this.fail('A property element can contain only one node element', el);
       if (!Xml.isWhitespace(text))
         this.fail('Mixed content is not allowed in a property element', el);
-      const other = resource ?? nodeId ?? datatype ?? props[0];
-      if (other !== undefined) {
-        this.fail(
-          `${other.attribute.name} is not allowed on a property element with content`,
-          other.attribute,
-        );
-      }
-      finish(this.nodeElement(elements[0], ctx));
+      this.reject(
+        [resource, nodeId, datatype, firstProp],
+        'is not allowed on a property element with content',
+      );
+      finish(this.nodeElement(Arr.headNonEmpty(elements), ctx));
       return;
     }
 
     if (hasText && text !== '') {
-      const other = resource ?? nodeId ?? props[0];
-      if (other !== undefined) {
-        this.fail(
-          `${other.attribute.name} is not allowed on a literal property element`,
-          other.attribute,
-        );
-      }
+      this.reject([resource, nodeId, firstProp], 'is not allowed on a literal property element');
       finish(
-        datatype !== undefined
-          ? Term.literal(text, this.named(Iri.resolve(datatype.value, ctx.base)))
+        Option.isSome(datatype)
+          ? Term.literal(text, this.named(resolveIn(datatype.value.value, ctx.base)))
           : this.literal(text, ctx),
       );
       return;
     }
 
     // empty property element
-    if (resource !== undefined && nodeId !== undefined) {
-      this.fail('rdf:resource and rdf:nodeID cannot be used together', nodeId.attribute);
+    if (Option.isSome(resource) && Option.isSome(nodeId)) {
+      this.fail('rdf:resource and rdf:nodeID cannot be used together', nodeId.value.attribute);
     }
-    if (datatype !== undefined) {
-      const other = resource ?? nodeId ?? props[0];
-      if (other !== undefined) {
-        this.fail(`${other.attribute.name} cannot be used with rdf:datatype`, other.attribute);
-      }
-      finish(Term.literal('', this.named(Iri.resolve(datatype.value, ctx.base))));
+    if (Option.isSome(datatype)) {
+      this.reject([resource, nodeId, firstProp], 'cannot be used with rdf:datatype');
+      finish(Term.literal('', this.named(resolveIn(datatype.value.value, ctx.base))));
       return;
     }
-    if (resource === undefined && nodeId === undefined && Arr.isReadonlyArrayEmpty(props)) {
+    if (Option.isNone(resource) && Option.isNone(nodeId) && Arr.isReadonlyArrayEmpty(props)) {
       finish(this.literal('', ctx));
       return;
     }
-    const r: Term.NamedNode | Term.BlankNode =
-      resource !== undefined
-        ? this.iri(resource.value, ctx)
-        : nodeId !== undefined
-          ? this.blank(nodeId.value, nodeId.attribute)
-          : this.fresh();
-    for (const a of props) {
+    const r: Term.NamedNode | Term.BlankNode = Option.isSome(resource)
+      ? this.iri(resource.value.value, ctx)
+      : Option.isSome(nodeId)
+        ? this.blank(nodeId.value.value, nodeId.value.attribute)
+        : this.fresh();
+    props.forEach((a) => {
       this.emit(
         r,
         this.named(a.iri),
         a.iri === RDF_TYPE ? this.iri(a.value, ctx) : this.literal(a.value, ctx),
       );
-    }
+    });
     finish(r);
   }
 
-  reify(statement: Term.Triple, id: Attr | undefined, annotation: Attr | undefined, ctx: Context) {
-    if (id !== undefined) {
-      const i = this.idIri(id.value, ctx, id.attribute);
+  reify(
+    statement: Term.Triple,
+    id: Option.Option<Attr>,
+    annotation: Option.Option<Attr>,
+    ctx: Context,
+  ) {
+    if (Option.isSome(id)) {
+      const i = this.idIri(id.value.value, ctx, id.value.attribute);
       this.emit(i, rdfType, rdfStatement);
       this.emit(i, rdfSubject, statement.subject);
       this.emit(i, rdfPredicate, statement.predicate);
       this.emit(i, rdfObject, statement.object);
     }
-    if (annotation !== undefined) {
-      const reifier =
-        annotation.iri === rdf('annotation')
-          ? this.iri(annotation.value, ctx)
-          : this.blank(annotation.value, annotation.attribute);
+    if (Option.isSome(annotation)) {
+      const { iri, value, attribute } = annotation.value;
+      const reifier = iri === RDF_ANNOTATION ? this.iri(value, ctx) : this.blank(value, attribute);
       this.emit(reifier, rdfReifies, statement);
     }
   }
 }
 
-const toParseError = (message: string, position: Xml.Position | undefined) =>
-  position === undefined
-    ? new Serialization.RdfParseError({ format: FORMAT_NAME, message })
-    : new Serialization.RdfParseError({
-        format: FORMAT_NAME,
-        message,
-        line: position.line,
-        column: position.column,
-      });
+const toParseError = (message: string, position: Xml.Position) =>
+  new Serialization.RdfParseError({
+    format: FORMAT_NAME,
+    message,
+    line: position.line,
+    column: position.column,
+  });
 
 const parseTriples = (
   doc: Xml.Document,
-  options: ParseOptions | undefined,
+  options?: ParseOptions,
 ): Effect.Effect<ReadonlyArray<Term.Triple>, Serialization.RdfParseError> =>
   Effect.try({
     try: () => {
       const parser = new RdfXmlParser(
         options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
-        options?.version,
+        Option.fromUndefinedOr(options?.version),
       );
-      parser.document(doc, options?.baseIri);
+      parser.document(doc, Option.fromUndefinedOr(options?.baseIri));
       return parser.sink;
     },
     catch: (e) => {
@@ -658,15 +653,15 @@ const declarePrefixes = (
   depth: number,
   maxDepth: number,
 ): void => {
-  for (const node of nodes) {
-    if (node._tag !== 'Element') continue;
-    for (const d of node.namespaceDeclarations) {
+  nodes.forEach((node) => {
+    if (!isElement(node)) return;
+    node.namespaceDeclarations.forEach((d) => {
       if (d.prefix !== '' && d.namespace !== '' && !prefixes.some(([p]) => p === d.prefix)) {
         prefixes.push([d.prefix, d.namespace]);
       }
-    }
+    });
     if (depth < maxDepth) declarePrefixes(prefixes, node.children, depth + 1, maxDepth);
-  }
+  });
 };
 
 /** The prefixes declared on the root, its children and their children. */
@@ -842,15 +837,16 @@ export const parseQuads = (
 ): Effect.Effect<QuadsResult, Serialization.RdfParseError> =>
   Effect.try({
     try: () => {
+      const version = Option.fromUndefinedOr(options?.version);
       const parser = new RdfXmlParser(
         options?.blankNodePrefix ?? Serialization.freshBlankNodePrefix(),
-        options?.version,
+        version,
       );
       const stream = new RootStream(parser, {
-        base: options?.baseIri,
+        base: Option.fromUndefinedOr(options?.baseIri),
         language: '',
         direction: '',
-        version: options?.version,
+        version,
       });
       const doc = XmlParser.parseText(input, stream.take);
       stream.finish(doc);
@@ -943,47 +939,64 @@ const escapeAttr = Xml.escapeAttribute;
 
 interface Namespaces {
   /** namespace → prefix, for configured and generated prefixes. */
-  readonly byNamespace: Map<string, string>;
+  readonly byNamespace: MutableHashMap.MutableHashMap<string, string>;
   /** Prefixes taken (configured, generated or reserved). */
-  readonly used: Set<string>;
+  readonly used: MutableHashSet.MutableHashSet<string>;
   /** Namespaces actually referenced by the output. */
-  readonly declared: Set<string>;
+  readonly declared: MutableHashSet.MutableHashSet<string>;
   counter: number;
 }
 
+/** Whether `prefix` may be declared for `ns` as configured in `options.prefixes`. */
+const isConfigurable = (prefix: string, ns: string): boolean =>
+  Xml.isNCName(prefix) &&
+  !prefix.toLowerCase().startsWith('xml') &&
+  ns !== ITS &&
+  Xml.isValidText(ns) &&
+  (ns === RDF) === (prefix === 'rdf') &&
+  prefix !== 'its';
+
+/** The first of `name(1)`, `name(2)`, … (counting on from `from`) that `taken` does not hold. */
+const freshName = (
+  taken: MutableHashSet.MutableHashSet<string>,
+  from: number,
+  name: (n: number) => string,
+): readonly [name: string, n: number] => {
+  const candidate = name(from + 1);
+  return MutableHashSet.has(taken, candidate)
+    ? freshName(taken, from + 1, name)
+    : [candidate, from + 1];
+};
+
 class Writer {
   readonly namespaces: Namespaces;
-  readonly blankLabels = new Map<string, string>();
+  readonly blankLabels = MutableHashMap.empty<string, string>();
+  /** The QName of each IRI written so far, while no namespace has been added since. */
+  private readonly qnames = MutableHashMap.empty<string, string>();
   needsVersion = false;
   needsIts = false;
 
   readonly options: SerializeOptions;
   constructor(options: SerializeOptions, prefixes: PrefixMap.PrefixMap) {
     this.options = options;
-    const byNamespace = new Map<string, string>();
-    const used = new Set<string>();
-    for (const [prefix, ns] of prefixes.prefixes) {
+    const byNamespace = MutableHashMap.empty<string, string>();
+    const used = MutableHashSet.empty<string>();
+    prefixes.prefixes.forEach((ns, prefix) => {
       if (
-        Xml.isNCName(prefix) &&
-        !prefix.toLowerCase().startsWith('xml') &&
-        !byNamespace.has(ns) &&
-        !used.has(prefix) &&
-        ns !== ITS &&
-        Xml.isValidText(ns)
+        isConfigurable(prefix, ns) &&
+        !MutableHashMap.has(byNamespace, ns) &&
+        !MutableHashSet.has(used, prefix)
       ) {
-        if (ns === RDF && prefix !== 'rdf') continue;
-        if (prefix === 'rdf' && ns !== RDF) continue;
-        if (prefix === 'its') continue;
-        byNamespace.set(ns, prefix);
-        used.add(prefix);
+        MutableHashMap.set(byNamespace, ns, prefix);
+        MutableHashSet.add(used, prefix);
       }
+    });
+    if (!MutableHashMap.has(byNamespace, RDF)) {
+      MutableHashMap.set(byNamespace, RDF, 'rdf');
+      MutableHashSet.add(used, 'rdf');
     }
-    if (!byNamespace.has(RDF)) {
-      byNamespace.set(RDF, 'rdf');
-      used.add('rdf');
-    }
-    used.add('its');
-    this.namespaces = { byNamespace, used, declared: new Set([RDF]), counter: 0 };
+    MutableHashSet.add(used, 'its');
+    this.namespaces = { byNamespace, used, declared: MutableHashSet.make(RDF), counter: 0 };
   }
 
   fail(message: string): never {
@@ -991,32 +1004,41 @@ class Writer {
   }
 
   qname(iri: string, what: string): string {
+    const known = MutableHashMap.get(this.qnames, iri);
+    if (Option.isSome(known)) return known.value;
+    const name = this.newQname(iri, what);
+    MutableHashMap.set(this.qnames, iri, name);
+    return name;
+  }
+
+  private newQname(iri: string, what: string): string {
     if (!Xml.isValidText(iri)) this.fail(`The ${what} <${iri}> contains invalid XML characters`);
+    const { byNamespace, used, declared } = this.namespaces;
     // Prefer the longest configured namespace that leaves an NCName.
-    let best: readonly [string, string] | undefined;
-    for (const ns of this.namespaces.byNamespace.keys()) {
-      if (
+    const configured = Arr.reduce(
+      Arr.fromIterable(MutableHashMap.keys(byNamespace)),
+      Option.none<readonly [string, string]>(),
+      (best, ns) =>
         iri.startsWith(ns) &&
-        (best === undefined || ns.length > best[0].length) &&
+        (Option.isNone(best) || ns.length > best.value[0].length) &&
         Xml.isNCName(iri.slice(ns.length))
-      ) {
-        best = [ns, iri.slice(ns.length)];
-      }
-    }
-    if (best === undefined) {
-      const split = splitIri(iri);
-      if (Option.isNone(split)) this.fail(`The ${what} <${iri}> cannot be written as an XML QName`);
-      best = split.value;
-    }
-    const [ns, local] = best;
-    this.namespaces.declared.add(ns);
-    let prefix = this.namespaces.byNamespace.get(ns);
-    if (prefix === undefined) {
-      do prefix = `ns${++this.namespaces.counter}`;
-      while (this.namespaces.used.has(prefix));
-      this.namespaces.used.add(prefix);
-      this.namespaces.byNamespace.set(ns, prefix);
-    }
+          ? Option.some([ns, iri.slice(ns.length)] as const)
+          : best,
+    );
+    const [ns, local] = Option.getOrElse(
+      Option.orElse(configured, () => splitIri(iri)),
+      () => this.fail(`The ${what} <${iri}> cannot be written as an XML QName`),
+    );
+    MutableHashSet.add(declared, ns);
+    const prefix = Option.getOrElse(MutableHashMap.get(byNamespace, ns), () => {
+      const [generated, n] = freshName(used, this.namespaces.counter, (i) => `ns${i}`);
+      this.namespaces.counter = n;
+      MutableHashSet.add(used, generated);
+      MutableHashMap.set(byNamespace, ns, generated);
+      // A new namespace may be a better choice for the IRIs already named
+      MutableHashMap.clear(this.qnames);
+      return generated;
+    });
     return `${prefix}:${local}`;
   }
 
@@ -1031,25 +1053,37 @@ class Writer {
   }
 
   blankLabel(node: Term.BlankNode): string {
-    let label = this.blankLabels.get(node.value);
-    if (label === undefined) {
-      label = Xml.isNCName(node.value) && !this.usedLabels.has(node.value) ? node.value : '';
-      if (label === '') {
-        do label = `b${this.labelCounter++}`;
-        while (this.usedLabels.has(label));
-      }
-      this.usedLabels.add(label);
-      this.blankLabels.set(node.value, label);
-    }
+    const known = MutableHashMap.get(this.blankLabels, node.value);
+    if (Option.isSome(known)) return known.value;
+    const label =
+      Xml.isNCName(node.value) && !MutableHashSet.has(this.usedLabels, node.value)
+        ? node.value
+        : this.freshLabel();
+    MutableHashSet.add(this.usedLabels, label);
+    MutableHashMap.set(this.blankLabels, node.value, label);
     return label;
   }
-  readonly usedLabels = new Set<string>();
+
+  private freshLabel(): string {
+    // `b0`, `b1`, …: `freshName` counts on from the one before the next
+    const [label, n] = freshName(this.usedLabels, this.labelCounter - 1, (i) => `b${i}`);
+    this.labelCounter = n + 1;
+    return label;
+  }
+
+  readonly usedLabels = MutableHashSet.empty<string>();
   labelCounter = 0;
 }
 
+/** A subject with the triples it is the subject of. */
+interface Description {
+  readonly subject: Term.Subject;
+  readonly triples: Array<Term.Triple>;
+}
+
 interface Graph {
-  readonly bySubject: Map<string, { subject: Term.Subject; triples: Array<Term.Triple> }>;
-  readonly references: Map<string, number>;
+  readonly bySubject: MutableHashMap.MutableHashMap<string, Description>;
+  readonly references: MutableHashMap.MutableHashMap<string, number>;
 }
 
 const text = (value: string, writer: Writer): string => {
@@ -1066,69 +1100,89 @@ const sortByPredicateObject = (ts: ReadonlyArray<Term.Triple>) =>
     ),
   );
 
+/** Whether `t` gives its subject an `rdf:type` that can be the name of a typed node element. */
+const isTypeTriple = (t: Term.Triple): t is Term.Triple & { readonly object: Term.NamedNode } =>
+  t.predicate.value === RDF_TYPE &&
+  Term.isNamedNode(t.object) &&
+  !isForbiddenNodeElement(t.object.value) &&
+  Option.isSome(splitIri(t.object.value));
+
 const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeOptions): string => {
   const writer = new Writer(options, options.prefixes ?? PrefixMap.empty);
   const indentUnit = options.indent ?? '  ';
   const nest = options.nestBlankNodes ?? true;
   const typed = options.typedNodes ?? true;
 
-  const graph: Graph = { bySubject: new Map(), references: new Map() };
-  const inTripleTerm = new Set<string>();
+  const graph: Graph = { bySubject: MutableHashMap.empty(), references: MutableHashMap.empty() };
+  const referenceCount = (label: string): number => {
+    const count = MutableHashMap.get(graph.references, label);
+    return Option.isSome(count) ? count.value : 0;
+  };
+  const inTripleTerm = MutableHashSet.empty<string>();
   const markTripleTerm = (t: Term.Term): void => {
-    if (t._tag === 'BlankNode') inTripleTerm.add(t.value);
-    else if (t._tag === 'Triple') {
+    if (Term.isBlankNode(t)) MutableHashSet.add(inTripleTerm, t.value);
+    else if (Term.isTriple(t)) {
       markTripleTerm(t.subject);
       markTripleTerm(t.object);
     }
   };
-  for (const t of triples) {
-    if (t.subject._tag === 'Triple') {
+  triples.forEach((t) => {
+    if (Term.isTriple(t.subject)) {
       writer.fail('RDF/XML cannot represent triple terms in the subject position');
     }
-    const key = t.subject.key;
-    let entry = graph.bySubject.get(key);
-    if (entry === undefined)
-      graph.bySubject.set(key, (entry = { subject: t.subject, triples: [] }));
-    entry.triples.push(t);
-    if (t.object._tag === 'BlankNode') {
-      graph.references.set(t.object.value, (graph.references.get(t.object.value) ?? 0) + 1);
-    } else if (t.object._tag === 'Triple') {
-      markTripleTerm(t.object);
+    const subject = t.subject;
+    const key = subject.key;
+    const entry = MutableHashMap.get(graph.bySubject, key);
+    if (Option.isSome(entry)) entry.value.triples.push(t);
+    else MutableHashMap.set(graph.bySubject, key, { subject, triples: [t] });
+    const o = t.object;
+    if (Term.isBlankNode(o)) {
+      MutableHashMap.set(graph.references, o.value, referenceCount(o.value) + 1);
+    } else if (Term.isTriple(o)) {
+      markTripleTerm(o);
     }
-  }
+  });
 
   // Blank nodes that can be written inline, inside their only reference.
-  const nested = new Set<string>();
+  const nested = MutableHashSet.empty<string>();
   if (nest) {
-    for (const [label, count] of graph.references) {
-      if (count === 1 && !inTripleTerm.has(label)) nested.add(label);
-    }
-    // Break cycles: every nested node must be reachable from a top-level node.
-    const reachable = new Set<string>();
-    const visit = (subjectKey: string) => {
-      const entry = graph.bySubject.get(subjectKey);
-      if (entry === undefined) return;
-      for (const t of entry.triples) {
-        if (
-          t.object._tag === 'BlankNode' &&
-          nested.has(t.object.value) &&
-          !reachable.has(t.object.value)
-        ) {
-          reachable.add(t.object.value);
-          visit(t.object.key);
-        }
+    MutableHashMap.forEach(graph.references, (count, label) => {
+      if (count === 1 && !MutableHashSet.has(inTripleTerm, label)) {
+        MutableHashSet.add(nested, label);
       }
+    });
+    // Break cycles: every nested node must be reachable from a top-level node.
+    const reachable = MutableHashSet.empty<string>();
+    const visit = (subjectKey: string): void => {
+      const entry = MutableHashMap.get(graph.bySubject, subjectKey);
+      if (Option.isNone(entry)) return;
+      entry.value.triples.forEach((t) => {
+        const o = t.object;
+        if (
+          Term.isBlankNode(o) &&
+          MutableHashSet.has(nested, o.value) &&
+          !MutableHashSet.has(reachable, o.value)
+        ) {
+          MutableHashSet.add(reachable, o.value);
+          visit(o.key);
+        }
+      });
     };
-    for (const [key, entry] of graph.bySubject) {
-      if (entry.subject._tag !== 'BlankNode' || !nested.has(entry.subject.value)) visit(key);
-    }
-    for (const [, entry] of graph.bySubject) {
+    MutableHashMap.forEach(graph.bySubject, (entry, key) => {
       const s = entry.subject;
-      if (s._tag === 'BlankNode' && nested.has(s.value) && !reachable.has(s.value)) {
-        nested.delete(s.value);
+      if (!Term.isBlankNode(s) || !MutableHashSet.has(nested, s.value)) visit(key);
+    });
+    MutableHashMap.forEach(graph.bySubject, (entry) => {
+      const s = entry.subject;
+      if (
+        Term.isBlankNode(s) &&
+        MutableHashSet.has(nested, s.value) &&
+        !MutableHashSet.has(reachable, s.value)
+      ) {
+        MutableHashSet.remove(nested, s.value);
         visit(s.key);
       }
-    }
+    });
   }
 
   const body: Array<string> = [];
@@ -1136,40 +1190,40 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   /** Writes a node element for `subject` at `depth`. */
   const node = (subject: Term.Subject, depth: number, inline: boolean, lines: Array<string>) => {
     const pad = indentUnit.repeat(depth);
-    const entry = graph.bySubject.get(subject.key);
-    let ts = entry === undefined ? [] : sortByPredicateObject(entry.triples);
-    let element = 'rdf:Description';
-    if (typed) {
-      const typeTriple = ts.find(
-        (t) =>
-          t.predicate.value === rdf('type') &&
-          t.object._tag === 'NamedNode' &&
-          !isForbiddenNodeElement(t.object.value) &&
-          Option.isSome(splitIri(t.object.value)) &&
-          Xml.isValidText(t.object.value),
-      );
-      if (typeTriple !== undefined) {
-        // SAFETY: the `rdf:type` triple was selected for an IRI object.
-        element = writer.qname((typeTriple.object as Term.NamedNode).value, 'type');
-        ts = ts.filter((t) => t !== typeTriple);
-      }
-    }
-    let attrs = '';
-    if (subject._tag === 'NamedNode') attrs = ` rdf:about="${writer.iriRef(subject.value)}"`;
-    else if (subject._tag === 'BlankNode' && !inline) {
-      if ((graph.references.get(subject.value) ?? 0) > 0 || inTripleTerm.has(subject.value)) {
-        attrs = ` rdf:nodeID="${writer.blankLabel(subject)}"`;
-      }
-    }
+    const sorted = Option.match(MutableHashMap.get(graph.bySubject, subject.key), {
+      onNone: (): ReadonlyArray<Term.Triple> => [],
+      onSome: (entry) => sortByPredicateObject(entry.triples),
+    });
+    const typeTriple = typed
+      ? Arr.findFirst(sorted, (t) =>
+          isTypeTriple(t) && Xml.isValidText(t.object.value)
+            ? Option.some([t, t.object.value] as const)
+            : Option.none(),
+        )
+      : Option.none();
+    const element = Option.match(typeTriple, {
+      onNone: () => 'rdf:Description',
+      onSome: ([, type]) => writer.qname(type, 'type'),
+    });
+    const ts = Option.match(typeTriple, {
+      onNone: () => sorted,
+      onSome: ([typeT]) => sorted.filter((t) => t !== typeT),
+    });
+    const attrs = Term.isNamedNode(subject)
+      ? ` rdf:about="${writer.iriRef(subject.value)}"`
+      : Term.isBlankNode(subject) &&
+          !inline &&
+          (referenceCount(subject.value) > 0 || MutableHashSet.has(inTripleTerm, subject.value))
+        ? ` rdf:nodeID="${writer.blankLabel(subject)}"`
+        : '';
     if (Arr.isReadonlyArrayEmpty(ts)) {
       lines.push(`${pad}<${element}${attrs}/>`);
       return;
     }
     lines.push(`${pad}<${element}${attrs}>`);
-    for (const t of ts) property(t, depth + 1, lines);
+    ts.forEach((t) => property(t, depth + 1, lines));
     lines.push(`${pad}</${element}>`);
   };
-
   const property = (t: Term.Triple, depth: number, lines: Array<string>) => {
     const pad = indentUnit.repeat(depth);
     const p = t.predicate.value;
@@ -1189,24 +1243,18 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
       lines.push(`${pad}<${name} rdf:resource="${writer.iriRef(o.value)}"/>`);
     }),
     Match.tag('BlankNode', (o, _o, pad, name, depth, lines) => {
-      if (nested.has(o.value) && !inTripleTerm.has(o.value)) {
-        const entry = graph.bySubject.get(o.key);
-        if (entry === undefined || Arr.isReadonlyArrayEmpty(entry.triples)) {
+      if (MutableHashSet.has(nested, o.value) && !MutableHashSet.has(inTripleTerm, o.value)) {
+        const described = Option.match(MutableHashMap.get(graph.bySubject, o.key), {
+          onNone: (): ReadonlyArray<Term.Triple> => [],
+          onSome: (entry) => entry.triples,
+        });
+        if (Arr.isReadonlyArrayEmpty(described)) {
           lines.push(`${pad}<${name} rdf:parseType="Resource"/>`);
           return;
         }
-        const hasType =
-          typed &&
-          entry.triples.some(
-            (x) =>
-              x.predicate.value === rdf('type') &&
-              x.object._tag === 'NamedNode' &&
-              !isForbiddenNodeElement(x.object.value) &&
-              Option.isSome(splitIri(x.object.value)),
-          );
-        if (!hasType) {
+        if (!(typed && described.some(isTypeTriple))) {
           lines.push(`${pad}<${name} rdf:parseType="Resource">`);
-          for (const x of sortByPredicateObject(entry.triples)) property(x, depth + 1, lines);
+          sortByPredicateObject(described).forEach((x) => property(x, depth + 1, lines));
           lines.push(`${pad}</${name}>`);
           return;
         }
@@ -1244,15 +1292,14 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   const tripleTerm = (t: Term.Triple, depth: number, lines: Array<string>) => {
     const pad = indentUnit.repeat(depth);
     const s = t.subject;
-    const attrs =
-      s._tag === 'NamedNode'
-        ? ` rdf:about="${writer.iriRef(s.value)}"`
-        : s._tag === 'BlankNode'
-          ? ` rdf:nodeID="${writer.blankLabel(s)}"`
-          : writer.fail('RDF/XML cannot represent triple terms in the subject position');
+    const attrs = Term.isNamedNode(s)
+      ? ` rdf:about="${writer.iriRef(s.value)}"`
+      : Term.isBlankNode(s)
+        ? ` rdf:nodeID="${writer.blankLabel(s)}"`
+        : writer.fail('RDF/XML cannot represent triple terms in the subject position');
     lines.push(`${pad}<rdf:Description${attrs}>`);
     const o = t.object;
-    if (o._tag === 'BlankNode') {
+    if (Term.isBlankNode(o)) {
       const name = writer.qname(t.predicate.value, 'predicate');
       if (isForbiddenPropertyElement(t.predicate.value) || t.predicate.value === RDF_LI) {
         writer.fail(
@@ -1267,41 +1314,38 @@ const serializeGraph = (triples: ReadonlyArray<Term.Triple>, options: SerializeO
   };
 
   const subjects = Arr.sort(
-    Arr.map([...graph.bySubject.values()], (e) => e.subject),
+    Arr.map(Arr.fromIterable(MutableHashMap.values(graph.bySubject)), (e) => e.subject),
     // Not `Term.Order`, which puts blank nodes first: IRI subjects come first here, so named
     // descriptions lead the document and unnested blank nodes follow.
     Order.make<Term.Term>((a, b) =>
-      a._tag === b._tag ? Term.compare(a, b) : a._tag === 'NamedNode' ? -1 : 1,
+      a._tag === b._tag ? Term.compare(a, b) : Term.isNamedNode(a) ? -1 : 1,
     ),
   );
-  for (const s of subjects) {
-    if (s._tag === 'BlankNode' && nested.has(s.value)) continue;
-    node(s, 1, false, body);
-  }
+  subjects.forEach((s) => {
+    if (!Term.isBlankNode(s) || !MutableHashSet.has(nested, s.value)) node(s, 1, false, body);
+  });
 
-  const out: Array<string> = [];
-  if (options.xmlDeclaration ?? true) out.push('<?xml version="1.0" encoding="utf-8"?>');
-  const decls: Array<string> = [];
   const nsEntries = Arr.sort(
-    Arr.filter([...writer.namespaces.byNamespace.entries()], ([ns]) =>
-      writer.namespaces.declared.has(ns),
+    Arr.filter(Arr.fromIterable(writer.namespaces.byNamespace), ([ns]) =>
+      MutableHashSet.has(writer.namespaces.declared, ns),
     ),
     Order.make<readonly [string, string]>((a, b) =>
       a[1] === 'rdf' ? -1 : b[1] === 'rdf' ? 1 : a[1] < b[1] ? -1 : 1,
     ),
   );
-  for (const [ns, prefix] of nsEntries) decls.push(`xmlns:${prefix}="${escapeAttr(ns)}"`);
-  if (writer.needsIts) decls.push(`xmlns:its="${ITS}"`, 'its:version="2.0"');
-  if (options.baseIri !== undefined) decls.push(`xml:base="${escapeAttr(options.baseIri)}"`);
-  if (writer.needsVersion) decls.push('rdf:version="1.2"');
+  const decls: Array<string> = [
+    ...nsEntries.map(([ns, prefix]) => `xmlns:${prefix}="${escapeAttr(ns)}"`),
+    ...(writer.needsIts ? [`xmlns:its="${ITS}"`, 'its:version="2.0"'] : []),
+    ...(options.baseIri === undefined ? [] : [`xml:base="${escapeAttr(options.baseIri)}"`]),
+    ...(writer.needsVersion ? ['rdf:version="1.2"'] : []),
+  ];
   const sep = `\n${' '.repeat('<rdf:RDF '.length)}`;
-  if (Arr.isReadonlyArrayEmpty(body)) {
-    out.push(`<rdf:RDF ${decls.join(sep)}/>`);
-  } else {
-    out.push(`<rdf:RDF ${decls.join(sep)}>`);
-    out.push(...body);
-    out.push('</rdf:RDF>');
-  }
+  const declaration =
+    (options.xmlDeclaration ?? true) ? ['<?xml version="1.0" encoding="utf-8"?>'] : [];
+  // Not `push(...body)`, which passes every line as an argument and overflows the stack
+  const out = Arr.isReadonlyArrayEmpty(body)
+    ? [...declaration, `<rdf:RDF ${decls.join(sep)}/>`]
+    : [...declaration, `<rdf:RDF ${decls.join(sep)}>`, ...body, '</rdf:RDF>'];
   return `${out.join('\n')}\n`;
 };
 
@@ -1318,18 +1362,17 @@ export const serialize = (
   options?: SerializeOptions,
 ): Effect.Effect<string, Serialization.RdfSerializeError> =>
   Effect.suspend(() => {
-    const triples: Array<Term.Triple> = [];
-    for (const q of quads) {
-      if (q.graph._tag !== 'DefaultGraph') {
-        return Effect.fail(
-          new Serialization.RdfSerializeError({
-            format: FORMAT_NAME,
-            message: `RDF/XML cannot represent named graphs (found graph ${q.graph.key})`,
-          }),
-        );
-      }
-      triples.push(q.triple);
+    const all = Arr.fromIterable(quads);
+    const named = Arr.findFirst(all, (q) => !Term.isDefaultGraph(q.graph));
+    if (Option.isSome(named)) {
+      return Effect.fail(
+        new Serialization.RdfSerializeError({
+          format: FORMAT_NAME,
+          message: `RDF/XML cannot represent named graphs (found graph ${named.value.graph.key})`,
+        }),
+      );
     }
+    const triples = all.map((q) => q.triple);
     return Effect.try({
       try: () => serializeGraph(triples, options ?? {}),
       catch: (e) => {

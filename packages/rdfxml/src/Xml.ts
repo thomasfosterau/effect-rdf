@@ -21,7 +21,9 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
 import * as Match from 'effect/Match';
+import * as Option from 'effect/Option';
 import * as Order from 'effect/Order';
 import type * as Ordering from 'effect/Ordering';
 import * as Result from 'effect/Result';
@@ -361,15 +363,29 @@ const compareStrings = (a: string, b: string): Ordering.Ordering => (a < b ? -1 
  * @since 0.1.0
  * @category canonicalization
  */
-export const canonicalize = (nodes: ReadonlyArray<Node>): string => {
-  let out = '';
-  for (const n of nodes) out += canonicalNode(n, new Map());
-  return out;
-};
+export const canonicalize = (nodes: ReadonlyArray<Node>): string =>
+  nodes.map((n) => canonicalNode(n, HashMap.empty())).join('');
+
+const byPrefix = Order.make<readonly [string, string]>((a, b) => compareStrings(a[0], b[0]));
+
+const byExpandedName = Order.make<Attribute>(
+  (a, b) =>
+    compareStrings(a.namespace ?? '', b.namespace ?? '') ||
+    compareStrings(a.localName, b.localName),
+);
+
+/** The prefixes an element visibly utilises: its own, and those of its prefixed attributes. */
+const utilizedPrefixes = (node: Element): ReadonlyArray<string> =>
+  Arr.dedupe(
+    Arr.filter(
+      [node.prefix, ...node.attributes.map((a) => a.prefix).filter((p) => p !== '')],
+      (p) => p !== 'xml',
+    ),
+  );
 
 // Built once: `canonicalize` runs it for every node of an XML literal.
-const canonicalNode: (node: Node, rendered: ReadonlyMap<string, string>) => string = Match.fn(
-  (node: Node, _rendered: ReadonlyMap<string, string>) => node,
+const canonicalNode: (node: Node, rendered: HashMap.HashMap<string, string>) => string = Match.fn(
+  (node: Node, _rendered: HashMap.HashMap<string, string>) => node,
 ).pipe(
   Match.withReturnType<string>(),
   Match.tag('Text', (node) => escapeText(node.value)),
@@ -378,44 +394,26 @@ const canonicalNode: (node: Node, rendered: ReadonlyMap<string, string>) => stri
     node.data === '' ? `<?${node.target}?>` : `<?${node.target} ${node.data}?>`,
   ),
   Match.tag('Element', (node, _node, rendered) => {
-    let out = '';
-    const utilized = new Set<string>([node.prefix]);
-    for (const a of node.attributes)
-      if (a.prefix !== '' && a.prefix !== 'xml') utilized.add(a.prefix);
-    utilized.delete('xml');
-    const unsorted: Array<readonly [string, string]> = [];
-    for (const p of utilized) {
-      const uri = node.inScopeNamespaces.get(p) ?? '';
-      if ((rendered.get(p) ?? '') !== uri) unsorted.push([p, uri]);
-    }
     const decls = Arr.sort(
-      unsorted,
-      Order.make<readonly [string, string]>((a, b) => compareStrings(a[0], b[0])),
+      Arr.filterMap(utilizedPrefixes(node), (p) => {
+        const uri = node.inScopeNamespaces.get(p) ?? '';
+        return Option.getOrElse(HashMap.get(rendered, p), () => '') === uri
+          ? Result.failVoid
+          : Result.succeed([p, uri] as const);
+      }),
+      byPrefix,
     );
-    let next = rendered;
-    if (Arr.isReadonlyArrayNonEmpty(decls)) {
-      const m = new Map(rendered);
-      for (const [p, uri] of decls) m.set(p, uri);
-      next = m;
-    }
-    out += `<${node.name}`;
-    for (const [p, uri] of decls) {
-      out +=
-        p === '' ? ` xmlns="${escapeAttribute(uri)}"` : ` xmlns:${p}="${escapeAttribute(uri)}"`;
-    }
-    const attrs = Arr.sort(
-      node.attributes,
-      Order.make<Attribute>(
-        (a, b) =>
-          compareStrings(a.namespace ?? '', b.namespace ?? '') ||
-          compareStrings(a.localName, b.localName),
-      ),
-    );
-    for (const a of attrs) out += ` ${a.name}="${escapeAttribute(a.value)}"`;
-    out += '>';
-    for (const c of node.children) out += canonicalNode(c, next);
-    out += `</${node.name}>`;
-    return out;
+    const next = decls.reduce((m, [p, uri]) => HashMap.set(m, p, uri), rendered);
+    const namespaces = decls
+      .map(([p, uri]) =>
+        p === '' ? ` xmlns="${escapeAttribute(uri)}"` : ` xmlns:${p}="${escapeAttribute(uri)}"`,
+      )
+      .join('');
+    const attributes = Arr.sort(node.attributes, byExpandedName)
+      .map((a) => ` ${a.name}="${escapeAttribute(a.value)}"`)
+      .join('');
+    const children = node.children.map((c) => canonicalNode(c, next)).join('');
+    return `<${node.name}${namespaces}${attributes}>${children}</${node.name}>`;
   }),
   Match.exhaustive,
 );

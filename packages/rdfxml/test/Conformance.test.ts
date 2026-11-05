@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as HashMap from 'effect/HashMap';
+import * as Option from 'effect/Option';
 import { Dataset, Isomorphism } from '@thomasfosterau/effect-rdf';
 import { RdfXml } from '../src/index.ts';
 import { parseBothWays, parseNTriples, readManifest, type TestCase } from './support.ts';
@@ -20,10 +22,10 @@ const exists = manifests.every((manifest) => fs.existsSync(manifest));
  * Tests deliberately skipped, with the reason. Currently empty: every test
  * in the rdf11 and rdf12 RDF/XML suites passes.
  */
-const skipList: ReadonlyMap<string, string> = new Map();
+const skipList: HashMap.HashMap<string, string> = HashMap.empty();
 
 const tests: Array<TestCase> = (exists ? manifests.flatMap(readManifest) : []).filter(
-  (t) => !skipList.has(t.name),
+  (t) => !HashMap.has(skipList, t.name),
 );
 const evalTests = tests.filter((t) => t.type === 'TestXMLEval');
 const negativeTests = tests.filter((t) => t.type === 'TestXMLNegativeSyntax');
@@ -42,7 +44,10 @@ describe.skipIf(!exists)('RDF/XML conformance (rdf11 + rdf12 rdf-xml)', () => {
       Effect.gen(function* () {
         const result = yield* parseFile(test);
         const expected = parseNTriples(
-          fs.readFileSync(test.result ?? assert.fail('eval test has no result'), 'utf8'),
+          fs.readFileSync(
+            Option.getOrElse(test.result, () => assert.fail('eval test has no result')),
+            'utf8',
+          ),
         );
         const isomorphic = Isomorphism.isomorphic(result.dataset, expected);
         // On a mismatch, compare the N-Quads first so the failure shows a diff.

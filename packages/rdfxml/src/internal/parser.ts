@@ -24,7 +24,13 @@
 import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
 import * as Parser from '@thomasfosterau/effect-parse/Parser';
 import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Arr from 'effect/Array';
+import { constFalse } from 'effect/Function';
 import * as HashSet from 'effect/HashSet';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import type * as Xml from '../Xml.ts';
 import {
@@ -38,6 +44,7 @@ import {
   PUBID_RE,
   space,
 } from './chars.ts';
+import { loop } from './loop.ts';
 
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
 const XMLNS_NAMESPACE = 'http://www.w3.org/2000/xmlns/';
@@ -82,46 +89,76 @@ interface RawAttribute {
 /** An open element (or the content an entity's replacement text adds). */
 interface Frame {
   readonly qname: string;
-  readonly start: number;
+  /** Where its start tag is (found as it is read, when the last position found is near). */
+  readonly position: Xml.Position;
   readonly prefix: string;
   readonly localName: string;
-  readonly namespace: string | undefined;
+  readonly namespace: Option.Option<string>;
   readonly attributes: ReadonlyArray<Xml.Attribute>;
   readonly declarations: ReadonlyArray<Xml.NamespaceDeclaration>;
   readonly inScope: ReadonlyMap<string, string>;
   readonly children: Array<Xml.Node>;
   text: string;
   textStart: number;
+  /** Whether the last of `children` is a text node (so `text` may merge into it). */
+  endsWithText: boolean;
   /** How many children precede the last child taken by a `RootChildHook`: text never merges into them. */
   floor: number;
 }
 
-const PREDEFINED = new Map([
-  ['lt', '<'],
-  ['gt', '>'],
-  ['amp', '&'],
-  ['apos', "'"],
-  ['quot', '"'],
-]);
+/** The replacement text of a predefined entity, or `''` if `entity` is not one. */
+const predefined = (entity: string): string =>
+  entity === 'lt'
+    ? '<'
+    : entity === 'gt'
+      ? '>'
+      : entity === 'amp'
+        ? '&'
+        : entity === 'apos'
+          ? "'"
+          : entity === 'quot'
+            ? '"'
+            : '';
+
+/** The types (tokenized or not) and defaults an `<!ATTLIST>` declares for an element. */
+interface AttributeList {
+  readonly types: MutableHashMap.MutableHashMap<string, boolean>;
+  readonly defaults: Array<AttributeDefault>;
+}
 
 const baseFrame = (inScope: ReadonlyMap<string, string>): Frame => ({
   qname: '',
-  start: 0,
+  position: { offset: 0, line: 0, column: 0 },
   prefix: '',
   localName: '',
-  namespace: undefined,
+  namespace: Option.none(),
   attributes: [],
   declarations: [],
   inScope,
   children: [],
   text: '',
   textStart: -1,
+  endsWithText: false,
   floor: 0,
 });
 
 /** Whether `offset` is on line `l` (from 0) of the text whose line starts are `starts`. */
 const onLine = (starts: ReadonlyArray<number>, l: number, offset: number): boolean =>
   (starts[l] ?? Infinity) <= offset && offset < (starts[l + 1] ?? Infinity);
+
+/** The line (from 0) of `offset` among lines `lo … hi` of the text whose line starts are `starts`. */
+const lineIndex = (
+  starts: ReadonlyArray<number>,
+  offset: number,
+  lo: number,
+  hi: number,
+): number => {
+  if (lo >= hi) return lo;
+  const mid = (lo + hi + 1) >> 1;
+  return (starts[mid] ?? 0) <= offset
+    ? lineIndex(starts, offset, mid, hi)
+    : lineIndex(starts, offset, lo, mid - 1);
+};
 
 /**
  * Receives each child element of the root as soon as it is closed, with the
@@ -137,15 +174,21 @@ const keepChild: RootChildHook = () => false;
 /** Up to how many attributes a start tag's duplicates are found by searching its list. */
 const SMALL = 16;
 
+/** Stands for the declarations of an `<!ATTLIST>` until one is read. */
+const NO_ATTRIBUTE_LIST: AttributeList = { types: MutableHashMap.empty(), defaults: [] };
+
+/** Stands for the set of a start tag's expanded names while it has too few to need one. */
+const UNUSED: MutableHashSet.MutableHashSet<string> = MutableHashSet.empty();
+
 /** The document being parsed. */
 class Context {
   /** The text being parsed: the document, or an entity's replacement text. */
   src: string;
   lineStarts: ReadonlyArray<number>;
-  readonly entities = new Map<string, string>();
-  readonly externalEntities = new Set<string>();
-  readonly attributeDefaults = new Map<string, Array<AttributeDefault>>();
-  readonly attributeTypes = new Map<string, Map<string, boolean>>();
+  readonly entities = MutableHashMap.empty<string, string>();
+  readonly externalEntities = MutableHashSet.empty<string>();
+  /** The `<!ATTLIST>` declarations, by element name. */
+  readonly attributeLists = MutableHashMap.empty<string, AttributeList>();
   expanded = 0;
   hasExternalSubset = false;
 
@@ -153,42 +196,40 @@ class Context {
   onRootChild: RootChildHook = keepChild;
 
   /** The frames of the open elements; those below `base` belong to enclosing text. */
-  stack: Array<Frame>;
+  stack: Arr.NonEmptyArray<Frame>;
   base = 1;
   /** The entities whose replacement text is being parsed. */
-  entityStack: ReadonlySet<string> = new Set();
+  entityStack: HashSet.HashSet<string> = HashSet.empty();
 
   // The parts of the document
-  version: string | undefined;
-  encoding: string | undefined;
-  standalone: boolean | undefined;
-  doctype: Xml.DocumentType | undefined;
+  version: Option.Option<string> = Option.none();
+  encoding: Option.Option<string> = Option.none();
+  standalone: Option.Option<boolean> = Option.none();
+  doctype: Option.Option<Xml.DocumentType> = Option.none();
   readonly prolog: Array<Xml.Comment | Xml.ProcessingInstruction> = [];
   readonly epilog: Array<Xml.Comment | Xml.ProcessingInstruction> = [];
-  root: Xml.Element | undefined;
+  root: Option.Option<Xml.Element> = Option.none();
 
   // Registers for the markup being read (none of it nests)
   tagStart = 0;
   qname = '';
   raw: Array<RawAttribute> = [];
   /** The qualified names read so far, split (`nameParts`). */
-  readonly qnames = new Map<string, readonly [prefix: string, local: string]>();
-  /** The names in `raw`, once it is too long to search (empty until then). */
-  readonly names = new Set<string>();
-  attlistElement = '';
+  readonly qnames = MutableHashMap.empty<string, readonly [prefix: string, local: string]>();
+  /** The names in `namesOf`, once it is too long to search. */
+  readonly names = MutableHashSet.empty<string>();
+  /** The attributes whose names `names` holds (cleared and refilled for each long start tag). */
+  namesOf: ReadonlyArray<RawAttribute> = [];
+  /** The declarations of the `<!ATTLIST>` being read (set as each is begun). */
+  attributeList: AttributeList = NO_ATTRIBUTE_LIST;
   attributeName = '';
   attributeType = '';
   tokenized = false;
-  entityName = '';
-  parameter = false;
-  entityValue: string | undefined;
-  doctypeName = '';
-  publicId: string | undefined;
-  systemId: string | undefined;
 
   constructor(src: string, lineStarts: ReadonlyArray<number>) {
     this.src = src;
     this.lineStarts = lineStarts;
+    // `inScopeNamespaces` is a public `ReadonlyMap`
     this.stack = [baseFrame(new Map())];
   }
 
@@ -197,33 +238,36 @@ class Context {
 
   position(offset: number): Xml.Position {
     const starts = this.lineStarts;
-    // The last position's line, or the one after it, before a binary search
+    // The last position's line, or the one after or before it (where the text before a tag
+    // starts), before a binary search
     const line = this.line;
-    let lo = onLine(starts, line, offset) ? line : onLine(starts, line + 1, offset) ? line + 1 : -1;
-    if (lo === -1) {
-      lo = 0;
-      let hi = starts.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi + 1) >> 1;
-        if ((starts[mid] ?? 0) <= offset) lo = mid;
-        else hi = mid - 1;
-      }
-    }
+    const lo = onLine(starts, line, offset)
+      ? line
+      : onLine(starts, line + 1, offset)
+        ? line + 1
+        : line > 0 && onLine(starts, line - 1, offset)
+          ? line - 1
+          : lineIndex(starts, offset, 0, starts.length - 1);
     this.line = lo;
     return { offset, line: lo + 1, column: offset - (starts[lo] ?? 0) + 1 };
   }
 
   /** Whether the start tag being read has an attribute `name` (adding it if not). */
-  hasAttribute(name: string): boolean {
-    if (this.raw.length < SMALL) return this.raw.some((a) => a.name === name);
-    if (this.names.size === 0) this.raw.forEach((a) => this.names.add(a.name));
-    if (this.names.has(name)) return true;
-    this.names.add(name);
+  hasAttribute(attribute: string): boolean {
+    if (this.raw.length < SMALL) return this.raw.some((a) => a.name === attribute);
+    const names = this.names;
+    if (this.namesOf !== this.raw) {
+      MutableHashSet.clear(names);
+      this.raw.forEach((a) => MutableHashSet.add(names, a.name));
+      this.namesOf = this.raw;
+    }
+    if (MutableHashSet.has(names, attribute)) return true;
+    MutableHashSet.add(names, attribute);
     return false;
   }
 
   top(): Frame {
-    return this.stack[this.stack.length - 1]!;
+    return Arr.lastNonEmpty(this.stack);
   }
 }
 
@@ -263,7 +307,7 @@ const afterWs: P<void> = Parser.make<void>((state) => {
 
 const expect = (s: string): P<unknown> => Parser.alt(lit(s), failHere(`Expected "${s}"`));
 
-const name: P<string> = Parser.alt(
+const xmlName: P<string> = Parser.alt(
   Parser.taken(Parser.seq(Token.oneOf(nameStart), Token.takeWhile(nameChar))),
   failHere('Expected a name'),
 );
@@ -290,13 +334,9 @@ const checked = <A>(p: P<A>, check: (a: A, pos: number) => void): P<A> =>
     Parser.map(([a]) => a),
   );
 
-const withEntry = (set: ReadonlySet<string>, entry: string): Set<string> => {
-  const next = new Set(set);
-  next.add(entry);
-  return next;
-};
-
 const collapse = (value: string): string => value.replace(/ +/g, ' ').replace(/^ | $/g, '');
+
+const CHAR_REF_RE = /^#(x[0-9a-fA-F]+|[0-9]+)$/;
 
 // -----------------------------------------------------------------------------
 // References
@@ -312,56 +352,59 @@ const charRef = (body: string, offset: number): string => {
 
 /** Expands the character references in an entity value, leaving entity references. */
 const expandCharRefs = (raw: string, offset: number): string =>
-  raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[^;]*);|&/g, (m, body: string | undefined, i: number) => {
-    if (body === undefined) fail('Invalid reference', offset + i);
+  // `body` is unset only when the bare `&` (the only one-character match) was matched
+  raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[^;]*);|&/g, (m: string, body: string, i: number) => {
+    if (m.length === 1) fail('Invalid reference', offset + i);
     if (body.startsWith('#')) return charRef(body, offset + i);
     if (!isName(body)) fail('Invalid entity reference', offset + i);
     return m;
   });
 
-/** The replacement text of a reference to `name`, counted against the expansion limit. */
-const entityText = (name: string, offset: number, stack: ReadonlySet<string>): string => {
-  if (!isName(name)) fail('Invalid entity reference', offset);
-  const predefined = PREDEFINED.get(name);
-  if (predefined !== undefined)
-    return predefined === '<' ? '&#60;' : predefined === '&' ? '&#38;' : predefined;
-  if (x.externalEntities.has(name)) fail(`External entity "${name}" is not supported`, offset);
-  const value = x.entities.get(name);
-  if (value === undefined) fail(`Undefined entity "${name}"`, offset);
-  if (stack.has(name)) fail(`Recursive entity "${name}"`, offset);
-  if (stack.size >= MAX_ENTITY_DEPTH) fail('Entity references are nested too deeply', offset);
+/** The replacement text of a reference to `entity`, counted against the expansion limit. */
+const entityText = (entity: string, offset: number, stack: HashSet.HashSet<string>): string => {
+  if (!isName(entity)) fail('Invalid entity reference', offset);
+  const builtIn = predefined(entity);
+  if (builtIn !== '') return builtIn === '<' ? '&#60;' : builtIn === '&' ? '&#38;' : builtIn;
+  if (MutableHashSet.has(x.externalEntities, entity)) {
+    fail(`External entity "${entity}" is not supported`, offset);
+  }
+  const value = Option.getOrElse(MutableHashMap.get(x.entities, entity), () =>
+    fail(`Undefined entity "${entity}"`, offset),
+  );
+  if (HashSet.has(stack, entity)) fail(`Recursive entity "${entity}"`, offset);
+  if (HashSet.size(stack) >= MAX_ENTITY_DEPTH) {
+    fail('Entity references are nested too deeply', offset);
+  }
   x.expanded += value.length;
   if (x.expanded > MAX_ENTITY_EXPANSION) fail('Entity expansion limit exceeded', offset);
   return value;
 };
 
+/**
+ * What attribute-value normalisation replaces: a reference (to the first `;`
+ * after its `&`), an `&` with no `;` after it, `<`, and white space other
+ * than a space. The matches are found before any is replaced, so the nested
+ * normalisation of an entity's replacement text may reuse it.
+ */
+const ATTRIBUTE_SPECIAL_RE = /&([^;]*);|[&<\t\n\r]/g;
+const ATTRIBUTE_SPECIAL_TEST_RE = /[&<\t\n\r]/;
+
 /** Normalises an attribute value (XML 1.0 §3.3.3). */
-const normalizeAttribute = (raw: string, offset: number, stack: ReadonlySet<string>): string => {
-  let out = '';
-  let i = 0;
-  while (i < raw.length) {
-    const c = raw[i]!;
-    if (c === '<') fail('"<" is not allowed in attribute values', offset + i);
-    if (c === '&') {
-      const semi = raw.indexOf(';', i);
-      if (semi === -1) fail('Unterminated reference', offset + i);
-      const body = raw.slice(i + 1, semi);
-      if (body.startsWith('#')) {
-        if (!/^#(x[0-9a-fA-F]+|[0-9]+)$/.test(body))
-          fail('Invalid character reference', offset + i);
-        out += charRef(body, offset + i);
-      } else {
+const normalizeAttribute = (raw: string, offset: number, stack: HashSet.HashSet<string>): string =>
+  !ATTRIBUTE_SPECIAL_TEST_RE.test(raw)
+    ? raw
+    : // `body` is set for every match longer than one character (a reference)
+      raw.replace(ATTRIBUTE_SPECIAL_RE, (m: string, body: string, i: number): string => {
+        if (m === '<') return fail('"<" is not allowed in attribute values', offset + i);
+        if (m === '&') return fail('Unterminated reference', offset + i);
+        if (m.length === 1) return ' ';
+        if (body.startsWith('#')) {
+          if (!CHAR_REF_RE.test(body)) fail('Invalid character reference', offset + i);
+          return charRef(body, offset + i);
+        }
         const replacement = entityText(body, offset + i, stack);
-        out += normalizeAttribute(replacement, offset + i, withEntry(stack, body));
-      }
-      i = semi + 1;
-    } else {
-      out += c === '\t' || c === '\n' || c === '\r' ? ' ' : c;
-      i++;
-    }
-  }
-  return out;
-};
+        return normalizeAttribute(replacement, offset + i, HashSet.add(stack, body));
+      });
 
 /** An attribute value literal, normalised. */
 const attributeValue: P<string> = Parser.alt(
@@ -374,7 +417,7 @@ const attributeValue: P<string> = Parser.alt(
     ),
   ),
   failHere<readonly [number, string]>('Expected a quoted attribute value'),
-).pipe(Parser.map(([quote, raw]) => normalizeAttribute(raw, quote + 1, new Set())));
+).pipe(Parser.map(([quote, raw]) => normalizeAttribute(raw, quote + 1, HashSet.empty())));
 
 // -----------------------------------------------------------------------------
 // Comments and processing instructions
@@ -383,18 +426,14 @@ const attributeValue: P<string> = Parser.alt(
 const comment: P<Xml.Comment> = Parser.terminated(
   Parser.seq(
     Parser.location,
-    Parser.preceded(lit('<!--'), Parser.alt(Token.takeUntil('--'), Parser.succeed(undefined))),
+    Parser.preceded(lit('<!--'), Parser.opt(Token.takeUntil('--'))),
     Parser.location,
   ).pipe(
-    Parser.tap(([start, value, end]) => {
-      if (value === undefined) fail('Unterminated comment', start);
+    Parser.map(([start, body, end]): Xml.Comment => {
+      const value = Option.getOrElse(body, () => fail('Unterminated comment', start));
       if (x.src.charCodeAt(end + 2) !== 0x3e) fail('"--" is not allowed in comments', end);
+      return { _tag: 'Comment', value, position: x.position(start) };
     }),
-    Parser.map(([start, value]): Xml.Comment => ({
-      _tag: 'Comment',
-      value: value!,
-      position: x.position(start),
-    })),
   ),
   lit('-->'),
 );
@@ -404,24 +443,21 @@ const pi: P<Xml.ProcessingInstruction> = Parser.terminated(
     Parser.location,
     Parser.preceded(
       lit('<?'),
-      checked(name, (target, pos) => {
+      checked(xmlName, (target, pos) => {
         if (target.toLowerCase() === 'xml')
           fail('Reserved processing instruction target', pos - target.length - 2);
         if (target.includes(':')) fail('Processing instruction targets cannot contain ":"', pos);
       }),
     ),
     Parser.alt(
-      Parser.preceded(at('?>'), Parser.succeed('')),
-      Parser.preceded(requireWs, Parser.alt(Token.takeUntil('?>'), Parser.succeed(undefined))),
+      Parser.preceded(at('?>'), Parser.succeed(Option.some(''))),
+      Parser.preceded(requireWs, Parser.opt(Token.takeUntil('?>'))),
     ),
   ).pipe(
-    Parser.tap(([start, , data]) => {
-      if (data === undefined) fail('Unterminated processing instruction', start);
-    }),
     Parser.map(([start, target, data]): Xml.ProcessingInstruction => ({
       _tag: 'ProcessingInstruction',
       target,
-      data: data!,
+      data: Option.getOrElse(data, () => fail('Unterminated processing instruction', start)),
       position: x.position(start),
     })),
   ),
@@ -433,9 +469,9 @@ const pi: P<Xml.ProcessingInstruction> = Parser.terminated(
 // -----------------------------------------------------------------------------
 
 /** `ExternalID`: `[publicId, systemId]`. */
-const externalId: P<readonly [string | undefined, string | undefined]> = Parser.alt(
+const externalId: P<readonly [Option.Option<string>, Option.Option<string>]> = Parser.alt(
   Parser.preceded(Parser.seq(lit('SYSTEM'), requireWs), quoted).pipe(
-    Parser.map((system) => [undefined, system] as const),
+    Parser.map((system) => [Option.none(), Option.some(system)] as const),
   ),
   Parser.preceded(
     Parser.seq(expect('PUBLIC'), requireWs),
@@ -444,21 +480,17 @@ const externalId: P<readonly [string | undefined, string | undefined]> = Parser.
         if (!PUBID_RE.test(pub)) fail('Invalid public identifier', pos);
       }),
       Parser.preceded(Parser.seq(ws, afterWs), quoted),
-    ),
+    ).pipe(Parser.map(([pub, system]) => [Option.some(pub), Option.some(system)] as const)),
   ),
 );
 
 const skipParens: P<unknown> = Parser.preceded(
   expect('('),
-  Parser.seq(
-    Parser.location,
-    Token.takeTill(')'),
-    Parser.alt(lit(')'), Parser.succeed(undefined)),
-  ).pipe(
+  Parser.seq(Parser.location, Token.takeTill(')'), Parser.opt(lit(')'))).pipe(
     Parser.tap(([pos, tokens, close]) => {
-      if (close === undefined) fail('Unterminated enumeration', pos);
-      for (const t of tokens.split('|')) {
-        if (!NMTOKEN_RE.test(t.trim())) fail('Invalid enumeration', pos);
+      if (Option.isNone(close)) fail('Unterminated enumeration', pos);
+      if (tokens.split('|').some((t) => !NMTOKEN_RE.test(t.trim()))) {
+        fail('Invalid enumeration', pos);
       }
     }),
   ),
@@ -474,10 +506,13 @@ const TOKENIZED_TYPES: HashSet.HashSet<string> = HashSet.make(
   'NMTOKENS',
 );
 
-const defaultDecl: P<string | undefined> = Parser.alt(
-  Parser.preceded(lit('#REQUIRED'), Parser.succeed<string | undefined>(undefined)),
-  Parser.preceded(lit('#IMPLIED'), Parser.succeed<string | undefined>(undefined)),
-  Parser.preceded(Parser.opt(Parser.seq(lit('#FIXED'), requireWs)), attributeValue),
+const defaultDecl: P<Option.Option<string>> = Parser.alt(
+  Parser.preceded(lit('#REQUIRED'), Parser.succeed(Option.none<string>())),
+  Parser.preceded(lit('#IMPLIED'), Parser.succeed(Option.none<string>())),
+  Parser.preceded(
+    Parser.opt(Parser.seq(lit('#FIXED'), requireWs)),
+    Parser.map(attributeValue, Option.some),
+  ),
 );
 
 const notation: P<void> = Parser.make<void>((state) =>
@@ -485,7 +520,7 @@ const notation: P<void> = Parser.make<void>((state) =>
 );
 
 const attributeDef: P<unknown> = Parser.seq(
-  Parser.tap(name, (n) => {
+  Parser.tap(xmlName, (n) => {
     x.attributeName = n;
     x.tokenized = true;
   }),
@@ -493,7 +528,7 @@ const attributeDef: P<unknown> = Parser.seq(
   Parser.alt(
     Parser.preceded(at('('), skipParens),
     Parser.seq(
-      checked(name, (type, pos) => {
+      checked(xmlName, (type, pos) => {
         x.attributeType = type;
         if (type === 'CDATA') x.tokenized = false;
         else if (type !== 'NOTATION' && !HashSet.has(TOKENIZED_TYPES, type)) {
@@ -506,18 +541,15 @@ const attributeDef: P<unknown> = Parser.seq(
   requireWs,
   defaultDecl,
 ).pipe(
-  Parser.tap(([, , , , v]) => {
-    // SAFETY: the default declaration yields the default value string, or `undefined` for
-    // `#REQUIRED` / `#IMPLIED`.
-    const value = v;
-    let types = x.attributeTypes.get(x.attlistElement);
-    if (types === undefined) x.attributeTypes.set(x.attlistElement, (types = new Map()));
-    const defaults = x.attributeDefaults.get(x.attlistElement)!;
-    const name = x.attributeName;
-    if (types.has(name)) return;
-    types.set(name, x.tokenized);
-    if (value !== undefined) {
-      defaults.push({ name, value: x.tokenized ? collapse(value) : value, tokenized: x.tokenized });
+  Parser.tap(([, , , , defaultValue]) => {
+    const { types, defaults } = x.attributeList;
+    const attribute = x.attributeName;
+    if (MutableHashMap.has(types, attribute)) return; // first wins
+    const tokenized = x.tokenized;
+    MutableHashMap.set(types, attribute, tokenized);
+    if (Option.isSome(defaultValue)) {
+      const value = defaultValue.value;
+      defaults.push({ name: attribute, value: tokenized ? collapse(value) : value, tokenized });
     }
   }),
 );
@@ -525,10 +557,14 @@ const attributeDef: P<unknown> = Parser.seq(
 const attlistDecl: P<unknown> = Parser.preceded(
   Parser.seq(lit('<!ATTLIST'), requireWs),
   Parser.seq(
-    Parser.tap(name, (element) => {
-      x.attlistElement = element;
-      if (!x.attributeDefaults.has(element)) x.attributeDefaults.set(element, []);
-      if (!x.attributeTypes.has(element)) x.attributeTypes.set(element, new Map());
+    Parser.tap(xmlName, (element) => {
+      const known = MutableHashMap.get(x.attributeLists, element);
+      if (Option.isSome(known)) x.attributeList = known.value;
+      else {
+        const list: AttributeList = { types: MutableHashMap.empty(), defaults: [] };
+        MutableHashMap.set(x.attributeLists, element, list);
+        x.attributeList = list;
+      }
     }),
     Parser.repeat(Parser.preceded(Parser.seq(ws, Parser.not(lit('>')), afterWs), attributeDef)),
     ws,
@@ -543,7 +579,7 @@ const entityDecl: P<unknown> = Parser.preceded(
       Parser.preceded(Parser.seq(lit('%'), requireWs), Parser.succeed(true)),
       Parser.succeed(false),
     ),
-    checked(name, (n, pos) => {
+    checked(xmlName, (n, pos) => {
       if (n.includes(':')) fail('Entity names cannot contain ":"', pos);
     }),
     requireWs,
@@ -553,7 +589,7 @@ const entityDecl: P<unknown> = Parser.preceded(
         Parser.seq(Parser.location, quoted).pipe(
           Parser.map(([quote, raw]) => {
             if (raw.includes('%')) fail('Parameter entity references are not supported', quote + 1);
-            return expandCharRefs(raw, quote + 1);
+            return Option.some(expandCharRefs(raw, quote + 1));
           }),
         ),
       ),
@@ -562,20 +598,22 @@ const entityDecl: P<unknown> = Parser.preceded(
         Parser.opt(
           Parser.preceded(
             Parser.seq(Token.takeWhile(space, { min: 1 }), lit('NDATA')),
-            Parser.seq(requireWs, name),
+            Parser.seq(requireWs, xmlName),
           ),
         ),
-      ).pipe(Parser.as(undefined)),
+      ).pipe(Parser.as(Option.none<string>())),
     ),
     ws,
     expect('>'),
   ),
 ).pipe(
-  Parser.tap(([parameter, name, , value]) => {
+  Parser.tap(([parameter, entity, , value]) => {
     if (parameter) return;
-    if (x.entities.has(name) || x.externalEntities.has(name)) return; // first wins
-    if (value === undefined) x.externalEntities.add(name);
-    else x.entities.set(name, value);
+    if (MutableHashMap.has(x.entities, entity) || MutableHashSet.has(x.externalEntities, entity)) {
+      return; // first wins
+    }
+    if (Option.isSome(value)) MutableHashMap.set(x.entities, entity, value.value);
+    else MutableHashSet.add(x.externalEntities, entity);
   }),
 );
 
@@ -610,7 +648,7 @@ const internalSubset: P<unknown> = Parser.terminated(
 );
 
 const doctype: P<unknown> = Parser.seq(
-  Parser.preceded(Parser.seq(lit('<!DOCTYPE'), requireWs), name),
+  Parser.preceded(Parser.seq(lit('<!DOCTYPE'), requireWs), xmlName),
   Parser.alt(
     Parser.preceded(
       Parser.seq(ws, Parser.peek(Parser.alt(lit('SYSTEM'), lit('PUBLIC'))), afterWs),
@@ -620,13 +658,19 @@ const doctype: P<unknown> = Parser.seq(
         x.hasExternalSubset = true;
       }),
     ),
-    Parser.preceded(ws, Parser.succeed([undefined, undefined] as const)),
+    Parser.preceded(ws, Parser.succeed([Option.none<string>(), Option.none<string>()] as const)),
   ),
   Parser.opt(Parser.preceded(lit('['), Parser.terminated(internalSubset, ws))),
   expect('>'),
 ).pipe(
-  Parser.tap(([name, [publicId, systemId]]) => {
-    x.doctype = { name, publicId, systemId, entities: new Map(x.entities) };
+  Parser.tap(([doctypeName, [publicId, systemId]]) => {
+    x.doctype = Option.some({
+      name: doctypeName,
+      publicId: Option.getOrUndefined(publicId),
+      systemId: Option.getOrUndefined(systemId),
+      // `DocumentType.entities` is a public `ReadonlyMap`
+      entities: new Map(x.entities),
+    });
   }),
 );
 
@@ -634,31 +678,39 @@ const doctype: P<unknown> = Parser.seq(
 // Elements
 // -----------------------------------------------------------------------------
 
-const pushText = (frame: Frame, s: string, at: number): void => {
+const pushText = (frame: Frame, s: string, offset: number): void => {
   if (s === '') return;
-  if (frame.textStart === -1) frame.textStart = at;
+  if (frame.textStart === -1) frame.textStart = offset;
   frame.text += s;
 };
+
+const isText = Predicate.isTagged('Text');
 
 const flush = (frame: Frame): void => {
   if (frame.text !== '') {
     const children = frame.children;
-    const prev = children[children.length - 1];
-    if (prev !== undefined && prev._tag === 'Text' && children.length > frame.floor) {
+    const prev = frame.endsWithText && children.length > frame.floor ? children.at(-1) : undefined;
+    if (isText(prev)) {
       children[children.length - 1] = { ...prev, value: prev.value + frame.text };
     } else {
       children.push({ _tag: 'Text', value: frame.text, position: x.position(frame.textStart) });
+      frame.endsWithText = true;
     }
   }
   frame.text = '';
   frame.textStart = -1;
 };
 
-/** A child that is not text. */
-const pushNode = (node: Xml.Node): void => {
-  const frame = x.top();
+/** Adds a child that is not text to `frame`, after its text. */
+const pushChild = (frame: Frame, node: Xml.Node): void => {
   flush(frame);
   frame.children.push(node);
+  frame.endsWithText = false;
+};
+
+/** A child that is not text. */
+const pushNode = (node: Xml.Node): void => {
+  pushChild(x.top(), node);
 };
 
 /**
@@ -666,37 +718,78 @@ const pushNode = (node: Xml.Node): void => {
  * names of a document repeat, so each is checked and split once, and its
  * parts are the same strings each time.
  */
-const nameParts = (qname: string, offset: number): readonly [prefix: string, local: string] => {
-  const known = x.qnames.get(qname);
-  if (known !== undefined) return known;
+const splitName = (qname: string, offset: number): readonly [prefix: string, local: string] => {
   const i = qname.indexOf(':');
-  let parts: readonly [string, string];
   if (i === -1) {
     if (!isNCName(qname)) fail(`Invalid name "${qname}"`, offset);
-    parts = ['', qname];
-  } else {
-    const prefix = qname.slice(0, i);
-    const local = qname.slice(i + 1);
-    if (!isNCName(prefix) || !isNCName(local)) fail(`Invalid qualified name "${qname}"`, offset);
-    if (prefix === 'xmlns') fail('Elements and attributes cannot use the "xmlns" prefix', offset);
-    parts = [prefix, local];
+    return ['', qname];
   }
-  x.qnames.set(qname, parts);
+  const prefix = qname.slice(0, i);
+  const local = qname.slice(i + 1);
+  if (!isNCName(prefix) || !isNCName(local)) fail(`Invalid qualified name "${qname}"`, offset);
+  if (prefix === 'xmlns') fail('Elements and attributes cannot use the "xmlns" prefix', offset);
+  return [prefix, local];
+};
+
+const nameParts = (qname: string, offset: number): readonly [prefix: string, local: string] => {
+  const known = MutableHashMap.get(x.qnames, qname);
+  if (Option.isSome(known)) return known.value;
+  const parts = splitName(qname, offset);
+  MutableHashMap.set(x.qnames, qname, parts);
   return parts;
 };
 
-const resolveName = (
-  qname: string,
+const XML_NAMESPACE_OPTION = Option.some(XML_NAMESPACE);
+
+/** The namespace of a name with `prefix` (an element's default namespace if `''`). */
+const namespaceOf = (
+  prefix: string,
   ns: ReadonlyMap<string, string>,
   isElement: boolean,
   offset: number,
-): readonly [string, string, string | undefined] => {
-  const [prefix, local] = nameParts(qname, offset);
-  if (prefix === '') return ['', local, isElement ? ns.get('') : undefined];
-  if (prefix === 'xml') return [prefix, local, XML_NAMESPACE];
+): Option.Option<string> => {
+  if (prefix === '') return isElement ? Option.fromUndefinedOr(ns.get('')) : Option.none();
+  if (prefix === 'xml') return XML_NAMESPACE_OPTION;
   const uri = ns.get(prefix);
   if (uri === undefined) fail(`Unbound namespace prefix "${prefix}"`, offset);
-  return [prefix, local, uri];
+  return Option.some(uri);
+};
+
+/** The namespace prefix an `xmlns` / `xmlns:…` attribute declares, or none for any other attribute. */
+const declaredPrefix = (attribute: string): Option.Option<string> =>
+  attribute === 'xmlns'
+    ? Option.some('')
+    : attribute.startsWith('xmlns:')
+      ? Option.some(attribute.slice(6))
+      : Option.none();
+
+const isDeclaration = (attribute: string): boolean =>
+  attribute === 'xmlns' || attribute.startsWith('xmlns:');
+
+/** The namespaces in scope of an element that makes `declarations` (which are not empty). */
+const declare = (
+  parentNs: ReadonlyMap<string, string>,
+  declarations: ReadonlyArray<Xml.NamespaceDeclaration>,
+): ReadonlyMap<string, string> => {
+  // `inScopeNamespaces` is a public `ReadonlyMap`
+  const own = new Map(parentNs);
+  declarations.forEach((d) => {
+    if (d.namespace === '') own.delete('');
+    else own.set(d.prefix, d.namespace);
+  });
+  return own;
+};
+
+/** Checks a namespace declaration, which declares `prefix` to be `uri`. */
+const checkDeclaration = (prefix: string, uri: string, offset: number): void => {
+  if (prefix !== '' && !isNCName(prefix)) fail('Invalid namespace prefix', offset);
+  if (prefix === 'xmlns') fail('The "xmlns" prefix cannot be declared', offset);
+  if (prefix === 'xml' && uri !== XML_NAMESPACE) fail('The "xml" prefix cannot be rebound', offset);
+  if (prefix !== 'xml' && uri === XML_NAMESPACE) {
+    fail('The XML namespace cannot be bound to another prefix', offset);
+  }
+  if (uri === XMLNS_NAMESPACE) fail('The xmlns namespace cannot be declared', offset);
+  if (prefix !== '' && uri === '') fail('Prefixed namespace declarations cannot be empty', offset);
 };
 
 /** Opens the element whose start tag was just read (closing it too if it was empty). */
@@ -705,58 +798,51 @@ const openElement = (empty: boolean): void => {
   const qname = x.qname;
   const raw = x.raw;
   // attribute types and defaults from the internal subset
-  const types = x.attributeTypes.get(qname);
-  if (types !== undefined) {
-    for (const a of raw) if (types.get(a.name) === true) a.value = collapse(a.value);
-  }
-  for (const d of x.attributeDefaults.get(qname) ?? []) {
-    if (!x.hasAttribute(d.name))
-      raw.push({ name: d.name, value: d.value, offset: start, defaulted: true });
+  if (!MutableHashMap.isEmpty(x.attributeLists)) {
+    const list = MutableHashMap.get(x.attributeLists, qname);
+    if (Option.isSome(list)) {
+      const { types, defaults } = list.value;
+      raw.forEach((a) => {
+        if (Option.getOrElse(MutableHashMap.get(types, a.name), constFalse)) {
+          a.value = collapse(a.value);
+        }
+      });
+      defaults.forEach((d) => {
+        if (!x.hasAttribute(d.name)) {
+          raw.push({ name: d.name, value: d.value, offset: start, defaulted: true });
+        }
+      });
+    }
   }
 
   // namespace declarations
   const parent = x.top();
   const parentNs = parent.inScope;
-  let inScope = parentNs;
   const declarations: Array<Xml.NamespaceDeclaration> = [];
-  for (const a of raw) {
-    let prefix: string | undefined;
-    if (a.name === 'xmlns') prefix = '';
-    else if (a.name.startsWith('xmlns:')) prefix = a.name.slice(6);
-    if (prefix === undefined) continue;
-    if (prefix !== '' && !isNCName(prefix)) fail('Invalid namespace prefix', a.offset);
-    if (prefix === 'xmlns') fail('The "xmlns" prefix cannot be declared', a.offset);
-    if (prefix === 'xml' && a.value !== XML_NAMESPACE) {
-      fail('The "xml" prefix cannot be rebound', a.offset);
-    }
-    if (prefix !== 'xml' && a.value === XML_NAMESPACE) {
-      fail('The XML namespace cannot be bound to another prefix', a.offset);
-    }
-    if (a.value === XMLNS_NAMESPACE) fail('The xmlns namespace cannot be declared', a.offset);
-    if (prefix !== '' && a.value === '') {
-      fail('Prefixed namespace declarations cannot be empty', a.offset);
-    }
-    if (prefix === 'xml') continue;
-    if (inScope === parentNs) inScope = new Map(parentNs);
-    // SAFETY: `inScope` was copied into a fresh mutable map on the line above when it was still
-    // the parent's.
-    const own = inScope as Map<string, string>;
-    if (a.value === '') own.delete('');
-    else own.set(prefix, a.value);
-    declarations.push({ prefix, namespace: a.value });
-  }
+  raw.forEach((a) => {
+    const declared = declaredPrefix(a.name);
+    if (Option.isNone(declared)) return;
+    const prefix = declared.value;
+    checkDeclaration(prefix, a.value, a.offset);
+    if (prefix !== 'xml') declarations.push({ prefix, namespace: a.value });
+  });
+  const inScope = Arr.isArrayNonEmpty(declarations) ? declare(parentNs, declarations) : parentNs;
 
-  const [prefix, localName, namespace] = resolveName(qname, inScope, true, start + 1);
+  const [prefix, localName] = nameParts(qname, start + 1);
+  const namespace = namespaceOf(prefix, inScope, true, start + 1);
   const attributes: Array<Xml.Attribute> = [];
-  const expanded = raw.length < SMALL ? undefined : new Set<string>();
-  for (const a of raw) {
-    if (a.name === 'xmlns' || a.name.startsWith('xmlns:')) continue;
-    const [ap, al, ans] = resolveName(a.name, inScope, false, a.offset);
-    const duplicate =
-      expanded === undefined
-        ? attributes.some((b) => b.localName === al && b.namespace === ans)
-        : expanded.size === expanded.add(`${ans ?? ''} ${al}`).size;
+  const large = raw.length >= SMALL;
+  const expanded = large ? MutableHashSet.empty<string>() : UNUSED;
+  raw.forEach((a) => {
+    if (isDeclaration(a.name)) return;
+    const [ap, al] = nameParts(a.name, a.offset);
+    const ans = Option.getOrUndefined(namespaceOf(ap, inScope, false, a.offset));
+    const key = `${ans ?? ''} ${al}`;
+    const duplicate = large
+      ? MutableHashSet.has(expanded, key)
+      : attributes.some((b) => b.localName === al && b.namespace === ans);
     if (duplicate) fail(`Duplicate attribute "{${ans ?? ''}}${al}"`, a.offset);
+    if (large) MutableHashSet.add(expanded, key);
     attributes.push({
       _tag: 'Attribute',
       name: a.name,
@@ -767,12 +853,12 @@ const openElement = (empty: boolean): void => {
       defaulted: a.defaulted,
       position: x.position(a.offset),
     });
-  }
+  });
 
   flush(parent);
   const frame: Frame = {
     qname,
-    start,
+    position: x.position(start),
     prefix,
     localName,
     namespace,
@@ -782,6 +868,7 @@ const openElement = (empty: boolean): void => {
     children: [],
     text: '',
     textStart: -1,
+    endsWithText: false,
     floor: 0,
   };
   if (empty) {
@@ -792,60 +879,51 @@ const openElement = (empty: boolean): void => {
   x.stack.push(frame);
 };
 
+/** The element an open frame stands for (with the children it has so far). */
+const elementOf = (frame: Frame): Xml.Element => ({
+  _tag: 'Element',
+  name: frame.qname,
+  prefix: frame.prefix,
+  localName: frame.localName,
+  namespace: Option.getOrUndefined(frame.namespace),
+  attributes: frame.attributes,
+  namespaceDeclarations: frame.declarations,
+  inScopeNamespaces: frame.inScope,
+  children: frame.children,
+  position: frame.position,
+});
+
 /** Adds a finished element to its parent. */
 const closeElement = (frame: Frame): void => {
   flush(frame);
-  const element: Xml.Element = {
-    _tag: 'Element',
-    name: frame.qname,
-    prefix: frame.prefix,
-    localName: frame.localName,
-    namespace: frame.namespace,
-    attributes: frame.attributes,
-    namespaceDeclarations: frame.declarations,
-    inScopeNamespaces: frame.inScope,
-    children: frame.children,
-    position: x.position(frame.start),
-  };
+  const element = elementOf(frame);
+  const inDocument = HashSet.isEmpty(x.entityStack);
+  // The document element (not one in an entity's replacement text) is the root
+  if (x.stack.length === 1 && inDocument) {
+    x.root = Option.some(element);
+    return;
+  }
   // A child of the root (not inside an entity's replacement text) may be taken as it closes
-  if (x.stack.length === 2 && x.entityStack.size === 0 && x.onRootChild(element, rootSoFar())) {
+  if (x.stack.length === 2 && inDocument && x.onRootChild(element, elementOf(x.top()))) {
     const root = x.top();
     root.floor = root.children.length;
     return;
   }
-  x.top().children.push(element);
+  pushChild(x.top(), element);
 };
 
-/** The root element as read so far, for a `RootChildHook`. */
-const rootSoFar = (): Xml.Element => {
-  const frame = x.top();
-  return {
-    _tag: 'Element',
-    name: frame.qname,
-    prefix: frame.prefix,
-    localName: frame.localName,
-    namespace: frame.namespace,
-    attributes: frame.attributes,
-    namespaceDeclarations: frame.declarations,
-    inScopeNamespaces: frame.inScope,
-    children: frame.children,
-    position: x.position(frame.start),
-  };
-};
-
-const attribute: P<unknown> = Parser.seq(Parser.location, name, eq, attributeValue).pipe(
-  Parser.tap(([offset, name, , value]) => {
-    if (x.hasAttribute(name)) fail(`Duplicate attribute "${name}"`, offset);
-    x.raw.push({ name, value, offset, defaulted: false });
+const attribute: P<unknown> = Parser.seq(Parser.location, xmlName, eq, attributeValue).pipe(
+  Parser.tap(([offset, attributeName, , value]) => {
+    if (x.hasAttribute(attributeName)) fail(`Duplicate attribute "${attributeName}"`, offset);
+    x.raw.push({ name: attributeName, value, offset, defaulted: false });
   }),
 );
 
 const startTag: P<unknown> = Parser.seq(
-  Parser.tap(Parser.seq(Parser.location, Parser.preceded(lit('<'), name)), ([start, qname]) => {
+  Parser.tap(Parser.seq(Parser.location, Parser.preceded(lit('<'), xmlName)), ([start, qname]) => {
     x.tagStart = start;
     x.qname = qname;
     x.raw = [];
-    x.names.clear();
   }),
   Parser.repeat(
     Parser.preceded(
@@ -876,7 +954,7 @@ const endTag: P<unknown> = Parser.seq(
     act((offset) => {
       if (x.stack.length === x.base) fail('Unbalanced end tag in entity replacement text', offset);
     }),
-    Parser.preceded(lit('</'), name),
+    Parser.preceded(lit('</'), xmlName),
   ).pipe(
     Parser.tap(([offset, endName]) => {
       const frame = x.top();
@@ -889,7 +967,9 @@ const endTag: P<unknown> = Parser.seq(
   expect('>'),
 ).pipe(
   Parser.tap(() => {
-    closeElement(x.stack.pop()!);
+    const frame = x.top();
+    x.stack.pop();
+    closeElement(frame);
   }),
 );
 
@@ -897,12 +977,15 @@ const cdata: P<unknown> = Parser.seq(
   Parser.location,
   Parser.preceded(
     lit('<![CDATA['),
-    Parser.alt(Parser.terminated(Token.takeUntil(']]>'), lit(']]>')), Parser.succeed(undefined)),
+    Parser.opt(Parser.terminated(Token.takeUntil(']]>'), lit(']]>'))),
   ),
 ).pipe(
   Parser.tap(([start, text]) => {
-    if (text === undefined) fail('Unterminated CDATA section', start);
-    pushText(x.top(), text, start);
+    pushText(
+      x.top(),
+      Option.getOrElse(text, () => fail('Unterminated CDATA section', start)),
+      start,
+    );
   }),
 );
 
@@ -932,7 +1015,7 @@ const replacementNodes = (body: string, replacement: string, start: number): Arr
   x.lineStarts = [0];
   x.stack = [frame];
   x.base = 1;
-  x.entityStack = withEntry(entityStack, body);
+  x.entityStack = HashSet.add(entityStack, body);
   const outcome = Result.try({
     try: () => {
       const result = Parser.parse(entityContent, replacement);
@@ -957,19 +1040,19 @@ const replacementNodes = (body: string, replacement: string, start: number): Arr
 const reference: P<unknown> = Parser.seq(
   Parser.location,
   Parser.preceded(lit('&'), Token.takeTill(';')),
-  Parser.alt(lit(';'), Parser.succeed(undefined)),
+  Parser.opt(lit(';')),
 ).pipe(
   Parser.tap(([start, body, semi]) => {
-    if (semi === undefined) fail('Unterminated reference', start);
+    if (Option.isNone(semi)) fail('Unterminated reference', start);
     const frame = x.top();
     if (body.startsWith('#')) {
-      if (!/^#(x[0-9a-fA-F]+|[0-9]+)$/.test(body)) fail('Invalid character reference', start);
+      if (!CHAR_REF_RE.test(body)) fail('Invalid character reference', start);
       pushText(frame, charRef(body, start), start);
       return;
     }
-    const predefined = PREDEFINED.get(body);
-    if (predefined !== undefined) {
-      pushText(frame, predefined, start);
+    const builtIn = predefined(body);
+    if (builtIn !== '') {
+      pushText(frame, builtIn, start);
       return;
     }
     const replacement = entityText(body, start, x.entityStack);
@@ -979,15 +1062,10 @@ const reference: P<unknown> = Parser.seq(
     }
     flush(frame);
     const position = x.position(start);
-    for (const n of replacementNodes(body, replacement, start)) {
-      // SAFETY: adding a position to a node keeps its kind.
-      const positioned = { ...n, position } as Xml.Node;
-      if (positioned._tag === 'Text') pushText(frame, positioned.value, start);
-      else {
-        flush(frame);
-        frame.children.push(positioned);
-      }
-    }
+    replacementNodes(body, replacement, start).forEach((n) => {
+      if (isText(n)) pushText(frame, n.value, start);
+      else pushChild(frame, { ...n, position });
+    });
   }),
 );
 
@@ -1003,27 +1081,21 @@ const contentItem: P<unknown> = Parser.alt(
 );
 
 /** The root element: its start tag, then content until it is closed. */
-const rootElement: P<unknown> = Parser.terminated(
-  Parser.asVoid(
-    Parser.seq(
-      startTag,
-      Parser.repeat(
-        Parser.preceded(
-          Parser.make<void>((state) =>
-            x.stack.length > x.base ? undefined : state.backtrack('Verify', ['content']),
-          ),
-          Parser.alt(
-            Parser.preceded(Parser.eof, failHere('Unexpected end of input: unclosed element')),
-            contentItem,
-          ),
+const rootElement: P<unknown> = Parser.asVoid(
+  Parser.seq(
+    startTag,
+    Parser.repeat(
+      Parser.preceded(
+        Parser.make<void>((state) =>
+          x.stack.length > x.base ? undefined : state.backtrack('Verify', ['content']),
+        ),
+        Parser.alt(
+          Parser.preceded(Parser.eof, failHere('Unexpected end of input: unclosed element')),
+          contentItem,
         ),
       ),
     ),
   ),
-  act(() => {
-    // SAFETY: the document element is the root frame's only child.
-    x.root = x.stack[0]!.children.pop() as Xml.Element;
-  }),
 );
 
 // -----------------------------------------------------------------------------
@@ -1038,7 +1110,7 @@ const xmlDecl: P<unknown> = Parser.preceded(
     eq,
     checked(quoted, (version, pos) => {
       if (!/^1\.[0-9]+$/.test(version)) fail(`Unsupported XML version "${version}"`, pos);
-      x.version = version;
+      x.version = Option.some(version);
     }),
     ws,
     Parser.opt(
@@ -1047,7 +1119,7 @@ const xmlDecl: P<unknown> = Parser.preceded(
         Parser.terminated(
           checked(quoted, (encoding, pos) => {
             if (!/^[A-Za-z][A-Za-z0-9._-]*$/.test(encoding)) fail('Invalid encoding name', pos);
-            x.encoding = encoding;
+            x.encoding = Option.some(encoding);
           }),
           ws,
         ),
@@ -1059,7 +1131,7 @@ const xmlDecl: P<unknown> = Parser.preceded(
         Parser.terminated(
           checked(quoted, (sd, pos) => {
             if (sd !== 'yes' && sd !== 'no') fail('standalone must be "yes" or "no"', pos);
-            x.standalone = sd === 'yes';
+            x.standalone = Option.some(sd === 'yes');
           }),
           ws,
         ),
@@ -1070,7 +1142,7 @@ const xmlDecl: P<unknown> = Parser.preceded(
 );
 
 const prologOrEpilog = (node: Xml.Comment | Xml.ProcessingInstruction): void => {
-  (x.root === undefined ? x.prolog : x.epilog).push(node);
+  (Option.isNone(x.root) ? x.prolog : x.epilog).push(node);
 };
 
 const document: P<unknown> = Compiler.jit(
@@ -1088,8 +1160,9 @@ const document: P<unknown> = Compiler.jit(
               at('<!DOCTYPE'),
               Parser.preceded(
                 act((pos) => {
-                  if (x.doctype !== undefined || x.root !== undefined)
+                  if (Option.isSome(x.doctype) || Option.isSome(x.root)) {
                     fail('Unexpected DOCTYPE', pos);
+                  }
                 }),
                 doctype,
               ),
@@ -1098,14 +1171,14 @@ const document: P<unknown> = Compiler.jit(
               at('<'),
               Parser.preceded(
                 act((pos) => {
-                  if (x.root !== undefined) fail('Only one root element is allowed', pos);
+                  if (Option.isSome(x.root)) fail('Only one root element is allowed', pos);
                 }),
                 rootElement,
               ),
             ),
             act((pos) =>
               fail(
-                x.root === undefined
+                Option.isNone(x.root)
                   ? 'Expected the root element'
                   : 'Content after the root element',
                 pos,
@@ -1115,7 +1188,7 @@ const document: P<unknown> = Compiler.jit(
         ),
       ),
       act((pos) => {
-        if (x.root === undefined) fail('No root element', pos);
+        if (Option.isNone(x.root)) fail('No root element', pos);
       }),
     ),
   ),
@@ -1133,31 +1206,31 @@ const parse = (
   if (Result.isFailure(result)) fail('Invalid XML', result.failure.offset);
   return {
     _tag: 'Document',
-    version: x.version,
-    encoding: x.encoding,
-    standalone: x.standalone,
-    doctype: x.doctype,
+    version: Option.getOrUndefined(x.version),
+    encoding: Option.getOrUndefined(x.encoding),
+    standalone: Option.getOrUndefined(x.standalone),
+    doctype: Option.getOrUndefined(x.doctype),
     prolog: x.prolog,
-    root: x.root!,
+    root: Option.getOrElse(x.root, () => fail('No root element', text.length)),
     epilog: x.epilog,
   };
 };
 
 /** The line and column of an offset, given the offsets at which lines start. */
 const positionAt = (lineStarts: ReadonlyArray<number>, offset: number): Xml.Position => {
-  let lo = 0;
-  let hi = lineStarts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if ((lineStarts[mid] ?? 0) <= offset) lo = mid;
-    else hi = mid - 1;
-  }
+  const lo = lineIndex(lineStarts, offset, 0, lineStarts.length - 1);
   return { offset, line: lo + 1, column: offset - (lineStarts[lo] ?? 0) + 1 };
 };
 
 const lineStartsOf = (text: string): Array<number> => {
   const starts = [0];
-  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  let i = text.indexOf('\n');
+  loop(() => {
+    if (i === -1) return false;
+    starts.push(i + 1);
+    i = text.indexOf('\n', i + 1);
+    return true;
+  });
   return starts;
 };
 
