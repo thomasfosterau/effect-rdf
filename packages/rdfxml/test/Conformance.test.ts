@@ -10,8 +10,11 @@ import { parseNTriples, readManifest, type TestCase } from './support.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const suites = process.env['RDF_TEST_SUITES'] ?? path.resolve(here, '../../../.test-suites');
-const manifest = path.join(suites, 'rdf-tests/rdf/rdf12/rdf-xml/manifest.ttl');
-const exists = fs.existsSync(manifest);
+// The rdf12 manifest no longer includes the rdf11 one (w3c/rdf-tests#396), so both are read.
+const manifests = ['rdf11', 'rdf12'].map((version) =>
+  path.join(suites, `rdf-tests/rdf/${version}/rdf-xml/manifest.ttl`),
+);
+const exists = manifests.every((manifest) => fs.existsSync(manifest));
 
 /**
  * Tests deliberately skipped, with the reason. Currently empty: every test
@@ -19,7 +22,7 @@ const exists = fs.existsSync(manifest);
  */
 const skipList: ReadonlyMap<string, string> = new Map();
 
-const tests: Array<TestCase> = (exists ? readManifest(manifest) : []).filter(
+const tests: Array<TestCase> = (exists ? manifests.flatMap(readManifest) : []).filter(
   (t) => !skipList.has(t.name),
 );
 const evalTests = tests.filter((t) => t.type === 'TestXMLEval');

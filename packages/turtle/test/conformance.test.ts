@@ -57,7 +57,10 @@ const expectEvaluatesTo = Effect.fn(function* (
   ).toBe(true);
 });
 
+// The rdf12 manifests no longer include the rdf11 ones (w3c/rdf-tests#396), so both are run.
 const suitesUnderTest = [
+  { manifest: 'rdf/rdf11/rdf-turtle/manifest.ttl', syntax: Turtle, expected: NTriples },
+  { manifest: 'rdf/rdf11/rdf-trig/manifest.ttl', syntax: TriG, expected: NQuads },
   { manifest: 'rdf/rdf12/rdf-turtle/manifest.ttl', syntax: Turtle, expected: NTriples },
   { manifest: 'rdf/rdf12/rdf-trig/manifest.ttl', syntax: TriG, expected: NQuads },
 ] as const;
@@ -67,7 +70,7 @@ describe.skipIf(!exists)('Turtle / TriG conformance', () => {
     const entries = loadEntries(suite.manifest);
     describe(`suite ${suite.manifest}`, () => {
       it('has entries', () => {
-        expect(entries.length).toBeGreaterThan(200);
+        expect(entries.length).toBeGreaterThan(50);
       });
       entries.forEach((entry) => {
         it.effect(`${entry.name} (${entry.kind})`, () =>
