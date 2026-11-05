@@ -88,6 +88,27 @@ The report has one `ShapeResult` (`conformant` or `nonconformant`, with a
 same schema, call `Validator.make(schema)` once and reuse the validator. It
 loads the imports and runs the structural checks a single time.
 
+## As a Schema
+
+`Validator.schema(validator, shapeMap)` (or a single `{ node, shape }`) is a `Dataset` → `Dataset`
+schema that accepts only data where every association conforms, so ShEx fits `Schema.decode`
+pipelines (`HttpApi` payloads, config loading). It takes a prepared validator, so imports are
+resolved up front and decoding needs no services. A failure is a `SchemaIssue.Composite` with one
+`InvalidValue` per nonconformant association, whose `message` annotation is
+`Validator.formatResult(result)` and whose `result` annotation is the `ShapeResult`. Compose it with
+a syntax codec to parse and validate in one decode:
+
+```ts
+import { Schema } from 'effect';
+import { Turtle } from '@thomasfosterau/effect-turtle';
+
+const validator = yield * Validator.make(schema);
+const PersonDocument = Turtle.codec.schema.pipe(
+  Schema.decodeTo(Validator.schema(validator, { node: alice, shape: 'http://ex.example/Person' })),
+);
+const data = yield * Schema.decodeEffect(PersonDocument)(turtleText);
+```
+
 ## Imports
 
 `IMPORT` is resolved through the `SchemaLoader` reference. By default it fails

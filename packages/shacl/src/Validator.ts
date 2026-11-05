@@ -989,39 +989,88 @@ export const layer = (
 // -----------------------------------------------------------------------------
 
 /**
+ * Options for `schema`: validation options plus the severity that fails
+ * decoding.
+ *
+ * @since 0.1.0
+ * @category schemas
+ */
+export interface SchemaOptions extends ValidateOptions {
+  /**
+   * The least severe result that fails decoding: `"violation"` (default)
+   * accepts data whose results are only `sh:Warning` or `sh:Info`,
+   * `"warning"` also fails on warnings, and `"info"` on any result (the
+   * report's own `conforms`, which is false whenever there is any result).
+   * Results with a custom severity count as violations.
+   */
+  readonly failOn?: 'violation' | 'warning' | 'info' | undefined;
+}
+
+const severityRank = (severity: Term.NamedNode): number =>
+  severity.value === sh.Info.value ? 0 : severity.value === sh.Warning.value ? 1 : 2;
+
+const thresholdRank = { info: 0, warning: 1, violation: 2 } as const;
+
+/**
  * A `Schema` that accepts a `Dataset` only if it conforms to the given shapes
- * graph. Decoding fails with an `InvalidValue` issue whose message is the
- * formatted validation report; encoding is the identity.
+ * graph. Decoding fails with a `SchemaIssue.Composite` holding one
+ * `InvalidValue` issue per failing result: its `message` annotation is the
+ * formatted result (`ValidationReport.formatResult`) and its `result`
+ * annotation the `ValidationResult` itself, for consumers that inspect
+ * failures (focus node, path, constraint component, severity, messages). By
+ * default only `sh:Violation` results fail (see `SchemaOptions.failOn`).
+ * Encoding is the identity.
+ *
+ * Compose it with a syntax codec to parse and validate in one decode:
+ * `Turtle.codec.schema.pipe(Schema.decodeTo(Validator.schema(shapes)))`.
  *
  * @since 0.1.0
  * @category schemas
  */
 export const schema = (
   shapesGraph: Shapes.ShapesGraph,
-  options?: ValidateOptions,
-): Schema.decodeTo<Schema.declare<Dataset.Dataset>, Schema.declare<Dataset.Dataset>> =>
-  Dataset.DatasetSchema.pipe(
+  options?: SchemaOptions,
+): Schema.decodeTo<Schema.declare<Dataset.Dataset>, Schema.declare<Dataset.Dataset>> => {
+  const threshold = thresholdRank[options?.failOn ?? 'violation'];
+  return Dataset.DatasetSchema.pipe(
     Schema.decodeTo(
       Dataset.DatasetSchema,
       SchemaTransformation.transformEffect({
-        decode: (data: Dataset.Dataset) =>
+        decode: (data: Dataset.Dataset, parseOptions) =>
           validate(data, shapesGraph, options).pipe(
-            Effect.mapError((e) => new SchemaIssue.InvalidValue({ message: e.message }, data)),
+            Effect.mapError(
+              (e) => new SchemaIssue.InvalidValue({ message: e.message }, data, parseOptions),
+            ),
             Effect.flatMap((report) =>
-              report.conforms
-                ? Effect.succeed(data)
-                : Effect.fail(
-                    new SchemaIssue.InvalidValue(
-                      { message: ValidationReport.format(report) },
-                      data,
+              Arr.match(
+                Arr.filter(report.results, (r) => severityRank(r.severity) >= threshold),
+                {
+                  onEmpty: () => Effect.succeed(data),
+                  onNonEmpty: (failing) =>
+                    Effect.fail(
+                      new SchemaIssue.Composite(
+                        Dataset.DatasetSchema.ast,
+                        Arr.map(
+                          failing,
+                          (r) =>
+                            new SchemaIssue.InvalidValue(
+                              { message: ValidationReport.formatResult(r), result: r },
+                              r,
+                              parseOptions,
+                            ),
+                        ),
+                        data,
+                      ),
                     ),
-                  ),
+                },
+              ),
             ),
           ),
         encode: (data: Dataset.Dataset) => Effect.succeed(data),
       }),
     ),
   );
+};
 
 /**
  * The SHACL `sh:Violation`, `sh:Warning` and `sh:Info` severities.
