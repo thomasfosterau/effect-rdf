@@ -85,6 +85,10 @@
         "patterns": ["packages/sparql/**"]
       },
       {
+        "name": "sparql-ai",
+        "patterns": ["packages/sparql-ai/**"]
+      },
+      {
         "name": "sparql-client",
         "patterns": ["packages/sparql-client/**"]
       },
@@ -145,6 +149,10 @@
       {
         "from": "sparql",
         "allow": ["core", "ntriples", "rdfxml", "turtle"]
+      },
+      {
+        "from": "sparql-ai",
+        "allow": ["core", "sparql", "turtle"]
       },
       {
         "from": "sparql-client",
