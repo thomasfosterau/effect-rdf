@@ -257,13 +257,14 @@ describe('QueryBuilder', () => {
   it.effect('executes with typed rows', () =>
     Effect.gen(function* () {
       const rows = yield* Q.executeAll(query);
-      const first = rows[0]!;
+      const first = rows[0] ?? assert.fail('expected a row');
       // Type-level: name is required, email optional.
       const name: Term.GroundTerm = first.name;
       const email: Term.GroundTerm | undefined = first.email;
       expect(lex(name)).toBe('Bob');
       expect(lex(email)).toBe('mailto:bob@example.org');
-      expect(rows[1]!.email).toBeUndefined();
+      expect(rows[1]).toBeDefined();
+      expect(rows[1]?.email).toBeUndefined();
     }).pipe(Effect.provide(TestLayer)),
   );
 
@@ -285,8 +286,8 @@ describe('QueryBuilder', () => {
         Q.triple(v.p, foaf('age'), v.age),
       );
       const [row] = yield* Q.executeAll(q);
-      expect(lex(row!.n)).toBe('2');
-      expect(lex(row!.total)).toBe('55');
+      expect(lex(row?.n)).toBe('2');
+      expect(lex(row?.total)).toBe('55');
     }).pipe(Effect.provide(TestLayer)),
   );
 });
@@ -325,8 +326,10 @@ describe('Results formats', () => {
       expect(text.split('\r\n')[0]).toBe('x,y,z');
       // SAFETY: the CSV serialization of a result set parses back to a result set.
       const parsed = (yield* Results.Csv.parse(text)) as Results.ResultSet;
-      expect(lex(Bindings.getUndefined(parsed.bindings[0]!, 'y'))).toBe('hello, "world"\n');
-      expect(Bindings.getUndefined(parsed.bindings[1]!, 'x')?._tag).toBe('BlankNode');
+      const [first, second] = parsed.bindings;
+      assert(first !== undefined && second !== undefined);
+      expect(lex(Bindings.getUndefined(first, 'y'))).toBe('hello, "world"\n');
+      expect(Bindings.getUndefined(second, 'x')?._tag).toBe('BlankNode');
     }),
   );
 

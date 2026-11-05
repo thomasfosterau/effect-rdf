@@ -79,7 +79,7 @@ export const parseNQuads = (text: string): Array<Term.Quad> => {
       if (m[1] !== undefined) terms.push(Term.namedNode(unescape(m[1])));
       else if (m[2] !== undefined) terms.push(Term.blankNode(m[2]));
       else {
-        const value = unescape(m[3]!);
+        const value = unescape(m[3] ?? '');
         if (m[4] !== undefined) terms.push(Term.literal(value, m[4]));
         else if (m[5] !== undefined)
           terms.push(Term.literal(value, Term.namedNode(unescape(m[5]))));

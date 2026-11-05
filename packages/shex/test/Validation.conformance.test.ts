@@ -61,7 +61,10 @@ const runEntry = (entry: Entry) =>
     const schemaIri = Iri.resolve(entry.schemaURL, validationBase);
     const schema = yield* loadShExC(schemaIri);
     const dataIri = Iri.resolve(entry.dataURL, validationBase);
-    const dataset = parseTurtle(readText(suitePath(dataIri)!), dataIri);
+    const dataset = parseTurtle(
+      readText(suitePath(dataIri) ?? assert.fail(`No local copy of ${dataIri}`)),
+      dataIri,
+    );
     let map: ShapeMap.QueryShapeMap;
     if (entry.queryMap !== undefined) {
       map = yield* ShapeMap.parse(entry.queryMap, { baseIri: validationBase });
@@ -72,7 +75,9 @@ const runEntry = (entry: Entry) =>
     } else {
       map = [
         {
-          node: ShapeMap.parseTerm(entry.node!, { baseIri: validationBase }),
+          node: ShapeMap.parseTerm(entry.node ?? assert.fail('Entry has no focus node'), {
+            baseIri: validationBase,
+          }),
           shape:
             entry.shape === undefined
               ? ShapeMap.start

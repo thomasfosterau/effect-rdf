@@ -49,15 +49,15 @@ describe('SPARQL-based constraints', () => {
       `);
       const report = yield* validate(graph);
       expect(report.results).toHaveLength(1);
-      const [result] = report.results;
-      expect(result!.focusNode.key).toBe(ex('alice').key);
-      expect(Option.map(result!.resultPath, Path.toSparql)).toEqual(
+      const result = report.results[0] ?? assert.fail('expected a validation result');
+      expect(result.focusNode.key).toBe(ex('alice').key);
+      expect(Option.map(result.resultPath, Path.toSparql)).toEqual(
         Option.some('<http://example.org/nickname>'),
       );
       expect(messages(report)).toEqual([
         'http://example.org/alice has a forbidden http://example.org/nickname: Al',
       ]);
-      expect(Option.isSome(result!.sourceConstraint)).toBe(true);
+      expect(Option.isSome(result.sourceConstraint)).toBe(true);
     }),
   );
 
@@ -79,7 +79,7 @@ describe('SPARQL-based constraints', () => {
       expect(report.results.map((r) => Option.getOrUndefined(r.value)?.key)).toEqual([
         Term.literal('Bo').key,
       ]);
-      expect(Option.map(report.results[0]!.resultPath, Path.toSparql)).toEqual(
+      expect(report.results[0]?.resultPath.pipe(Option.map(Path.toSparql))).toEqual(
         Option.some('<http://example.org/knows>/<http://example.org/name>'),
       );
     }),
@@ -160,7 +160,7 @@ describe('SPARQL-based constraint components', () => {
         'Value has more than 2 words',
         'Value has more than 2 words',
       ]);
-      expect(report.results[0]!.sourceConstraintComponent.key).toBe(ex('MaxWordsComponent').key);
+      expect(report.results[0]?.sourceConstraintComponent.key).toBe(ex('MaxWordsComponent').key);
     }),
   );
 
@@ -189,7 +189,9 @@ describe('SPARQL-based constraint components', () => {
         'Ah is not in en',
         'Node http://example.org/a lacks a de label',
       ]);
-      const nodeResult = report.results.find((r) => Option.isNone(r.resultPath))!;
+      const nodeResult =
+        report.results.find((r) => Option.isNone(r.resultPath)) ??
+        assert.fail('expected a node result');
       expect(Option.getOrUndefined(nodeResult.value)?.key).toBe(ex('a').key);
     }),
   );

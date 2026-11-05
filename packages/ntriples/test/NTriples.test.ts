@@ -130,7 +130,7 @@ describe('NQuads', () => {
           Stream.make('<http://a/s> <http://a/p> <http://a/o> <http', '://a/g> .'),
         ),
       );
-      expect(quads[0]!.graph).toEqual(Term.namedNode('http://a/g'));
+      expect(quads[0]?.graph).toEqual(Term.namedNode('http://a/g'));
     }),
   );
 });

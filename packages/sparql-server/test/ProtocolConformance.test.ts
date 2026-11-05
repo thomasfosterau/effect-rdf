@@ -43,7 +43,7 @@ const loadGraphData = (t: ProtocolTest): Dataset.Dataset => {
   return Dataset.fromIterable(quads);
 };
 
-const mediaType = (ct: string | undefined) => (ct ?? '').split(';')[0]!.trim().toLowerCase();
+const mediaType = (ct: string | undefined) => ((ct ?? '').split(';')[0] ?? '').trim().toLowerCase();
 
 const parseRdf = (contentType: string | undefined, text: string, baseIri: string) => {
   const parser = Serialization.parserFor(formatsService, mediaType(contentType));

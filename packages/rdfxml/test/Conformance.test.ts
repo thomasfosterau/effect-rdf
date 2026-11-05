@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import { Dataset, Isomorphism } from '@thomasfosterau/effect-rdf';
@@ -41,7 +41,9 @@ describe.skipIf(!exists)('RDF/XML conformance (rdf11 + rdf12 rdf-xml)', () => {
     it.effect(`${test.name} (eval)`, () =>
       Effect.gen(function* () {
         const result = yield* parseFile(test);
-        const expected = parseNTriples(fs.readFileSync(test.result!, 'utf8'));
+        const expected = parseNTriples(
+          fs.readFileSync(test.result ?? assert.fail('eval test has no result'), 'utf8'),
+        );
         const isomorphic = Isomorphism.isomorphic(result.dataset, expected);
         // On a mismatch, compare the N-Quads first so the failure shows a diff.
         expect(isomorphic ? '' : Dataset.toNQuads(result.dataset)).toEqual(

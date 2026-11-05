@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Stream from 'effect/Stream';
 import { Namespace, Term, Xsd } from '@thomasfosterau/effect-rdf';
@@ -35,7 +35,8 @@ describe('Performance', () => {
         const start = performance.now();
         yield* store.insert(data);
         const loaded = performance.now() - start;
-        expect(yield* store.count!({})).toBe(N);
+        const count = store.count ?? assert.fail('the SQL store counts quads');
+        expect(yield* count({})).toBe(N);
         // Loading 100k triples into SQLite takes a few seconds at most.
         expect(loaded).toBeLessThan(30_000);
 
@@ -48,7 +49,7 @@ describe('Performance', () => {
           }`);
         const rows = yield* Stream.runCollect(result.bindings);
         const queried = performance.now() - queryStart;
-        const n = Bindings.getUndefined(rows[0]!, 'n');
+        const n = Bindings.getUndefined(rows[0] ?? assert.fail('expected a COUNT row'), 'n');
         expect(n?._tag === 'Literal' && Number(n.value) > 0).toBe(true);
         expect(queried).toBeLessThan(10_000);
         yield* Effect.logInfo(

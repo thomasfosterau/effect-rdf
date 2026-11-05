@@ -58,7 +58,8 @@ async function evaluate(test: TestEntry): Promise<{ ok: boolean; detail: string 
     };
   }
   if (Exit.isFailure(exit)) return { ok: false, detail: `failed: ${String(exit.cause)}` };
-  const expected = readJson(test.expect!);
+  if (test.expect === undefined) return { ok: false, detail: 'no expected output' };
+  const expected = readJson(test.expect);
   return {
     ok: jsonLdEqual(exit.value, expected),
     detail: `got ${toJsonText(exit.value, 1)}`,

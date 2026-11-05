@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import { Dataset, Isomorphism, PrefixMap, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -74,7 +74,7 @@ describe('Turtle parser', () => {
         Stream.fail('boom'),
       );
       const first = yield* Stream.runCollect(Stream.take(Turtle.parseStream(input), 1));
-      expect(first[0]!.object).toEqual(Term.namedNode('http://ex/c'));
+      expect(first[0]?.object).toEqual(Term.namedNode('http://ex/c'));
       const failure = yield* Effect.flip(Stream.runCollect(Turtle.parseStream(input)));
       expect(failure).toBe('boom');
     }),
@@ -248,13 +248,13 @@ describe('Manifest', () => {
         ],
       ]);
       const entries = yield* Manifest.load('http://t/manifest.ttl', (iri) =>
-        Effect.succeed(files.get(iri)!),
+        Effect.succeed(files.get(iri) ?? assert.fail(`No fixture for ${iri}`)),
       );
       expect(entries.map((e) => [e.name, e.kind, Option.getOrNull(e.action)])).toEqual([
         ['t1', 'TestTurtleEval', 'http://t/a.ttl'],
         ['t2', 'TestTurtleNegativeSyntax', 'http://t/sub/b.ttl'],
       ]);
-      expect(Option.getOrNull(entries[0]!.result)).toBe('http://t/a.nt');
+      expect(entries[0]?.result.pipe(Option.getOrNull)).toBe('http://t/a.nt');
       expect(Manifest.toPath('http://t/sub/b.ttl', 'http://t/', '/suite/')).toBe(
         '/suite/sub/b.ttl',
       );

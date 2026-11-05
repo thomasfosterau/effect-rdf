@@ -62,7 +62,7 @@ const bench = (name: string, inputs: ReadonlyArray<{ text: string; baseIri: stri
     samples.push(performance.now() - t);
   }
   const sorted = Arr.sort(samples, Order.Number);
-  const median = sorted[Math.floor(samples.length / 2)]!;
+  const median = sorted[Math.floor(samples.length / 2)] ?? 0;
   // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${inputs.length} docs, ${(size / 1e3).toFixed(0)} kB, median ${median.toFixed(1)} ms` +

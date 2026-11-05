@@ -46,7 +46,7 @@ interface TestCase {
 
 const loaded = new Map<string, Dataset.Dataset>();
 const load = (iri: string): Dataset.Dataset => {
-  const file = fileURLToPath(iri.split('#')[0]!);
+  const file = fileURLToPath(iri.split('#')[0] ?? iri);
   let ds = loaded.get(file);
   if (ds === undefined) {
     ds = parseTurtle(readFileSync(file, 'utf8'), pathToFileURL(file).href);
@@ -99,14 +99,14 @@ const runCase = (tc: TestCase) =>
     // SAFETY: only called with manifest nodes, which are IRIs or blank nodes.
     const one = (s: Term.Term, p: Term.NamedNode) =>
       Dataset.objectsOf(tc.ds, s as Term.Subject, p)[0];
-    const action = one(tc.node, mf('action'))!;
+    const action = one(tc.node, mf('action')) ?? assert.fail('test case has no mf:action');
     // SAFETY: `sht:dataGraph` is the IRI of the data file in every suite manifest.
     const dataIri = one(action, sht('dataGraph')) as Term.NamedNode;
     // SAFETY: `sht:shapesGraph` is the IRI of the shapes file in every suite manifest.
     const shapesIri = one(action, sht('shapesGraph')) as Term.NamedNode;
     const data = load(dataIri.value);
     const shapes = load(shapesIri.value);
-    const expectedNode = one(tc.node, mf('result'))!;
+    const expectedNode = one(tc.node, mf('result')) ?? assert.fail('test case has no mf:result');
 
     const exit = yield* Effect.exit(Validator.validate(data, shapes));
     const expectsFailure = expectedNode.key === sht('Failure').key;
@@ -144,9 +144,11 @@ const runCase = (tc: TestCase) =>
     // Backtracking bipartite matching of expected to actual results.
     const used = new Set<number>();
     const match = (i: number): boolean => {
-      if (i === expected.results.length) return true;
+      const e = expected.results[i];
+      if (e === undefined) return true;
       for (let j = 0; j < actual.results.length; j++) {
-        if (used.has(j) || !resultMatches(expected.results[i]!, actual.results[j]!)) continue;
+        const a = actual.results[j];
+        if (a === undefined || used.has(j) || !resultMatches(e, a)) continue;
         used.add(j);
         if (match(i + 1)) return true;
         used.delete(j);

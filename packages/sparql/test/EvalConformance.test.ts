@@ -16,7 +16,13 @@ import * as Parser from '../src/Parser.ts';
 import * as Results from '../src/Results.ts';
 import * as Store from '../src/Store.ts';
 import { fromRdf, normalize, sameResults } from './support/compare.ts';
-import { readManifest, suitesDir, type TestCase } from './support/manifest.ts';
+import {
+  expectedResultFile,
+  queryFile,
+  readManifest,
+  suitesDir,
+  type TestCase,
+} from './support/manifest.ts';
 import { parseFile } from './support/rdf.ts';
 
 const sparqlDir = path.join(suitesDir, 'rdf-tests', 'sparql');
@@ -142,15 +148,15 @@ const expectSameSolutions = (
 
 const runQueryTest = (t: TestCase, optimize = true) =>
   Effect.gen(function* () {
-    const text = fs.readFileSync(t.query!, 'utf8');
-    const baseIri = pathToFileURL(t.query!).href;
+    const text = fs.readFileSync(queryFile(t), 'utf8');
+    const baseIri = pathToFileURL(queryFile(t)).href;
     const query = yield* Parser.parseQuery(text, { baseIri });
     const loaded = loadDataset(t, false);
     const initial = Dataset.addAll(loaded, datasetClauseQuads(query, loaded));
     const store = yield* Store.makeMemory(initial);
     const engine = Engine.make(store, { baseIri, optimize });
     const result = yield* engine.query(query);
-    const expected = readExpected(t.result!);
+    const expected = readExpected(expectedResultFile(t));
     yield* Match.value(result).pipe(
       Match.tag('Ask', (ask) =>
         Effect.sync(() => {
@@ -173,13 +179,13 @@ const runQueryTest = (t: TestCase, optimize = true) =>
           let actual = set.bindings;
           // SAFETY: a SELECT test's expected result was loaded as a result set.
           let exp = (expected as Results.ResultSet).bindings;
-          if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+          if (t.type === 'CSVResultFormatTest' || expectedResultFile(t).endsWith('.csv')) {
             // Round-trip our results through CSV, as CSV is lossy.
             const csv = Results.Csv.serializeString(set);
             // SAFETY: the CSV serialization of a result set parses back to a result set.
             actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
           }
-          if (t.result!.endsWith('.tsv') || t.result!.endsWith('.csv')) {
+          if (expectedResultFile(t).endsWith('.tsv') || expectedResultFile(t).endsWith('.csv')) {
             exp = exp.map((b) => b);
           }
           expectSameSolutions(actual, exp, orderVariables(query), t.laxCardinality);
@@ -191,7 +197,7 @@ const runQueryTest = (t: TestCase, optimize = true) =>
 
 const updateEngine = (t: TestCase) =>
   Effect.gen(function* () {
-    const baseIri = pathToFileURL(t.query!).href;
+    const baseIri = pathToFileURL(queryFile(t)).href;
     const store = yield* Store.makeMemory(loadDataset(t, true));
     return { store, engine: Engine.make(store, { baseIri }) };
   });
@@ -199,14 +205,14 @@ const updateEngine = (t: TestCase) =>
 const runFailingUpdateTest = (t: TestCase) =>
   Effect.gen(function* () {
     const { engine } = yield* updateEngine(t);
-    const outcome = yield* Effect.result(engine.update(fs.readFileSync(t.query!, 'utf8')));
+    const outcome = yield* Effect.result(engine.update(fs.readFileSync(queryFile(t), 'utf8')));
     expect(outcome._tag).toBe('Failure');
   });
 
 const runUpdateTest = (t: TestCase) =>
   Effect.gen(function* () {
     const { store, engine } = yield* updateEngine(t);
-    yield* engine.update(fs.readFileSync(t.query!, 'utf8'));
+    yield* engine.update(fs.readFileSync(queryFile(t), 'utf8'));
     const quads: Array<Term.Quad> = [];
     for (const file of t.resultData) quads.push(...parseFile(file));
     for (const g of t.resultGraphData) quads.push(...parseFile(g.file, Term.namedNode(g.name)));
@@ -223,7 +229,7 @@ describe.skipIf(!exists)('SPARQL evaluation conformance', () => {
   it('documents every skipped test', () => {
     const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
     // Skipped: SERVICE federation, entailment regimes and protocol tests.
-    expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t)!))).toBe(true);
+    expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t) ?? ''))).toBe(true);
   });
   it.each(
     runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),
