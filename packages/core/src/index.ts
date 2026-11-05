@@ -25,6 +25,8 @@ export * as Rdfs from './Rdfs.ts';
 /** @since 0.1.0 */
 export * as Reification from './Reification.ts';
 /** @since 0.1.0 */
+export * as Resource from './Resource.ts';
+/** @since 0.1.0 */
 export * as Serialization from './Serialization.ts';
 /** @since 0.1.0 */
 export * as Term from './Term.ts';

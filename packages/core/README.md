@@ -15,6 +15,7 @@ pnpm add effect @thomasfosterau/effect-rdf
 | `Term`               | `NamedNode`, `BlankNode`, `Literal` (language tags with base direction), `Variable`, `DefaultGraph`, `Triple` (triple terms) and `Quad`; constructors (`namedNode`, `blankNode`, `literal`, `triple`, `quad`), guards, `compare` / `compareQuads` and their Effect instances (`Order`, `QuadOrder`, `Equivalence`, `QuadEquivalence`), JSON conversion (`toJson`, `fromJson`, `quadToJson`, `quadFromJson`, `isWellFormed`) and schemas with JSON codecs. Every term implements `Equal` / `Hash`.                        |
 | `TermJson`           | The JSON shape of terms and quads: the SPARQL 1.2 JSON results term (`{ "type": "uri", "value": … }`, triple terms, `xml:lang`, `its:dir`) extended with `{ "type": "variable", "value" }` and `{ "type": "default-graph" }`, and `{ subject, predicate, object, graph? }` quads.                                                                                                                                                                                                                                        |
 | `TermCodec`          | `Schema`s between ground terms and JS values: `string`, `localized`, `langString`, `iri`, `namedNode`, `resource`, `literal`, `lexical`, `number`, `integer`, `bigint`, `decimal`, `double`, `float`, `boolean`, `date`, `dateTime` (Effect `DateTime.Utc` / `Zoned`), `value`, `typed`, `typedOneOf`, and `make` for your own. Decode a `Dataset`'s objects or SPARQL solutions into typed structs.                                                                                                                     |
+| `Resource`           | Typed records over a dataset's resources: `property(predicate, codec, { inverse?, languages? })` maps a `Schema.Struct` field to a predicate, `describe({ type?, id? })` gives the struct an `rdf:type` and an id field, `list(codec)` reads an RDF collection; `decode`, `decodeAll` (every resource of the described type) and `encode` (to quads), and `schema(struct)`, the same mapping as a `Schema` from `{ dataset, subject }`.                                                                                  |
 | `Dataset`            | An immutable, indexed set of quads: `make`, `fromIterable`, `add`, `remove`, `match`, `objectsOf`, `subjects`, `graphs`, `list` (RDF collections), set operations, `filter` / `map` / `reduce`, `toNQuads`, `toGraph` / `fromGraph` (`effect/Graph`) and `DatasetSchema` (JSON: sorted array of quads).                                                                                                                                                                                                                  |
 | `Iri`                | RFC 3987 resolution (`resolve`, `removeDotSegments`), `relativize`, `isAbsolute`, `isValid`, `isValidReference`, and `IriSchema` / `IriReferenceSchema` (JSON Schema `format: "iri"` / `"iri-reference"`) for validating IRIs from `Config`, CLI flags or HTTP parameters.                                                                                                                                                                                                                                               |
 | `LanguageTag`        | BCP 47 language tags as RDF 1.2 requires them: `isWellFormed` (the §2.1 ABNF), `normalize` (lower case) and `LanguageTagSchema`.                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -28,6 +29,50 @@ pnpm add effect @thomasfosterau/effect-rdf
 | `Serialization`      | The `Format`, `Parser`, `Serializer` and `Codec` interfaces the syntax packages implement, their typed errors (`RdfParseError` with `line` / `column`, `RdfSerializeError`), `toSchema`, the `Formats` service with content negotiation (`negotiate`, `parserFor`, `serializerFor`, `parserForExtension`, `serializerForExtension`), byte entry points (`parseBytes`, `parseBytesDocument`, `serializeBytes`: strict UTF-8 or a `charset`, BOM stripped) and files over Effect's `FileSystem` (`readFile`, `writeFile`). |
 
 Every module is also its own entry point (`@thomasfosterau/effect-rdf/Term`, …).
+
+### Resources
+
+`Resource` maps the resources of a dataset to typed records. Each field of a `Schema.Struct` names its predicate with `Resource.property` (an annotation only: the field's type is unchanged), and its schema sets the cardinality:
+
+| Field schema                                          | Values read                                             |
+| ----------------------------------------------------- | ------------------------------------------------------- |
+| `property(p, codec)`                                  | exactly one (fails on none or several)                  |
+| `Schema.optional(property(p, codec))` / `optionalKey` | at most one                                             |
+| `property(p, Schema.Array(codec))`                    | any number, in `Term.Order`                             |
+| `property(p, Resource.list(codec))`                   | one RDF collection (`rdf:first` / `rdf:rest`)           |
+| `property(p, Struct)`                                 | a nested resource (IRI or blank node), read recursively |
+
+Values decode through the field's own codec (the `TermCodec` schemas, or any `Schema.Codec<A, Term.GroundTerm>`), and a failure is an ordinary `SchemaError` at the field's path. `{ inverse: true }` reads `?x p resource` instead; `{ languages: ['en', 'fr', ''] }` takes the first value whose language tag matches, in that order (`''` is untagged). `Resource.describe` adds the `rdf:type` decoding requires and encoding writes, and an `id` field holding the resource itself:
+
+```ts
+import { Effect, Schema } from 'effect';
+import { Dataset, Namespace, Resource, TermCodec } from '@thomasfosterau/effect-rdf';
+
+const foaf = Namespace.make('http://xmlns.com/foaf/0.1/');
+const ex = Namespace.make('http://example.org/');
+
+const Address = Schema.Struct({
+  city: Resource.property(ex('city'), TermCodec.string),
+});
+
+const Person = Schema.Struct({
+  id: TermCodec.iri,
+  name: Resource.property(foaf('name'), TermCodec.string, { languages: ['en', ''] }),
+  age: Schema.optional(Resource.property(foaf('age'), TermCodec.integer)),
+  knows: Resource.property(foaf('knows'), Schema.Array(TermCodec.namedNode)),
+  address: Schema.optional(Resource.property(ex('address'), Address)),
+}).pipe(Resource.describe({ type: foaf('Person'), id: 'id' }));
+
+const program = Effect.gen(function* () {
+  const alice = yield* Resource.decode(Person)(data, ex('alice')); // { id, name, age?, knows, address? }
+  const people = yield* Resource.decodeAll(Person)(data, { graph: ex('people') }); // [{ subject, value }]
+  // A nested value without an id is written as a fresh blank node.
+  const quads = yield* Resource.encode(Person)(ex('alice'), alice);
+  return Dataset.fromIterable(quads);
+});
+```
+
+`decode` and `decodeAll` read every graph unless given `{ graph }`; `encode` writes into `{ graph }` (the default graph otherwise). A cycle through a recursive schema (`Schema.suspend`) fails rather than looping. `Resource.schema(Person)` is the same mapping as a `Schema` whose encoded side is `{ dataset, subject }` (`Resource.InputSchema`), so it composes with `Schema.decodeTo` and the rest of the `Schema` API; encoding gives the dataset of the value's quads.
 
 ### Bytes and files
 
