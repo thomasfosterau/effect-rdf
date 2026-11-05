@@ -76,6 +76,7 @@ export const layer: Layer.Layer<SqlClient.SqlClient, SqlError> = Layer.effect(
       transactionAcquirer,
       onCommitFailure,
       compiler: PgClient.makeCompiler(),
+      driver: 'pglite',
       spanAttributes: [],
     });
   }),
