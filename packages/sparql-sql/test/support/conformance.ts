@@ -22,7 +22,13 @@ import * as Results from '@thomasfosterau/effect-sparql/Results';
 import * as Store from '@thomasfosterau/effect-sparql/Store';
 import type * as SqlStore from '../../src/SqlStore.ts';
 import { fromRdf, normalize, sameResults } from '../../../sparql/test/support/compare.ts';
-import { readManifest, suitesDir, type TestCase } from '../../../sparql/test/support/manifest.ts';
+import {
+  expectedResultFile,
+  queryFile,
+  readManifest,
+  suitesDir,
+  type TestCase,
+} from '../../../sparql/test/support/manifest.ts';
 import { parseFile } from '../../../sparql/test/support/rdf.ts';
 
 const sparqlDir = path.join(suitesDir, 'rdf-tests', 'sparql');
@@ -144,14 +150,14 @@ export interface Backend {
 
 const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
   Effect.gen(function* () {
-    const text = fs.readFileSync(t.query!, 'utf8');
-    const baseIri = pathToFileURL(t.query!).href;
+    const text = fs.readFileSync(queryFile(t), 'utf8');
+    const baseIri = pathToFileURL(queryFile(t)).href;
     const query = yield* Parser.parseQuery(text, { baseIri });
     const loaded = Dataset.fromIterable(loadQuads(t));
     yield* store.insert(Dataset.addAll(loaded, datasetClauseQuads(query, loaded)));
     const engine = Engine.make(store, { baseIri });
     const answer = yield* engine.query(query);
-    const expected = readExpected(t.result!);
+    const expected = readExpected(expectedResultFile(t));
     return yield* Match.value(answer).pipe(
       Match.tag('Ask', (result) =>
         Effect.sync(() => {
@@ -175,7 +181,7 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
           let actual = set.bindings;
           // SAFETY: a SELECT test's expected result was loaded as a result set.
           const exp = (expected as Results.ResultSet).bindings;
-          if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+          if (t.type === 'CSVResultFormatTest' || expectedResultFile(t).endsWith('.csv')) {
             const csv = Results.Csv.serializeString(set);
             // SAFETY: the CSV serialization of a result set parses back to a result set.
             actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
@@ -206,8 +212,8 @@ const runQueryTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
 
 const runUpdateTest = (store: SqlStore.SqlStoreShape, t: TestCase) =>
   Effect.gen(function* () {
-    const text = fs.readFileSync(t.query!, 'utf8');
-    const baseIri = pathToFileURL(t.query!).href;
+    const text = fs.readFileSync(queryFile(t), 'utf8');
+    const baseIri = pathToFileURL(queryFile(t)).href;
     yield* store.insert(loadQuads(t));
     const engine = Engine.make(store, { baseIri });
     const outcome = yield* Effect.result(engine.update(text));
@@ -249,7 +255,7 @@ export const conformanceSuite = (name: string, backend: Backend): void => {
     const runnable = tests.filter((t) => skipReason(t) === undefined);
     it('documents every skipped test', () => {
       const skippedTests = tests.filter((t) => skipReason(t) !== undefined);
-      expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t)!))).toBe(true);
+      expect(skippedTests.every((t) => Str.isNonEmpty(skipReason(t) ?? ''))).toBe(true);
     });
     it.each(
       runnable.filter((t) => t.type !== 'UpdateEvaluationTest').map((t) => [label(t), t] as const),

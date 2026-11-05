@@ -123,7 +123,7 @@ describe('ShapeMap', () => {
         { prefixes: { ex: 'http://ex.example/' } },
       );
       expect(map).toHaveLength(3);
-      expect(map[1]!.shape).toEqual(ShapeMap.start);
+      expect(map[1]?.shape).toEqual(ShapeMap.start);
       const fixed = ShapeMap.resolve(map, data);
       expect(fixed.map((a) => a.node.key)).toContain('<http://ex.example/dave>');
     }),

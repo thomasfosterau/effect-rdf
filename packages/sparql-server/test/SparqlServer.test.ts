@@ -74,7 +74,7 @@ const post = (
 const q = (query: string) => `/sparql?query=${encodeURIComponent(query)}`;
 
 const mediaType = (r: HttpClientResponse.HttpClientResponse) =>
-  (r.headers['content-type'] ?? '').split(';')[0]!.trim();
+  ((r.headers['content-type'] ?? '').split(';')[0] ?? '').trim();
 
 const SELECT = 'SELECT ?s ?name WHERE { ?s <http://example.org/name> ?name } ORDER BY ?name';
 
@@ -413,7 +413,7 @@ describe('SPARQL endpoint', () => {
         // SAFETY: the query binds `?x` to an IRI.
         expect(
           set._tag === 'ResultSet' &&
-            (set.bindings[0]!.map.get('x') as Term.NamedNode | undefined)?.value,
+            (set.bindings[0]?.map.get('x') as Term.NamedNode | undefined)?.value,
         ).toBe('http://localhost/rel');
       }),
     ),
@@ -489,7 +489,7 @@ describe('Graph Store Protocol', () => {
           ),
         );
         expect(created.status).toBe(201);
-        const location = created.headers['location']!;
+        const location = created.headers['location'] ?? assert.fail('expected a Location header');
         expect(location.startsWith('http://localhost/rdf-graph-store/')).toBe(true);
         const fetched = yield* get(client, `${gsp}?graph=${encodeURIComponent(location)}`, {
           accept: 'application/n-triples',
@@ -526,8 +526,16 @@ describe('Protocol', () => {
       parameters: { charset: 'UTF-8' },
     });
     expect(Protocol.parseContentType(undefined)).toBeUndefined();
-    expect(Protocol.isNonUtf8(Protocol.parseContentType('a/b; charset=utf8')!)).toBe(false);
-    expect(Protocol.isNonUtf8(Protocol.parseContentType('a/b; charset=latin1')!)).toBe(true);
+    expect(
+      Protocol.isNonUtf8(
+        Protocol.parseContentType('a/b; charset=utf8') ?? assert.fail('expected a content type'),
+      ),
+    ).toBe(false);
+    expect(
+      Protocol.isNonUtf8(
+        Protocol.parseContentType('a/b; charset=latin1') ?? assert.fail('expected a content type'),
+      ),
+    ).toBe(true);
   });
 });
 

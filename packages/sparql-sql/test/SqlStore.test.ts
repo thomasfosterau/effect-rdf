@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Stream from 'effect/Stream';
@@ -36,6 +36,7 @@ describe('SqlStore', () => {
   it.effect('stores, matches and counts quads', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
+      const count = store.count ?? assert.fail('the SQL store counts quads');
       yield* store.insert(data);
       yield* store.insert(data);
       const all = yield* Store.toDataset(store);
@@ -46,12 +47,12 @@ describe('SqlStore', () => {
         store.match({ predicate: foaf('name'), graph: Term.defaultGraph }),
       );
       expect(defaultNames.length).toBe(2);
-      expect(yield* store.count!({ predicate: foaf('name'), graph: undefined })).toBe(3);
-      expect(yield* store.count!({ subject: ex('nobody') })).toBe(0);
+      expect(yield* count({ predicate: foaf('name'), graph: undefined })).toBe(3);
+      expect(yield* count({ subject: ex('nobody') })).toBe(0);
       const graphs = yield* Stream.runCollect(store.graphs);
       expect(graphs.map((g) => g.value)).toEqual([ex('g1').value]);
-      yield* store.delete([data[0]!]);
-      expect(yield* store.count!({})).toBe(data.length - 1);
+      yield* store.delete(data.slice(0, 1));
+      expect(yield* count({})).toBe(data.length - 1);
       yield* store.createGraph(ex('empty'));
       expect(yield* store.hasGraph(ex('empty'))).toBe(true);
       yield* store.dropGraph(ex('g1'));
@@ -62,6 +63,7 @@ describe('SqlStore', () => {
   it.effect('rolls back failed transactions', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
+      const count = store.count ?? assert.fail('the SQL store counts quads');
       yield* store.insert(data.slice(0, 2));
       const result = yield* Effect.result(
         store.transaction(
@@ -69,7 +71,7 @@ describe('SqlStore', () => {
         ),
       );
       expect(result._tag).toBe('Failure');
-      expect(yield* store.count!({})).toBe(2);
+      expect(yield* count({})).toBe(2);
     }).pipe(Effect.provide(StoreLayer)),
   );
 
@@ -93,7 +95,9 @@ describe('SqlStore', () => {
       ).toEqual(['Alice:30', 'Bob:undefined']);
       const count = yield* engine.select('SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }');
       const c = yield* Stream.runCollect(count.bindings);
-      expect(lex(Bindings.getUndefined(c[0]!, 'n'))).toBe('1');
+      expect(lex(Bindings.getUndefined(c[0] ?? assert.fail('expected a COUNT row'), 'n'))).toBe(
+        '1',
+      );
       const since = yield* engine.select(
         'SELECT ?y WHERE { <<( ?a <http://xmlns.com/foaf/0.1/knows> ?b )>> <http://example.org/since> ?y }',
       );

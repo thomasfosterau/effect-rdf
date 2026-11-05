@@ -23,7 +23,12 @@ import { type Ast, type Bindings, Parser, Results, Store } from '@thomasfosterau
 import { SparqlServer, Testing } from '@thomasfosterau/effect-sparql-server';
 import * as SparqlClient from '../src/SparqlClient.ts';
 import { fromRdf, normalize, sameResults } from '../../sparql/test/support/compare.ts';
-import { readManifest, type TestCase } from '../../sparql/test/support/manifest.ts';
+import {
+  expectedResultFile,
+  queryFile,
+  readManifest,
+  type TestCase,
+} from '../../sparql/test/support/manifest.ts';
 import { parseFile } from '../../sparql/test/support/rdf.ts';
 
 const suitesDir =
@@ -163,10 +168,10 @@ const expectSameSolutions = (
 
 const runQueryTest = (t: TestCase, accept: string) =>
   Effect.gen(function* () {
-    const text = fs.readFileSync(t.query!, 'utf8');
-    const baseIri = pathToFileURL(t.query!).href;
+    const text = fs.readFileSync(queryFile(t), 'utf8');
+    const baseIri = pathToFileURL(queryFile(t)).href;
     const parsed = yield* Parser.parseQuery(text, { baseIri });
-    const expected = readExpected(t.result!);
+    const expected = readExpected(expectedResultFile(t));
     yield* Effect.gen(function* () {
       const client = yield* SparqlClient.SparqlClient;
       return yield* Match.value(parsed).pipe(
@@ -189,7 +194,7 @@ const runQueryTest = (t: TestCase, accept: string) =>
           Effect.gen(function* () {
             const set = yield* client.selectAll(text);
             let actual = set.bindings;
-            if (t.type === 'CSVResultFormatTest' || t.result!.endsWith('.csv')) {
+            if (t.type === 'CSVResultFormatTest' || expectedResultFile(t).endsWith('.csv')) {
               const csv = Results.Csv.serializeString(set);
               // SAFETY: the CSV serialization of a result set parses back to a result set.
               actual = ((yield* Results.Csv.parse(csv)) as Results.ResultSet).bindings;
@@ -211,8 +216,8 @@ const runQueryTest = (t: TestCase, accept: string) =>
 
 const runUpdateTest = (t: TestCase) =>
   Effect.gen(function* () {
-    const text = fs.readFileSync(t.query!, 'utf8');
-    const baseIri = pathToFileURL(t.query!).href;
+    const text = fs.readFileSync(queryFile(t), 'utf8');
+    const baseIri = pathToFileURL(queryFile(t)).href;
     yield* Effect.gen(function* () {
       const client = yield* SparqlClient.SparqlClient;
       const outcome = yield* Effect.result(client.update(text));
@@ -238,7 +243,9 @@ describe.skipIf(!exists)('SPARQL evaluation conformance over HTTP (client ↔ se
   const runnable = tests.filter((t) => skipReason(t) === undefined);
   it('runs every evaluation test outside the skipped directories', () => {
     expect(
-      tests.filter((t) => skipReason(t) !== undefined).every((t) => Str.isNonEmpty(skipReason(t)!)),
+      tests
+        .filter((t) => skipReason(t) !== undefined)
+        .every((t) => Str.isNonEmpty(skipReason(t) ?? '')),
     ).toBe(true);
     expect(runnable.length).toBeGreaterThan(600);
   });

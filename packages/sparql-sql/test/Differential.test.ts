@@ -30,7 +30,7 @@ const prng = (seed: number) => {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   const int = (n: number) => Math.floor(next() * n);
-  const pick = <A>(xs: ReadonlyArray<A>): A => xs[int(xs.length)]!;
+  const pick = <A>(xs: ReadonlyArray<A>): A => Arr.getUnsafe(xs, int(xs.length));
   const chance = (p: number) => next() < p;
   return { int, pick, chance };
 };
@@ -88,7 +88,11 @@ const riskyLiterals: ReadonlyArray<Term.Literal> = [
   typed('P1D', 'dayTimeDuration'),
 ];
 
-const tripleTerm = Term.triple(resources[0]!, predicates[0]!, resources[1]!);
+const tripleTerm = Term.triple(
+  Arr.getUnsafe(resources, 0),
+  Arr.getUnsafe(predicates, 0),
+  Arr.getUnsafe(resources, 1),
+);
 
 const makeData = (r: Random, risky: boolean): Array<Term.Quad> => {
   const literals = risky ? [...safeLiterals, ...riskyLiterals] : safeLiterals;
@@ -197,7 +201,7 @@ class QueryGen {
       ? r.pick(VARS)
       : r.chance(0.9)
         ? r.pick(resources).toString()
-        : `<<( ${resources[0]!.toString()} ${predicates[0]!.toString()} ?d )>>`;
+        : `<<( ${tripleTerm.subject.toString()} ${tripleTerm.predicate.toString()} ?d )>>`;
     const p = r.chance(0.7) ? r.pick(predicates).toString() : r.pick(VARS);
     const o = r.chance(0.7) ? r.pick(VARS) : this.constant();
     return `${s} ${p} ${o} .`;

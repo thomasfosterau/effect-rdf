@@ -41,7 +41,7 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
   let pos = 0;
   const ws = () => {
     for (;;) {
-      while (pos < input.length && /[ \t\r\n]/.test(input[pos]!)) pos++;
+      while (pos < input.length && /[ \t\r\n]/.test(input.charAt(pos))) pos++;
       if (input[pos] === '#') {
         while (pos < input.length && input[pos] !== '\n') pos++;
       } else return;
@@ -70,9 +70,10 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
       return Term.namedNode(iri);
     }
     if (c === '_') {
-      const m = /^_:([^\s)]+)/.exec(input.slice(pos))!;
+      const m = /^_:([^\s)]+)/.exec(input.slice(pos));
+      if (m === null) return assert.fail(`Malformed blank node at ${pos}`);
       pos += m[0].length;
-      let label = m[1]!;
+      let label = m[1] ?? '';
       if (label.endsWith('.')) {
         label = label.slice(0, -1);
         pos--;
@@ -93,11 +94,12 @@ export const parseNTriples = (input: string, bnodePrefix = 'nt_'): Dataset.Datas
       if (input[pos] === '@') {
         const m = /^@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*?)(?:--(ltr|rtl))?(?=[\s.)])/.exec(
           input.slice(pos),
-        )!;
+        );
+        if (m === null) return assert.fail(`Malformed language tag at ${pos}`);
         pos += m[0].length;
         // SAFETY: the regex only captures `ltr` or `rtl`.
         return m[2] !== undefined
-          ? Term.literal(value, { language: m[1]!, direction: m[2] as Term.Direction })
+          ? Term.literal(value, { language: m[1] ?? '', direction: m[2] as Term.Direction })
           : Term.literal(value, m[1]);
       }
       if (input.startsWith('^^', pos)) {
@@ -142,7 +144,7 @@ const tokenize = (src: string): Array<string> => {
   const tokens: Array<string> = [];
   let i = 0;
   while (i < src.length) {
-    const c = src[i]!;
+    const c = src.charAt(i);
     if (/\s/.test(c)) i++;
     else if (c === '#') {
       while (i < src.length && src[i] !== '\n') i++;
@@ -165,7 +167,7 @@ const tokenize = (src: string): Array<string> => {
       i++;
     } else {
       let j = i;
-      while (j < src.length && !/[\s()[\];,]/.test(src[j]!)) j++;
+      while (j < src.length && !/[\s()[\];,]/.test(src.charAt(j))) j++;
       let tok = src.slice(i, j);
       if (tok.endsWith('.') && tok.length > 1) {
         tokens.push(tok.slice(0, -1));
@@ -180,11 +182,11 @@ const tokenize = (src: string): Array<string> => {
 
 const skipSuffix = (src: string, i: number): number => {
   if (src[i] === '@') {
-    while (i < src.length && /[@A-Za-z0-9-]/.test(src[i]!)) i++;
+    while (i < src.length && /[@A-Za-z0-9-]/.test(src.charAt(i))) i++;
   } else if (src.startsWith('^^', i)) {
     i += 2;
     if (src[i] === '<') i = src.indexOf('>', i) + 1;
-    else while (i < src.length && !/[\s;,.)\]]/.test(src[i]!)) i++;
+    else while (i < src.length && !/[\s;,.)\]]/.test(src.charAt(i))) i++;
   }
   return i;
 };
@@ -211,7 +213,7 @@ const parseManifestGraph = (src: string, base: string): Graph => {
     return ns + tok.slice(i + 1);
   };
   const object = (): Value => {
-    const tok = tokens[k++]!;
+    const tok = tokens[k++] ?? assert.fail('Unexpected end of manifest');
     if (tok.startsWith('"')) return { kind: 'literal', value: tok.slice(1), items: [] };
     if (tok === '(') {
       const items: Array<Value> = [];
@@ -231,7 +233,7 @@ const parseManifestGraph = (src: string, base: string): Graph => {
   };
   const predicateObjectList = (subject: string) => {
     for (;;) {
-      const p = iri(tokens[k++]!);
+      const p = iri(tokens[k++] ?? assert.fail('Unexpected end of manifest'));
       for (;;) {
         add(subject, p, object());
         if (tokens[k] === ',') k++;
@@ -244,10 +246,11 @@ const parseManifestGraph = (src: string, base: string): Graph => {
     }
   };
   while (k < tokens.length) {
-    const tok = tokens[k]!;
+    const tok = tokens[k] ?? assert.fail('Unexpected end of manifest');
     if (tok === '@prefix' || tok === 'PREFIX') {
-      const p = tokens[k + 1]!;
-      prefixes.set(p.slice(0, -1), Iri.resolve(tokens[k + 2]!.slice(1, -1), base));
+      const p = tokens[k + 1] ?? assert.fail('Unexpected end of manifest');
+      const nsToken = tokens[k + 2] ?? assert.fail('Unexpected end of manifest');
+      prefixes.set(p.slice(0, -1), Iri.resolve(nsToken.slice(1, -1), base));
       k += tok === '@prefix' ? 4 : 3;
       continue;
     }
@@ -255,7 +258,7 @@ const parseManifestGraph = (src: string, base: string): Graph => {
       k += tok === '@base' ? 3 : 2;
       continue;
     }
-    const subject = iri(tokens[k++]!);
+    const subject = iri(tokens[k++] ?? assert.fail('Unexpected end of manifest'));
     if (tokens[k] !== '.') predicateObjectList(subject);
     if (tokens[k] !== '.') assert.fail(`Expected . but found ${tokens[k]}`);
     k++;

@@ -127,7 +127,7 @@ export default defineConfig({
       // 631 at adoption; dropping the unnecessary `a!` in `a!._tag` (sparql
       // Functions.ts) made 15 existing checks visible to the rule.
       'effect/avoid-direct-tag-checks': 'warn', // 619
-      'effect/avoid-non-null-assertion': 'warn', // 558
+      'effect/avoid-non-null-assertion': 'warn', // 391
       'effect/avoid-native-object-helpers': 'warn', // 539
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is

@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
+import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Equal from 'effect/Equal';
 import * as Exit from 'effect/Exit';
@@ -32,27 +33,29 @@ describe('N3.parse', () => {
   );
 
   it('parses formulas, variables and rule shorthands', () => {
-    const [rule] = statements('{ ?x a :Man } => { ?x a :Mortal } .');
-    expect(rule!.predicate).toEqual(Vocab.log.implies);
-    expect(Model.isFormula(rule!.subject)).toBe(true);
-    expect(Model.variables(rule!).map((v) => v.value)).toEqual(['x']);
-    expect(statements(':a <= :b .')[0]!.predicate).toEqual(Vocab.log.isImpliedBy);
-    expect(statements(':a = :b .')[0]!.predicate).toEqual(Vocab.sameAs);
+    const rule = Arr.getUnsafe(statements('{ ?x a :Man } => { ?x a :Mortal } .'), 0);
+    expect(rule.predicate).toEqual(Vocab.log.implies);
+    expect(Model.isFormula(rule.subject)).toBe(true);
+    expect(Model.variables(rule).map((v) => v.value)).toEqual(['x']);
+    expect(statements(':a <= :b .')[0]?.predicate).toEqual(Vocab.log.isImpliedBy);
+    expect(statements(':a = :b .')[0]?.predicate).toEqual(Vocab.sameAs);
   });
 
   it('treats the empty formula as the literal true', () => {
-    expect(statements(':a :b {} .')[0]!.object).toEqual(Term.literal('true', xsd.boolean));
+    expect(statements(':a :b {} .')[0]?.object).toEqual(Term.literal('true', xsd.boolean));
   });
 
   it('expands paths left to right', () => {
     const [s1, s2, s3] = statements(':joe!:hasMother^:hasMother a :Person .');
-    expect(s1!.subject).toEqual(ex('joe'));
-    expect(s1!.predicate).toEqual(ex('hasMother'));
-    const m = s1!.object;
-    expect(s2!.predicate).toEqual(ex('hasMother'));
-    expect(s2!.object).toEqual(m);
-    expect(s3!.subject).toEqual(s2!.subject);
-    expect(s3!.object).toEqual(ex('Person'));
+    expect(s1?.subject).toEqual(ex('joe'));
+    expect(s1?.predicate).toEqual(ex('hasMother'));
+    const m = s1?.object;
+    expect(m).toBeDefined();
+    expect(s2?.predicate).toEqual(ex('hasMother'));
+    expect(s2?.object).toEqual(m);
+    expect(s3?.subject).toEqual(s2?.subject);
+    expect(s3?.subject).toBeDefined();
+    expect(s3?.object).toEqual(ex('Person'));
   });
 
   it('supports inverse predicates', () => {
@@ -71,10 +74,10 @@ describe('N3.parse', () => {
   });
 
   it('allows literals, formulas and collections in any position', () => {
-    const [s] = statements('"x" ( 1 2 ) { :a :b :c } .');
-    expect(s!.subject).toEqual(Term.literal('x'));
-    expect(Model.isCollection(s!.predicate)).toBe(true);
-    expect(Model.isFormula(s!.object)).toBe(true);
+    const s = Arr.getUnsafe(statements('"x" ( 1 2 ) { :a :b :c } .'), 0);
+    expect(s.subject).toEqual(Term.literal('x'));
+    expect(Model.isCollection(s.predicate)).toBe(true);
+    expect(Model.isFormula(s.object)).toBe(true);
   });
 
   it('parses literals', () => {
@@ -96,7 +99,7 @@ describe('N3.parse', () => {
 
   it('defaults the empty prefix to <#>', () => {
     const doc = Effect.runSync(N3.parse(':a :b :c .', { baseIri: 'http://x.org/doc' }));
-    expect(doc.formula.statements[0]!.subject).toEqual(Term.namedNode('http://x.org/doc#a'));
+    expect(doc.formula.statements[0]?.subject).toEqual(Term.namedNode('http://x.org/doc#a'));
   });
 
   it('resolves relative IRIs against @base and BASE', () => {
@@ -111,15 +114,15 @@ describe('N3.parse', () => {
   });
 
   it('scopes blank node labels to the document', () => {
-    const [a] = statements('_:x :p { _:x :q :r } .');
+    const a = Arr.getUnsafe(statements('_:x :p { _:x :q :r } .'), 0);
     // SAFETY: the test document's object is a formula.
-    expect(a!.subject).toEqual((a!.object as Model.Formula).statements[0]!.subject);
+    expect(a.subject).toEqual((a.object as Model.Formula).statements[0]?.subject);
   });
 
   it('maps legacy @forAll / @forSome', () => {
     const [s] = statements('@forAll :x . @forSome :y . :x :p :y .');
-    expect(s!.subject).toEqual(Term.variable('x'));
-    expect(s!.object._tag).toBe('BlankNode');
+    expect(s?.subject).toEqual(Term.variable('x'));
+    expect(s?.object._tag).toBe('BlankNode');
   });
 
   it('rejects IRIs whose escapes encode disallowed characters', () => {
@@ -216,7 +219,7 @@ describe('Mapping', () => {
       const dataset = yield* Mapping.toDataset(doc);
       const graphs = Dataset.graphs(dataset).filter((g) => g._tag === 'BlankNode');
       expect(graphs.length).toBe(1);
-      expect(Dataset.count(dataset, { graph: graphs[0]! })).toBe(1);
+      expect(Dataset.count(dataset, { graph: Arr.getUnsafe(graphs, 0) })).toBe(1);
       const back = yield* Mapping.fromDataset(dataset);
       expect(Isomorphism.isomorphic(back, doc.formula)).toBe(true);
       expect(back.statements.some((s) => Model.isCollection(s.object))).toBe(true);
@@ -350,7 +353,7 @@ describe('Reasoner', () => {
   it('answers queries', () => {
     const doc = parse(':a :knows :b . :b :knows :c .');
     const answers = Reasoner.query(doc.formula, parse('?x :knows [ :knows ?z ] .').formula);
-    expect(answers.map((b) => [b.get('x')!.key, b.get('z')!.key])).toEqual([
+    expect(answers.map((b) => [b.get('x')?.key, b.get('z')?.key])).toEqual([
       [`<${EX}a>`, `<${EX}c>`],
     ]);
   });

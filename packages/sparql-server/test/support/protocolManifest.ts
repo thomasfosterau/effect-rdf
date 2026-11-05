@@ -6,6 +6,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assert } from '@effect/vitest';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -104,7 +105,7 @@ export const readManifest = (file: string): Array<ProtocolTest> => {
     const action = object(entry, `${MF}action`);
     if (action === undefined) continue;
     const requests = list(object(action, `${HT}requests`)).map((r): RequestSpec => {
-      const resp = object(r, `${HT}resp`)!;
+      const resp = object(r, `${HT}resp`) ?? assert.fail(`${r.key} has no ht:resp`);
       return {
         method: value(r, `${HT}methodName`) ?? 'GET',
         path: value(r, `${HT}absolutePath`) ?? '/',

@@ -4,6 +4,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assert } from '@effect/vitest';
 import { Term } from '@thomasfosterau/effect-rdf';
 import { parseRdf } from './rdf.ts';
 
@@ -41,6 +42,14 @@ export interface TestCase {
   readonly requires: ReadonlyArray<string>;
   readonly laxCardinality: boolean;
 }
+
+/** The test's query or update file; fails the test when its manifest entry names none. */
+export const queryFile = (t: TestCase): string =>
+  t.query ?? assert.fail(`${t.id} has no query or update file`);
+
+/** The test's expected-result file; fails the test when its manifest entry names none. */
+export const expectedResultFile = (t: TestCase): string =>
+  t.result ?? assert.fail(`${t.id} has no result file`);
 
 type Node = Term.NamedNode | Term.BlankNode | Term.Literal;
 

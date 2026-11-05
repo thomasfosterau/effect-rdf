@@ -79,8 +79,9 @@ describe('SparqlClient ↔ SparqlServer', () => {
           readonly mbox?: Term.GroundTerm | undefined;
         }> = yield* Stream.runCollect(client.select(query));
         expect(typed.map((r) => lexical(r.name))).toEqual(['Alice', 'Bob']);
-        expect(lexical(typed[0]!.mbox)).toBe('mailto:alice@example.org');
-        expect(typed[1]!.mbox).toBeUndefined();
+        expect(lexical(typed[0]?.mbox)).toBe('mailto:alice@example.org');
+        expect(typed[1]).toBeDefined();
+        expect(typed[1]?.mbox).toBeUndefined();
 
         const all = yield* client.selectAll(query);
         expect(all.variables).toEqual(['person', 'name', 'mbox']);

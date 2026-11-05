@@ -328,7 +328,7 @@ describe('RdfJson schemas', () => {
   it.effect('RdfJsonFromString decodes and encodes typed documents', () =>
     Effect.gen(function* () {
       const document = yield* Schema.decodeEffect(RdfJson.RdfJsonFromString)(specExample);
-      expect(document['http://example.org/about']!['http://purl.org/dc/terms/title']).toEqual([
+      expect(document['http://example.org/about']?.['http://purl.org/dc/terms/title']).toEqual([
         { type: 'literal', value: "Anna's Homepage", lang: 'en' },
       ]);
       const text = yield* Schema.encodeEffect(RdfJson.RdfJsonFromString)(document);

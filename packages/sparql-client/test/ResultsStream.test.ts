@@ -63,7 +63,7 @@ describe('ResultsStream', () => {
             expect(events[0]).toEqual({ _tag: 'Variables', variables: ['s', 'o'] });
             const got = solutions(events);
             expect(got).toHaveLength(rows.length);
-            got.forEach((b, i) => expect(b.key).toBe(rows[i]!.key));
+            got.forEach((b, i) => expect(b.key).toBe(rows[i]?.key));
           }),
           { concurrency: 1, discard: true },
         );
@@ -90,7 +90,7 @@ describe('ResultsStream', () => {
         }),
         { concurrency: 1, discard: true },
       );
-      expect(solutions(yield* collect('text/csv', text, 4))[0]!.map.get('y')?.key).toBe(
+      expect(solutions(yield* collect('text/csv', text, 4))[0]?.map.get('y')?.key).toBe(
         Term.literal('multi\r\nline "quoted"').key,
       );
       expect(yield* collect('text/csv', 'true\r\n', 1)).toEqual([{ _tag: 'Boolean', value: true }]);

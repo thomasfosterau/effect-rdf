@@ -126,7 +126,7 @@ describe('Path', () => {
 
   it('rejects ill-formed paths', () => {
     const g = ttl(`ex:s sh:path [ ex:unknown ex:p ] .`);
-    const node = Dataset.objectsOf(g, ex('s'), sh.path)[0]!;
+    const node = Dataset.objectsOf(g, ex('s'), sh.path)[0] ?? assert.fail('expected an sh:path');
     expect(Result.isFailure(Path.fromRdf(g, node))).toBe(true);
   });
 });
@@ -145,9 +145,10 @@ describe('Shapes', () => {
       expect(person.constraints.map((c) => c._tag)).toEqual(['Property', 'Property', 'Property']);
       const props = shapes.shapes.filter((s) => s._tag === 'PropertyShape');
       expect(props).toHaveLength(3);
-      const age = props.find(
-        (s) => s._tag === 'PropertyShape' && Path.equals(s.path, Path.predicate(ex('age'))),
-      )!;
+      const age =
+        props.find(
+          (s) => s._tag === 'PropertyShape' && Path.equals(s.path, Path.predicate(ex('age'))),
+        ) ?? assert.fail('expected the ex:age property shape');
       expect(age.severity.value).toBe(sh.Warning.value);
       expect(age.constraints.map((c) => Shapes.componentOf(c).value)).toEqual([
         sh.DatatypeConstraintComponent.value,
@@ -217,7 +218,9 @@ describe('Validator', () => {
         'http://example.org/dave MinCountConstraintComponent Violation',
       ]);
       expect(ValidationReport.violations(report)).toHaveLength(2);
-      const dave = report.results.find((r) => r.focusNode.key === ex('dave').key)!;
+      const dave =
+        report.results.find((r) => r.focusNode.key === ex('dave').key) ??
+        assert.fail('expected a result for ex:dave');
       expect(dave.messages.map((m) => m.value)).toEqual(['A person needs exactly one string name']);
       expect(Option.map(dave.resultPath, Path.toSparql)).toEqual(Option.some(ex('name').key));
       expect(ValidationReport.format(report)).toContain('MinCountConstraintComponent');
@@ -234,7 +237,8 @@ describe('Validator', () => {
         Dataset.has(
           ds,
           Term.quad(
-            Dataset.subjectsOf(ds, rdf.type, sh.ValidationReport)[0]!,
+            Dataset.subjectsOf(ds, rdf.type, sh.ValidationReport)[0] ??
+              assert.fail('expected a validation report'),
             sh.conforms,
             Term.literal('false', xsd.boolean),
           ),
@@ -305,7 +309,9 @@ describe('Validator', () => {
       const counts = new Map<string, number>();
       for (const r of report.results) {
         // SAFETY: constraint components are IRIs.
-        const name = sh.localName(r.sourceConstraintComponent as Term.NamedNode)!;
+        const name =
+          sh.localName(r.sourceConstraintComponent as Term.NamedNode) ??
+          assert.fail('expected a SHACL constraint component');
         counts.set(name, (counts.get(name) ?? 0) + 1);
       }
       expect(Object.fromEntries(counts)).toEqual({
@@ -343,7 +349,9 @@ describe('Validator', () => {
         'http://example.org/a ClosedConstraintComponent',
         'http://example.org/b NotConstraintComponent',
       ]);
-      const closed = report.results.find((r) => r.focusNode.key === ex('a').key)!;
+      const closed =
+        report.results.find((r) => r.focusNode.key === ex('a').key) ??
+        assert.fail('expected a result for ex:a');
       expect(Option.map(closed.resultPath, Path.toSparql)).toEqual(Option.some(ex('q').key));
     }),
   );
@@ -507,10 +515,10 @@ describe('SHACL-SPARQL extension point', () => {
     Effect.gen(function* () {
       const report = yield* Validator.validate(data, shapes);
       expect(report.results).toHaveLength(1);
-      const [result] = report.results;
-      expect(result?.sourceConstraintComponent.key).toBe(sh.SPARQLConstraintComponent.key);
-      expect(Option.isSome(result!.sourceConstraint)).toBe(true);
-      expect(Option.map(result!.value, (v) => v.key)).toEqual(
+      const result = report.results[0] ?? assert.fail('expected a validation result');
+      expect(result.sourceConstraintComponent.key).toBe(sh.SPARQLConstraintComponent.key);
+      expect(Option.isSome(result.sourceConstraint)).toBe(true);
+      expect(Option.map(result.value, (v) => v.key)).toEqual(
         Option.some(Term.literal('1', xsd.integer).key),
       );
     }).pipe(
@@ -539,7 +547,7 @@ describe('SHACL-SPARQL extension point', () => {
             sh:sparql [ sh:select "SELECT $this WHERE { }" ] .
         `),
       );
-      expect(report.results[0]!.messages.map((m) => m.value)).toEqual([
+      expect(report.results[0]?.messages.map((m) => m.value)).toEqual([
         'http://example.org/a is bad: 1 (too bad)',
       ]);
     }).pipe(

@@ -216,7 +216,8 @@ const loadTests = (): Array<ServiceTest> => {
       ? Dataset.objectsOf(ds, s, Term.namedNode(p))
       : [];
   return manifest.entries.map((entry) => {
-    const action = objects(entry.node, `${MF}action`)[0]!;
+    const action =
+      objects(entry.node, `${MF}action`)[0] ?? assert.fail(`${entry.name} has no mf:action`);
     return {
       name: entry.name,
       query: fileURLToPath(iriValue(objects(action, `${QT}query`)[0])),

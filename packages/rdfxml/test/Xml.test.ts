@@ -55,17 +55,17 @@ describe('Xml.parse', () => {
         [undefined, 'y', '2'],
       ]);
       const [child, other, plain] = elements(root);
-      expect(child!.namespace).toBe('urn:default');
-      expect(other!.namespace).toBe('urn:b');
-      expect(other!.children).toMatchObject([{ _tag: 'Text', value: 'text' }]);
-      expect(other!.inScopeNamespaces.has('')).toBe(false);
-      expect(plain!.namespace).toBe('urn:default');
+      expect(child?.namespace).toBe('urn:default');
+      expect(other?.namespace).toBe('urn:b');
+      expect(other?.children).toMatchObject([{ _tag: 'Text', value: 'text' }]);
+      expect(other?.inScopeNamespaces.has('')).toBe(false);
+      expect(plain?.namespace).toBe('urn:default');
     }),
   );
 
   it('expands character and predefined entity references', () => {
     const doc = parseOk(`<r a="&lt;&#x41;&#66;&quot;">&amp;&#x1F600;&apos;&gt;</r>`);
-    expect(doc.root.attributes[0]!.value).toBe('<AB"');
+    expect(doc.root.attributes[0]?.value).toBe('<AB"');
     expect(doc.root.children).toMatchObject([{ _tag: 'Text', value: "&😀'>" }]);
   });
 
@@ -89,8 +89,8 @@ describe('Xml.parse', () => {
 
   it('normalises attribute values and line ends', () => {
     const doc = parseOk(`<r a="x\ty\r\nz" b="&#10;"/>`);
-    expect(doc.root.attributes[0]!.value).toBe('x y z');
-    expect(doc.root.attributes[1]!.value).toBe('\n');
+    expect(doc.root.attributes[0]?.value).toBe('x y z');
+    expect(doc.root.attributes[1]?.value).toBe('\n');
     expect(parseOk('<r>a\r\nb\rc</r>').root.children).toMatchObject([{ value: 'a\nb\nc' }]);
   });
 
@@ -108,7 +108,7 @@ describe('Xml.parse', () => {
     expect(doc.doctype?.entities.get('name')).toBe('World');
     const attrs = Object.fromEntries(doc.root.attributes.map((a) => [a.localName, a.value]));
     expect(attrs).toEqual({ tok: 'a', a: 'Hello World', kind: 'default' });
-    expect(doc.root.attributes.find((a) => a.localName === 'kind')!.defaulted).toBe(true);
+    expect(doc.root.attributes.find((a) => a.localName === 'kind')?.defaulted).toBe(true);
     expect(doc.root.children).toMatchObject([
       { _tag: 'Text', value: 'Hello World! ' },
       { _tag: 'Element', localName: 'b', namespace: 'urn:b' },
