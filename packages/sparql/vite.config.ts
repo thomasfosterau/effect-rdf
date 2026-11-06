@@ -1,3 +1,3 @@
 import { packageConfig } from '../../vite.package.ts';
 
-export default packageConfig({ subpaths: ['ai'] });
+export default packageConfig({ subpaths: ['ai', 'shacl'] });

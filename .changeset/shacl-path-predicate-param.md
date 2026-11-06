@@ -1,5 +1,5 @@
 ---
-'@thomasfosterau/effect-shacl': patch
+'@thomasfosterau/effect-rdf': patch
 ---
 
-`Path.predicate`'s parameter is now named `iri` in the emitted declarations (it no longer shadows the `predicate` export).
+SHACL `Path.predicate`'s parameter (`@thomasfosterau/effect-rdf/shacl`) is now named `iri` in the emitted declarations (it no longer shadows the `predicate` export).

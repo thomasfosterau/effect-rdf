@@ -1,0 +1,8 @@
+---
+'@thomasfosterau/effect-rdf': minor
+---
+
+Two new nested subpaths, each a barrel (`./<subpath>`) with one entry point per module (`./<subpath>/<Module>`), kept off the root barrel. They replace the separate `effect-csvw` and `effect-shacl` packages, which were never published; their modules are unchanged apart from the import path and the service keys, which follow it.
+
+- **`@thomasfosterau/effect-rdf/csvw`** (`Metadata`, `Datatype`, `Table`, `Report`, `Processor`, `Csv2Rdf`, `Csv2Json`): CSV on the Web over already-parsed tables. `Metadata` decodes and normalizes CSVW metadata documents into `Schema`-described table groups (with warnings for invalid properties and `MetadataError` for specification errors); `Table` reads a parsed table with its dialect, checks its embedded metadata for compatibility and annotates every cell (datatypes, number, date and boolean formats, `null`, `default`, `required`, `separator`, virtual columns, URI templates); `Processor` runs it all from a metadata or tabular data file through a `Loader` service (key `@thomasfosterau/effect-rdf/csvw/Loader`), validating primary and foreign keys, into a positioned `Report`; `Csv2Rdf` and `Csv2Json` convert the result in standard or minimal mode. Locating metadata through HTTP `Link` headers and `/.well-known/csvm` is not yet supported.
+- **`@thomasfosterau/effect-rdf/shacl`** (`Vocabulary`, `Shapes`, `Path`, `Validator`, `ValidationReport`, `Sparql`, `Message`): the SHACL Core validator, with the `Sparql.SparqlConstraintEvaluator` extension point that `@thomasfosterau/effect-sparql/shacl` implements. Its service keys are `@thomasfosterau/effect-rdf/shacl/Validator` and `@thomasfosterau/effect-rdf/shacl/Sparql/SparqlConstraintEvaluator`.

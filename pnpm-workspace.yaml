@@ -12,6 +12,8 @@
 # lockfile fails CI at once with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
 packages:
   - packages/*
+  # Private, never-published test packages (`tests/conformance`).
+  - tests/*
 
 catalogMode: strict
 
@@ -94,9 +96,8 @@ catalogs:
     # instead). Proved by running each package's `check` and `test:unit`
     # with the `effect` line above pinned to 4.0.0.
     effect: ^4.0.0
-  # `@thomasfosterau/effect-sparql` (its `/ai` subpath included), and the
-  # packages that depend on it at runtime (`effect-shacl-sparql`):
-  # effect-sparql's runtime dependency `@effect/platform-node`, pinned above at 4.1.2,
+  # `@thomasfosterau/effect-sparql` (its `/shacl` and `/ai` subpaths
+  # included): its runtime dependency `@effect/platform-node`, pinned above at 4.1.2,
   # declares `effect: ^4.1.2`. Move it with that pin. (The SPARQL server's
   # `HttpApi` also passes `StreamUint8Array` a list of content types, a 4.1
   # form, #60; it would need a 4.0 shape before this floor could drop.)

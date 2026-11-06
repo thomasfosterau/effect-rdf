@@ -286,7 +286,7 @@
         "count": 2
       }
     },
-    "packages/shacl-sparql/src/Query.ts": {
+    "packages/sparql/src/shacl/Query.ts": {
       "complexity_high": {
         "count": 1
       },
@@ -297,12 +297,12 @@
         "count": 1
       }
     },
-    "packages/shacl/src/Path.ts": {
+    "packages/core/src/shacl/Path.ts": {
       "complexity_critical": {
         "count": 1
       }
     },
-    "packages/shacl/src/Shapes.ts": {
+    "packages/core/src/shacl/Shapes.ts": {
       "complexity_critical": {
         "count": 1
       },
@@ -313,12 +313,12 @@
         "count": 1
       }
     },
-    "packages/shacl/src/ValidationReport.ts": {
+    "packages/core/src/shacl/ValidationReport.ts": {
       "complexity_moderate": {
         "count": 1
       }
     },
-    "packages/shacl/src/Validator.ts": {
+    "packages/core/src/shacl/Validator.ts": {
       "complexity_critical": {
         "count": 1
       },
@@ -332,7 +332,7 @@
         "count": 2
       }
     },
-    "packages/shacl/src/internal/compare.ts": {
+    "packages/core/src/shacl/internal/compare.ts": {
       "complexity_critical": {
         "count": 1
       },
@@ -346,7 +346,7 @@
         "count": 1
       }
     },
-    "packages/shacl/src/internal/regex.ts": {
+    "packages/core/src/shacl/internal/regex.ts": {
       "crap_high": {
         "count": 1
       }
@@ -688,7 +688,7 @@
     "packages/sparql/src/internal/values.ts:high impact",
     "packages/n3/src/Mapping.ts:complexity",
     "packages/sparql-sql/src/SqlStore.ts:complexity",
-    "packages/shacl/src/internal/compare.ts:complexity",
+    "packages/core/src/shacl/internal/compare.ts:complexity",
     "packages/sparql/src/GraphStore.ts:complexity",
     "packages/shex/src/internal/engine.ts:complexity",
     "packages/turtle/src/internal/writer.ts:complexity",
@@ -696,8 +696,8 @@
     "packages/rdfxml/src/RdfXml.ts:high impact",
     "packages/jsonld/src/internal/expand.ts:complexity",
     "packages/ntriples/src/Lexical.ts:high impact",
-    "packages/shacl/src/Path.ts:complexity",
-    "packages/shacl/src/Validator.ts:complexity",
+    "packages/core/src/shacl/Path.ts:complexity",
+    "packages/core/src/shacl/Validator.ts:complexity",
     "packages/sparql-sql/src/Translation.ts:complexity",
     "packages/shex/src/ShExR.ts:complexity",
     "packages/sparql/test/HttpEvalConformance.test.ts:untested risk",
@@ -717,7 +717,7 @@
     "packages/sparql-sql/test/support/manifest.ts:complexity",
     "packages/core/src/Xsd.ts:complexity",
     "packages/sparql-sql/src/internal/encoding.ts:complexity",
-    "packages/shacl/src/Shapes.ts:complexity",
+    "packages/core/src/shacl/Shapes.ts:complexity",
     "packages/turtle/src/internal/parser.ts:complexity",
     "packages/core/src/Rdfs.ts:complexity",
     "packages/jsonld/src/internal/compact.ts:complexity",

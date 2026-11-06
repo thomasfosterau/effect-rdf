@@ -35,7 +35,7 @@
     "packages/shex/src/internal/nodeConstraint.ts:180-187|packages/shex/src/internal/nodeConstraint.ts:189-196",
     "packages/jsonld/src/internal/json.ts:15-19|packages/core/src/rdfjson/internal/json.ts:15-19",
     "packages/shex/src/internal/engine.ts:131-138|packages/shex/src/internal/engine.ts:156-163",
-    "packages/shacl/src/Validator.ts:806-812|packages/shacl/src/Validator.ts:837-843",
+    "packages/core/src/shacl/Validator.ts:806-812|packages/core/src/shacl/Validator.ts:837-843",
     "packages/jsonld/src/JsonLd.ts:548-563|packages/core/src/rdfjson/RdfJson.ts:540-574",
     "packages/sparql/src/internal/parser.ts:713-718|packages/sparql/src/internal/parser.ts:828-833",
     "packages/core/src/Term.ts:44-64|packages/n3/src/Model.ts:50-69",
