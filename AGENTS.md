@@ -74,14 +74,14 @@ Before you report work as done, run the gates below in order and quote each comm
 5. `vp run -r build`
 6. `vp run check:dist`
 7. `pnpm audit --audit-level high` (network)
-8. `vp run test:coverage`, then `fallow audit --format json --quiet --explain --gate-marker agent --base origin/trunk` (the fallow gate below; not a CI step). The PreToolUse fallow gate audits against `coverage/coverage-final.json` and never refreshes it, so run `test:coverage` first. The complexity and duplication already on `main` when fallow was adopted is recorded in `.fallow-baselines/` (`audit.healthBaseline` / `dupesBaseline`); the audit fails on what a change adds or worsens. Re-save a baseline only to shrink it.
+8. `vp run test:coverage`, then `vp exec fallow audit --format json --quiet --explain --gate-marker agent --base origin/trunk` (the fallow gate below; not a CI step). The PreToolUse fallow gate audits against `coverage/coverage-final.json` and never refreshes it, so run `test:coverage` first. The complexity and duplication already on `main` when fallow was adopted is recorded in `.fallow-baselines/` (`audit.healthBaseline` / `dupesBaseline`); the audit fails on what a change adds or worsens. Re-save a baseline only to shrink it.
 
 Steps 2–7 are CI's required `ci` job, in its order ([ci.yml](.github/workflows/ci.yml)). `CONTRIBUTING.md` and the PR template link here rather than restating the list.
 
 ## Branches and pull requests
 
 - Branch off `trunk` (the default branch); PR against `trunk`. Commit subjects name the package they change (`sparql: …`, `turtle: …`) or take a conventional prefix for workspace-wide work (`chore:`, `docs:`, `ci:`). Rebase onto `origin/trunk` before opening or updating a PR.
-- Agent work uses git worktrees under `.claude/worktrees/`, one per branch. Start every command that targets a worktree with an explicit `cd` and confirm with `git log -1` before committing. A worktree needs its own `pnpm install` (the `vp` shim re-execs the nearest `node_modules/vite-plus/bin/vp`) and a `.test-suites` symlink.
+- Agent work uses git worktrees under `.claude/worktrees/`, one per branch. Start every command that targets a worktree with an explicit `cd` and confirm with `git log -1` before committing. A worktree needs its own `pnpm install` (the global `vp` delegates to the checkout's own `vite-plus`) and a `.test-suites` symlink.
 - Every change to a published package's behaviour carries a changeset (`pnpm changeset`). Changes to doc comments that reach the emitted `.d.ts` take a `patch` changeset; other docs-only changes (READMEs, guidance), CI and tooling need none. Never publish or version by hand: the Release workflow opens the version PR (`chore: version packages`) and the owner merges it. Publishing is npm trusted publishing (OIDC) from the protected `release` environment; there is no `NPM_TOKEN` ([PUBLISHING.md](PUBLISHING.md)).
 - GitHub writes go to `thomasfosterau/effect-rdf` only — never to `effect-parse`, upstream suites or the owner's other repositories without the owner's explicit approval in the current session. If another repo needs something, say so in the PR body.
 
@@ -103,9 +103,9 @@ Read the installed package before writing Effect code — `node_modules/effect/d
 
 ## Agent sessions
 
-- The SessionStart hook (`.claude/hooks/session-start.sh`) installs dependencies against the lockfile and puts `vp` (a re-exec shim that prefers the nearest worktree's `node_modules`) and `fallow` on PATH for non-interactive shells. It hydrates no secrets (none are needed, and nothing here can publish) and does not fetch the conformance suites.
+- The SessionStart hook (`.claude/hooks/session-start.sh`) installs the global Vite+ CLI at the catalog's `vite-plus` pin with the official installer (npm-provenance and SHA-512 checked; it needs `vite.plus` and `viteplus.dev` on the environment's network allowlist), links `vp` and `vpx` into `~/.local/bin`, and runs `vp install --frozen-lockfile`. Everything else goes through Vite+: `vp exec fallow …` for fallow, `vpx <file>.ts` for a TypeScript script. Nothing else is put on PATH. If the installer can't run, `vp` falls back to this checkout's `node_modules` copy. It hydrates no secrets (none are needed, and nothing here can publish) and does not fetch the conformance suites.
 - `.claude/settings.json` should enable the `@enfect/claude` plugin (Effect guidance, skills and post-write pattern checks; marketplace `mpsuesser/enfect`, pinned by `ref` to a reviewed commit).
-- A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` fails; it reads the coverage map on disk, so run `vp run test:coverage` first. A PostToolUse hook runs `vp fmt` on every source, JSON or Markdown file you write or edit.
+- A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` (run as `vp exec fallow`) fails; it audits only this checkout and its `.claude/worktrees/*`, skipping any other tree with a notice, and reads the coverage map on disk, so run `vp run test:coverage` first. A PostToolUse hook runs `vp fmt` on every source, JSON or Markdown file you write or edit.
 - Every gate in [Verification](#verification) runs in an agent session; fetching the suites and `pnpm audit` need the network.
 
 ## Documentation surfaces
