@@ -4,33 +4,11 @@ import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Order from 'effect/Order';
 import * as Stream from 'effect/Stream';
-import { McpProtocol, McpTest, type Tool } from 'effect/ai';
-import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
-import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Engine from '../../../src/sparql/Engine.ts';
-import * as Store from '../../../src/sparql/Store.ts';
+import { McpServer, type Tool } from 'effect/ai';
 import { Mcp, Tools } from '../../../src/sparql/ai/index.ts';
+import { withLayer } from '../support/layer.ts';
+import { EX, engine } from './support/fixture.ts';
 
-const EX = 'http://example.org/';
-const RDF_TYPE = Term.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type');
-const LABEL = Term.namedNode('http://www.w3.org/2000/01/rdf-schema#label');
-const ex = (local: string) => Term.namedNode(`${EX}${local}`);
-
-const data = Dataset.make(
-  Term.quad(ex('alice'), RDF_TYPE, ex('Person')),
-  Term.quad(ex('bob'), RDF_TYPE, ex('Person')),
-  Term.quad(ex('acme'), RDF_TYPE, ex('Company')),
-  Term.quad(ex('alice'), LABEL, Term.literal('Alice Liddell', 'en')),
-  Term.quad(ex('bob'), LABEL, Term.literal('Bob')),
-  Term.quad(ex('alice'), ex('knows'), ex('bob')),
-  Term.quad(ex('alice'), ex('worksFor'), ex('acme')),
-);
-
-// The engine over the data, and the handlers of a toolkit with small limits.
-const engine = Layer.effect(
-  Engine.SparqlEngine,
-  Effect.map(Store.makeMemory(data), (store) => Engine.make(store)),
-);
 const readOnly = Tools.layer({ maxRows: 2 }).pipe(Layer.provideMerge(engine));
 const withUpdate = Tools.layerWithUpdate().pipe(Layer.provideMerge(engine));
 
@@ -176,15 +154,14 @@ layer(withUpdate)('sparql_update', (test) => {
 });
 
 describe('Mcp', () => {
-  it.effect('serves the read-only tools to an MCP client', () =>
+  // Runs on every supported effect (4.0 included): registers the tools on an
+  // `McpServer` without a transport.
+  it.effect('registers the read-only tools with the McpServer', () =>
     Effect.gen(function* () {
-      const client = yield* McpTest.makeClient(Mcp.layer().pipe(Layer.provide(engine)), {
-        protocols: [McpProtocol.v2025_11_25],
-      });
-      const tools = yield* client.listTools();
+      const server = yield* McpServer.McpServer;
       expect(
         Arr.sort(
-          tools.tools.map((t) => t.name),
+          server.tools.map((t) => t.tool.name),
           Order.String,
         ),
       ).toEqual([
@@ -194,10 +171,10 @@ describe('Mcp', () => {
         'search_labels',
         'sparql_query',
       ]);
-      const result = yield* client.callTool({ name: 'search_labels', arguments: { text: 'bob' } });
-      expect(result.content).toEqual([
-        expect.objectContaining({ type: 'text', text: expect.stringContaining(`${EX}bob`) }),
-      ]);
-    }).pipe(Effect.scoped),
+    }).pipe(
+      withLayer(
+        Mcp.layer().pipe(Layer.provide(engine), Layer.provideMerge(McpServer.McpServer.layer)),
+      ),
+    ),
   );
 });

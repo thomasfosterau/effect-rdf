@@ -2212,7 +2212,7 @@ property, component and pre-binding tests) pass, and all 98 Core tests pass
 with the evaluator installed.
 
 **Knowledge-graph tools** (`/sparql/ai`): there is no conformance suite for tools; the tests
-(`test/sparql/ai/`) drive every handler against an in-memory engine and round-trip the tools through `McpTest`.
+(`test/sparql/ai/`) drive every handler against an in-memory engine and round-trip the tools through `McpTest` (`test/sparql/ai/McpClient.test.ts`, which needs effect 4.1; everything else in the package's suite also runs on the 4.0 floor).
 
 **SPARQL over SQL** (`/sparql/sql`):
 

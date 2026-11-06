@@ -25,7 +25,7 @@ const triples = (): Array<Term.Quad> => {
 };
 
 describe('Performance', () => {
-  layer(layerSqlite({ filename: ':memory:' }), { buildPerTest: true })((test) => {
+  layer(layerSqlite({ filename: ':memory:' }))((test) => {
     test.effect(
       `bulk loads ${N} triples and queries them in SQL`,
       () =>

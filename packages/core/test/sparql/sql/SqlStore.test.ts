@@ -1,4 +1,4 @@
-import { assert, expect, layer } from '@effect/vitest';
+import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -9,6 +9,7 @@ import { Dataset, Namespace, Term, Xsd } from '@thomasfosterau/effect-rdf';
 import * as Bindings from '@thomasfosterau/effect-rdf/sparql/Bindings';
 import * as Engine from '@thomasfosterau/effect-rdf/sparql/Engine';
 import * as Store from '@thomasfosterau/effect-rdf/sparql/Store';
+import { withLayer } from '../support/layer.ts';
 import { layerSqlite } from './support/sqlite.ts';
 
 const ex = Namespace.make('http://example.org/');
@@ -37,9 +38,10 @@ const lex = (t: Option.Option<Term.GroundTerm>): string =>
     { onNone: () => 'undefined', onSome: (x) => x.value },
   );
 
-// A fresh in-memory database for each test.
-layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
-  test.effect('stores, matches and counts quads', () =>
+// A fresh in-memory database for each test (`withLayer`, rather than
+// `@effect/vitest`'s 4.1-only `buildPerTest`, so the suite runs on effect 4.0 too).
+describe('SqlStore', () => {
+  it.effect('stores, matches and counts quads', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
       const count = store.count ?? assert.fail('the SQL store counts quads');
@@ -63,10 +65,10 @@ layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
       expect(yield* store.hasGraph(ex('empty'))).toBe(true);
       yield* store.dropGraph(ex('g1'));
       expect(yield* store.hasGraph(ex('g1'))).toBe(false);
-    }),
+    }).pipe(withLayer(TestLayer)),
   );
 
-  test.effect('rolls back failed transactions', () =>
+  it.effect('rolls back failed transactions', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
       const count = store.count ?? assert.fail('the SQL store counts quads');
@@ -78,10 +80,10 @@ layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
       );
       expect(result._tag).toBe('Failure');
       expect(yield* count({})).toBe(2);
-    }),
+    }).pipe(withLayer(TestLayer)),
   );
 
-  test.effect('evaluates queries in SQL', () =>
+  it.effect('evaluates queries in SQL', () =>
     Effect.gen(function* () {
       const store = yield* Store.QuadStore;
       yield* store.insert(data);
@@ -104,6 +106,6 @@ layer(TestLayer, { buildPerTest: true })('SqlStore', (test) => {
       );
       const s = yield* Stream.runCollect(since.bindings);
       expect(s.map((b) => lex(Bindings.get(b, 'y')))).toEqual(['2020']);
-    }),
+    }).pipe(withLayer(TestLayer)),
   );
 });

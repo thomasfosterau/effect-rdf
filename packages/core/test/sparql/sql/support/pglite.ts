@@ -62,19 +62,19 @@ export const layer: Layer.Layer<SqlClient.SqlClient, SqlError> = Layer.effect(
       executeUnprepared: (sql, params, transform) =>
         Effect.map(rows(sql, params), (r) => (transform ? transform(r) : r)),
     };
-    const { acquirer, borrower, onCommitFailure, transactionAcquirer } =
-      SqlClient.makeSqliteAcquirers({
-        connection: Effect.succeed(connection),
-        semaphore: yield* Semaphore.make(1),
-      });
-    return yield* SqlClient.make({
-      acquirer,
-      borrower,
-      transactionAcquirer,
-      onCommitFailure,
+    const acquirers = SqlClient.makeSqliteAcquirers({
+      connection: Effect.succeed(connection),
+      semaphore: yield* Semaphore.make(1),
+    });
+    // Not an object literal, so it type-checks on effect 4.0 too: 4.1 adds the
+    // `borrower` these acquirers return and the `driver` option it requires,
+    // and 4.0 knows neither.
+    const options = {
+      ...acquirers,
       compiler: PgClient.makeCompiler(),
       driver: 'pglite',
       spanAttributes: [],
-    });
+    };
+    return yield* SqlClient.make(options);
   }),
 ).pipe(Layer.provide(Reactivity.layer));
