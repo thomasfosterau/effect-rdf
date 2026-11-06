@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Tracer from 'effect/Tracer';
-import { RdfJson } from '../src/index.ts';
+import { RdfJson } from '../../src/rdfjson/index.ts';
 
 // A tracer that records every span, so tests can assert names and attributes.
 const traced = <A, E>(self: Effect.Effect<A, E>) =>

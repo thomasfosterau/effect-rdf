@@ -23,6 +23,12 @@ export interface PackageConfigOptions {
    * also covers `test/`) pulls in more than the published sources should.
    */
   readonly packTsconfig?: string | undefined;
+  /**
+   * Nested subpaths (`src/<name>/*.ts`, published as `./<name>` and
+   * `./<name>/<Module>`) that `vp pack` builds beside the flat `src/*.ts`
+   * entries, e.g. core's `csvw`, `rdfjson` and `shacl`.
+   */
+  readonly subpaths?: ReadonlyArray<string> | undefined;
 }
 
 /**
@@ -42,6 +48,7 @@ const cacheInputs = [
 export const packageConfig = ({
   testTimeout = 60_000,
   packTsconfig,
+  subpaths = [],
 }: PackageConfigOptions = {}) => {
   const maxWorkers = process.env.VITEST_MAX_WORKERS;
   return defineConfig({
@@ -53,7 +60,8 @@ export const packageConfig = ({
           cache: { input: cacheInputs, output: [] },
         },
         // The published artifact: one ESM module + declaration file per
-        // `src/*.ts` (the `./*` export), via `vp pack` → tsdown.
+        // `src/*.ts` (the `./*` export) and per `src/<subpath>/*.ts`, via
+        // `vp pack` → tsdown.
         build: {
           command: 'vp pack',
           cache: { input: cacheInputs, output: ['dist/**'] },
@@ -74,7 +82,7 @@ export const packageConfig = ({
       },
     },
     pack: {
-      entry: ['src/*.ts'],
+      entry: ['src/*.ts', ...subpaths.map((name) => `src/${name}/*.ts`)],
       dts: true,
       format: ['esm'],
       sourcemap: true,

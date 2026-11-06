@@ -94,9 +94,9 @@ catalogs:
     # instead). Proved by running each package's `check` and `test:unit`
     # with the `effect` line above pinned to 4.0.0.
     effect: ^4.0.0
-  # `@thomasfosterau/effect-sparql`, and the packages that depend on it at
-  # runtime (`effect-shacl-sparql`, `effect-sparql-ai`): effect-sparql's
-  # runtime dependency `@effect/platform-node`, pinned above at 4.1.2,
+  # `@thomasfosterau/effect-sparql` (its `/ai` subpath included), and the
+  # packages that depend on it at runtime (`effect-shacl-sparql`):
+  # effect-sparql's runtime dependency `@effect/platform-node`, pinned above at 4.1.2,
   # declares `effect: ^4.1.2`. Move it with that pin. (The SPARQL server's
   # `HttpApi` also passes `StreamUint8Array` a list of content types, a 4.1
   # form, #60; it would need a 4.0 shape before this floor could drop.)

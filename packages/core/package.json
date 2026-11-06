@@ -2,10 +2,11 @@
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdf",
   "version": "0.0.0",
-  "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model",
+  "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model, with an RDF/JSON codec",
   "keywords": [
     "effect",
     "rdf",
+    "rdf-json",
     "typescript"
   ],
   "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/core#readme",
@@ -29,6 +30,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./rdfjson": "./src/rdfjson/index.ts",
+    "./rdfjson/*": "./src/rdfjson/*.ts",
     "./*": "./src/*.ts"
   },
   "publishConfig": {
@@ -36,6 +39,14 @@
       ".": {
         "types": "./dist/index.d.mts",
         "default": "./dist/index.mjs"
+      },
+      "./rdfjson": {
+        "types": "./dist/rdfjson/index.d.mts",
+        "default": "./dist/rdfjson/index.mjs"
+      },
+      "./rdfjson/*": {
+        "types": "./dist/rdfjson/*.d.mts",
+        "default": "./dist/rdfjson/*.mjs"
       },
       "./*": {
         "types": "./dist/*.d.mts",

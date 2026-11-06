@@ -2,6 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
     "packages/*/src/*.ts",
+    // The nested subpaths: core's `/rdfjson` and sparql's `/ai` (each `./<subpath>/*` export).
+    // Listed one by one so `src/internal/` stays private.
+    "packages/core/src/rdfjson/*.ts",
+    "packages/sparql/src/ai/*.ts",
     "packages/*/test/**/*.test.ts",
     "packages/*/bench/*.ts",
     "packages/sparql/bin/*.mjs",
@@ -65,10 +69,6 @@
         "patterns": ["packages/ntriples/**"]
       },
       {
-        "name": "rdfjson",
-        "patterns": ["packages/rdfjson/**"]
-      },
-      {
         "name": "rdfxml",
         "patterns": ["packages/rdfxml/**"]
       },
@@ -87,10 +87,6 @@
       {
         "name": "sparql",
         "patterns": ["packages/sparql/**"]
-      },
-      {
-        "name": "sparql-ai",
-        "patterns": ["packages/sparql-ai/**"]
       },
       {
         "name": "sparql-sql",
@@ -127,10 +123,6 @@
         "allow": ["core"]
       },
       {
-        "from": "rdfjson",
-        "allow": ["core"]
-      },
-      {
         "from": "rdfxml",
         "allow": ["core"]
       },
@@ -148,11 +140,7 @@
       },
       {
         "from": "sparql",
-        "allow": ["core", "jsonld", "n3", "ntriples", "rdfjson", "rdfxml", "turtle"]
-      },
-      {
-        "from": "sparql-ai",
-        "allow": ["core", "sparql", "turtle"]
+        "allow": ["core", "jsonld", "n3", "ntriples", "rdfxml", "turtle"]
       },
       {
         "from": "sparql-sql",
@@ -175,8 +163,8 @@
     "ignore": ["packages/*/bench/**"],
     // Reviewed clones that predate fallow, between packages that may not
     // depend on each other (AGENTS.md: each package stays lean): JSON-LD and
-    // RDF/JSON each locate JSON syntax errors, the N-Triples, Turtle and
-    // RDF/XML parsers each map a thrown parse failure to `RdfParseError`, and
+    // core's RDF/JSON subpath each locate JSON syntax errors (core exports no
+    // such helper), the N-Triples, Turtle and RDF/XML parsers each map a thrown parse failure to `RdfParseError`, and
     // the SPARQL evaluator dedupes path results the way core's `Dataset`
     // dedupes terms without core exporting that helper. A content change on
     // either side makes the group reportable again.

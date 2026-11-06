@@ -1,6 +1,6 @@
 # @thomasfosterau/effect-rdf
 
-The [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) / RDF-star data model for [Effect](https://effect.website) 4, and the core of the [effect-rdf](https://github.com/thomasfosterau/effect-rdf) family: terms with value equality, an immutable indexed `Dataset`, IRIs, prefix maps, typed vocabularies, XSD datatypes, RDF Schema entailment, RDF 1.2 reification, graph isomorphism and the serialisation interfaces every syntax package implements.
+The [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) / RDF-star data model for [Effect](https://effect.website) 4, and the core of the [effect-rdf](https://github.com/thomasfosterau/effect-rdf) family: terms with value equality, an immutable indexed `Dataset`, IRIs, prefix maps, typed vocabularies, XSD datatypes, RDF Schema entailment, RDF 1.2 reification, graph isomorphism and the serialisation interfaces every syntax package implements, and, on its own subpath, the [RDF/JSON](#rdfjson-thomasfosteraueffect-rdfrdfjson) codec (`/rdfjson`).
 
 ```sh
 pnpm add effect @thomasfosterau/effect-rdf
@@ -28,7 +28,7 @@ pnpm add effect @thomasfosterau/effect-rdf
 | `RdfJs`              | Conversion to and from the [RDF/JS data model](https://rdf.js.org/data-model-spec/).                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `Serialization`      | The `Format`, `Parser`, `Serializer` and `Codec` interfaces the syntax packages implement, their typed errors (`RdfParseError` with `line` / `column`, `RdfSerializeError`), `toSchema`, the `Formats` service with content negotiation (`negotiate`, `parserFor`, `serializerFor`, `parserForExtension`, `serializerForExtension`), byte entry points (`parseBytes`, `parseBytesDocument`, `serializeBytes`: strict UTF-8 or a `charset`, BOM stripped) and files over Effect's `FileSystem` (`readFile`, `writeFile`). |
 
-Every module is also its own entry point (`@thomasfosterau/effect-rdf/Term`, …).
+Every module is also its own entry point (`@thomasfosterau/effect-rdf/Term`, …). RDF/JSON is nested under its own subpath (`@thomasfosterau/effect-rdf/rdfjson`, `@thomasfosterau/effect-rdf/rdfjson/RdfJson`) and is not on the root barrel; [its section](#rdfjson-thomasfosteraueffect-rdfrdfjson) is below.
 
 ### Resources
 
@@ -169,11 +169,88 @@ const prefixes = PrefixMap.make({ ex: 'http://example.org/' });
 Option.getOrUndefined(PrefixMap.compact(prefixes, alice)); // ['ex', 'alice']
 ```
 
-To read and write documents, add a syntax package: [`effect-ntriples`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/ntriples), [`effect-turtle`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/turtle), [`effect-jsonld`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/jsonld), [`effect-rdfxml`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/rdfxml), [`effect-rdfjson`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/rdfjson) or [`effect-n3`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/n3).
+To read and write documents, add a syntax package: [`effect-ntriples`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/ntriples), [`effect-turtle`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/turtle), [`effect-jsonld`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/jsonld), [`effect-rdfxml`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/rdfxml) or [`effect-n3`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/n3); RDF/JSON ships here, on [`/rdfjson`](#rdfjson-thomasfosteraueffect-rdfrdfjson).
+
+## RDF/JSON (`@thomasfosterau/effect-rdf/rdfjson`)
+
+`@thomasfosterau/effect-rdf/rdfjson` is [RDF/JSON](https://www.w3.org/TR/rdf-json/)
+(`application/rdf+json`), built on Effect `Schema`. Its one module is also
+`@thomasfosterau/effect-rdf/rdfjson/RdfJson`.
+
+### Schemas
+
+| Schema                                   | Type                                     |
+| ---------------------------------------- | ---------------------------------------- |
+| `RdfJson.Document` / `StrictDocument`    | `Document` (validates the JSON shape)    |
+| `RdfJson.ObjectValue`, `LiteralValue`, … | individual value objects                 |
+| `RdfJson.RdfJsonFromString`              | `string ⇄ Document`                      |
+| `RdfJson.DatasetFromRdfJson`             | `Document ⇄ Dataset`                     |
+| `RdfJson.DatasetFromString`              | `string ⇄ Dataset` (also `codec.schema`) |
+| `RdfJson.makeDatasetSchema(options)`     | `Document ⇄ Dataset` with options        |
+
+```ts
+import { Effect, Schema } from 'effect';
+import { RdfJson } from '@thomasfosterau/effect-rdf/rdfjson';
+
+const program = Effect.gen(function* () {
+  const dataset = yield* Schema.decodeEffect(RdfJson.DatasetFromString)(`{
+    "http://example.org/about": {
+      "http://purl.org/dc/terms/title": [
+        { "type": "literal", "value": "Anna's Homepage", "lang": "en" }
+      ]
+    }
+  }`);
+  const text = yield* Schema.encodeEffect(RdfJson.DatasetFromString)(dataset);
+});
+```
+
+Invalid documents fail with precise messages, e.g.
+`Expected an RDF/JSON value ("type" must be "uri", "bnode", "literal" or "triple") at ["s"]["p"][0]`.
+
+### Parser and serializer
+
+`RdfJson.parse(text, options?)` / `RdfJson.serialize(quads, options?)` implement the core
+`Serialization` interfaces (`parser`, `serializer`, `codec`, `format`). Parse errors are
+`RdfParseError`s (JSON syntax errors carry `line`/`column`); serialisation errors are
+`RdfSerializeError`s.
+
+- `parse` options: `blankNodePrefix`, `graph`, `strict` (reject the RDF 1.2 extensions).
+- `serialize` options: `extensions` (default `false`), `mergeGraphs` (default `false`),
+  `space` (JSON indentation, default 2).
+
+RDF/JSON describes a single graph, so quads in named graphs are rejected unless
+`mergeGraphs: true`.
+
+### RDF 1.2 extensions
+
+Output is strict RDF/JSON by default; data that needs the extensions fails unless
+`extensions: true`. Parsing accepts them unless `strict: true`.
+
+- **Base direction**: a literal with `"lang"` may carry `"direction": "ltr" | "rtl"`.
+- **Triple terms**: `{ "type": "triple", "value": { "subject": …, "predicate": …, "object": … } }`,
+  where `subject` is a `uri` or `bnode` value, `predicate` a `uri` value and `object` any value
+  (including another triple term). Triple terms cannot be subjects.
+
+```json
+{
+  "http://example.org/s": {
+    "http://example.org/claims": [
+      {
+        "type": "triple",
+        "value": {
+          "subject": { "type": "uri", "value": "http://example.org/a" },
+          "predicate": { "type": "uri", "value": "http://example.org/b" },
+          "object": { "type": "literal", "value": "مرحبا", "lang": "ar", "direction": "rtl" }
+        }
+      }
+    ]
+  }
+}
+```
 
 ## Conformance
 
-The core has no W3C suite of its own; it is exercised by every syntax package's suites (N-Triples, Turtle, TriG, RDF/XML, JSON-LD, N3) and by the SPARQL evaluation suite, which compare graphs with `Isomorphism.isomorphic`. Its unit tests cover terms, datasets, IRIs, XSD, RDFS and isomorphism.
+The core has no W3C suite of its own; it is exercised by every syntax package's suites (N-Triples, Turtle, TriG, RDF/XML, JSON-LD, N3) and by the SPARQL evaluation suite, which compare graphs with `Isomorphism.isomorphic`. Its unit tests cover terms, datasets, IRIs, XSD, RDFS and isomorphism, and RDF/JSON's (`test/rdfjson/`) its schemas, parser, serialiser and round trips; RDF/JSON has no W3C suite.
 
 ## License
 

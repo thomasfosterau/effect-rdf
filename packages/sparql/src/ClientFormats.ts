@@ -14,7 +14,7 @@ import * as JsonLd from '@thomasfosterau/effect-jsonld/JsonLd';
 import * as N3 from '@thomasfosterau/effect-n3/N3';
 import * as NQuads from '@thomasfosterau/effect-ntriples/NQuads';
 import * as NTriples from '@thomasfosterau/effect-ntriples/NTriples';
-import * as RdfJson from '@thomasfosterau/effect-rdfjson/RdfJson';
+import * as RdfJson from '@thomasfosterau/effect-rdf/rdfjson/RdfJson';
 import * as RdfXml from '@thomasfosterau/effect-rdfxml/RdfXml';
 import * as TriG from '@thomasfosterau/effect-turtle/TriG';
 import * as Turtle from '@thomasfosterau/effect-turtle/Turtle';

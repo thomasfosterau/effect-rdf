@@ -1,7 +1,7 @@
 import { describe, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
-import { Dataset, Isomorphism, Term } from '@thomasfosterau/effect-rdf';
-import { RdfJson } from '../src/index.ts';
+import { Dataset, Isomorphism, Term } from '../../src/index.ts';
+import { RdfJson } from '../../src/rdfjson/index.ts';
 
 // RDF/JSON describes one graph: every quad is moved into the default graph.
 const representable = (ds: Dataset.Dataset): Dataset.Dataset =>

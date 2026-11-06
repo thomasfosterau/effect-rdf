@@ -7,9 +7,9 @@ import * as Stream from 'effect/Stream';
 import { McpProtocol, McpTest, type Tool } from 'effect/ai';
 import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Engine from '@thomasfosterau/effect-sparql/Engine';
-import * as Store from '@thomasfosterau/effect-sparql/Store';
-import { Mcp, Tools } from '../src/index.ts';
+import * as Engine from '../../src/Engine.ts';
+import * as Store from '../../src/Store.ts';
+import { Mcp, Tools } from '../../src/ai/index.ts';
 
 const EX = 'http://example.org/';
 const RDF_TYPE = Term.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type');

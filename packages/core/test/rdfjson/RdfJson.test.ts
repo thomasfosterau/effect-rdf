@@ -2,15 +2,8 @@ import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
-import {
-  Dataset,
-  Isomorphism,
-  Namespace,
-  Serialization,
-  Term,
-  Vocab,
-} from '@thomasfosterau/effect-rdf';
-import { RdfJson } from '../src/index.ts';
+import { Dataset, Isomorphism, Namespace, Serialization, Term, Vocab } from '../../src/index.ts';
+import { RdfJson } from '../../src/rdfjson/index.ts';
 
 const ex = Namespace.make('http://example.org/');
 const { xsd, rdf } = Vocab;
