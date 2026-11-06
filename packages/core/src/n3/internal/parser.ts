@@ -1,0 +1,1032 @@
+/**
+ * The Notation3 parser: a compiled `@thomasfosterau/effect-parse` grammar
+ * over the input string (no separate lexer), built on the Turtle terminals of
+ * `/turtle` (`Grammar`), as the N3 grammar is: N3 extends Turtle with
+ * formulas, paths, quick variables, `=`, `=>`, `<=`, `has`, `is … of` and the
+ * legacy `@forAll` / `@forSome`.
+ *
+ * The grammar's callbacks build the model as it reads, with no syntax tree:
+ * a `Builder` holds what depends on what came before (`@prefix` / `@base`,
+ * quantifier scopes, blank node allocation, the open formulas and the
+ * subjects being described), and statements are made in document order.
+ * Side effects run in `tap`s and zero-width `Parser.make`s, never in a `map`
+ * whose value is unused (the compiler skips those). An error the builder
+ * finds is kept and reported once the whole document has been read, so a
+ * syntax error anywhere takes precedence, as when the model was built from a
+ * tree after parsing.
+ *
+ * @internal
+ */
+import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as TurtleGrammar from '../../turtle/Grammar.ts';
+import * as Iri from '../../Iri.ts';
+import * as PrefixMap from '../../PrefixMap.ts';
+import * as Term from '../../Term.ts';
+import { rdf, xsd } from '../../Vocab.ts';
+import * as Arr from 'effect/Array';
+import * as Iterable from 'effect/Iterable';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
+import * as Model from '../Model.ts';
+import { i18n, log, sameAs } from '../Vocab.ts';
+import { loop } from './loop.ts';
+
+/** @internal */
+export class SyntaxFailure {
+  readonly message: string;
+  readonly line: number;
+  readonly column: number;
+  constructor(message: string, line: number, column: number) {
+    this.message = message;
+    this.line = line;
+    this.column = column;
+  }
+}
+
+/** @internal */
+export interface ParserOptions {
+  readonly baseIri: Option.Option<string>;
+  readonly blankNodePrefix: string;
+}
+
+// -----------------------------------------------------------------------------
+// Character classes (also used by the writer)
+// -----------------------------------------------------------------------------
+
+/** @internal */
+export const isPnCharsBase = (c: number): boolean =>
+  (c >= 0x41 && c <= 0x5a) ||
+  (c >= 0x61 && c <= 0x7a) ||
+  (c >= 0xc0 && c <= 0xd6) ||
+  (c >= 0xd8 && c <= 0xf6) ||
+  (c >= 0xf8 && c <= 0x2ff) ||
+  (c >= 0x370 && c <= 0x37d) ||
+  (c >= 0x37f && c <= 0x1fff) ||
+  (c >= 0x200c && c <= 0x200d) ||
+  (c >= 0x2070 && c <= 0x218f) ||
+  (c >= 0x2c00 && c <= 0x2fef) ||
+  (c >= 0x3001 && c <= 0xd7ff) ||
+  (c >= 0xf900 && c <= 0xfdcf) ||
+  (c >= 0xfdf0 && c <= 0xfffd) ||
+  (c >= 0x10000 && c <= 0xeffff);
+
+/** @internal */
+export const isPnCharsU = (c: number): boolean => c === 0x5f || isPnCharsBase(c);
+
+/** @internal */
+export const isPnChars = (c: number): boolean =>
+  isPnCharsU(c) ||
+  c === 0x2d ||
+  (c >= 0x30 && c <= 0x39) ||
+  c === 0xb7 ||
+  (c >= 0x300 && c <= 0x36f) ||
+  (c >= 0x203f && c <= 0x2040);
+
+// -----------------------------------------------------------------------------
+// IRIs as written
+// -----------------------------------------------------------------------------
+
+/** An IRI as written: an IRI reference or a prefixed name, at an offset. */
+type IriNode =
+  | {
+      readonly _tag: 'IriRef';
+      readonly value: string;
+      readonly at: number;
+      /** Whether the reference contains `UCHAR` escapes. */
+      readonly escaped: boolean;
+    }
+  | {
+      readonly _tag: 'PName';
+      readonly prefix: string;
+      readonly local: string;
+      readonly at: number;
+    };
+
+// -----------------------------------------------------------------------------
+// Grammar
+// -----------------------------------------------------------------------------
+
+/** A syntax error with its offset (the cause of a grammar failure). */
+interface Fail {
+  readonly message: string;
+  readonly at: number;
+}
+
+type P<A> = Parser.Parser<A, Fail>;
+
+const fail = <A>(message: string, at: number): Result.Result<A, Fail> =>
+  Result.fail({ message, at });
+
+const WHITESPACE = 'whitespace';
+
+/** Whitespace and `#` comments (which also end at a form feed). */
+const ws: P<void> = Parser.asVoid(
+  Parser.repeat(
+    Parser.alt(
+      Token.takeWhile(' \t\r\n', { min: 1 }),
+      Parser.preceded(Token.literal('#'), Token.takeTill('\n\r\f')),
+    ).pipe(Parser.expected(WHITESPACE)),
+  ),
+);
+
+const lit = (s: string): P<string> => Token.literal(s);
+
+const closeBracket: P<string> = Parser.cut(Parser.preceded(ws, Token.literal(']'))).pipe(
+  Parser.expected("']'"),
+);
+
+/** `s` after whitespace. */
+const sym = (s: string): P<string> => Parser.preceded(ws, Token.literal(s));
+
+/** A character that ends a statement, a list of objects or a formula. */
+const endOf = (chars: string): P<unknown> =>
+  Parser.preceded(ws, Parser.alt(Parser.eof, Parser.peek(Token.oneOf(chars))));
+
+/** An `@` keyword: `@` followed by letters. */
+const atWord: P<string> = Parser.taken(
+  Parser.preceded(lit('@'), Token.takeWhile(TurtleGrammar.alpha, { min: 1 })),
+);
+
+const atKeyword = (word: string): P<string> => atWord.pipe(Parser.filter((w) => w === word));
+
+/** A `PN_PREFIX` not followed by `:` (a bare word such as `a`, `is`, `true`). */
+const bareWord: P<string> = Parser.terminated(TurtleGrammar.pnPrefix, Parser.not(lit(':')));
+
+/**
+ * The bare word `w`, checked by its first character before the word is
+ * read, so that the names tried as keywords on the way to a path are not
+ * each scanned as a word first.
+ */
+const word = (w: string): P<string> =>
+  Parser.preceded(Parser.peek(lit(w.slice(0, 1))), bareWord.pipe(Parser.filter((x) => x === w)));
+
+// eslint-disable-next-line no-control-regex
+const forbiddenInIri = /[\u0000- <>"{}|^`\\]/u;
+
+/** IRIREF (escapes of characters not allowed in IRIs are rejected by the builder). */
+const iriRef: P<IriNode> = Parser.seq(Parser.location, TurtleGrammar.iriRef, Parser.location).pipe(
+  Parser.map(([at, value, end]): IriNode => ({
+    _tag: 'IriRef',
+    value,
+    at,
+    escaped: end - at - 2 !== value.length,
+  })),
+);
+
+const pname: P<IriNode> = Parser.seq(Parser.location, TurtleGrammar.prefixedName).pipe(
+  Parser.map(([at, { prefix, local }]): IriNode => ({ _tag: 'PName', prefix, local, at })),
+);
+
+/** Records the offset at which a term starts (`b.at`), for its errors. */
+const mark: P<void> = Parser.make<void>((state) => {
+  b.at = state.pos;
+  return undefined;
+});
+
+/** Records the offset at which an IRI reference ends (`b.end`). */
+const markEnd: P<void> = Parser.make<void>((state) => {
+  b.end = state.pos;
+  return undefined;
+});
+
+/** An IRI reference as a term, made without an intermediate `IriNode`. */
+const iriRefTerm: P<Model.N3Term> = Parser.delimited(mark, TurtleGrammar.iriRef, markEnd).pipe(
+  Parser.map((value) => b.namedRef(value)),
+);
+
+/**
+ * A prefixed name as a term: the `PNAME_LN` / `PNAME_NS` that
+ * `TurtleGrammar.prefixedName` reads, taken as one slice and split at its
+ * first `:` (which `PN_PREFIX` cannot contain).
+ */
+const pnameTerm: P<Model.N3Term> = Parser.preceded(
+  mark,
+  Parser.taken(
+    Parser.seq(Parser.opt(TurtleGrammar.pnPrefix), lit(':'), Parser.opt(TurtleGrammar.pnLocal)),
+  ),
+).pipe(Parser.map((name) => b.namedPName(name)));
+
+/** `iri`: an IRI reference or a prefixed name. */
+const iri: P<IriNode> = Parser.alt(iriRef, pname).pipe(Parser.expected('an IRI'));
+
+const path: P<Model.N3Term> = Parser.suspend(() => pathDef);
+const pol: P<void> = Parser.suspend(() => polDef);
+const statementList = (inFormula: boolean): P<void> =>
+  Parser.suspend(() => (inFormula ? formulaStatements : documentStatements));
+
+/** A parser that consumes nothing and runs `f` (on the builder's state). */
+const act = (f: () => void): P<void> =>
+  Parser.make<void>(() => {
+    f();
+    return undefined;
+  });
+
+const TRUE = Term.literal('true', xsd.boolean);
+const FALSE = Term.literal('false', xsd.boolean);
+
+/**
+ * Where a numeric literal can start: a digit, or `.`, `+` or `-` followed by
+ * one. Checking up front (without consuming input) reports errors at a `.`
+ * that ends a statement, rather than after it.
+ */
+const numberStart: P<void> = Parser.make<void>((state) => {
+  // SAFETY: the N3 parser runs on string input, never bytes.
+  const input = state.input;
+  const isDigit = (k: number) => {
+    const c = input.charCodeAt(k);
+    return c >= 0x30 && c <= 0x39;
+  };
+  const c = input.charCodeAt(state.pos);
+  const ok =
+    isDigit(state.pos) ||
+    (c === 0x2e && isDigit(state.pos + 1)) ||
+    ((c === 0x2b || c === 0x2d) &&
+      (isDigit(state.pos + 1) ||
+        (input.charCodeAt(state.pos + 1) === 0x2e && isDigit(state.pos + 2))));
+  return ok ? undefined : state.backtrack('Token', expectedNumber);
+});
+
+const expectedNumber = ['a number'];
+
+const numeric: P<Model.N3Term> = Parser.preceded(numberStart, TurtleGrammar.numericLiteral).pipe(
+  Parser.map(([lexical, type]) =>
+    Term.literal(
+      lexical,
+      type === 'double' ? xsd.double : type === 'decimal' ? xsd.decimal : xsd.integer,
+    ),
+  ),
+);
+
+/** What follows a string literal: a language tag (`''` for none) or a datatype. */
+interface LiteralSuffix {
+  readonly language: string;
+  readonly datatype: Option.Option<IriNode>;
+}
+
+const noDatatype = Option.none<IriNode>();
+const plainSuffix: LiteralSuffix = { language: '', datatype: noDatatype };
+
+const rdfLiteral: P<Model.N3Term> = Parser.seq(
+  TurtleGrammar.stringLiteral,
+  Parser.alt(
+    Parser.preceded(Parser.peek(lit('@')), Parser.cut(TurtleGrammar.langTag)).pipe(
+      Parser.map((language): LiteralSuffix => ({ language, datatype: noDatatype })),
+    ),
+    Parser.preceded(sym('^^'), Parser.cut(Parser.preceded(ws, iri))).pipe(
+      Parser.map((datatype): LiteralSuffix => ({ language: '', datatype: Option.some(datatype) })),
+    ),
+    Parser.succeed(plainSuffix),
+  ),
+).pipe(Parser.map(([value, { language, datatype }]) => b.literal(value, language, datatype)));
+
+const quickVar: P<Model.N3Term> = Parser.preceded(
+  lit('?'),
+  Parser.cut(
+    Parser.taken(
+      Parser.seq(Token.oneOf(TurtleGrammar.pnCharsU), Token.takeWhile(TurtleGrammar.pnChars)),
+    ),
+  ).pipe(Parser.expected('a variable name')),
+).pipe(Parser.map((name) => b.variable(name)));
+
+const blank: P<Model.N3Term> = Parser.preceded(
+  Parser.peek(lit('_:')),
+  Parser.cut(TurtleGrammar.blankNodeLabel.pipe(Parser.expected('a blank node label'))),
+).pipe(Parser.map((label) => b.labelledBlank(label)));
+
+/**
+ * `[ … ]`: an anonymous node, or `[ id <iri> … ]`. A new node is made when
+ * the bracket opens, before the nodes inside it, as the statements inside
+ * are about it.
+ */
+const bracket: P<Model.N3Term> = Parser.preceded(
+  lit('['),
+  Parser.cut(
+    Parser.alt(
+      sym(']').pipe(Parser.map(() => b.freshBlank())),
+      Parser.preceded(
+        Parser.tap(
+          Parser.preceded(Parser.seq(ws, word('id')), Parser.cut(Parser.preceded(ws, iri))),
+          (id) => b.open(b.named(id)),
+        ),
+        Parser.cut(Parser.terminated(pol, closeBracket)),
+      ).pipe(Parser.map(() => b.close())),
+      Parser.preceded(
+        act(() => b.open(b.freshBlank())),
+        Parser.terminated(pol, closeBracket),
+      ).pipe(Parser.map(() => b.close())),
+    ),
+  ),
+);
+
+/** `( … )`: a collection. */
+const collection: P<Model.N3Term> = Parser.delimited(
+  lit('('),
+  Parser.cut(Parser.repeat(Parser.preceded(Parser.not(sym(')')), path))),
+  Parser.cut(sym(')').pipe(Parser.expected("')'"))),
+).pipe(Parser.map((items) => new Model.Collection(items)));
+
+/** `{ … }`: a formula; an empty one is the literal `true` (N3 test suite: graph/empty_graph). */
+const formula: P<Model.N3Term> = Parser.preceded(
+  lit('{'),
+  Parser.cut(
+    Parser.delimited(
+      act(() => b.openFormula()),
+      statementList(true),
+      Parser.cut(sym('}').pipe(Parser.expected("'}'"))),
+    ),
+  ),
+).pipe(
+  Parser.map(() => {
+    const f = b.closeFormula();
+    return f.size === 0 ? TRUE : f;
+  }),
+);
+
+/** A prefixed name, or the bare words `true` and `false`. */
+const TRAILING_DOTS = /\.+$/;
+
+/** ASCII letters (`PN_CHARS_BASE` below 0x80). */
+const isAsciiLetter = (c: number): boolean => (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a);
+
+/** ASCII name characters (`PN_CHARS` below 0x80): letters, digits, `_` and `-`. */
+const isAsciiNameChar = (c: number): boolean =>
+  isAsciiLetter(c) || (c >= 0x30 && c <= 0x39) || c === 0x5f || c === 0x2d;
+
+/** The scan in progress: its input and position (one pair of step functions serves every scan). */
+let scanInput = '';
+let scanPos = 0;
+
+const prefixStep = (): boolean => {
+  if (!isAsciiNameChar(scanInput.charCodeAt(scanPos))) return false;
+  scanPos++;
+  return true;
+};
+
+const localStep = (): boolean => {
+  const c = scanInput.charCodeAt(scanPos);
+  if (!isAsciiNameChar(c) && c !== 0x2e && c !== 0x3a) return false;
+  scanPos++;
+  return true;
+};
+
+/** Where the run of characters that `step` accepts, from `pos`, ends. */
+const scanTo = (step: () => boolean, input: string, pos: number): number => {
+  scanInput = input;
+  scanPos = pos;
+  loop(step);
+  return scanPos;
+};
+
+/**
+ * A prefixed name that is plain ASCII, scanned by hand: a prefix of letters,
+ * digits, `_` and `-` (or none), `:`, and a local name of those and `:` and
+ * `.` (without trailing dots). It backtracks, having changed nothing, at
+ * anything else (`.` in the prefix, `%`, `\`, a character from 0x80, no
+ * `:`), so that `pnameTerm` reads the name, with the same result.
+ */
+const asciiPName: P<Model.N3Term> = Parser.make((state) => {
+  const input = state.input;
+  const start = state.pos;
+  const colon = isAsciiLetter(input.charCodeAt(start))
+    ? scanTo(prefixStep, input, start + 1)
+    : start;
+  if (input.charCodeAt(colon) !== 0x3a) return state.backtrack('Token');
+  // A local name does not start with `-` or `.`
+  const first = input.charCodeAt(colon + 1);
+  const i =
+    first === 0x2d || first === 0x2e || !(isAsciiNameChar(first) || first === 0x3a)
+      ? colon + 1
+      : scanTo(localStep, input, colon + 2);
+  const c = input.charCodeAt(i);
+  if (c === 0x25 || c === 0x5c || c >= 0x80) return state.backtrack('Token');
+  // A dot cannot end a name (it ends the statement)
+  const local =
+    input.charCodeAt(i - 1) === 0x2e && i > colon + 1
+      ? input.slice(colon + 1, i).replace(TRAILING_DOTS, '')
+      : input.slice(colon + 1, i);
+  b.at = start;
+  state.pos = colon + 1 + local.length;
+  return b.namedPNameParts(input.slice(start, colon), local);
+});
+
+const nameItem: P<Model.N3Term> = Parser.alt(
+  Parser.alt(asciiPName, pnameTerm),
+  Parser.seq(Parser.location, bareWord).pipe(
+    Parser.map(([at, w]) =>
+      w === 'true'
+        ? TRUE
+        : w === 'false'
+          ? FALSE
+          : b.error(`Unexpected keyword or undeclared prefix '${w}'`, at),
+    ),
+  ),
+);
+
+/**
+ * A grammar rule compiled to a function of its own. Formulas, collections and
+ * `[ … ]` nest, so the compiled functions on that path recurse; keeping the
+ * leaf terms out of them keeps their stack frames small, and the nesting
+ * depth the parser supports large.
+ */
+const rule = <A>(p: P<A>): P<A> => Parser.suspend(() => p);
+
+const leafItem: P<Model.N3Term> = rule(
+  Parser.alt(
+    iriRefTerm,
+    rdfLiteral,
+    quickVar,
+    atKeyword('@true').pipe(Parser.as<Model.N3Term>(TRUE)),
+    atKeyword('@false').pipe(Parser.as<Model.N3Term>(FALSE)),
+    blank,
+    numeric,
+    nameItem,
+  ),
+);
+
+const pathItem: P<Model.N3Term> = Parser.preceded(
+  ws,
+  Parser.alt(bracket, collection, formula, leafItem).pipe(Parser.expected('a term')),
+);
+
+/** A path: an item, then `!` (forward) and `^` (backward) steps, each applied as it is read. */
+const pathDef: P<Model.N3Term> = Parser.preceded(
+  Parser.tap(pathItem, (head) => b.paths.push(head)),
+  Parser.repeat(
+    Parser.preceded(
+      Parser.tap(
+        Parser.preceded(
+          ws,
+          Parser.alt(lit('!'), Parser.terminated(lit('^'), Parser.not(lit('^')))),
+        ),
+        (dir) => b.dirs.push(dir),
+      ),
+      Parser.tap(Parser.cut(pathItem), (step) => b.step(step)),
+    ),
+  ),
+).pipe(Parser.map(() => b.endPath()));
+
+const fixedVerb: P<Model.N3Term> = rule(
+  Parser.alt(
+    lit('=>').pipe(Parser.as<Model.N3Term>(log.implies)),
+    lit('=').pipe(Parser.as<Model.N3Term>(sameAs)),
+    // `<=` unless the `<` starts an IRI reference.
+    Parser.preceded(Parser.seq(Parser.peek(lit('<=')), Parser.not(iriRef)), lit('<=')).pipe(
+      Parser.as<Model.N3Term>(log.isImpliedBy),
+    ),
+    Parser.alt(word('a'), atKeyword('@a')).pipe(Parser.as<Model.N3Term>(rdf.type)),
+  ),
+);
+
+/** A verb, which becomes the predicate (and direction) of the objects after it. */
+const verb: P<void> = Parser.preceded(
+  ws,
+  Parser.asVoid<Model.N3Term, Fail, never, string>(
+    Parser.alt(
+      Parser.tap(fixedVerb, (predicate) => b.verb(predicate, false)),
+      Parser.tap(
+        Parser.preceded(
+          Parser.seq(Parser.peek(lit('<-')), Parser.not(iriRef), lit('<-')),
+          Parser.cut(path),
+        ),
+        (predicate) => b.verb(predicate, true),
+      ),
+      Parser.tap(
+        Parser.preceded(Parser.alt(word('has'), atKeyword('@has')), Parser.cut(path)),
+        (predicate) => b.verb(predicate, false),
+      ),
+      Parser.preceded(
+        Parser.alt(word('is'), atKeyword('@is')),
+        Parser.cut(
+          Parser.terminated(
+            path,
+            Parser.preceded(ws, Parser.alt(word('of'), atKeyword('@of'))).pipe(
+              Parser.expected("'of' after 'is ...'"),
+            ),
+          ),
+        ),
+      ).pipe(Parser.tap((predicate) => b.verb(predicate, true))),
+      Parser.tap(path, (predicate) => b.verb(predicate, false)),
+    ),
+  ),
+);
+
+const objectList: P<unknown> = Parser.separated(
+  Parser.tap(path, (object) => b.object(object)),
+  sym(','),
+  { min: 1 },
+).pipe(Parser.expected('an object'));
+
+const semicolons = Parser.repeat(sym(';'), { min: 1 });
+
+const polDef: P<void> = Parser.asVoid(
+  Parser.terminated(
+    Parser.seq(
+      Parser.seq(verb, Parser.cut(objectList)),
+      Parser.repeat(
+        Parser.preceded(
+          semicolons,
+          Parser.preceded(Parser.not(endOf('.]}')), Parser.cut(Parser.seq(verb, objectList))),
+        ),
+      ),
+    ),
+    Parser.opt(semicolons),
+  ),
+);
+
+const triples: P<void> = Parser.preceded(
+  Parser.tap(path, (subject) => b.open(subject)),
+  Parser.alt(Parser.preceded(Parser.peek(endOf('.}')), Parser.succeed(undefined)), pol),
+).pipe(Parser.tap(() => void b.close()));
+
+/** The body of `@prefix` / `PREFIX`: `PN_PREFIX? ':' IRIREF`. */
+const prefixBody: P<void> = Parser.asVoid(
+  Parser.seq(
+    Parser.preceded(
+      ws,
+      Parser.terminated(
+        Parser.opt(TurtleGrammar.pnPrefix),
+        lit(':').pipe(Parser.expected('a prefix name ending in ":"')),
+      ),
+    ),
+    Parser.preceded(ws, iriRef),
+  ).pipe(
+    Parser.tap(([prefix, ref]) =>
+      b.prefix(
+        Option.getOrElse(prefix, () => ''),
+        ref,
+      ),
+    ),
+  ),
+);
+
+const baseBody: P<void> = Parser.asVoid(
+  Parser.preceded(ws, iriRef).pipe(
+    Parser.tap((ref) => {
+      b.base = Option.some(b.iri(ref));
+    }),
+  ),
+);
+
+const quantifier = (universal: boolean): P<void> =>
+  Parser.alt(
+    Parser.preceded(Parser.peek(endOf('.}')), Parser.succeed<ReadonlyArray<IriNode>>([])),
+    Parser.separated(Parser.preceded(ws, iri), sym(','), { min: 1 }),
+  ).pipe(
+    Parser.tap((iris) => b.quantify(universal, iris)),
+    Parser.asVoid,
+  );
+
+/** `PREFIX` / `BASE` (case-insensitive, no trailing `.`). */
+const sparqlDirective: P<void> = rule(
+  Parser.preceded(
+    ws,
+    Parser.alt(
+      Parser.preceded(
+        Parser.terminated(
+          Ascii.caseless('PREFIX'),
+          Parser.not(Token.oneOf([':.', TurtleGrammar.pnChars])),
+        ),
+        Parser.cut(prefixBody),
+      ),
+      Parser.preceded(
+        Parser.terminated(
+          Ascii.caseless('BASE'),
+          Parser.not(Token.oneOf([':.', TurtleGrammar.pnChars])),
+        ),
+        Parser.cut(baseBody),
+      ),
+    ),
+  ),
+);
+
+const atDirective: P<void> = rule(
+  Parser.alt(
+    Parser.preceded(atKeyword('@prefix'), Parser.cut(prefixBody)),
+    Parser.preceded(atKeyword('@base'), Parser.cut(baseBody)),
+    Parser.preceded(atKeyword('@forAll'), Parser.cut(quantifier(true))),
+    Parser.preceded(atKeyword('@forSome'), Parser.cut(quantifier(false))),
+    Parser.preceded(
+      Parser.peek(atKeyword('@keywords')),
+      Parser.cut(
+        Parser.location.pipe(
+          Parser.tryMap((at) => fail<void>('@keywords is not supported by Notation3', at)),
+        ),
+      ),
+    ),
+  ),
+);
+
+const statement: P<void> = Parser.preceded(ws, Parser.alt(atDirective, triples));
+
+/** Statements, each ended by `.` (optional before the `}` of a formula). */
+const statements = (inFormula: boolean): P<void> =>
+  Parser.asVoid(
+    Parser.repeat(
+      Parser.preceded(
+        Parser.not(inFormula ? endOf('}') : Parser.preceded(ws, Parser.eof)),
+        Parser.alt(
+          sparqlDirective,
+          Parser.cut(
+            Parser.terminated(
+              statement,
+              (inFormula ? Parser.alt(sym('.'), Parser.peek(sym('}'))) : sym('.')).pipe(
+                Parser.expected("'.'"),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+const formulaStatements = statements(true);
+const documentStatements = statements(false);
+
+const document = Compiler.jit(
+  Parser.terminated(documentStatements, Parser.preceded(ws, Parser.eof)),
+);
+
+// -----------------------------------------------------------------------------
+// Builder
+// -----------------------------------------------------------------------------
+
+const PN_LOCAL_ESC = /\\(.)/gu;
+
+const I18N_DATATYPE = /^([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)_(ltr|rtl)$/;
+
+/** The subject whose statements are being read, with the predicate and direction in force. */
+class Frame {
+  subject: Model.N3Term = rdf.nil;
+  predicate: Model.N3Term = rdf.nil;
+  inverse = false;
+}
+
+/**
+ * What depends on the document so far (prefixes, the base IRI, blank node
+ * labels and counters, quantifier scopes, the open formulas and subjects),
+ * updated by the grammar's callbacks as it reads, so that statements are
+ * made in document order without a syntax tree. An error found here is
+ * kept and reported once the grammar has read the whole document, so that a
+ * syntax error anywhere comes first.
+ */
+class Builder {
+  readonly prefixes = MutableHashMap.empty<string, string>();
+  base: Option.Option<string>;
+  private readonly bnodePrefix: string;
+  private readonly bnodes = MutableHashMap.empty<string, Term.BlankNode>();
+  /** The blank node labels written in the document (as keys). */
+  private readonly reserved = MutableHashMap.empty<string, boolean>();
+  private anonCounter = 0;
+  /** Statement collectors, one per open formula (innermost last). */
+  private readonly out: Array<Array<Model.Statement>> = [];
+  /**
+   * Explicit quantifier scopes (legacy `@forAll` / `@forSome`), innermost
+   * last, each with the depth of the formula it belongs to: only formulas
+   * that quantify something have one, so a document without quantifiers
+   * looks nothing up.
+   */
+  private readonly scopes: Array<
+    readonly [depth: number, scope: MutableHashMap.MutableHashMap<string, Model.N3Term>]
+  > = [];
+  /** How many formulas are open. */
+  private depth = 0;
+  /**
+   * The variables made so far, by name: quick variables (one node per name,
+   * so that the copies of a rule compare by identity when a formula removes
+   * duplicate statements) and those made for `@forAll`, whose names avoid
+   * these.
+   */
+  private readonly variables = MutableHashMap.empty<string, Term.Variable>();
+  /** The subjects being described, innermost last (`depthOfFrames` of them are in use). */
+  private readonly frames: Array<Frame> = [];
+  private openFrames = 0;
+  /** The items of the paths being read, and the directions of their steps, innermost last. */
+  readonly paths: Array<Model.N3Term> = [];
+  readonly dirs: Array<string> = [];
+  /** Where the term being read starts, and (for an IRI reference) ends. */
+  at = 0;
+  end = 0;
+  /** The first error found (none while it is empty). */
+  readonly errors: Array<{ readonly message: string; readonly at: number }> = [];
+
+  readonly input: string;
+  constructor(input: string, options: ParserOptions) {
+    this.input = input;
+    this.base = options.baseIri;
+    this.bnodePrefix = options.blankNodePrefix;
+    // Labels written in the document; generated labels avoid them.
+    Iterable.forEach(input.matchAll(/_:([^\s<>"{}()[\],;^!]+)/g), ([, label]) => {
+      MutableHashMap.set(this.reserved, `${this.bnodePrefix}${label ?? ''}`, true);
+    });
+  }
+
+  /** Keeps the first error, returning a stand-in term so that reading can go on. */
+  error(message: string, at: number): Model.N3Term {
+    if (Arr.isReadonlyArrayEmpty(this.errors)) this.errors.push({ message, at });
+    return rdf.nil;
+  }
+
+  openFormula(): void {
+    this.out.push([]);
+    this.depth++;
+  }
+
+  closeFormula(): Model.Formula {
+    if (this.scopes.at(-1)?.[0] === this.depth) this.scopes.pop();
+    this.depth--;
+    return new Model.Formula(this.out.pop() ?? []);
+  }
+
+  /** Starts describing `subject` (a statement's subject, or the node of a `[ … ]`). */
+  open(subject: Model.N3Term): void {
+    const frame = (this.frames[this.openFrames++] ??= new Frame());
+    frame.subject = subject;
+    frame.predicate = rdf.nil;
+    frame.inverse = false;
+  }
+
+  /** Stops describing the current subject, returning it. */
+  close(): Model.N3Term {
+    const frame = this.frames[--this.openFrames];
+    return frame === undefined ? rdf.nil : frame.subject;
+  }
+
+  verb(predicate: Model.N3Term, inverse: boolean): void {
+    const frame = this.frames[this.openFrames - 1];
+    if (frame === undefined) return;
+    frame.predicate = predicate;
+    frame.inverse = inverse;
+  }
+
+  /** A statement about the current subject, with the current predicate, of `object`. */
+  object(object: Model.N3Term): void {
+    const frame = this.frames[this.openFrames - 1];
+    if (frame === undefined) return;
+    if (frame.inverse) this.emit(object, frame.predicate, frame.subject);
+    else this.emit(frame.subject, frame.predicate, object);
+  }
+
+  /** A `!` or `^` step from the current path's item to a new blank node, which replaces it. */
+  step(predicate: Model.N3Term): void {
+    const dir = this.dirs.pop();
+    const item = this.paths.pop() ?? rdf.nil;
+    const node = this.freshBlank();
+    if (dir === '!') this.emit(item, predicate, node);
+    else this.emit(node, predicate, item);
+    this.paths.push(node);
+  }
+
+  endPath(): Model.N3Term {
+    return this.paths.pop() ?? rdf.nil;
+  }
+
+  prefix(prefix: string, ref: IriNode): void {
+    MutableHashMap.set(this.prefixes, prefix, this.iri(ref));
+  }
+
+  quantify(universal: boolean, iris: ReadonlyArray<IriNode>): void {
+    const scope = this.scope();
+    iris.forEach((node) => {
+      const quantified = this.iri(node);
+      MutableHashMap.set(
+        scope,
+        quantified,
+        universal ? this.variableFor(quantified) : this.freshBlank(),
+      );
+    });
+  }
+
+  variable(name: string): Term.Variable {
+    const known = this.variables.backing.get(name);
+    if (known !== undefined) return known;
+    const node = new Term.Variable(name);
+    MutableHashMap.set(this.variables, name, node);
+    return node;
+  }
+
+  /** A literal: with `language` unless it is `''`, else of `datatype` if there is one. */
+  literal(value: string, language: string, datatype: Option.Option<IriNode>): Term.Literal {
+    if (language !== '') return Term.literal(value, language);
+    if (Option.isNone(datatype)) return Term.literal(value);
+    const type = this.iri(datatype.value);
+    const dir = type.startsWith(i18n.base)
+      ? I18N_DATATYPE.exec(type.slice(i18n.base.length))
+      : null;
+    if (dir !== null) {
+      // The base-direction regex only captures `ltr` or `rtl`.
+      return Term.literal(value, {
+        language: dir[1] ?? '',
+        direction: dir[2] === 'rtl' ? 'rtl' : 'ltr',
+      });
+    }
+    return Term.literal(value, new Term.NamedNode(type));
+  }
+
+  iri(node: IriNode): string {
+    if (Predicate.isTagged(node, 'IriRef')) {
+      if (node.escaped && forbiddenInIri.test(node.value)) {
+        this.error('Invalid escaped character in IRI', node.at);
+        return node.value;
+      }
+      return this.resolveIri(node.value);
+    }
+    const ns = this.prefixes.backing.get(node.prefix);
+    if (ns !== undefined) return ns + node.local;
+    // The empty prefix defaults to `<#>` (the current document), as in cwm.
+    if (node.prefix === '') return this.resolveIri('#') + node.local;
+    this.error(`Undeclared prefix '${node.prefix}:'`, node.at);
+    return node.local;
+  }
+
+  private resolveIri(value: string): string {
+    return Option.isNone(this.base) ? value : Iri.resolve(value, this.base.value);
+  }
+
+  /** The quantifier scope of the innermost formula, made on first use. */
+  private scope(): MutableHashMap.MutableHashMap<string, Model.N3Term> {
+    const top = this.scopes.at(-1);
+    if (top !== undefined && top[0] === this.depth) return top[1];
+    const scope = MutableHashMap.empty<string, Model.N3Term>();
+    this.scopes.push([this.depth, scope]);
+    return scope;
+  }
+
+  /**
+   * The nodes made so far, by IRI and (for prefixed names) by namespace and
+   * local name, so that a name written again is neither concatenated nor
+   * hashed anew, and each IRI's key (which formulas deduplicate by) is
+   * computed once.
+   */
+  private readonly iriNodes = MutableHashMap.empty<string, Term.NamedNode>();
+  private readonly localNodes = MutableHashMap.empty<
+    string,
+    Array<readonly [string, Term.NamedNode]>
+  >();
+
+  /** The term an IRI reference read at `at`…`end` stands for. */
+  namedRef(value: string): Model.N3Term {
+    if (this.end - this.at - 2 !== value.length && forbiddenInIri.test(value)) {
+      return this.error('Invalid escaped character in IRI', this.at);
+    }
+    return this.scoped(this.iriNodeOf(this.resolveIri(value)));
+  }
+
+  /** The term a prefixed name read at `at` stands for. */
+  namedPName(name: string): Model.N3Term {
+    const colon = name.indexOf(':');
+    const raw = name.slice(colon + 1);
+    // `PN_LOCAL_ESC`s are decoded, as `TurtleGrammar.pnLocal` does
+    return this.namedPNameParts(
+      name.slice(0, colon),
+      raw.includes('\\') ? raw.replace(PN_LOCAL_ESC, '$1') : raw,
+    );
+  }
+
+  /** The term of a prefixed name read at `at`, given its prefix and decoded local name. */
+  namedPNameParts(prefix: string, local: string): Model.N3Term {
+    const ns = this.prefixes.backing.get(prefix);
+    if (ns !== undefined) return this.scoped(this.localNode(ns, local));
+    return this.named({ _tag: 'PName', prefix, local, at: this.at });
+  }
+
+  /** The term an IRI as written stands for: its node, or a quantified variable or blank node. */
+  named(node: IriNode): Model.N3Term {
+    return this.scoped(this.iriNode(node));
+  }
+
+  /** `named`, or the variable or blank node it is quantified as. */
+  private scoped(named: Term.NamedNode): Model.N3Term {
+    // Usually no formula quantifies anything, and there is nothing to look up
+    if (Arr.isReadonlyArrayEmpty(this.scopes)) return named;
+    const scope = this.scopes.findLast(([, quantified]) =>
+      MutableHashMap.has(quantified, named.value),
+    );
+    return scope?.[1].backing.get(named.value) ?? named;
+  }
+
+  private iriNode(node: IriNode): Term.NamedNode {
+    if (Predicate.isTagged(node, 'PName')) {
+      const ns = this.prefixes.backing.get(node.prefix);
+      if (ns !== undefined) return this.localNode(ns, node.local);
+    }
+    return this.iriNodeOf(this.iri(node));
+  }
+
+  private iriNodeOf(value: string): Term.NamedNode {
+    const known = this.iriNodes.backing.get(value);
+    if (known !== undefined) return known;
+    const named = new Term.NamedNode(value);
+    MutableHashMap.set(this.iriNodes, value, named);
+    return named;
+  }
+
+  /** The node of `ns` + `local`, by local name and then namespace (a local name rarely has two). */
+  private localNode(ns: string, local: string): Term.NamedNode {
+    let byNamespace = this.localNodes.backing.get(local);
+    if (byNamespace === undefined) {
+      byNamespace = [];
+      MutableHashMap.set(this.localNodes, local, byNamespace);
+    }
+    const known = byNamespace.find(([namespace]) => namespace === ns);
+    if (known !== undefined) return known[1];
+    const named = new Term.NamedNode(ns + local);
+    byNamespace.push([ns, named]);
+    return named;
+  }
+
+  private emit(subject: Model.N3Term, predicate: Model.N3Term, object: Model.N3Term): void {
+    this.out.at(-1)?.push(new Model.Statement(subject, predicate, object));
+  }
+
+  freshBlank(): Term.BlankNode {
+    const label = this.freshLabel();
+    // Usually the first label is free
+    return new Term.BlankNode(this.reserved.backing.has(label) ? this.freeLabel() : label);
+  }
+
+  private freshLabel(): string {
+    return `${this.bnodePrefix}b${(this.anonCounter++).toString(36)}`;
+  }
+
+  /** The next generated label that the document does not use. */
+  private freeLabel(): string {
+    let label = this.freshLabel();
+    loop(() => {
+      if (!this.reserved.backing.has(label)) return false;
+      label = this.freshLabel();
+      return true;
+    });
+    return label;
+  }
+
+  labelledBlank(label: string): Term.BlankNode {
+    const known = this.bnodes.backing.get(label);
+    if (known !== undefined) return known;
+    const node = new Term.BlankNode(`${this.bnodePrefix}${label}`);
+    MutableHashMap.set(this.bnodes, label, node);
+    return node;
+  }
+
+  private variableFor(quantified: string): Term.Variable {
+    const local = /[^#/:]*$/.exec(quantified)?.[0] ?? '';
+    const base = /^[A-Za-z_][A-Za-z0-9_]*$/.test(local) ? local : 'v';
+    let name = base;
+    if (MutableHashMap.has(this.variables, base)) {
+      loop((i) => {
+        name = `${base}_${i + 1}`;
+        return MutableHashMap.has(this.variables, name);
+      });
+    }
+    const node = new Term.Variable(name);
+    MutableHashMap.set(this.variables, name, node);
+    return node;
+  }
+}
+
+/** The builder of the document being parsed (the grammar's callbacks update it). */
+let b: Builder = new Builder('', { baseIri: Option.none(), blankNodePrefix: '' });
+
+// -----------------------------------------------------------------------------
+// Entry point
+// -----------------------------------------------------------------------------
+
+const failAt = (input: string, message: string, at: number): never => {
+  const end = Math.min(at, input.length);
+  // The lines before `at`: the last is the one it is on
+  const lines = input.slice(0, end).split('\n');
+  const column = (lines.at(-1) ?? '').length + 1;
+  throw new SyntaxFailure(message, lines.length, column);
+};
+
+const describe = (input: string, at: number): string =>
+  at >= input.length ? 'end of input' : `'${String.fromCodePoint(input.codePointAt(at) ?? 0)}'`;
+
+/** @internal */
+export const parse = (input: string, options: ParserOptions): Model.Document => {
+  b = new Builder(input, options);
+  b.openFormula();
+  const result = Parser.parse(document, input);
+  if (Result.isFailure(result)) {
+    const error = result.failure;
+    if (error.cause !== undefined) return failAt(input, error.cause.message, error.cause.at);
+    const found = describe(input, error.offset);
+    const expected = error.expected.filter((e) => e !== WHITESPACE);
+    const message =
+      Arr.isReadonlyArrayEmpty(expected) || expected.length > 3
+        ? `Unexpected ${found}`
+        : `Expected ${expected.join(' or ')} but found ${found}`;
+    return failAt(input, message, error.offset);
+  }
+  const error = b.errors.at(0);
+  if (error !== undefined) return failAt(input, error.message, error.at);
+  return {
+    formula: b.closeFormula(),
+    prefixes: PrefixMap.make(b.prefixes),
+    baseIri: Option.getOrUndefined(b.base),
+  };
+};

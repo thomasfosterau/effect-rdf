@@ -40,12 +40,12 @@ Hooks are managed by Vite+; the editable [.vite-hooks/pre-commit](.vite-hooks/pr
 vp lint                                       # oxlint
 vp fmt                                        # oxfmt
 vp run --concurrency-limit 2 check            # the whole type gate
-vp run --filter ./packages/sparql check       # one package's type gate
+vp run --filter ./packages/core check         # one package's type gate
 vp run --concurrency-limit 2 -r test:unit     # every package's tests
 vp test run test/Engine.test.ts               # single file (from inside the package)
 vp run -r build                               # emit dist/
 vp run check:dist                             # dist import guard (after the build)
 vp run test:coverage                          # one Istanbul map for fallow
 vp run fallow:audit                           # change-set review (not a CI gate)
-vp run --filter ./packages/turtle bench       # a package's benchmark (turtle, n3, rdfxml, shex, sparql)
+vp run --filter ./packages/core bench:turtle  # one subpath's benchmark (turtle, n3, rdfxml, shex, sparql)
 ```

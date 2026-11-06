@@ -12,20 +12,23 @@
 # lockfile fails CI at once with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
 packages:
   - packages/*
-  # Private, never-published test packages (`tests/conformance`).
-  - tests/*
 
 catalogMode: strict
 
 catalog:
   '@changesets/changelog-github': ^1.0.1
   '@changesets/cli': ^3.0.3
-  # Test-only: the SPARQL-to-SQL backend's PostgreSQL suite runs on PGlite.
+  # Test-only (core devDependency): effect-rdf/sparql/sql's PostgreSQL suite
+  # runs on PGlite, through `@effect/sql-pg`'s statement compiler.
   '@electric-sql/pglite': 0.5.15
   # The Effect Language Service plugin named in tsconfig.base.json; the
   # patched native `tsc` (see @effect/tsgo) runs its diagnostics.
   '@effect/language-service': ^0.87.5
   # Exact, in lockstep with `effect` below: each declares `effect: ^<its version>`.
+  # `@effect/platform-node` is effect-sparql-node's runtime dependency;
+  # `@effect/sql-pg` and `@effect/sql-sqlite-node` are core devDependencies
+  # only (the effect-rdf/sparql/sql suites' drivers), never runtime
+  # dependencies or peers.
   '@effect/platform-node': 4.1.2
   '@effect/sql-pg': 4.1.2
   '@effect/sql-sqlite-node': 4.1.2
@@ -52,7 +55,9 @@ catalog:
   # Effect APIs, so an `effect` bump re-runs `vp check` against the plugin too.
   '@enfect/oxlint': ^0.9.0
   # Parser-combinator library behind the Turtle, N-Triples, N3, ShExC, SPARQL
-  # and XML grammars; a peer of the packages that use it (see `catalogs.peers`).
+  # and XML grammars: an optional peer of effect-rdf, reached only from the
+  # syntax and SPARQL subpaths (see `catalogs.peers`), and a required peer of
+  # effect-sparql-node.
   '@thomasfosterau/effect-parse': 0.4.1
   '@types/node': ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
@@ -96,17 +101,12 @@ catalogs:
     # instead). Proved by running each package's `check` and `test:unit`
     # with the `effect` line above pinned to 4.0.0.
     effect: ^4.0.0
-  # `@thomasfosterau/effect-sparql` (its `/shacl` and `/ai` subpaths
-  # included): its runtime dependency `@effect/platform-node`, pinned above at 4.1.2,
-  # declares `effect: ^4.1.2`. Move it with that pin. (The SPARQL server's
-  # `HttpApi` also passes `StreamUint8Array` a list of content types, a 4.1
-  # form, #60; it would need a 4.0 shape before this floor could drop.)
+  # `@thomasfosterau/effect-sparql-node` only: its runtime dependency
+  # `@effect/platform-node`, pinned above at 4.1.2, declares `effect: ^4.1.2`.
+  # Move it with that pin. (Its `SparqlApi` also passes `StreamUint8Array` a
+  # list of content types, a 4.1 form, #60; 4.0 takes one, so the API client
+  # would reject every format but the first.)
   platform-node-peers:
-    effect: ^4.1.2
-  # `@thomasfosterau/effect-sparql-sql` only: its runtime dependencies
-  # `@effect/sql-sqlite-node` (pinned above at 4.1.2, `effect: ^4.1.2`) and
-  # effect-sparql (`platform-node-peers`). Move it with those pins.
-  sql-peers:
     effect: ^4.1.2
 
 overrides:

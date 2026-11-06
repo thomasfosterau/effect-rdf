@@ -2,17 +2,25 @@
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
     "packages/*/src/*.ts",
-    // The nested subpaths: core's `/csvw`, `/rdfjson` and `/shacl`, sparql's `/ai` and `/shacl`
-    // (each `./<subpath>/*` export). Listed one by one so `src/internal/` stays private.
+    // Core's nested subpaths (each `./<subpath>/*` export). Listed one by one so each
+    // `internal/` directory stays private.
     "packages/core/src/csvw/*.ts",
+    "packages/core/src/jsonld/*.ts",
+    "packages/core/src/n3/*.ts",
+    "packages/core/src/ntriples/*.ts",
     "packages/core/src/rdfjson/*.ts",
+    "packages/core/src/rdfxml/*.ts",
     "packages/core/src/shacl/*.ts",
-    "packages/sparql/src/ai/*.ts",
-    "packages/sparql/src/shacl/*.ts",
+    "packages/core/src/shex/*.ts",
+    "packages/core/src/sparql/*.ts",
+    "packages/core/src/sparql/ai/*.ts",
+    "packages/core/src/sparql/shacl/*.ts",
+    "packages/core/src/sparql/sql/*.ts",
+    "packages/core/src/turtle/*.ts",
+    "packages/core/src/xmp/*.ts",
     "packages/*/test/**/*.test.ts",
-    "tests/*/test/**/*.test.ts",
-    "packages/*/bench/*.ts",
-    "packages/sparql/bin/*.mjs",
+    "packages/core/bench/*/*.ts",
+    "packages/sparql-node/bin/*.mjs",
     "**/vite.config.ts",
     "vite.package.ts",
     "scripts/check-dist-imports.mjs"
@@ -56,46 +64,9 @@
         "name": "core",
         "patterns": ["packages/core/**"]
       },
-      // Private: the core subpaths' suites that read Turtle (AGENTS.md).
       {
-        "name": "conformance",
-        "patterns": ["tests/conformance/**"]
-      },
-      {
-        "name": "jsonld",
-        "patterns": ["packages/jsonld/**"]
-      },
-      {
-        "name": "n3",
-        "patterns": ["packages/n3/**"]
-      },
-      {
-        "name": "ntriples",
-        "patterns": ["packages/ntriples/**"]
-      },
-      {
-        "name": "rdfxml",
-        "patterns": ["packages/rdfxml/**"]
-      },
-      {
-        "name": "shex",
-        "patterns": ["packages/shex/**"]
-      },
-      {
-        "name": "sparql",
-        "patterns": ["packages/sparql/**"]
-      },
-      {
-        "name": "sparql-sql",
-        "patterns": ["packages/sparql-sql/**"]
-      },
-      {
-        "name": "turtle",
-        "patterns": ["packages/turtle/**"]
-      },
-      {
-        "name": "xmp",
-        "patterns": ["packages/xmp/**"]
+        "name": "sparql-node",
+        "patterns": ["packages/sparql-node/**"]
       }
     ],
     "rules": [
@@ -104,59 +75,22 @@
         "allow": []
       },
       {
-        "from": "conformance",
-        "allow": ["core", "turtle"]
-      },
-      {
-        "from": "jsonld",
+        "from": "sparql-node",
         "allow": ["core"]
-      },
-      {
-        "from": "n3",
-        "allow": ["core", "turtle"]
-      },
-      {
-        "from": "ntriples",
-        "allow": ["core"]
-      },
-      {
-        "from": "rdfxml",
-        "allow": ["core"]
-      },
-      {
-        "from": "shex",
-        "allow": ["core", "turtle"]
-      },
-      {
-        "from": "sparql",
-        "allow": ["core", "jsonld", "n3", "ntriples", "rdfxml", "turtle"]
-      },
-      {
-        "from": "sparql-sql",
-        "allow": ["core", "sparql"]
-      },
-      {
-        "from": "turtle",
-        "allow": ["core", "ntriples"]
-      },
-      {
-        "from": "xmp",
-        "allow": ["core", "rdfxml"]
       }
     ]
   },
-  // Each package's benchmark is a standalone Node script over that package's
-  // own corpus; sharing their timing loops would need a workspace module that
-  // no published package should depend on.
+  // Each subpath's benchmark is a standalone Node script over that subpath's
+  // own corpus; sharing their timing loops would need a module that no
+  // published entry point should carry.
   "duplicates": {
     "ignore": ["packages/*/bench/**"],
-    // Reviewed clones that predate fallow, between packages that may not
-    // depend on each other (AGENTS.md: each package stays lean): JSON-LD and
-    // core's RDF/JSON subpath each locate JSON syntax errors (core exports no
-    // such helper), the N-Triples, Turtle and RDF/XML parsers each map a thrown parse failure to `RdfParseError`, and
-    // the SPARQL evaluator dedupes path results the way core's `Dataset`
-    // dedupes terms without core exporting that helper. A content change on
-    // either side makes the group reportable again.
+    // Reviewed clones that predate fallow, from when the subpaths were
+    // separate packages: JSON-LD and the RDF/JSON subpath each locate JSON
+    // syntax errors, the N-Triples, Turtle and RDF/XML parsers each map a
+    // thrown parse failure to `RdfParseError`, and the SPARQL evaluator
+    // dedupes path results the way `Dataset` dedupes terms. A content change
+    // on either side makes the group reportable again.
     "ignoredClones": [
       "dup:9c54618a:2",
       "dup:ec5793a2:2",

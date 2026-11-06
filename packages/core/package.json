@@ -2,15 +2,25 @@
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdf",
   "version": "0.0.0",
-  "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model, with RDF/JSON, CSV on the Web (CSVW) and a SHACL Core validator",
+  "description": "Effect-idiomatic RDF 1.2 / RDF-star toolkit: the data model, parsers and serialisers for N-Triples, N-Quads, Turtle, TriG, N3, JSON-LD, RDF/XML, RDF/JSON and XMP, CSV on the Web, a SPARQL 1.1 / 1.2 engine, client and protocol handler with a SQL translation layer, and SHACL and ShEx validation",
   "keywords": [
-    "csv",
     "csvw",
     "effect",
+    "json-ld",
+    "n-quads",
+    "n-triples",
+    "n3",
     "rdf",
     "rdf-json",
+    "rdf-star",
+    "rdfxml",
     "shacl",
-    "typescript"
+    "shex",
+    "sparql",
+    "trig",
+    "turtle",
+    "typescript",
+    "xmp"
   ],
   "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/core#readme",
   "bugs": {
@@ -35,10 +45,32 @@
     ".": "./src/index.ts",
     "./csvw": "./src/csvw/index.ts",
     "./csvw/*": "./src/csvw/*.ts",
+    "./jsonld": "./src/jsonld/index.ts",
+    "./jsonld/*": "./src/jsonld/*.ts",
+    "./n3": "./src/n3/index.ts",
+    "./n3/*": "./src/n3/*.ts",
+    "./ntriples": "./src/ntriples/index.ts",
+    "./ntriples/*": "./src/ntriples/*.ts",
     "./rdfjson": "./src/rdfjson/index.ts",
     "./rdfjson/*": "./src/rdfjson/*.ts",
+    "./rdfxml": "./src/rdfxml/index.ts",
+    "./rdfxml/*": "./src/rdfxml/*.ts",
     "./shacl": "./src/shacl/index.ts",
     "./shacl/*": "./src/shacl/*.ts",
+    "./shex": "./src/shex/index.ts",
+    "./shex/*": "./src/shex/*.ts",
+    "./sparql": "./src/sparql/index.ts",
+    "./sparql/*": "./src/sparql/*.ts",
+    "./sparql/ai": "./src/sparql/ai/index.ts",
+    "./sparql/ai/*": "./src/sparql/ai/*.ts",
+    "./sparql/shacl": "./src/sparql/shacl/index.ts",
+    "./sparql/shacl/*": "./src/sparql/shacl/*.ts",
+    "./sparql/sql": "./src/sparql/sql/index.ts",
+    "./sparql/sql/*": "./src/sparql/sql/*.ts",
+    "./turtle": "./src/turtle/index.ts",
+    "./turtle/*": "./src/turtle/*.ts",
+    "./xmp": "./src/xmp/index.ts",
+    "./xmp/*": "./src/xmp/*.ts",
     "./*": "./src/*.ts"
   },
   "publishConfig": {
@@ -55,6 +87,30 @@
         "types": "./dist/csvw/*.d.mts",
         "default": "./dist/csvw/*.mjs"
       },
+      "./jsonld": {
+        "types": "./dist/jsonld/index.d.mts",
+        "default": "./dist/jsonld/index.mjs"
+      },
+      "./jsonld/*": {
+        "types": "./dist/jsonld/*.d.mts",
+        "default": "./dist/jsonld/*.mjs"
+      },
+      "./n3": {
+        "types": "./dist/n3/index.d.mts",
+        "default": "./dist/n3/index.mjs"
+      },
+      "./n3/*": {
+        "types": "./dist/n3/*.d.mts",
+        "default": "./dist/n3/*.mjs"
+      },
+      "./ntriples": {
+        "types": "./dist/ntriples/index.d.mts",
+        "default": "./dist/ntriples/index.mjs"
+      },
+      "./ntriples/*": {
+        "types": "./dist/ntriples/*.d.mts",
+        "default": "./dist/ntriples/*.mjs"
+      },
       "./rdfjson": {
         "types": "./dist/rdfjson/index.d.mts",
         "default": "./dist/rdfjson/index.mjs"
@@ -62,6 +118,14 @@
       "./rdfjson/*": {
         "types": "./dist/rdfjson/*.d.mts",
         "default": "./dist/rdfjson/*.mjs"
+      },
+      "./rdfxml": {
+        "types": "./dist/rdfxml/index.d.mts",
+        "default": "./dist/rdfxml/index.mjs"
+      },
+      "./rdfxml/*": {
+        "types": "./dist/rdfxml/*.d.mts",
+        "default": "./dist/rdfxml/*.mjs"
       },
       "./shacl": {
         "types": "./dist/shacl/index.d.mts",
@@ -71,6 +135,62 @@
         "types": "./dist/shacl/*.d.mts",
         "default": "./dist/shacl/*.mjs"
       },
+      "./shex": {
+        "types": "./dist/shex/index.d.mts",
+        "default": "./dist/shex/index.mjs"
+      },
+      "./shex/*": {
+        "types": "./dist/shex/*.d.mts",
+        "default": "./dist/shex/*.mjs"
+      },
+      "./sparql": {
+        "types": "./dist/sparql/index.d.mts",
+        "default": "./dist/sparql/index.mjs"
+      },
+      "./sparql/*": {
+        "types": "./dist/sparql/*.d.mts",
+        "default": "./dist/sparql/*.mjs"
+      },
+      "./sparql/ai": {
+        "types": "./dist/sparql/ai/index.d.mts",
+        "default": "./dist/sparql/ai/index.mjs"
+      },
+      "./sparql/ai/*": {
+        "types": "./dist/sparql/ai/*.d.mts",
+        "default": "./dist/sparql/ai/*.mjs"
+      },
+      "./sparql/shacl": {
+        "types": "./dist/sparql/shacl/index.d.mts",
+        "default": "./dist/sparql/shacl/index.mjs"
+      },
+      "./sparql/shacl/*": {
+        "types": "./dist/sparql/shacl/*.d.mts",
+        "default": "./dist/sparql/shacl/*.mjs"
+      },
+      "./sparql/sql": {
+        "types": "./dist/sparql/sql/index.d.mts",
+        "default": "./dist/sparql/sql/index.mjs"
+      },
+      "./sparql/sql/*": {
+        "types": "./dist/sparql/sql/*.d.mts",
+        "default": "./dist/sparql/sql/*.mjs"
+      },
+      "./turtle": {
+        "types": "./dist/turtle/index.d.mts",
+        "default": "./dist/turtle/index.mjs"
+      },
+      "./turtle/*": {
+        "types": "./dist/turtle/*.d.mts",
+        "default": "./dist/turtle/*.mjs"
+      },
+      "./xmp": {
+        "types": "./dist/xmp/index.d.mts",
+        "default": "./dist/xmp/index.mjs"
+      },
+      "./xmp/*": {
+        "types": "./dist/xmp/*.d.mts",
+        "default": "./dist/xmp/*.mjs"
+      },
       "./*": {
         "types": "./dist/*.d.mts",
         "default": "./dist/*.mjs"
@@ -78,13 +198,31 @@
     },
     "access": "public"
   },
+  "scripts": {
+    "bench": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts && node --experimental-strip-types --no-warnings bench/n3/n3.ts && node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts && node --experimental-strip-types --no-warnings bench/shex/shexc.ts && node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts",
+    "bench:turtle": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts",
+    "bench:n3": "node --experimental-strip-types --no-warnings bench/n3/n3.ts",
+    "bench:rdfxml": "node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts",
+    "bench:shex": "node --experimental-strip-types --no-warnings bench/shex/shexc.ts",
+    "bench:sparql": "node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts"
+  },
   "devDependencies": {
+    "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@electric-sql/pglite": "catalog:",
+    "@thomasfosterau/effect-parse": "catalog:",
     "effect": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@thomasfosterau/effect-parse": "catalog:peers",
     "effect": "catalog:peers"
+  },
+  "peerDependenciesMeta": {
+    "@thomasfosterau/effect-parse": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22"

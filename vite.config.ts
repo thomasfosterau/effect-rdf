@@ -15,21 +15,7 @@ import { defineConfig } from 'vite-plus';
 import { recommended } from '@effect/tsgo/oxlint-presets';
 import effect from '@enfect/oxlint';
 
-const packages = [
-  'effect-rdf',
-  'effect-ntriples',
-  'effect-turtle',
-  'effect-n3',
-  'effect-jsonld',
-  'effect-rdfxml',
-  'effect-xmp',
-  'effect-sparql',
-  'effect-shex',
-  'effect-sparql-sql',
-].map((name) => `@thomasfosterau/${name}`);
-
-// Private, never-published test packages: in the type gate, not in `check:dist`.
-const testPackages = ['@effect-rdf/conformance'];
+const packages = ['effect-rdf', 'effect-sparql-node'].map((name) => `@thomasfosterau/${name}`);
 
 export default defineConfig({
   // Staged-file checks run by `vp staged` (pre-commit).
@@ -167,7 +153,7 @@ export default defineConfig({
       // IS the runtime boundary that `effect-run-in-body` asks for. A
       // benchmark's console output is its product.
       {
-        files: ['packages/*/test/**', 'packages/*/bench/**', 'tests/*/test/**'],
+        files: ['packages/*/test/**', 'packages/*/bench/**'],
         rules: {
           'effect/avoid-node-imports': 'off',
           'effect/avoid-sync-fs': 'off',
@@ -178,12 +164,12 @@ export default defineConfig({
           'effect/effect-run-in-body': 'off',
         },
       },
-      // The one native `JSON.parse` per package (or nested subpath): `Schema.fromJsonString`
+      // The one native `JSON.parse` per nested subpath: `Schema.fromJsonString`
       // replaces the engine's SyntaxError with "Expected a valid JSON
       // string", and the parsers' error messages (and the positions in them)
       // are part of their contract.
       {
-        files: ['packages/*/src/internal/json.ts', 'packages/*/src/*/internal/json.ts'],
+        files: ['packages/*/src/*/internal/json.ts'],
         rules: { 'effect/avoid-direct-json': 'off' },
       },
       // Public signatures over arbitrary JSON-LD / ShExJ / N3 JSON: a JSON-LD
@@ -196,12 +182,12 @@ export default defineConfig({
       // is a breaking API change.
       {
         files: [
-          'packages/jsonld/src/JsonLd.ts',
-          'packages/jsonld/src/DocumentLoader.ts',
-          'packages/jsonld/src/internal/util.ts',
-          'packages/n3/src/Model.ts',
-          'packages/shex/src/ShExJ.ts',
-          'packages/shex/src/ShapeMap.ts',
+          'packages/core/src/jsonld/JsonLd.ts',
+          'packages/core/src/jsonld/DocumentLoader.ts',
+          'packages/core/src/jsonld/internal/util.ts',
+          'packages/core/src/n3/Model.ts',
+          'packages/core/src/shex/ShExJ.ts',
+          'packages/core/src/shex/ShapeMap.ts',
         ],
         rules: {
           'effect/no-object-parameters': 'off',
@@ -230,7 +216,7 @@ export default defineConfig({
       // `effect/sql` types rows as `unknown`, and pg returns strings where
       // SQLite returns numbers.
       {
-        files: ['packages/sparql-sql/src/SqlStore.ts'],
+        files: ['packages/core/src/sparql/sql/SqlStore.ts'],
         rules: { 'effect/no-unknown-parameters': 'off' },
       },
       // The SPARQL server's Node runtime boundary: the `bin/` launcher picks
@@ -240,9 +226,9 @@ export default defineConfig({
       // (a server, not the HTTP client the rule is about).
       {
         files: [
-          'packages/sparql/bin/**',
-          'packages/sparql/src/Cli.ts',
-          'packages/sparql/src/SparqlServer.ts',
+          'packages/sparql-node/bin/**',
+          'packages/sparql-node/src/Cli.ts',
+          'packages/sparql-node/src/NodeSparqlServer.ts',
         ],
         rules: {
           'effect/avoid-node-imports': 'off',
@@ -259,14 +245,14 @@ export default defineConfig({
       // `Results.serializeString` and the client's push-based `Incremental`
       // parser run the Effect-returning serializer / codec to completion.
       {
-        files: ['packages/sparql/src/Results.ts', 'packages/sparql/src/ResultsStream.ts'],
+        files: ['packages/core/src/sparql/Results.ts', 'packages/core/src/sparql/ResultsStream.ts'],
         rules: { 'effect/effect-run-in-body': 'off' },
       },
       // The SPARQL parser's per-token `hook` / `take` combinators catch the
       // parse failure they throw; a `Result` per token is the per-step
       // allocation AGENTS.md keeps out of hot loops.
       {
-        files: ['packages/sparql/src/internal/parser.ts'],
+        files: ['packages/core/src/sparql/internal/parser.ts'],
         rules: { 'effect/avoid-try-catch': 'off' },
       },
       // The evaluator hands a built-in its evaluated arguments as the public
@@ -275,14 +261,14 @@ export default defineConfig({
       // from the plain array cannot be a single assertion without changing
       // that public type.
       {
-        files: ['packages/sparql/src/Expression.ts'],
+        files: ['packages/core/src/sparql/Expression.ts'],
         rules: { 'effect/avoid-any': 'off', 'effect/no-chained-type-assertions': 'off' },
       },
       // `Builder.patch` re-asserts `QueryOf<K>` after a spread. tsgolint calls
       // the assertion unnecessary, but native `tsc` (the type gate) rejects
       // the code without it (TS2322 / TS2345): the two checkers disagree here.
       {
-        files: ['packages/sparql/src/QueryBuilder.ts'],
+        files: ['packages/core/src/sparql/QueryBuilder.ts'],
         rules: { 'typescript/no-unnecessary-type-assertion': 'off' },
       },
       {
@@ -337,7 +323,7 @@ export default defineConfig({
       // new package adds itself to `packages` above.
       check: {
         command: "echo 'check: every type gate green'",
-        dependsOn: [...packages, ...testPackages].map((name) => `${name}#check`),
+        dependsOn: packages.map((name) => `${name}#check`),
         cache: false,
       },
       // Import guard: the built dist of every published package imports no
@@ -362,9 +348,8 @@ export default defineConfig({
   },
   test: {
     // One entry per package: each package's own vite.config.ts is a vitest
-    // project, so the root run and the root coverage map cover them all. The
-    // conformance package's suites count toward the core sources they hit.
-    projects: ['packages/*/vite.config.ts', 'tests/*/vite.config.ts'],
+    // project, so the root run and the root coverage map cover them all.
+    projects: ['packages/*/vite.config.ts'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text-summary', 'json-summary', 'json'],
