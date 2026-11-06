@@ -1,0 +1,1303 @@
+/**
+ * The Turtle and TriG (RDF 1.2) parser: a compiled
+ * `@thomasfosterau/effect-parse` grammar over the input string, built on the
+ * terminals of `Grammar.ts`, that emits quads as it reads.
+ *
+ * What depends on the document so far (prefixes, the base IRI, blank node
+ * labels and counters, the current graph) lives in a per-parser `Builder`
+ * that the grammar's callbacks update, as the hand-written parser it replaces
+ * did. Errors are thrown out of the grammar (as a `Stop` at an offset) at the
+ * points, and with the messages, of that parser.
+ *
+ * Input can be fed incrementally. Each run parses as many statements as the
+ * buffered text holds; a statement that ends too close to the end of the
+ * buffer to be sure of (or fails there) is rolled back and retried with more
+ * text, and a statement that fails before the input is complete is re-read in
+ * partial mode to tell a real error from a statement that is merely cut off.
+ *
+ * @internal
+ */
+import * as Ascii from '@thomasfosterau/effect-parse/Ascii';
+import * as Compiler from '@thomasfosterau/effect-parse/Compiler';
+import * as Parser from '@thomasfosterau/effect-parse/Parser';
+import * as Token from '@thomasfosterau/effect-parse/Token';
+import * as Iri from '../../Iri.ts';
+import * as Term from '../../Term.ts';
+import { rdf, xsd } from '../../Vocab.ts';
+import * as Lexical from '../../ntriples/Lexical.ts';
+import * as Arr from 'effect/Array';
+import * as MutableHashMap from 'effect/MutableHashMap';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
+import * as Str from 'effect/String';
+import * as Grammar from '../Grammar.ts';
+import { loop } from './loop.ts';
+
+/** @internal */
+export class SyntaxFailure extends Error {
+  readonly line: number;
+  readonly column: number;
+  constructor(message: string, line: number, column: number) {
+    super(message);
+    this.line = line;
+    this.column = column;
+  }
+}
+
+/** @internal */
+export interface ParserOptions {
+  readonly trig: boolean;
+  readonly baseIri: Option.Option<string>;
+  readonly blankNodePrefix: string;
+  /** The graph for triples outside graph blocks. */
+  readonly graph: Term.Graph;
+}
+
+/** An error at an offset of the text being parsed, thrown out of the grammar. */
+class Stop {
+  readonly message: string;
+  readonly pos: number;
+  constructor(message: string, pos: number) {
+    this.message = message;
+    this.pos = pos;
+  }
+}
+
+/**
+ * How far past the end of a statement, and past any dots there, the grammar
+ * may look (`.%41`, `1.e+5`): a statement ending closer than this to the end
+ * of incomplete input is retried once more text has arrived. (A run of dots
+ * may continue a name, as in `ex:a...b`, however long it is.)
+ */
+const MARGIN = 3;
+
+const C_DOT = 0x2e;
+const C_BACKSLASH = 0x5c;
+const C_PERCENT = 0x25;
+const C_GT = 0x3e;
+
+/** A run of dots, matched where it starts. */
+const DOTS = /\.*/y;
+
+/** The offset after any dots at `pos`. */
+const skipDots = (input: string, pos: number): number => {
+  if (input.charCodeAt(pos) !== C_DOT) return pos;
+  DOTS.lastIndex = pos;
+  DOTS.test(input);
+  return DOTS.lastIndex;
+};
+
+type P<A> = Parser.Parser<A>;
+
+// -----------------------------------------------------------------------------
+// The builder
+// -----------------------------------------------------------------------------
+
+/** The subject being described, with the predicate, object and reifier in progress. */
+class Frame {
+  subject: Term.Subject = rdf.nil;
+  predicate: Term.Predicate = rdf.nil;
+  object: Term.Object = rdf.nil;
+  reifier: Option.Option<Term.NamedNode | Term.BlankNode> = Option.none();
+  /** The triple of the current object, once built for a reifier. */
+  triple: Option.Option<Term.Triple> = Option.none();
+}
+
+const noReifier = Option.none<Term.NamedNode | Term.BlankNode>();
+const noTriple = Option.none<Term.Triple>();
+
+/** A previous prefix binding (`None` when the prefix was unbound). */
+type PrefixBinding = readonly [prefix: string, previous: Option.Option<string>];
+
+class Builder {
+  readonly options: ParserOptions;
+  readonly prefixes = MutableHashMap.empty<string, string>();
+  base: Option.Option<string>;
+  out: Array<Term.Quad> = [];
+  readonly labels = MutableHashMap.empty<string, Term.BlankNode>();
+  counter = 0;
+  graph: Term.Graph;
+  inGraph = false;
+
+  /** Whether the input is complete, and the text being parsed. */
+  final = true;
+  input = '';
+  readonly frames: Array<Frame> = [];
+  depth = -1;
+  /** A node read before it is known what it is (a TriG subject or graph name). */
+  pending: Term.NamedNode | Term.BlankNode = rdf.nil;
+
+  /** The state at the start of the current statement, to roll back to. */
+  open = false;
+  snapPos = 0;
+  snapOut = 0;
+  snapCounter = 0;
+  snapGraph: Term.Graph;
+  snapInGraph = false;
+  snapBase: Option.Option<string> = Option.none();
+  /** The prefix the statement bound, with its previous binding. */
+  snapPrefix: Option.Option<PrefixBinding> = Option.none();
+  /** Registers for the terms being read (none of them nests). */
+  iriStart = 0;
+  iriEnd = 0;
+  nameStart = 0;
+  prefix = '';
+  stringStart = 0;
+  stringEnd = 0;
+  tagStart = 0;
+  literalStart = 0;
+  literalValue = '';
+
+  /** Where the last complete statement ended. */
+  lastEnd = 0;
+  /** The state at the start of the run, for a re-run. */
+  private runOut = 0;
+  private runCounter = 0;
+  private runGraph: Term.Graph;
+  private runInGraph = false;
+  private runBase: Option.Option<string> = Option.none();
+  /** The prefixes set during the run, with their previous values. */
+  private readonly runPrefixes: Array<PrefixBinding> = [];
+
+  constructor(options: ParserOptions) {
+    this.options = options;
+    this.base = options.baseIri;
+    this.graph = options.graph;
+    this.snapGraph = options.graph;
+    this.runGraph = options.graph;
+  }
+
+  /** Records the state at the start of a run. */
+  beginRun(): void {
+    this.open = false;
+    this.lastEnd = 0;
+    this.runOut = this.out.length;
+    this.runCounter = this.counter;
+    this.runGraph = this.graph;
+    this.runInGraph = this.inGraph;
+    this.runBase = this.base;
+    this.runPrefixes.length = 0;
+  }
+
+  /** Returns to the state at the start of the run (for the re-run of a failed one). */
+  restartRun(): void {
+    this.open = false;
+    this.lastEnd = 0;
+    this.depth = -1;
+    this.out.length = this.runOut;
+    this.counter = this.runCounter;
+    this.graph = this.runGraph;
+    this.inGraph = this.runInGraph;
+    this.base = this.runBase;
+    Arr.forEach(Arr.reverse(this.runPrefixes), (binding) => this.restorePrefix(binding));
+    this.runPrefixes.length = 0;
+  }
+
+  private restorePrefix([prefix, previous]: PrefixBinding): void {
+    if (Option.isSome(previous)) MutableHashMap.set(this.prefixes, prefix, previous.value);
+    else MutableHashMap.remove(this.prefixes, prefix);
+  }
+
+  frame(): Frame {
+    // The grammar pushes a frame before it reads one, so the fallback is never used
+    return this.frames[this.depth] ?? new Frame();
+  }
+
+  push(subject: Term.Subject): void {
+    const frame = (this.frames[++this.depth] ??= new Frame());
+    frame.subject = subject;
+    frame.reifier = noReifier;
+    frame.triple = noTriple;
+  }
+
+  emit(s: Term.Subject, p: Term.Predicate, o: Term.Object): void {
+    this.out.push(new Term.Quad(s, p, o, this.graph));
+  }
+
+  fresh(): Term.BlankNode {
+    return new Term.BlankNode(`${this.options.blankNodePrefix}_${(this.counter++).toString(36)}`);
+  }
+
+  snapshot(pos: number): void {
+    this.open = true;
+    this.depth = -1;
+    this.snapPos = pos;
+    this.snapOut = this.out.length;
+    this.snapCounter = this.counter;
+    this.snapGraph = this.graph;
+    this.snapInGraph = this.inGraph;
+    this.snapBase = this.base;
+    this.snapPrefix = Option.none();
+  }
+
+  /** Undoes the statement in progress. */
+  rollback(): void {
+    if (!this.open) return;
+    this.out.length = this.snapOut;
+    this.counter = this.snapCounter;
+    this.graph = this.snapGraph;
+    this.inGraph = this.snapInGraph;
+    this.base = this.snapBase;
+    if (Option.isSome(this.snapPrefix)) {
+      this.restorePrefix(this.snapPrefix.value);
+      this.snapPrefix = Option.none();
+    }
+    this.depth = -1;
+  }
+
+  setPrefix(prefix: string, iri: string): void {
+    const binding: PrefixBinding = [prefix, MutableHashMap.get(this.prefixes, prefix)];
+    if (Option.isNone(this.snapPrefix)) this.snapPrefix = Option.some(binding);
+    this.runPrefixes.push(binding);
+    MutableHashMap.set(this.prefixes, prefix, iri);
+  }
+
+  openGraph(graph: Term.Graph): void {
+    this.inGraph = true;
+    this.graph = graph;
+  }
+}
+
+/** The builder of the parser running the grammar. */
+let b: Builder = new Builder({
+  trig: false,
+  baseIri: Option.none(),
+  blankNodePrefix: '',
+  graph: Term.defaultGraph,
+});
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+const lit = Token.literal;
+const skip = Grammar.skip;
+
+/** Runs `f` at the current offset, consuming nothing (never skipped by the compiler). */
+const act = (f: (pos: number) => void): P<number> => Parser.tap(Parser.location, f);
+
+/** Throws `message` at the current offset. */
+const failHere = <A = never>(message: string): P<A> =>
+  Parser.make<A>((state) => {
+    throw new Stop(message, state.pos);
+  });
+
+/** Throws the error `diagnose` finds at the current offset. */
+const failWith = <A = never>(diagnose: (input: string, pos: number) => Stop): P<A> =>
+  Parser.make<A>((state) => {
+    throw diagnose(state.input, state.pos);
+  });
+
+const at = (s: string): P<unknown> => Parser.peek(lit(s));
+
+const nameChar = Token.oneOf([Grammar.pnChars, ':']);
+const notName = Parser.not(nameChar);
+
+/** A case-insensitive keyword followed by a character that cannot continue a name. */
+const keyword = (word: string): P<unknown> => Parser.terminated(Ascii.caseless(word), notName);
+
+/** An `@` keyword, not followed by a letter, digit or `-`. */
+const atKeyword = (word: string): P<unknown> =>
+  Parser.terminated(lit(word), Parser.not(Token.oneOf([Grammar.alphanumeric, '-'])));
+
+/** `.` or the error "Expected `what`". */
+const expectDot = (what: string): P<unknown> => Parser.alt(lit('.'), failHere(`Expected ${what}`));
+
+const nameStart: P<unknown> = Parser.peek(Parser.alt(lit(':'), Token.oneOf(Grammar.pnCharsBase)));
+
+// -----------------------------------------------------------------------------
+// Diagnostics: the errors of IRIs and strings, found by scanning them again
+// -----------------------------------------------------------------------------
+
+const isDecodeError = Predicate.isTagged('Error');
+
+/**
+ * Scans from `start` with `step`, which returns the next offset, or the
+ * error found (`Some`) or the end of the term (`None`) to stop.
+ */
+const scan = (
+  start: number,
+  step: (i: number) => number | Option.Option<Stop>,
+): Option.Option<Stop> => {
+  let i = start;
+  let error = Option.none<Stop>();
+  loop(() => {
+    const next = step(i);
+    if (Predicate.isNumber(next)) {
+      i = next;
+      return true;
+    }
+    error = next;
+    return false;
+  });
+  return error;
+};
+
+const fail = (message: string, pos: number): Option.Option<Stop> =>
+  Option.some(new Stop(message, pos));
+
+/** The error in the IRI at `start`, or `None`; `end` bounds an IRI that matched. */
+const iriError = (input: string, start: number, end = input.length): Option.Option<Stop> =>
+  scan(start + 1, (i) => {
+    if (i >= end) return end === input.length ? fail('Unterminated IRI', start) : Option.none();
+    const c = input.charCodeAt(i);
+    if (c === C_GT) return Option.none();
+    if (c === C_BACKSLASH) {
+      const decoded = Lexical.decodeUchar(input, i);
+      if (isDecodeError(decoded)) return fail(decoded.message, i);
+      if (!Lexical.isIriChar(decoded.value.codePointAt(0) ?? 0)) {
+        return fail('Escaped character is not allowed in an IRI', i);
+      }
+      return i + decoded.length;
+    }
+    if (!Lexical.isIriChar(c)) return fail('Invalid character in IRI', i);
+    return i + 1;
+  });
+
+/** The error in the string at `start`, or `None`; `end` bounds a string that matched. */
+const stringError = (input: string, start: number, end = input.length): Option.Option<Stop> => {
+  const q = input.charCodeAt(start);
+  const long = input.charCodeAt(start + 1) === q && input.charCodeAt(start + 2) === q;
+  if (!long && input.charCodeAt(start + 1) === q) return Option.none();
+  return scan(start + (long ? 3 : 1), (i) => {
+    if (i >= end) {
+      return end === input.length ? fail('Unterminated string literal', start) : Option.none();
+    }
+    const c = input.charCodeAt(i);
+    if (c === q) {
+      if (!long) return Option.none();
+      if (input.charCodeAt(i + 1) === q && input.charCodeAt(i + 2) === q) return Option.none();
+      return i + 1;
+    }
+    if (c === C_BACKSLASH) {
+      if (Lexical.decodeEchar(input.charCodeAt(i + 1)) !== undefined) return i + 2;
+      const decoded = Lexical.decodeUchar(input, i);
+      if (isDecodeError(decoded)) return fail(decoded.message, i);
+      return i + decoded.length;
+    }
+    if (!long && (c === 0x0a || c === 0x0d)) return fail('Line break in string literal', i);
+    return i + 1;
+  });
+};
+
+const diagnosis =
+  (find: (input: string, start: number) => Option.Option<Stop>, message: string) =>
+  (input: string, pos: number): Stop =>
+    Option.getOrElse(find(input, pos), () => new Stop(message, pos));
+
+// -----------------------------------------------------------------------------
+// Terms
+// -----------------------------------------------------------------------------
+
+/** `IRIREF` (at a `<`), resolved against the base. */
+const iri: P<Term.NamedNode> = Parser.preceded(
+  act((pos) => {
+    b.iriStart = pos;
+  }),
+  Parser.terminated(
+    Parser.alt(Parser.backtrack(Grammar.iriRef), failWith(diagnosis(iriError, 'Invalid IRI'))),
+    act((pos) => {
+      b.iriEnd = pos;
+    }),
+  ),
+).pipe(
+  Parser.map((value) => {
+    const start = b.iriStart;
+    // Escapes (which shorten the value) may decode to characters an IRI cannot contain
+    if (b.iriEnd - start - 2 !== value.length) {
+      const error = iriError(b.input, start, b.iriEnd);
+      if (Option.isSome(error)) throw error.value;
+    }
+    if (Option.isNone(b.base)) {
+      if (!Lexical.isAbsoluteIri(value)) {
+        throw new Stop(`Relative IRI <${value}> cannot be resolved without a base IRI`, start);
+      }
+      return new Term.NamedNode(value);
+    }
+    return new Term.NamedNode(Iri.resolve(value, b.base.value));
+  }),
+);
+
+/** Fails when a prefix name is followed by a dot (which `PN_PREFIX` cannot end with). */
+const noTrailingDot: P<void> = Parser.make<void>((state) => {
+  if (state.input.charCodeAt(state.pos) === C_DOT) {
+    throw new Stop('A prefix name must not end with "."', state.pos - b.prefix.length);
+  }
+  return undefined;
+});
+
+/** `PN_PREFIX` (possibly empty), before the colon. */
+const prefixLabel: P<string> = Parser.alt(
+  Parser.terminated(
+    Parser.tap(Grammar.pnPrefix, (prefix) => {
+      b.prefix = prefix;
+    }),
+    noTrailingDot,
+  ),
+  Parser.preceded(at(':'), Parser.succeed('')),
+  failHere('Invalid prefix name'),
+);
+
+/** Fails on the escapes that end a local name early: `%` or `\` (after any dots). */
+const localTail: P<void> = Parser.make<void>((state) => {
+  const input = state.input;
+  const i = skipDots(input, state.pos);
+  const c = input.charCodeAt(i);
+  if (c === C_PERCENT) throw new Stop('Invalid percent escape', i);
+  if (c === C_BACKSLASH) throw new Stop('Invalid escape in local name', i);
+  return undefined;
+});
+
+const prefixedName: P<Term.NamedNode> = Parser.preceded(
+  Parser.seq(
+    act((pos) => {
+      b.nameStart = pos;
+    }),
+    Parser.tap(prefixLabel, (prefix) => {
+      b.prefix = prefix;
+    }),
+  ),
+  Parser.alt(
+    Parser.preceded(
+      lit(':'),
+      Parser.terminated(Parser.alt(Grammar.pnLocal, Parser.succeed('')), localTail),
+    ).pipe(
+      Parser.map((local) => {
+        const ns = MutableHashMap.get(b.prefixes, b.prefix);
+        if (Option.isNone(ns)) throw new Stop(`Undefined prefix "${b.prefix}:"`, b.nameStart);
+        return new Term.NamedNode(ns.value + local);
+      }),
+    ),
+    Parser.make<Term.NamedNode>(() => {
+      throw new Stop('Expected a prefixed name', b.nameStart);
+    }),
+  ),
+);
+
+const blankNode: P<Term.BlankNode> = Parser.alt(
+  Grammar.blankNodeLabel,
+  Parser.preceded(lit('_:'), failHere<string>('Invalid blank node label')),
+).pipe(
+  Parser.map((label) => {
+    const found = MutableHashMap.get(b.labels, label);
+    if (Option.isSome(found)) return found.value;
+    const node = new Term.BlankNode(
+      b.options.blankNodePrefix + (label.startsWith('_') ? `_${label}` : label),
+    );
+    MutableHashMap.set(b.labels, label, node);
+    return node;
+  }),
+);
+
+/** An IRI or a blank node label (no anonymous nodes). */
+const resource: P<Term.NamedNode | Term.BlankNode> = Parser.alt(
+  Parser.preceded(at('<<'), failHere('Unexpected triple')),
+  Parser.preceded(at('<'), iri),
+  Parser.preceded(at('_:'), blankNode),
+  prefixedName,
+);
+
+/** Any of the four string forms (at a quote), returning the value. */
+const string: P<string> = Parser.preceded(
+  act((pos) => {
+    b.stringStart = pos;
+  }),
+  Parser.terminated(
+    Parser.alt(
+      Parser.backtrack(Grammar.stringLiteral),
+      failWith(diagnosis(stringError, 'Invalid string literal')),
+    ),
+    act((pos) => {
+      b.stringEnd = pos;
+    }),
+  ),
+).pipe(
+  Parser.map((value) => {
+    // Numeric escapes (which shorten the value) may encode surrogates, which the terminal accepts
+    const input = b.input;
+    const start = b.stringStart;
+    const q = input.charCodeAt(start);
+    const quotes = input.charCodeAt(start + 1) === q && input.charCodeAt(start + 2) === q ? 6 : 2;
+    if (b.stringEnd - start - quotes !== value.length) {
+      const error = stringError(input, start, b.stringEnd);
+      if (Option.isSome(error)) throw error.value;
+    }
+    return value;
+  }),
+);
+
+const datatype: P<Term.NamedNode> = Parser.alt(
+  Parser.preceded(Parser.seq(Parser.not(lit('<<')), at('<')), iri),
+  Parser.preceded(nameStart, prefixedName),
+  failHere('Expected a datatype IRI'),
+);
+
+const languageTag: P<Lexical.LanguageTag> = Parser.preceded(
+  lit('@'),
+  Parser.preceded(
+    act((pos) => {
+      b.tagStart = pos;
+    }),
+    Token.takeWhile([Grammar.alphanumeric, '-']),
+  ),
+).pipe(
+  Parser.map((text) => {
+    const tag = Lexical.parseLanguageTag(text);
+    if (tag === undefined) throw new Stop('Invalid language tag', b.tagStart);
+    return tag;
+  }),
+);
+
+/** The literal read, with a language tag or datatype. */
+const annotatedLiteral = (annotation: Lexical.LanguageTag | Term.NamedNode): Term.Literal => {
+  const result = Lexical.makeLiteral(b.literalValue, annotation);
+  if (Predicate.isString(result)) throw new Stop(result, b.literalStart);
+  return result;
+};
+
+const rdfLiteral: P<Term.Literal> = Parser.preceded(
+  Parser.seq(
+    act((pos) => {
+      b.literalStart = pos;
+    }),
+    Parser.tap(string, (value) => {
+      b.literalValue = value;
+    }),
+    skip,
+  ),
+  Parser.alt(
+    languageTag.pipe(Parser.map(annotatedLiteral)),
+    Parser.preceded(
+      Parser.alt(lit('^^'), Parser.preceded(at('^'), failHere("Expected '^^'"))),
+      Parser.preceded(skip, datatype),
+    ).pipe(Parser.map(annotatedLiteral)),
+    Parser.make<Term.Literal>(() => Term.literal(b.literalValue)),
+  ),
+);
+
+const numericLiteral: P<Term.Literal> = Parser.alt(
+  Grammar.double.pipe(Parser.map((value) => new Term.Literal(value, xsd.double))),
+  Grammar.decimal.pipe(Parser.map((value) => new Term.Literal(value, xsd.decimal))),
+  Grammar.integer.pipe(Parser.map((value) => new Term.Literal(value, xsd.integer))),
+  failHere('Invalid number'),
+);
+
+const trueLiteral = new Term.Literal('true', xsd.boolean);
+const falseLiteral = new Term.Literal('false', xsd.boolean);
+
+const booleanLiteral: P<Term.Literal> = Parser.alt(
+  Parser.terminated(lit('true'), notName).pipe(Parser.as(trueLiteral)),
+  Parser.terminated(lit('false'), notName).pipe(Parser.as(falseLiteral)),
+);
+
+/** Numbers, booleans and prefixed names. */
+const simpleObject: P<Term.Object> = Parser.alt(
+  Parser.preceded(Parser.peek(Token.oneOf('0123456789+-.')), numericLiteral),
+  booleanLiteral,
+  Parser.preceded(nameStart, prefixedName),
+  failHere('Expected an object'),
+);
+
+const anon: P<Term.BlankNode> = Parser.seq(lit('['), Token.takeWhile(' \t\r\n'), lit(']')).pipe(
+  Parser.map(() => b.fresh()),
+);
+
+/** `iri | BlankNode`, including `[]`. */
+const iriOrBlankNode = (what: string): P<Term.NamedNode | Term.BlankNode> =>
+  Parser.alt(
+    Parser.preceded(
+      at('['),
+      Parser.alt(anon, failHere(`Blank node property lists are not allowed in ${what}`)),
+    ),
+    Parser.preceded(at('<<'), failHere(`Unexpected triple in ${what}`)),
+    Parser.preceded(at('('), failHere(`Collections are not allowed in ${what}`)),
+    Parser.preceded(Parser.peek(Token.oneOf('<_:')), resource),
+    Parser.preceded(
+      Parser.seq(Parser.peek(Token.oneOf(Grammar.pnCharsBase)), Parser.not(booleanLiteral)),
+      resource,
+    ),
+    failHere(`Expected an IRI or blank node in ${what}`),
+  );
+
+const verb: P<Term.NamedNode> = Parser.alt(
+  Parser.preceded(at('<<'), failHere('Triples are not allowed as predicates')),
+  Parser.preceded(at('<'), iri),
+  Parser.terminated(lit('a'), notName).pipe(Parser.as(rdf.type)),
+  Parser.preceded(nameStart, prefixedName),
+  failHere('Expected a predicate'),
+);
+
+const tripleTerm: P<Term.Triple> = Parser.suspend(() => tripleTermDef);
+const reifiedTriple: P<Term.NamedNode | Term.BlankNode> = Parser.suspend(() => reifiedTripleDef);
+const object: P<Term.Object> = Parser.suspend(() => objectDef);
+const predicateObjectList: P<unknown> = Parser.suspend(() => predicateObjectListDef);
+
+/** The object of a reified triple or triple term. */
+const innerObject = (reified: boolean): P<Term.Object> => {
+  const what = reified ? 'reified triples' : 'triple terms';
+  return Parser.alt(
+    Parser.preceded(at('<<('), tripleTerm),
+    Parser.preceded(
+      at('<<'),
+      reified ? reifiedTriple : failHere('Reified triples are not allowed in triple terms'),
+    ),
+    Parser.preceded(Parser.peek(Token.oneOf('<_')), resource),
+    Parser.preceded(
+      at('['),
+      Parser.alt(anon, failHere(`Blank node property lists are not allowed in ${what}`)),
+    ),
+    Parser.preceded(at('('), failHere(`Collections are not allowed in ${what}`)),
+    Parser.preceded(Parser.peek(Token.oneOf('"\'')), rdfLiteral),
+    simpleObject,
+  );
+};
+
+const tripleTermDef: P<Term.Triple> = Parser.seq(
+  Parser.preceded(Parser.seq(lit('<<('), skip), iriOrBlankNode('the subject of a triple term')),
+  Parser.preceded(skip, verb),
+  Parser.preceded(skip, innerObject(false)),
+  Parser.preceded(skip, Parser.alt(lit(')>>'), failHere("Expected ')>>'"))),
+).pipe(Parser.map(([s, p, o]) => new Term.Triple(s, p, o)));
+
+const startsReifierId: P<unknown> = Parser.peek(
+  Parser.alt(
+    Parser.preceded(Parser.not(lit('<<')), lit('<')),
+    lit('_:'),
+    anon,
+    lit(':'),
+    Token.oneOf(Grammar.pnCharsBase),
+  ),
+);
+
+/** A reifier IRI or blank node, including `[]`. */
+const reifierId: P<Term.NamedNode | Term.BlankNode> = Parser.preceded(
+  startsReifierId,
+  Parser.alt(Parser.preceded(at('['), anon), resource),
+);
+
+const reifiedTripleDef: P<Term.NamedNode | Term.BlankNode> = Parser.seq(
+  Parser.preceded(
+    Parser.seq(lit('<<'), skip),
+    Parser.alt(
+      Parser.preceded(Parser.seq(at('<<'), Parser.not(lit('<<('))), reifiedTriple),
+      iriOrBlankNode('the subject of a reified triple'),
+    ),
+  ),
+  Parser.preceded(skip, verb),
+  Parser.preceded(skip, innerObject(true)),
+  Parser.preceded(
+    skip,
+    Parser.opt(
+      Parser.preceded(Parser.seq(lit('~'), skip), Parser.terminated(Parser.opt(reifierId), skip)),
+    ),
+  ),
+  Parser.alt(lit('>>'), failHere("Expected '>>'")),
+).pipe(
+  Parser.map(([s, p, o, r]) => {
+    const reifier = Option.getOrElse(Option.flatten(r), () => b.fresh());
+    b.emit(reifier, rdf.reifies, new Term.Triple(s, p, o));
+    return reifier;
+  }),
+);
+
+const blankNodePropertyList: P<Term.BlankNode> = Parser.seq(
+  Parser.tap(lit('[').pipe(Parser.map(() => b.fresh())), (node) => b.push(node)),
+  Parser.preceded(skip, predicateObjectList),
+  Parser.preceded(skip, Parser.alt(lit(']'), failHere("Expected ']'"))),
+).pipe(
+  Parser.tap(() => {
+    b.depth--;
+  }),
+  Parser.map(([node]) => node),
+);
+
+const collection: P<Term.NamedNode | Term.BlankNode> = Parser.preceded(
+  Parser.seq(lit('('), skip),
+  Parser.terminated(
+    Parser.repeat(
+      Parser.preceded(
+        Parser.seq(Parser.not(lit(')')), Parser.not(Parser.eof)),
+        Parser.terminated(object, skip),
+      ),
+    ),
+    Parser.alt(lit(')'), failHere("Expected ')'")),
+  ),
+).pipe(
+  Parser.map((items) => {
+    if (Arr.isReadonlyArrayEmpty(items)) return rdf.nil;
+    // Each cell is labelled before the next: `( a b )` is `_:c0 first a ; rest _:c1`, …
+    const head = b.fresh();
+    Arr.reduce<Term.Object, Term.NamedNode | Term.BlankNode>(items, head, (cell, item, i) => {
+      b.emit(cell, rdf.first, item);
+      const next = i + 1 < items.length ? b.fresh() : rdf.nil;
+      b.emit(cell, rdf.rest, next);
+      return next;
+    });
+    return head;
+  }),
+);
+
+/**
+ * A parser as a rule of its own: the compiler inlines everything between
+ * rules, and leaves inlined into the recursive productions would make their
+ * stack frames (and so the nesting the parser supports) much larger.
+ */
+const rule = <A>(p: P<A>): P<A> => Parser.suspend(() => p);
+
+const objectDef: P<Term.Object> = Parser.alt(
+  Parser.preceded(at('<<('), tripleTerm),
+  Parser.preceded(at('<<'), reifiedTriple),
+  Parser.preceded(at('<'), rule(iri)),
+  Parser.preceded(at('_:'), rule(blankNode)),
+  Parser.preceded(at('_'), rule(prefixedName)),
+  Parser.preceded(at('['), Parser.alt(rule(anon), rule(blankNodePropertyList))),
+  Parser.preceded(at('('), rule(collection)),
+  Parser.preceded(Parser.peek(Token.oneOf('"\'')), rule(rdfLiteral)),
+  rule(simpleObject),
+);
+
+// -----------------------------------------------------------------------------
+// Predicate-object lists
+// -----------------------------------------------------------------------------
+
+const freshNode: P<Term.BlankNode> = Parser.make<Term.BlankNode>(() => b.fresh());
+
+const emitObject: P<Term.Object> = Parser.tap(object, (o) => {
+  const frame = b.frame();
+  b.emit(frame.subject, frame.predicate, o);
+  frame.object = o;
+  frame.reifier = noReifier;
+  frame.triple = noTriple;
+});
+
+/** The triple of the frame's current object, built once. */
+const frameTriple = (frame: Frame): Term.Triple => {
+  if (Option.isSome(frame.triple)) return frame.triple.value;
+  const triple = new Term.Triple(frame.subject, frame.predicate, frame.object);
+  frame.triple = Option.some(triple);
+  return triple;
+};
+
+const reifies = (frame: Frame, reifier: Term.NamedNode | Term.BlankNode): void => {
+  b.emit(reifier, rdf.reifies, frameTriple(frame));
+};
+
+// `~ r` names a reifier of the triple; `{| … |}` describes it (a fresh one if none was named).
+const annotation: P<unknown> = Parser.repeat(
+  Parser.preceded(
+    skip,
+    Parser.alt(
+      Parser.tap(
+        Parser.preceded(Parser.seq(lit('~'), skip), Parser.alt(reifierId, freshNode)),
+        (reifier) => {
+          const frame = b.frame();
+          reifies(frame, reifier);
+          frame.reifier = Option.some(reifier);
+        },
+      ),
+      Parser.seq(
+        Parser.tap(lit('{|'), () => {
+          const frame = b.frame();
+          if (Option.isSome(frame.reifier)) {
+            b.push(frame.reifier.value);
+            return;
+          }
+          const reifier = b.fresh();
+          frame.reifier = Option.some(reifier);
+          reifies(frame, reifier);
+          b.push(reifier);
+        }),
+        Parser.preceded(skip, predicateObjectList),
+        Parser.preceded(skip, Parser.alt(lit('|}'), failHere("Expected '|}'"))),
+      ).pipe(
+        Parser.tap(() => {
+          b.depth--;
+          b.frame().reifier = noReifier;
+        }),
+      ),
+    ),
+  ),
+);
+
+const objectList: P<unknown> = Parser.seq(
+  emitObject,
+  rule(annotation),
+  skip,
+  Parser.repeat(
+    Parser.preceded(Parser.seq(lit(','), skip), Parser.seq(emitObject, annotation, skip)),
+  ),
+);
+
+const setPredicate: P<Term.NamedNode> = Parser.tap(rule(verb), (p) => {
+  b.frame().predicate = p;
+});
+
+const startsVerb: P<unknown> = Parser.peek(
+  Parser.alt(
+    Parser.preceded(Parser.not(lit('<<')), lit('<')),
+    lit(':'),
+    Token.oneOf(Grammar.pnCharsBase),
+  ),
+);
+
+const predicateObjectListDef: P<unknown> = Parser.seq(
+  setPredicate,
+  skip,
+  objectList,
+  Parser.repeat(
+    Parser.preceded(
+      Parser.repeat(Parser.seq(lit(';'), skip), { min: 1 }),
+      Parser.opt(Parser.preceded(startsVerb, Parser.seq(setPredicate, skip, objectList))),
+    ),
+  ),
+);
+
+/** `subject` (pushed while `rest` describes it). */
+const describing = (subject: P<Term.Subject>, rest: P<unknown>): P<unknown> =>
+  Parser.terminated(
+    Parser.preceded(
+      Parser.tap(subject, (s) => b.push(s)),
+      rest,
+    ),
+    act(() => {
+      b.depth--;
+    }),
+  );
+
+const notEnd: P<unknown> = Parser.not(Token.oneOf('.}'));
+
+const properties: P<unknown> = Parser.preceded(skip, predicateObjectList);
+const optionalProperties: P<unknown> = Parser.preceded(
+  skip,
+  Parser.opt(Parser.preceded(notEnd, predicateObjectList)),
+);
+
+/** The `triples` production. */
+const triples: P<unknown> = Parser.alt(
+  Parser.preceded(
+    at('['),
+    Parser.alt(describing(anon, properties), describing(blankNodePropertyList, optionalProperties)),
+  ),
+  Parser.preceded(at('('), describing(collection, properties)),
+  Parser.preceded(at('<<('), failHere('Triple terms are not allowed as subjects')),
+  Parser.preceded(at('<<'), describing(reifiedTriple, optionalProperties)),
+  describing(resource, properties),
+);
+
+// -----------------------------------------------------------------------------
+// Statements
+// -----------------------------------------------------------------------------
+
+const prefixDirective = (turtle: boolean): P<unknown> =>
+  Parser.seq(
+    Parser.tap(
+      Parser.preceded(skip, Parser.seq(Parser.location, prefixLabel, Parser.opt(lit(':')))),
+      ([start, , colon]) => {
+        if (Option.isNone(colon)) throw new Stop('Expected a prefix name ending with ":"', start);
+      },
+    ),
+    Parser.preceded(skip, Parser.alt(Parser.preceded(at('<'), iri), failHere('Expected an IRI'))),
+    turtle ? Parser.preceded(skip, expectDot("'.' after @prefix")) : Parser.succeed(undefined),
+  ).pipe(
+    Parser.tap(([[, prefix], ref]) => {
+      b.setPrefix(prefix, ref.value);
+    }),
+  );
+
+const baseDirective = (turtle: boolean): P<unknown> =>
+  Parser.seq(
+    Parser.preceded(skip, Parser.alt(Parser.preceded(at('<'), iri), failHere('Expected an IRI'))),
+    turtle ? Parser.preceded(skip, expectDot("'.' after @base")) : Parser.succeed(undefined),
+  ).pipe(
+    Parser.tap(([ref]) => {
+      b.base = Option.some(ref.value);
+    }),
+  );
+
+const versionDirective = (turtle: boolean): P<unknown> =>
+  Parser.seq(
+    Parser.preceded(
+      skip,
+      Parser.alt(
+        Parser.preceded(
+          Parser.peek(Parser.alt(lit('"""'), lit("'''"))),
+          failHere('Long strings are not allowed as version specifiers'),
+        ),
+        Parser.preceded(Parser.peek(Token.oneOf('"\'')), string),
+        failHere('Expected a version string'),
+      ),
+    ),
+    turtle ? Parser.preceded(skip, expectDot("'.' after @version")) : Parser.succeed(undefined),
+  );
+
+const directive: P<unknown> = Parser.alt(
+  Parser.preceded(
+    at('@'),
+    Parser.alt(
+      Parser.preceded(atKeyword('@prefix'), prefixDirective(true)),
+      Parser.preceded(atKeyword('@base'), baseDirective(true)),
+      Parser.preceded(atKeyword('@version'), versionDirective(true)),
+      failHere('Unknown directive'),
+    ),
+  ),
+  Parser.preceded(keyword('prefix'), prefixDirective(false)),
+  Parser.preceded(keyword('base'), baseDirective(false)),
+  Parser.preceded(keyword('version'), versionDirective(false)),
+);
+
+const endOfStatement: P<unknown> = Parser.preceded(
+  skip,
+  expectDot("'.' at the end of the statement"),
+);
+
+const turtleStatement: P<unknown> = Parser.alt(directive, Parser.seq(triples, endOfStatement));
+
+const pending = (p: P<Term.NamedNode | Term.BlankNode>): P<unknown> =>
+  Parser.tap(p, (node) => {
+    b.pending = node;
+  });
+
+/** A graph block opened with `{` after `pending`, or properties of `pending`. */
+const graphOrProperties: P<unknown> = Parser.preceded(
+  skip,
+  Parser.alt(
+    Parser.tap(lit('{'), () => b.openGraph(b.pending)),
+    Parser.seq(
+      describing(
+        Parser.make<Term.Subject>(() => b.pending),
+        predicateObjectList,
+      ),
+      endOfStatement,
+    ),
+  ),
+);
+
+const graphLabel: P<Term.NamedNode | Term.BlankNode> = Parser.alt(
+  Parser.preceded(at('['), Parser.alt(anon, failHere('Expected a graph name'))),
+  resource,
+);
+
+/** A TriG block outside graphs. */
+const block: P<unknown> = Parser.alt(
+  Parser.tap(lit('{'), () => b.openGraph(Term.defaultGraph)),
+  Parser.preceded(
+    keyword('graph'),
+    Parser.seq(
+      pending(Parser.preceded(skip, graphLabel)),
+      Parser.preceded(skip, Parser.alt(lit('{'), failHere("Expected '{' after graph name"))),
+    ).pipe(Parser.tap(() => b.openGraph(b.pending))),
+  ),
+  Parser.preceded(
+    at('['),
+    Parser.alt(
+      Parser.preceded(pending(anon), graphOrProperties),
+      Parser.seq(
+        describing(
+          blankNodePropertyList,
+          Parser.preceded(
+            skip,
+            Parser.opt(Parser.preceded(Parser.not(lit('.')), predicateObjectList)),
+          ),
+        ),
+        endOfStatement,
+      ),
+    ),
+  ),
+  Parser.preceded(at('('), Parser.seq(describing(collection, properties), endOfStatement)),
+  Parser.preceded(at('<<('), failHere('Triple terms are not allowed as subjects')),
+  Parser.preceded(
+    at('<<'),
+    Parser.seq(
+      describing(
+        reifiedTriple,
+        Parser.preceded(
+          skip,
+          Parser.opt(Parser.preceded(Parser.not(lit('.')), predicateObjectList)),
+        ),
+      ),
+      endOfStatement,
+    ),
+  ),
+  Parser.preceded(pending(resource), graphOrProperties),
+);
+
+/** Whether a TriG graph block is open (consuming nothing). */
+const inGraph: P<void> = Parser.make<void>((state) =>
+  b.inGraph ? undefined : state.backtrack('Verify', ['a graph block']),
+);
+
+const graphStatement: P<unknown> = Parser.alt(
+  Parser.tap(lit('}'), () => {
+    b.inGraph = false;
+    b.graph = b.options.graph;
+  }),
+  Parser.seq(triples, skip, Parser.alt(lit('.'), at('}'), failHere("Expected '.' or '}'"))),
+);
+
+const trigStatement: P<unknown> = Parser.alt(
+  Parser.preceded(inGraph, graphStatement),
+  directive,
+  block,
+);
+
+/** Records the state at the start of a statement. */
+const beginStatement: P<void> = Parser.make<void>((state) => {
+  b.snapshot(state.pos);
+  return undefined;
+});
+
+/**
+ * Ends a statement, unless the input may continue so close to its end that
+ * the statement could still turn out differently.
+ */
+const endStatement: P<void> = Parser.make<void>((state) => {
+  if (!b.final) {
+    const input = state.input;
+    const i = skipDots(input, state.pos);
+    if (i + MARGIN > input.length) return state.backtrack('Verify', ['more input']);
+  }
+  b.open = false;
+  b.lastEnd = state.pos;
+  return undefined;
+});
+
+/** Starts a run: the compiled run, or the interpreted re-run after it fails. */
+const startRun: P<void> = Parser.make<void>((state) => {
+  b.input = state.input;
+  b.restartRun();
+  return undefined;
+});
+
+const statements = (statement: P<unknown>): P<number> =>
+  Compiler.jit(
+    Parser.preceded(
+      startRun,
+      Parser.preceded(
+        Parser.repeat(
+          Parser.preceded(
+            skip,
+            Parser.preceded(
+              Parser.not(Parser.eof),
+              Parser.delimited(beginStatement, statement, endStatement),
+            ),
+          ),
+        ),
+        Parser.preceded(skip, Parser.location),
+      ),
+    ),
+  );
+
+const turtleStatements = statements(turtleStatement);
+const trigStatements = statements(trigStatement);
+
+/** One statement, for the partial-mode check (setting the input first). */
+const single = (statement: P<unknown>): P<unknown> =>
+  Parser.preceded(
+    Parser.make<void>((state) => {
+      b.input = state.input;
+      return undefined;
+    }),
+    statement,
+  );
+
+const turtleSingle = single(turtleStatement);
+const trigSingle = single(trigStatement);
+
+// -----------------------------------------------------------------------------
+// Driving
+// -----------------------------------------------------------------------------
+
+/** @internal */
+export class TurtleParser {
+  private input = '';
+  private pos = 0;
+  private final = true;
+  /** Lines and columns consumed before the start of `input`. */
+  private lineOffset = 0;
+  private columnOffset = 0;
+  private started = false;
+  private readonly builder: Builder;
+  /** How much text the failing statement at `pos` had when it was last checked (or -1). */
+  private checked = -1;
+
+  readonly options: ParserOptions;
+  constructor(options: ParserOptions) {
+    this.options = options;
+    this.builder = new Builder(options);
+  }
+
+  get prefixes(): MutableHashMap.MutableHashMap<string, string> {
+    return this.builder.prefixes;
+  }
+
+  get base(): Option.Option<string> {
+    return this.builder.base;
+  }
+
+  /** Parses a complete document. */
+  parseDocument(input: string): Array<Term.Quad> {
+    this.input = input;
+    this.pos = 0;
+    this.final = true;
+    this.skipBom();
+    this.run();
+    return this.finish();
+  }
+
+  /** Adds a chunk of input and returns the statements completed so far. */
+  feed(chunk: string): Array<Term.Quad> {
+    this.discardConsumed();
+    this.input += chunk;
+    this.final = false;
+    this.skipBom();
+    this.run();
+    return this.take();
+  }
+
+  /** Signals the end of input and returns the remaining statements. */
+  end(): Array<Term.Quad> {
+    this.final = true;
+    this.run();
+    return this.finish();
+  }
+
+  private finish(): Array<Term.Quad> {
+    if (this.builder.inGraph) this.fail("Unterminated graph block: expected '}'");
+    return this.take();
+  }
+
+  private take(): Array<Term.Quad> {
+    const out = this.builder.out;
+    this.builder.out = [];
+    return out;
+  }
+
+  private skipBom(): void {
+    if (this.started) return;
+    if (Str.isEmpty(this.input)) return;
+    this.started = true;
+    if (this.input.charCodeAt(0) === 0xfeff) this.pos = 1;
+  }
+
+  private discardConsumed(): void {
+    if (this.pos === 0) return;
+    const consumed = this.input.slice(0, this.pos);
+    const lastBreak = Math.max(consumed.lastIndexOf('\n'), consumed.lastIndexOf('\r'));
+    if (lastBreak === -1) {
+      this.columnOffset += consumed.length;
+    } else {
+      this.lineOffset += countLines(consumed);
+      this.columnOffset = consumed.length - lastBreak - 1;
+    }
+    this.input = this.input.slice(this.pos);
+    this.pos = 0;
+  }
+
+  /** Parses the statements of the buffered input. */
+  private run(): void {
+    const base = this.pos;
+    const input = base === 0 ? this.input : this.input.slice(base);
+    const builder = this.builder;
+    b = builder;
+    builder.final = this.final;
+    builder.beginRun();
+    const outcome = Result.try({
+      try: () => {
+        const result = Parser.parsePeek(
+          this.options.trig ? trigStatements : turtleStatements,
+          input,
+        );
+        if (Result.isFailure(result)) this.fail('Invalid syntax', base + result.failure.offset);
+        const [, end] = result.success;
+        if (this.final) {
+          if (end < input.length) this.fail('Invalid syntax', base + end);
+          this.pos = base + end;
+        } else {
+          builder.rollback();
+          this.pos = base + builder.lastEnd;
+          this.checked = -1;
+        }
+      },
+      // A `Stop` is the expected failure; anything else (a `SyntaxFailure`,
+      // a bug) keeps propagating.
+      catch: (e) => {
+        if (e instanceof Stop) return e;
+        throw e;
+      },
+    });
+    if (Result.isFailure(outcome)) {
+      const e = outcome.failure;
+      builder.rollback();
+      if (this.final) this.fail(e.message, base + e.pos);
+      // A statement that fails is usually just cut off: it is retried with more
+      // text, and checked when it still fails once its text has doubled (which
+      // keeps the interpreted checks linear in the input)
+      const start = builder.snapPos;
+      const remaining = input.length - start;
+      if (start !== 0 || this.checked < 0 || remaining < 2 * this.checked) {
+        if (start !== 0 || this.checked < 0) this.checked = remaining;
+        this.pos = base + start;
+        return;
+      }
+      this.checked = remaining;
+      this.check(input, base);
+    }
+  }
+
+  /**
+   * Before the input is complete, re-reads the statement that failed in
+   * partial mode: it fails again if the error is real, and runs out of input
+   * if the statement is only cut off.
+   */
+  private check(input: string, base: number): void {
+    const builder = this.builder;
+    const start = builder.snapPos;
+    builder.open = true;
+    const outcome = Result.try({
+      try: () => {
+        const result = Parser.parsePartial(
+          this.options.trig ? trigSingle : turtleSingle,
+          input.slice(start),
+        );
+        if (Result.isFailure(result))
+          this.fail('Invalid syntax', base + start + result.failure.offset);
+      },
+      // A `Stop` is the expected failure; anything else (a `SyntaxFailure`,
+      // a bug) keeps propagating.
+      catch: (e) => {
+        if (e instanceof Stop) return e;
+        throw e;
+      },
+    });
+    if (Result.isFailure(outcome)) {
+      builder.rollback();
+      this.fail(outcome.failure.message, base + start + outcome.failure.pos);
+    }
+    builder.rollback();
+    builder.open = false;
+    this.pos = base + start;
+  }
+
+  private fail(message: string, pos: number = this.pos): never {
+    const before = this.input.slice(0, pos);
+    const lines = countLines(before);
+    const lastBreak = Math.max(before.lastIndexOf('\n'), before.lastIndexOf('\r'));
+    const column = lines === 0 ? this.columnOffset + pos + 1 : pos - lastBreak;
+    throw new SyntaxFailure(message, this.lineOffset + lines + 1, column);
+  }
+}
+
+/** A line break: `\r\n`, `\r` or `\n`. */
+const LINE_BREAK = /\r\n?|\n/g;
+
+const countLines = (text: string): number => {
+  let n = 0;
+  LINE_BREAK.lastIndex = 0;
+  loop(() => {
+    if (!LINE_BREAK.test(text)) return false;
+    n++;
+    return true;
+  });
+  return n;
+};

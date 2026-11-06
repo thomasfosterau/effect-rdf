@@ -1,5 +1,0 @@
----
-'@thomasfosterau/effect-sparql': minor
----
-
-The SPARQL Protocol / Graph Store server and client now ship in `@thomasfosterau/effect-sparql` (#95); the separate `effect-sparql-server` and `effect-sparql-client` packages are gone (they were never published). Their modules are new entry points of this package and namespaces of its index: `Cli`, `GraphStore`, `Options`, `Protocol`, `ProtocolErrors` (the server's `Errors`), `ServerFormats` (the server's `Formats`), `ServiceDescription`, `SparqlApi`, `SparqlApiBuilder`, `SparqlServer` and `Testing` from the server; `ClientErrors` (the client's `Errors`), `ClientFormats` (the client's `Formats`), `Federation`, `ResultsStream`, `SparqlApiClient` and `SparqlClient` from the client. `Errors` stays the engine's `EvaluationError` / `UpdateError`. The package now depends on `@effect/platform-node` and on the remaining syntax packages (`effect-jsonld`, `effect-n3`, `effect-ntriples` at runtime), and installs the `effect-sparql-server` CLI as its `bin`. The service keys follow the package: `@thomasfosterau/effect-sparql/SparqlClient`, `…/SparqlApiClient` and `…/SparqlApi/SchemaFallback`.

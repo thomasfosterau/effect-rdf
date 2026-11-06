@@ -1,5 +1,5 @@
 ---
-'@thomasfosterau/effect-rdfxml': patch
+'@thomasfosterau/effect-rdf': patch
 ---
 
 `RdfXml.parse` carries the `RdfXml.parse` tracing span again (it had landed on `parseQuads`, whose result has no dataset, which broke the type check).

@@ -1,0 +1,79 @@
+import * as Serialization from '../../Serialization.ts';
+import type * as Term from '../../Term.ts';
+import * as Effect from 'effect/Effect';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Stream from 'effect/Stream';
+import type { Syntax } from './parse.ts';
+import { StreamWriter } from './streamWriter.ts';
+import { prepare, Writer, type WriterOptions } from './writer.ts';
+
+/**
+ * Options for the Turtle and TriG serializers.
+ *
+ * @since 0.1.0
+ * @category models
+ */
+export interface SerializeOptions extends Serialization.SerializeOptions {
+  /**
+   * Also declare prefixes detected from the data: well-known vocabularies
+   * (`rdf`, `rdfs`, `xsd`, `owl`) and `nsN` prefixes for other namespaces
+   * used at least twice. Prefixes in `prefixes` take precedence. Defaults to
+   * `false`. Ignored by `serializeStream`.
+   */
+  readonly autoPrefixes?: boolean | undefined;
+  /** Use SPARQL-style `PREFIX` / `BASE` directives. Defaults to `false`. */
+  readonly sparqlDirectives?: boolean | undefined;
+  /** The indentation unit. Defaults to four spaces. */
+  readonly indent?: string | undefined;
+}
+
+const writerOptions = (syntax: Syntax, options?: SerializeOptions): WriterOptions => ({
+  trig: syntax.trig,
+  prefixes: Option.fromUndefinedOr(options?.prefixes),
+  baseIri: Option.fromUndefinedOr(options?.baseIri),
+  autoPrefixes: options?.autoPrefixes ?? false,
+  sparqlDirectives: options?.sparqlDirectives ?? false,
+  indent: options?.indent ?? '    ',
+});
+
+/** Maps what a serialisation threw (an `Error` or its string form) to an `RdfSerializeError`. */
+const toSerializeError = (syntax: Syntax, error: Error | string): Serialization.RdfSerializeError =>
+  new Serialization.RdfSerializeError({
+    format: syntax.name,
+    message: Predicate.isString(error) ? error : error.message,
+  });
+
+/** @internal */
+export const serialize = (
+  syntax: Syntax,
+  quads: Iterable<Term.Quad>,
+  options?: SerializeOptions,
+): Effect.Effect<string, Serialization.RdfSerializeError> =>
+  Effect.try({
+    try: () => new Writer(writerOptions(syntax, options), prepare(quads)).write(),
+    catch: (error) => toSerializeError(syntax, Predicate.isError(error) ? error : String(error)),
+  }).pipe(Serialization.withSerializeSpan(Option.getOrUndefined(syntax.trace)));
+
+/** @internal */
+export const serializeStream =
+  (syntax: Syntax) =>
+  <E, R>(
+    quads: Stream.Stream<Term.Quad, E, R>,
+    options?: SerializeOptions,
+  ): Stream.Stream<string, Serialization.RdfSerializeError | E, R> =>
+    Stream.suspend(() => {
+      const writer = new StreamWriter(writerOptions(syntax, options));
+      const write = (f: () => string) =>
+        Effect.try({
+          try: f,
+          catch: (error) =>
+            toSerializeError(syntax, Predicate.isError(error) ? error : String(error)),
+        });
+      return quads.pipe(
+        Stream.chunks,
+        Stream.mapEffect((chunk) => write(() => writer.write(chunk))),
+        Stream.concat(Stream.fromEffect(write(() => writer.end()))),
+        Stream.filter((s) => s !== ''),
+      );
+    }).pipe(Serialization.withStreamSpan(Option.getOrUndefined(syntax.trace), 'serializeStream'));

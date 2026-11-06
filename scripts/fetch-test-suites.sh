@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Fetches the W3C and community conformance test suites used by the
-# packages' conformance tests into ./.test-suites (git-ignored).
+# conformance tests into ./.test-suites (git-ignored).
 # Conformance tests are skipped when the suites are not present.
 set -eu
 DIR="${RDF_TEST_SUITES:-$(cd "$(dirname "$0")/.." && pwd)/.test-suites}"
@@ -20,7 +20,7 @@ fetch json-ld-framing w3c/json-ld-framing
 fetch data-shapes w3c/data-shapes
 fetch shexTest shexSpec/shexTest
 fetch N3 w3c/N3
-# veraPDF's PDF/A and PDF/UA corpus, for XMP (effect-xmp): only its metadata
+# veraPDF's PDF/A and PDF/UA corpus, for XMP (effect-rdf/xmp): only its metadata
 # sections, checked out sparsely (the whole corpus is several hundred MB).
 fetch_sparse() {
   name="$1"
@@ -33,7 +33,7 @@ fetch_sparse() {
   git -C "$DIR/$name" checkout -q
   git -C "$DIR/$name" pull -q --depth 1 || true
 }
-# The W3C CSV on the Web suite (effect-rdf/csvw; run by tests/conformance): only its tests/ directory (the
+# The W3C CSV on the Web suite (effect-rdf/csvw): only its tests/ directory (the
 # repository also holds the specifications' sources).
 fetch_sparse csvw w3c/csvw '/tests/'
 fetch_sparse veraPDF-corpus veraPDF/veraPDF-corpus '/*/*Metadata/' '/Isartor test files/*/*Metadata/'

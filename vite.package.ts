@@ -26,20 +26,9 @@ export interface PackageConfigOptions {
   /**
    * Nested subpaths (`src/<name>/*.ts`, published as `./<name>` and
    * `./<name>/<Module>`) that `vp pack` builds beside the flat `src/*.ts`
-   * entries, e.g. core's `csvw`, `rdfjson` and `shacl`.
+   * entries, e.g. core's `turtle`, `shacl` and `sparql/sql`.
    */
   readonly subpaths?: ReadonlyArray<string> | undefined;
-  /**
-   * `false` for a private test-only package (`tests/conformance`): no `src/`,
-   * so no `build` task and no `vp pack` settings. Default `true`.
-   */
-  readonly published?: boolean | undefined;
-  /**
-   * The sources the package's own coverage run measures, when they are not its
-   * own `src/` (globs relative to the package, outside it allowed), e.g. the
-   * conformance package's `../../packages/core/src/**` .
-   */
-  readonly coverageOf?: ReadonlyArray<string> | undefined;
 }
 
 /**
@@ -80,22 +69,13 @@ const publishing = ({
   },
 });
 
-/** What a package's coverage run measures: its own `src/`, or `coverageOf`. */
-const coverageSources = ({ coverageOf }: Pick<PackageConfigOptions, 'coverageOf'>) =>
-  coverageOf === undefined
-    ? { include: ['src/**/*.ts'], allowExternal: false }
-    : // Sources outside the package root are measured only when asked for.
-      { include: [...coverageOf], allowExternal: true };
-
 export const packageConfig = ({
   testTimeout = 60_000,
   packTsconfig,
   subpaths = [],
-  published = true,
-  coverageOf,
 }: PackageConfigOptions = {}) => {
   const maxWorkers = process.env.VITEST_MAX_WORKERS;
-  const release = published ? publishing({ subpaths, packTsconfig }) : { tasks: {} };
+  const release = publishing({ subpaths, packTsconfig });
   return defineConfig({
     run: {
       tasks: {
@@ -104,7 +84,7 @@ export const packageConfig = ({
           command: 'tsc -p tsconfig.json',
           cache: { input: cacheInputs, output: [] },
         },
-        // The published artifact (`build`), unless the package is private.
+        // The published artifact.
         ...release.tasks,
         // Never cached: the conformance suites read `RDF_TEST_SUITES`
         // (default `<repo>/.test-suites`, fetched by
@@ -121,7 +101,7 @@ export const packageConfig = ({
         },
       },
     },
-    ...('pack' in release ? { pack: release.pack } : {}),
+    pack: release.pack,
     test: {
       include: ['test/**/*.test.ts'],
       testTimeout,
@@ -132,7 +112,7 @@ export const packageConfig = ({
         // reads for exact per-function CRAP scores.
         reporter: ['text-summary', 'json-summary', 'json'],
         reportsDirectory: './coverage',
-        ...coverageSources({ coverageOf }),
+        include: ['src/**/*.ts'],
         exclude: ['**/*.d.ts'],
       },
     },

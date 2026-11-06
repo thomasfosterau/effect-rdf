@@ -1,0 +1,142 @@
+/**
+ * W3C RDF 1.1 / RDF 1.2 N-Triples and N-Quads conformance tests.
+ *
+ * The manifests are read with a small purpose-built reader (this package
+ * cannot depend on the Turtle parser, which depends on it for its own tests).
+ */
+import { describe, expect, it } from '@effect/vitest';
+import { Dataset, Isomorphism, Serialization } from '@thomasfosterau/effect-rdf';
+import * as Effect from 'effect/Effect';
+import * as MutableHashSet from 'effect/MutableHashSet';
+import * as Option from 'effect/Option';
+import * as Stream from 'effect/Stream';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { NQuads, NTriples } from '../../src/ntriples/index.ts';
+
+const suites =
+  process.env['RDF_TEST_SUITES'] ??
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../.test-suites');
+const rdfDir = path.join(suites, 'rdf-tests', 'rdf');
+const exists = fs.existsSync(rdfDir);
+
+interface Entry {
+  readonly id: string;
+  readonly type: string;
+  readonly action: string;
+  readonly result: Option.Option<string>;
+}
+
+/** Reads the entries of a (simple, regular) W3C syntax test manifest. */
+const readManifest = (dir: string): ReadonlyArray<Entry> => {
+  const text = fs.readFileSync(path.join(dir, 'manifest.ttl'), 'utf8');
+  const listed = /mf:entries\s*\(([\s\S]*?)\)/.exec(text)?.[1] ?? '';
+  const ids = MutableHashSet.fromIterable([
+    ...listed
+      .split('\n')
+      .map((l) => l.replace(/#.*$/, '').trim())
+      .flatMap((l) => l.split(/\s+/))
+      .filter((l) => l !== ''),
+    // Recover `<#x>` entries whose `#` was stripped above.
+    ...Array.from(listed.matchAll(/<#[^>]+>/g), (m) => m[0]),
+  ]);
+  const block = /^(\S+)\s+(?:rdf:type|a)\s+rdft:(\w+)\s*;([\s\S]*?)(?:^\s*\.\s*$|\s\.\s*$)/gm;
+  return Array.from(text.matchAll(block)).flatMap((m): Array<Entry> => {
+    const id = m[1];
+    const type = m[2];
+    const body = m[3];
+    if (id === undefined || type === undefined || body === undefined) return [];
+    if (!MutableHashSet.has(ids, id)) return [];
+    const action = /mf:action\s+<([^>]+)>/.exec(body)?.[1];
+    if (action === undefined) return [];
+    return [
+      {
+        id,
+        type,
+        action: path.join(dir, action),
+        result: Option.map(
+          Option.fromNullishOr(/mf:result\s+<([^>]+)>/.exec(body)?.[1]),
+          (result) => path.join(dir, result),
+        ),
+      },
+    ];
+  });
+};
+
+const manifests = [
+  'rdf11/rdf-n-triples',
+  'rdf11/rdf-n-quads',
+  'rdf12/rdf-n-triples/syntax',
+  'rdf12/rdf-n-triples/c14n',
+  'rdf12/rdf-n-quads/syntax',
+  'rdf12/rdf-n-quads/c14n',
+];
+
+const chunked = (text: string, size: number): Stream.Stream<string> => {
+  const chunks = Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+    text.slice(i * size, (i + 1) * size),
+  );
+  return Stream.fromIterable(chunks);
+};
+
+type Codec = typeof NTriples | typeof NQuads;
+
+type Failure = Serialization.RdfParseError | Serialization.RdfSerializeError;
+
+// An unexpected parse success dies, which fails the test.
+const negative = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
+  Effect.gen(function* () {
+    const input = fs.readFileSync(entry.action, 'utf8');
+    const error = yield* codec.parse(input).pipe(Effect.flip, Effect.orDie);
+    expect(error._tag).toBe('RdfParseError');
+    const streamed = yield* Stream.runCollect(codec.parseStream(chunked(input, 5))).pipe(
+      Effect.flip,
+      Effect.orDie,
+    );
+    expect(streamed._tag).toBe('RdfParseError');
+  });
+
+const positive = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
+  Effect.gen(function* () {
+    const input = fs.readFileSync(entry.action, 'utf8');
+    const quads = yield* codec.parseQuads(input, { blankNodePrefix: '' });
+    // Streaming with arbitrary chunk boundaries yields the same statements.
+    yield* Effect.forEach(
+      [1, 3, 17],
+      Effect.fnUntraced(function* (size) {
+        const streamed = yield* Stream.runCollect(
+          codec.parseStream(chunked(input, size), { blankNodePrefix: '' }),
+        );
+        expect(streamed.map((q) => q.key)).toEqual(quads.map((q) => q.key));
+      }),
+      { concurrency: 1, discard: true },
+    );
+    // The canonical serialisation round-trips.
+    const text = yield* codec.serialize(quads);
+    const reparsed = yield* codec.parse(text);
+    expect(Isomorphism.isomorphic(reparsed.dataset, Dataset.fromIterable(quads))).toBe(true);
+    // A c14n test also pins the canonical text; other tests have none.
+    const expected =
+      entry.type.endsWith('PositiveC14N') && Option.isSome(entry.result)
+        ? fs.readFileSync(entry.result.value, 'utf8')
+        : text;
+    expect(text).toBe(expected);
+  });
+
+describe.skipIf(!exists)('N-Triples / N-Quads conformance', () => {
+  manifests.forEach((dir) => {
+    const entries = exists ? readManifest(path.join(rdfDir, dir)) : [];
+    describe(`manifest ${dir}`, () => {
+      it('has entries', () => {
+        expect(entries.length).toBeGreaterThan(10);
+      });
+      entries.forEach((entry) => {
+        const codec = entry.type.startsWith('TestNQuads') ? NQuads : NTriples;
+        it.effect(`${entry.id} (${entry.type})`, () =>
+          entry.type.endsWith('NegativeSyntax') ? negative(codec, entry) : positive(codec, entry),
+        );
+      });
+    });
+  });
+});

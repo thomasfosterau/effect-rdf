@@ -17,7 +17,7 @@
  * kind or datatype. Because `Term.GroundTermSchema` has a JSON codec,
  * `Schema.toCodecJson` of a struct of these codecs encodes to JSON terms.
  *
- * This module moved here from `@thomasfosterau/effect-sparql/TermSchema`,
+ * This module moved here from `@thomasfosterau/effect-rdf/sparql/TermSchema`,
  * which re-exports it.
  *
  * @since 0.1.0

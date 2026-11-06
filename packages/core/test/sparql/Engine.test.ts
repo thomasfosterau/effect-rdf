@@ -1,0 +1,405 @@
+import * as crypto from 'node:crypto';
+import { assert, describe, expect, it, layer } from '@effect/vitest';
+import * as Effect from 'effect/Effect';
+import * as Layer from 'effect/Layer';
+import * as Option from 'effect/Option';
+import * as Predicate from 'effect/Predicate';
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
+import * as Stream from 'effect/Stream';
+import { Dataset, Namespace, Term, Xsd } from '@thomasfosterau/effect-rdf';
+import * as Algebra from '../../src/sparql/Algebra.ts';
+import * as Bindings from '../../src/sparql/Bindings.ts';
+import * as Engine from '../../src/sparql/Engine.ts';
+import * as Hash from '../../src/sparql/internal/hash.ts';
+import * as Parser from '../../src/sparql/Parser.ts';
+import * as Q from '../../src/sparql/QueryBuilder.ts';
+import * as Results from '../../src/sparql/Results.ts';
+import * as Store from '../../src/sparql/Store.ts';
+import * as TermSchema from '../../src/sparql/TermSchema.ts';
+import * as Translate from '../../src/sparql/Translate.ts';
+
+/** The lexical value of a bound term (`None` when unbound or a triple term). */
+const lex = (t: Option.Option<Term.GroundTerm>): Option.Option<string> =>
+  Option.flatMap(t, (x) => (Term.isTriple(x) ? Option.none() : Option.some(x.value)));
+
+const ex = Namespace.make('http://example.org/');
+const foaf = Namespace.make('http://xmlns.com/foaf/0.1/');
+
+const data = Dataset.make(
+  Term.quad(ex('alice'), foaf('name'), Term.literal('Alice')),
+  Term.quad(ex('alice'), foaf('age'), Xsd.integer(30)),
+  Term.quad(ex('alice'), foaf('knows'), ex('bob')),
+  Term.quad(ex('bob'), foaf('name'), Term.literal('Bob')),
+  Term.quad(ex('bob'), foaf('mbox'), Term.namedNode('mailto:bob@example.org')),
+  Term.quad(ex('bob'), foaf('age'), Xsd.integer(25)),
+  Term.quad(ex('carol'), foaf('name'), Term.literal('Carol'), ex('g1')),
+);
+
+const TestLayer = Engine.layer({ baseIri: 'http://example.org/' }).pipe(
+  Layer.provideMerge(Store.layerMemory(data)),
+);
+
+layer(TestLayer)('Engine', (test) => {
+  test.effect('evaluates SELECT queries as streams', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select(
+        'PREFIX foaf: <http://xmlns.com/foaf/0.1/> SELECT ?name WHERE { ?p foaf:name ?name } ORDER BY ?name',
+      );
+      const rows = yield* Stream.runCollect(result.bindings);
+      expect(rows.map((b) => lex(Bindings.get(b, 'name')))).toEqual([
+        Option.some('Alice'),
+        Option.some('Bob'),
+      ]);
+      expect(result.variables.map((v) => v.value)).toEqual(['name']);
+    }),
+  );
+
+  test.effect('evaluates ASK, CONSTRUCT and GRAPH patterns', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      expect(yield* engine.ask('ASK { <http://example.org/alice> ?p ?o }')).toBe(true);
+      expect(yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }')).toBe(true);
+      expect(yield* engine.ask('ASK { ?s ?p "Carol" }')).toBe(false);
+      const quads = yield* Stream.runCollect(
+        yield* engine.construct(
+          'PREFIX foaf: <http://xmlns.com/foaf/0.1/> CONSTRUCT { ?b foaf:knownBy ?a } WHERE { ?a foaf:knows ?b }',
+        ),
+      );
+      expect(quads.map((q) => q.toString())).toEqual([
+        '<http://example.org/bob> <http://xmlns.com/foaf/0.1/knownBy> <http://example.org/alice> .',
+      ]);
+    }),
+  );
+
+  test.effect('supports the union default graph option', () =>
+    Effect.gen(function* () {
+      const engine = Engine.make(yield* Store.makeMemory(data), { unionDefaultGraph: true });
+      expect(yield* engine.ask('ASK { ?s ?p "Carol" }')).toBe(true);
+    }),
+  );
+
+  test.effect('executes updates atomically', () =>
+    Effect.gen(function* () {
+      const store = yield* Store.makeMemory(data);
+      const engine = Engine.make(store);
+      yield* engine.update(
+        'PREFIX ex: <http://example.org/> INSERT DATA { ex:dave ex:p 1 } ; DELETE WHERE { ex:bob ?p ?o }',
+      );
+      const after = yield* store.snapshot;
+      expect(Dataset.match(after, { subject: ex('bob') })).toHaveLength(0);
+      expect(Dataset.match(after, { subject: ex('dave') })).toHaveLength(1);
+      // A failing request leaves the store unchanged.
+      const failure = yield* Effect.result(
+        engine.update(
+          'PREFIX ex: <http://example.org/> INSERT DATA { ex:erin ex:p 1 } ; CREATE GRAPH ex:g1 ; CREATE GRAPH ex:g1',
+        ),
+      );
+      assert.isTrue(Result.isFailure(failure));
+      expect(Dataset.match(yield* store.snapshot, { subject: ex('erin') })).toHaveLength(0);
+    }),
+  );
+
+  test.effect('reports parse errors with positions', () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(Parser.parseQuery('SELECT * WHERE {\n  ?s ?p \n}'));
+      expect(error._tag).toBe('SparqlParseError');
+      expect(error.line).toBe(3);
+      expect(error.column).toBe(1);
+    }),
+  );
+
+  test.effect('streams lazily: LIMIT stops evaluation early', () =>
+    Effect.gen(function* () {
+      const big = Dataset.fromIterable(
+        Array.from({ length: 20_000 }, (_, i) => Term.quad(ex(`s${i}`), ex('p'), Xsd.integer(i))),
+      );
+      let matched = 0;
+      const base = yield* Store.makeMemory(big);
+      const counting: Store.QuadStoreShape = {
+        ...base,
+        match: (pattern) => Stream.tap(base.match(pattern), () => Effect.sync(() => matched++)),
+      };
+      const engine = Engine.make(counting);
+      const result = yield* engine.select(
+        'SELECT ?s WHERE { ?s <http://example.org/p> ?o } LIMIT 5',
+      );
+      const rows = yield* Stream.runCollect(result.bindings);
+      expect(rows).toHaveLength(5);
+      expect(matched).toBeLessThan(20_000);
+    }),
+  );
+
+  test.effect('offers algebra to a store query capability first', () =>
+    Effect.gen(function* () {
+      const base = yield* Store.makeMemory(data);
+      const seen: Array<string> = [];
+      const store: Store.QuadStoreShape = {
+        ...base,
+        query: {
+          evaluate: (op) => {
+            seen.push(op._tag);
+            return Predicate.isTagged(op, 'Bgp') && op.patterns.length === 1
+              ? Option.some(Stream.succeed(Bindings.make({ name: Term.literal('native') })))
+              : Option.none();
+          },
+        },
+      };
+      const engine = Engine.make(store);
+      const result = yield* engine.select(
+        'SELECT ?name WHERE { ?p <http://xmlns.com/foaf/0.1/name> ?name }',
+      );
+      const rows = yield* Stream.runCollect(result.bindings);
+      expect(rows.map((r) => lex(Bindings.get(r, 'name')))).toEqual([Option.some('native')]);
+      expect(seen).toContain('Project');
+      expect(seen).toContain('Bgp');
+    }),
+  );
+});
+
+const selectPrebound = (query: string, bindings: Record<string, Term.GroundTerm>) =>
+  Effect.gen(function* () {
+    const engine = yield* Engine.SparqlEngine;
+    const result = yield* engine.select(`PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n${query}`, {
+      bindings: Bindings.make(bindings),
+    });
+    return (yield* Stream.runCollect(result.bindings)).map((b) => b.toString());
+  });
+
+layer(TestLayer)('Pre-binding', (test) => {
+  test.effect('makes pre-bound values visible in FILTERs of empty groups', () =>
+    Effect.gen(function* () {
+      expect(
+        yield* selectPrebound(
+          'SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }',
+          {
+            this: ex('alice'),
+          },
+        ),
+      ).toEqual(['{ ?this → <http://example.org/alice> }']);
+      expect(
+        yield* selectPrebound(
+          'SELECT $this WHERE { FILTER ($this = <http://example.org/alice>) }',
+          {
+            this: ex('bob'),
+          },
+        ),
+      ).toEqual([]);
+    }),
+  );
+
+  test.effect('pre-binds BGPs, UNION branches, BIND and nested groups', () =>
+    Effect.gen(function* () {
+      expect(
+        yield* selectPrebound('SELECT ?name WHERE { $this foaf:name ?name }', { this: ex('bob') }),
+      ).toEqual(['{ ?name → "Bob" }']);
+      expect(
+        yield* selectPrebound(
+          'SELECT $this ?x WHERE { { FILTER (false) } UNION { BIND ($this AS ?x) } FILTER bound($this) }',
+          { this: ex('bob') },
+        ),
+      ).toEqual(['{ ?this → <http://example.org/bob>, ?x → <http://example.org/bob> }']);
+      expect(
+        yield* selectPrebound(
+          'SELECT ?n WHERE { ?p foaf:knows ?q . FILTER EXISTS { $this foaf:name ?n0 } ?q foaf:name ?n }',
+          { this: ex('carol') },
+        ),
+      ).toEqual([]);
+    }),
+  );
+
+  test.effect('pre-binds GRAPH ?g, ASK and algebra evaluation', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      expect(
+        yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }', {
+          bindings: Bindings.make({ g: ex('g1') }),
+        }),
+      ).toBe(true);
+      expect(
+        yield* engine.ask('ASK { GRAPH ?g { ?s ?p "Carol" } }', {
+          bindings: Bindings.make({ g: ex('g2') }),
+        }),
+      ).toBe(false);
+      const op = Translate.translatePattern(
+        (yield* Parser.parseQuery('SELECT * WHERE { ?s ?p ?o }')).where,
+      );
+      const rows = yield* Stream.runCollect(
+        engine.evaluate(op, { bindings: Bindings.make({ s: ex('alice'), p: foaf('age') }) }),
+      );
+      expect(rows.map((r) => lex(Bindings.get(r, 'o')))).toEqual([Option.some('30')]);
+    }),
+  );
+
+  test('rewrites the algebra by values insertion', () => {
+    const op = Algebra.prebind(
+      Translate.translatePattern(
+        Effect.runSync(Parser.parseQuery('SELECT * WHERE { ?s ?p ?o FILTER (?o != 1) }')).where,
+      ),
+      Bindings.make({ s: ex('alice') }),
+    );
+    expect(Algebra.format(op)).toContain('<http://example.org/alice> ?p ?o');
+    expect(Algebra.format(op)).toContain('table');
+  });
+});
+
+layer(TestLayer)('QueryBuilder', (test) => {
+  const v = Q.vars('person', 'name', 'email', 'p', 'age');
+  const query = Q.select('person', 'name', Q.maybe('email'))
+    .where(Q.triple(v.person, foaf('name'), v.name))
+    .optional(Q.triple(v.person, foaf('mbox'), v.email))
+    .orderBy(Q.desc(v.name));
+
+  test('builds ASTs that print as SPARQL', () => {
+    const text = query.toString();
+    expect(text).toContain('OPTIONAL');
+    const reparsed = Parser.parseQueryUnsafe(text);
+    expect(reparsed._tag).toBe('Select');
+    expect(Algebra.format(Translate.translateQuery(reparsed).input)).toContain('leftjoin');
+  });
+
+  test.effect('executes with typed rows', () =>
+    Effect.gen(function* () {
+      const rows = yield* Q.executeAll(query);
+      const first = rows[0] ?? assert.fail('expected a row');
+      // Type-level: name is required, email optional.
+      const name: Term.GroundTerm = first.name;
+      // `email` is optional: a term, or `undefined`.
+      const optional: [undefined, Term.GroundTerm] extends [typeof first.email, typeof first.email]
+        ? true
+        : false = true;
+      expect(optional).toBe(true);
+      expect(lex(Option.some(name))).toEqual(Option.some('Bob'));
+      expect(lex(Option.fromUndefinedOr(first.email))).toEqual(
+        Option.some('mailto:bob@example.org'),
+      );
+      expect(rows[1]).toBeDefined();
+      expect(rows[1]?.email).toBeUndefined();
+    }),
+  );
+
+  test.effect('decodes rows with schemas', () =>
+    Effect.gen(function* () {
+      const people = Q.select('name', 'age')
+        .where(Q.triple(v.p, foaf('name'), v.name), Q.triple(v.p, foaf('age'), v.age))
+        .filter(Q.gt(v.age, 26));
+      const decoded = yield* Stream.runCollect(
+        Q.decode(people, Schema.Struct({ name: TermSchema.string, age: TermSchema.integer })),
+      );
+      expect(decoded).toEqual([{ name: 'Alice', age: 30 }]);
+    }),
+  );
+
+  test.effect('supports aggregates and grouping', () =>
+    Effect.gen(function* () {
+      const q = Q.select(Q.as(Q.count(), 'n'), Q.as(Q.sum(v.age), 'total')).where(
+        Q.triple(v.p, foaf('age'), v.age),
+      );
+      const [row] = yield* Q.executeAll(q);
+      expect(lex(Option.fromUndefinedOr(row?.n))).toEqual(Option.some('2'));
+      expect(lex(Option.fromUndefinedOr(row?.total))).toEqual(Option.some('55'));
+    }),
+  );
+});
+
+describe('Results formats', () => {
+  const tt = Term.triple(ex('a'), ex('b'), Term.literal('c', { language: 'ar', direction: 'rtl' }));
+  const set: Results.ResultSet = {
+    _tag: 'ResultSet',
+    variables: ['x', 'y', 'z'],
+    bindings: [
+      Bindings.make({ x: ex('a'), y: Term.literal('hello, "world"\n', 'en'), z: tt }),
+      Bindings.make({ x: Term.blankNode('b0'), y: Xsd.integer(42) }),
+      Bindings.make({ y: Term.literal('5', ex('dt')) }),
+    ],
+  };
+
+  [Results.Json, Results.Xml, Results.Tsv].forEach((codec) => {
+    it.effect(`round-trips ${codec.format.name}`, () =>
+      Effect.gen(function* () {
+        const text = codec.serializeString(set);
+        const parsed = yield* codec.parse(text);
+        assert(Predicate.isTagged(parsed, 'ResultSet'), 'expected a result set');
+        const back = parsed;
+        expect(back.variables).toEqual(set.variables);
+        expect(back.bindings.map((b) => b.key)).toEqual(set.bindings.map((b) => b.key));
+        const bool = yield* codec.parse(codec.serializeString({ _tag: 'Ask', value: true }));
+        expect(bool).toEqual({ _tag: 'Boolean', value: true });
+      }),
+    );
+  });
+
+  it.effect('writes and reads CSV', () =>
+    Effect.gen(function* () {
+      const text = Results.Csv.serializeString(set);
+      expect(text.split('\r\n')[0]).toBe('x,y,z');
+      const parsed = yield* Results.Csv.parse(text);
+      assert(Predicate.isTagged(parsed, 'ResultSet'), 'CSV results parse to a result set');
+      const [first, second] = parsed.bindings;
+      assert(first !== undefined && second !== undefined);
+      expect(lex(Bindings.get(first, 'y'))).toEqual(Option.some('hello, "world"\n'));
+      expect(Bindings.getUndefined(second, 'x')?._tag).toBe('BlankNode');
+    }),
+  );
+
+  it('negotiates media types', () => {
+    expect(
+      Option.map(
+        Results.negotiate('text/csv;q=0.5, application/sparql-results+xml'),
+        (c) => c.format.name,
+      ),
+    ).toEqual(Option.some('SPARQL Results XML'));
+  });
+});
+
+describe('Hash functions', () => {
+  const inputs = ['', 'abc', 'hello world', 'é漢字👾', 'x'.repeat(200)];
+  it.each(inputs)('match node:crypto for %s', (input) => {
+    const node = (alg: string) => crypto.createHash(alg).update(input, 'utf8').digest('hex');
+    expect(Hash.md5(input)).toBe(node('md5'));
+    expect(Hash.sha1(input)).toBe(node('sha1'));
+    expect(Hash.sha256(input)).toBe(node('sha256'));
+    expect(Hash.sha384(input)).toBe(node('sha384'));
+    expect(Hash.sha512(input)).toBe(node('sha512'));
+  });
+});
+
+const remoteTitles = (endpoint: Term.NamedNode) =>
+  Stream.make(Bindings.make({ title: Term.literal(`from ${endpoint.value}`) }));
+
+const FederatedLayer = Engine.layer({ service: (endpoint) => remoteTitles(endpoint) }).pipe(
+  Layer.provideMerge(
+    Store.layerMemory(
+      Dataset.make(
+        Term.quad(ex('p1'), ex('endpoint'), Term.namedNode('http://one.example/sparql')),
+        Term.quad(ex('p2'), ex('endpoint'), Term.namedNode('http://two.example/sparql')),
+      ),
+    ),
+  ),
+);
+
+layer(FederatedLayer)('SERVICE with a variable endpoint', (test) => {
+  test.effect('evaluates the remote pattern once per bound endpoint', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select(
+        'SELECT ?p ?title { ?p <http://example.org/endpoint> ?e SERVICE ?e { ?x ?y ?title } } ORDER BY ?p',
+      );
+      const rows = yield* Stream.runCollect(result.bindings);
+      expect(rows.map((b) => lex(Bindings.get(b, 'title')))).toEqual([
+        Option.some('from http://one.example/sparql'),
+        Option.some('from http://two.example/sparql'),
+      ]);
+    }),
+  );
+
+  test.effect('fails when the endpoint variable is unbound', () =>
+    Effect.gen(function* () {
+      const engine = yield* Engine.SparqlEngine;
+      const result = yield* engine.select('SELECT * { SERVICE ?e { ?x ?y ?z } }');
+      const error = yield* Effect.flip(Stream.runCollect(result.bindings));
+      expect(error._tag).toBe('EvaluationError');
+    }),
+  );
+});
