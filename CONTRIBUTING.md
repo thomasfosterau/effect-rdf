@@ -4,6 +4,8 @@ Maintained by Thomas Foster, with a workflow meant to be approachable for both h
 
 ## Setup
 
+Open in a Codespace or Dev Container: `.devcontainer/` provisions it with the same hook as agent sessions.
+
 Node 22 or later and pnpm 11 (the version pinned by `packageManager`; no npm, yarn or bun), then:
 
 ```sh
