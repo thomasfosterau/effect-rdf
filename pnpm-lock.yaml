@@ -34,8 +34,8 @@ catalogs:
       specifier: 0.5.15
       version: 0.5.15
     '@enfect/oxlint':
-      specifier: ^0.9.0
-      version: 0.9.0
+      specifier: ^0.10.0
+      version: 0.10.0
     '@thomasfosterau/effect-parse':
       specifier: 0.4.1
       version: 0.4.1
@@ -88,7 +88,7 @@ importers:
         version: 0.63.0
       '@enfect/oxlint':
         specifier: 'catalog:'
-        version: 0.9.0
+        version: 0.10.0
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -685,8 +685,8 @@ packages:
   '@electric-sql/pglite@0.5.15':
     resolution: {integrity: sha512-ERZWgaRTxueGV4cvL1tfpAOzFCWTXoUtbCBqnf2FhHDVs/so9eAKaanvrwWF9Dntx7BYsmFQujVQ0/B4S8Mmiw==}
 
-  '@enfect/oxlint@0.9.0':
-    resolution: {integrity: sha512-xOKRAj9DmtVb5DqF/EznATObYldQBEWO2nmRYg7E+FxG258dsn5PHOODhakORbR0PVcs9VZ3MfvkuU0JSTRVbA==}
+  '@enfect/oxlint@0.10.0':
+    resolution: {integrity: sha512-A5VEkq8tV8FDRnvK0/AAQePX5iszZ6FlBIwWOsnb6EJFUDURwUIxpJvv3R5sXINId2zkYk1DIjOhpP4W0YsbHg==}
 
   '@fallow-cli/darwin-arm64@3.40.0':
     resolution: {integrity: sha512-0D2Da7aUAR3//pIxr2nTV1hl11Fj4rTNL8VrOa2GBeAoMcOqZD0zQyYjKLhs/cG+Xa+zBORJH3rCcxrlKxt17g==}
@@ -2318,9 +2318,9 @@ snapshots:
 
   '@electric-sql/pglite@0.5.15': {}
 
-  '@enfect/oxlint@0.9.0':
+  '@enfect/oxlint@0.10.0':
     dependencies:
-      '@oxlint/plugins': 1.88.0
+      '@oxlint/plugins': 1.89.0
       effect: 4.1.2
       effect-oxlint: 0.4.0(effect@4.1.2)
 
