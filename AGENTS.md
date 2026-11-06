@@ -95,7 +95,7 @@ Steps 2–7 are CI's required `ci` job, in its order ([ci.yml](.github/workflows
 
 Read the installed package before writing Effect code — `node_modules/effect/dist/*.d.ts`, `node_modules/effect/src/`, and the `node_modules/effect/AGENTS.md` and `ai-docs/` it ships; never guess at an Effect API.
 
-- Effect **4** — the pinned version is the `effect` entry in `pnpm-workspace.yaml`'s catalog; the published peer floor (`>=4.1.0`) is under `catalogs.peers`. Raising the floor is a breaking change for every package.
+- Effect **4** — the pinned version is the `effect` entry in `pnpm-workspace.yaml`'s catalog; the published `effect` peer is `^4.0.0` (`catalogs.peers`), per package: raise a package's floor only when one of its own dependencies requires a newer `effect`, in a named catalog whose comment names that dependency (the sparql packages' `catalogs.platform-node-peers` and `catalogs.sql-peers`, forced by `@effect/platform-node` and `@effect/sql-sqlite-node`). Raising a floor is a breaking change for that package.
 - Services: `class X extends Context.Service<X, XShape>()('@thomasfosterau/effect-<name>/X') {}` with `Layer`s (`layer`, `layerMemory`, …) and a plain `make` constructor.
 - Errors: `Schema.TaggedError<E>()('Tag', { message: Schema.String, … })`; public fallible operations return `Effect` / `Stream` with typed errors.
 - `Effect.fn` / `Effect.fnUntraced` for reusable effectful functions; pure helpers stay pure (and synchronous `…Result` variants return `Result`). Hot loops (parsers, evaluators, the dataset index) are plain code, not an Effect per step.

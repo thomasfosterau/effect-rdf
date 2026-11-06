@@ -57,7 +57,7 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "effect": "catalog:peers"
+    "effect": "catalog:sql-peers"
   },
   "engines": {
     "node": ">=22"

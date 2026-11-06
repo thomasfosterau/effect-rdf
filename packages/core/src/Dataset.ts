@@ -310,8 +310,10 @@ const indexBatch = (spog: Spog): IndexBatch => {
     const map = HashMap.beginMutation(
       Option.getOrElse(HashMap.get(idx[i], termKey), () => HashMap.empty<string, Term.Quad>()),
     );
+    // Stored in `idx[i]` by `close`, once the batch is done: setting it here,
+    // still equal to the map it copies, is a no-op on effect 4.0.x, whose
+    // `HashMap.set` keeps an existing value `Equal.equals` to the new one
     MutableHashMap.set(opened, termKey, map);
-    idx[i] = HashMap.set(idx[i], termKey, map);
     return map;
   };
   // A mutable map is updated in place, so the results of `set` and `remove` are the map itself
@@ -326,7 +328,10 @@ const indexBatch = (spog: Spog): IndexBatch => {
   const close = (i: 0 | 1 | 2 | 3): void => {
     MutableHashMap.forEach(open[i], (map, termKey) => {
       HashMap.endMutation(map);
-      if (HashMap.size(map) === 0) idx[i] = HashMap.remove(idx[i], termKey);
+      idx[i] =
+        HashMap.size(map) === 0
+          ? HashMap.remove(idx[i], termKey)
+          : HashMap.set(idx[i], termKey, map);
     });
   };
   return {

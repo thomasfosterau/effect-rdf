@@ -87,11 +87,26 @@ catalogs:
     # Caret, not `>=`: on 0.x a minor release may break the combinator API
     # the grammars are written against.
     '@thomasfosterau/effect-parse': ^0.4.0
-    # 4.1.0: `effect/http-api`'s `StreamUint8Array` takes a list of content
-    # types (rc.118 – 4.0.x take one), which the SPARQL server's `HttpApi`
-    # definition uses to document every response format (#60). rc.118
-    # already removed `effect/unstable/*` (now `effect/http`, `effect/sql`).
-    effect: '>=4.1.0'
+    # The owner's peer-range policy: `effect` is `^4.0.0`, decided per
+    # package. A package whose own dependencies require a newer `effect`
+    # takes a named catalog below whose comment names that dependency; our
+    # own code using a newer API is never a reason (make it work on 4.0.0
+    # instead). Proved by running each package's `check` and `test:unit`
+    # with the `effect` line above pinned to 4.0.0.
+    effect: ^4.0.0
+  # `@thomasfosterau/effect-sparql`, and the packages that depend on it at
+  # runtime (`effect-shacl-sparql`, `effect-sparql-ai`): effect-sparql's
+  # runtime dependency `@effect/platform-node`, pinned above at 4.1.2,
+  # declares `effect: ^4.1.2`. Move it with that pin. (The SPARQL server's
+  # `HttpApi` also passes `StreamUint8Array` a list of content types, a 4.1
+  # form, #60; it would need a 4.0 shape before this floor could drop.)
+  platform-node-peers:
+    effect: ^4.1.2
+  # `@thomasfosterau/effect-sparql-sql` only: its runtime dependencies
+  # `@effect/sql-sqlite-node` (pinned above at 4.1.2, `effect: ^4.1.2`) and
+  # effect-sparql (`platform-node-peers`). Move it with those pins.
+  sql-peers:
+    effect: ^4.1.2
 
 overrides:
   # undici <8.12.2 — GHSA-xjj6-f33q-929c (high): an unhandled error on a

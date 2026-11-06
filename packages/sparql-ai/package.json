@@ -58,7 +58,7 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "effect": "catalog:peers"
+    "effect": "catalog:platform-node-peers"
   },
   "engines": {
     "node": ">=22"

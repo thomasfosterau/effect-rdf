@@ -32,7 +32,7 @@ Each package has a README with its API and usage examples.
 ## Install
 
 The packages are published to npm under the `@thomasfosterau` scope and have
-`effect` (4.x) as a peer dependency (`effect-turtle`, `effect-sparql`,
+`effect` as a peer dependency (`^4.0.0`; `^4.1.2` for `effect-sparql`, `effect-sparql-sql`, `effect-shacl-sparql` and `effect-sparql-ai`, whose `@effect/*` runtime dependencies need it) (`effect-turtle`, `effect-sparql`,
 `effect-shex`, `effect-n3`, `effect-rdfxml` and `effect-xmp` also have `@thomasfosterau/effect-parse`):
 
 ```sh
