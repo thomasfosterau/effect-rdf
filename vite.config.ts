@@ -22,7 +22,6 @@ const packages = [
   'effect-n3',
   'effect-jsonld',
   'effect-rdfxml',
-  'effect-rdfjson',
   'effect-xmp',
   'effect-csvw',
   'effect-sparql',
@@ -30,7 +29,6 @@ const packages = [
   'effect-shacl-sparql',
   'effect-shex',
   'effect-sparql-sql',
-  'effect-sparql-ai',
 ].map((name) => `@thomasfosterau/${name}`);
 
 export default defineConfig({
@@ -180,12 +178,12 @@ export default defineConfig({
           'effect/effect-run-in-body': 'off',
         },
       },
-      // The one native `JSON.parse` per package: `Schema.fromJsonString`
+      // The one native `JSON.parse` per package (or nested subpath): `Schema.fromJsonString`
       // replaces the engine's SyntaxError with "Expected a valid JSON
       // string", and the parsers' error messages (and the positions in them)
       // are part of their contract.
       {
-        files: ['packages/*/src/internal/json.ts'],
+        files: ['packages/*/src/internal/json.ts', 'packages/*/src/*/internal/json.ts'],
         rules: { 'effect/avoid-direct-json': 'off' },
       },
       // Public signatures over arbitrary JSON-LD / ShExJ / N3 JSON: a JSON-LD

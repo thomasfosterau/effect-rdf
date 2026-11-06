@@ -5,7 +5,6 @@
 '@thomasfosterau/effect-n3': patch
 '@thomasfosterau/effect-jsonld': patch
 '@thomasfosterau/effect-rdfxml': patch
-'@thomasfosterau/effect-rdfjson': patch
 '@thomasfosterau/effect-xmp': patch
 '@thomasfosterau/effect-csvw': patch
 '@thomasfosterau/effect-shacl': patch

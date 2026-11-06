@@ -31,13 +31,13 @@ import * as Stream from 'effect/Stream';
 import { Tool, Toolkit } from 'effect/ai';
 import * as Iri from '@thomasfosterau/effect-rdf/Iri';
 import * as Term from '@thomasfosterau/effect-rdf/Term';
-import * as Algebra from '@thomasfosterau/effect-sparql/Algebra';
-import type * as Ast from '@thomasfosterau/effect-sparql/Ast';
-import * as Bindings from '@thomasfosterau/effect-sparql/Bindings';
-import * as Engine from '@thomasfosterau/effect-sparql/Engine';
-import * as Parser from '@thomasfosterau/effect-sparql/Parser';
-import * as Results from '@thomasfosterau/effect-sparql/Results';
-import * as Translate from '@thomasfosterau/effect-sparql/Translate';
+import * as Algebra from '../Algebra.ts';
+import type * as Ast from '../Ast.ts';
+import * as Bindings from '../Bindings.ts';
+import * as Engine from '../Engine.ts';
+import * as Parser from '../Parser.ts';
+import * as Results from '../Results.ts';
+import * as Translate from '../Translate.ts';
 import * as Turtle from '@thomasfosterau/effect-turtle/Turtle';
 
 // -----------------------------------------------------------------------------

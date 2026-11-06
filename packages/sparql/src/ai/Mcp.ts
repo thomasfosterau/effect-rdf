@@ -8,7 +8,7 @@
  * import { Layer } from 'effect'
  * import { McpServer } from 'effect/ai'
  * import { Engine } from '@thomasfosterau/effect-sparql'
- * import { Mcp } from '@thomasfosterau/effect-sparql-ai'
+ * import { Mcp } from '@thomasfosterau/effect-sparql/ai'
  *
  * const Server = Mcp.layer({ maxRows: 50 }).pipe(
  *   Layer.provide(McpServer.layerStdio({ name: 'knowledge-graph', version: '1.0.0', protocols })),

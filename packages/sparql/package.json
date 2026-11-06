@@ -2,10 +2,13 @@
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql",
   "version": "0.0.0",
-  "description": "Effect-idiomatic SPARQL 1.1 / 1.2: parser, algebra, query engine, results formats, a typed query builder, and a SPARQL Protocol / Graph Store server and client",
+  "description": "Effect-idiomatic SPARQL 1.1 / 1.2: parser, algebra, query engine, results formats, a typed query builder, a SPARQL Protocol / Graph Store server and client, and knowledge-graph tools for effect/ai",
   "keywords": [
+    "ai",
     "effect",
+    "mcp",
     "rdf",
+    "sparql",
     "typescript"
   ],
   "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/sparql#readme",
@@ -33,6 +36,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./ai": "./src/ai/index.ts",
+    "./ai/*": "./src/ai/*.ts",
     "./*": "./src/*.ts"
   },
   "publishConfig": {
@@ -40,6 +45,14 @@
       ".": {
         "types": "./dist/index.d.mts",
         "default": "./dist/index.mjs"
+      },
+      "./ai": {
+        "types": "./dist/ai/index.d.mts",
+        "default": "./dist/ai/index.mjs"
+      },
+      "./ai/*": {
+        "types": "./dist/ai/*.d.mts",
+        "default": "./dist/ai/*.mjs"
       },
       "./*": {
         "types": "./dist/*.d.mts",
@@ -58,7 +71,6 @@
     "@thomasfosterau/effect-n3": "workspace:*",
     "@thomasfosterau/effect-ntriples": "workspace:*",
     "@thomasfosterau/effect-rdf": "workspace:*",
-    "@thomasfosterau/effect-rdfjson": "workspace:*",
     "@thomasfosterau/effect-rdfxml": "workspace:*",
     "@thomasfosterau/effect-turtle": "workspace:*"
   },

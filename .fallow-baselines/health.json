@@ -225,7 +225,7 @@
         "count": 1
       }
     },
-    "packages/rdfjson/src/RdfJson.ts": {
+    "packages/core/src/rdfjson/RdfJson.ts": {
       "complexity_high": {
         "count": 1
       },
@@ -721,7 +721,7 @@
     "packages/turtle/src/internal/parser.ts:complexity",
     "packages/core/src/Rdfs.ts:complexity",
     "packages/jsonld/src/internal/compact.ts:complexity",
-    "packages/rdfjson/src/RdfJson.ts:complexity",
+    "packages/core/src/rdfjson/RdfJson.ts:complexity",
     "packages/sparql/src/internal/lexer.ts:complexity",
     "packages/rdfxml/src/internal/parser.ts:complexity"
   ]

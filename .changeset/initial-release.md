@@ -3,7 +3,6 @@
 '@thomasfosterau/effect-jsonld': minor
 '@thomasfosterau/effect-n3': minor
 '@thomasfosterau/effect-ntriples': minor
-'@thomasfosterau/effect-rdfjson': minor
 '@thomasfosterau/effect-rdfxml': minor
 '@thomasfosterau/effect-shacl': minor
 '@thomasfosterau/effect-shacl-sparql': minor

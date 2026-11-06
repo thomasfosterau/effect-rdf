@@ -53,10 +53,10 @@ import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as SchemaIssue from 'effect/SchemaIssue';
 import * as SchemaTransformation from 'effect/SchemaTransformation';
-import * as Dataset from '@thomasfosterau/effect-rdf/Dataset';
-import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
-import * as Serialization from '@thomasfosterau/effect-rdf/Serialization';
-import * as Term from '@thomasfosterau/effect-rdf/Term';
+import * as Dataset from '../Dataset.ts';
+import * as PrefixMap from '../PrefixMap.ts';
+import * as Serialization from '../Serialization.ts';
+import * as Term from '../Term.ts';
 import { parseJson } from './internal/json.ts';
 
 const FORMAT_NAME = 'RDF/JSON';

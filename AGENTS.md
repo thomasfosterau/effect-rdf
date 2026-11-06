@@ -4,25 +4,23 @@
 
 This repo publishes the `@thomasfosterau/effect-rdf` package family: an Effect 4-native RDF 1.2 / RDF-star toolkit — the data model, parsers and serialisers for every common syntax, a SPARQL 1.1 / 1.2 engine with storage, protocol server and client, and SHACL and ShEx validation. Every package is self-contained TypeScript checked against the W3C and community conformance suites; those suites are the behavioural spec.
 
-| Package                               | Directory               | Depends on (workspace)                                                        |
-| ------------------------------------- | ----------------------- | ----------------------------------------------------------------------------- |
-| `@thomasfosterau/effect-rdf`          | `packages/core`         | —                                                                             |
-| `@thomasfosterau/effect-ntriples`     | `packages/ntriples`     | core                                                                          |
-| `@thomasfosterau/effect-turtle`       | `packages/turtle`       | core, ntriples                                                                |
-| `@thomasfosterau/effect-n3`           | `packages/n3`           | core, turtle                                                                  |
-| `@thomasfosterau/effect-jsonld`       | `packages/jsonld`       | core                                                                          |
-| `@thomasfosterau/effect-rdfxml`       | `packages/rdfxml`       | core                                                                          |
-| `@thomasfosterau/effect-rdfjson`      | `packages/rdfjson`      | core                                                                          |
-| `@thomasfosterau/effect-xmp`          | `packages/xmp`          | core, rdfxml                                                                  |
-| `@thomasfosterau/effect-csvw`         | `packages/csvw`         | core                                                                          |
-| `@thomasfosterau/effect-sparql`       | `packages/sparql`       | core and every syntax package (ntriples, turtle, n3, jsonld, rdfxml, rdfjson) |
-| `@thomasfosterau/effect-shacl`        | `packages/shacl`        | core                                                                          |
-| `@thomasfosterau/effect-shacl-sparql` | `packages/shacl-sparql` | core, shacl, sparql                                                           |
-| `@thomasfosterau/effect-shex`         | `packages/shex`         | core, turtle                                                                  |
-| `@thomasfosterau/effect-sparql-sql`   | `packages/sparql-sql`   | core, sparql                                                                  |
-| `@thomasfosterau/effect-sparql-ai`    | `packages/sparql-ai`    | core, sparql, turtle                                                          |
+| Package                               | Directory               | Subpaths   | Depends on (workspace)                                               |
+| ------------------------------------- | ----------------------- | ---------- | -------------------------------------------------------------------- |
+| `@thomasfosterau/effect-rdf`          | `packages/core`         | `/rdfjson` | —                                                                    |
+| `@thomasfosterau/effect-ntriples`     | `packages/ntriples`     |            | core                                                                 |
+| `@thomasfosterau/effect-turtle`       | `packages/turtle`       |            | core, ntriples                                                       |
+| `@thomasfosterau/effect-n3`           | `packages/n3`           |            | core, turtle                                                         |
+| `@thomasfosterau/effect-jsonld`       | `packages/jsonld`       |            | core                                                                 |
+| `@thomasfosterau/effect-rdfxml`       | `packages/rdfxml`       |            | core                                                                 |
+| `@thomasfosterau/effect-xmp`          | `packages/xmp`          |            | core, rdfxml                                                         |
+| `@thomasfosterau/effect-csvw`         | `packages/csvw`         |            | core                                                                 |
+| `@thomasfosterau/effect-sparql`       | `packages/sparql`       | `/ai`      | core and every syntax package (ntriples, turtle, n3, jsonld, rdfxml) |
+| `@thomasfosterau/effect-shacl`        | `packages/shacl`        |            | core                                                                 |
+| `@thomasfosterau/effect-shacl-sparql` | `packages/shacl-sparql` |            | core, shacl, sparql                                                  |
+| `@thomasfosterau/effect-shex`         | `packages/shex`         |            | core, turtle                                                         |
+| `@thomasfosterau/effect-sparql-sql`   | `packages/sparql-sql`   |            | core, sparql                                                         |
 
-Every module of a package is an entry point (`exports["./*"]` → `src/*.ts`; `src/index.ts` re-exports them as namespaces). Test-only workspace dependencies are `devDependencies`; `.fallowrc.json`'s boundary rules allow both.
+Every module of a package is an entry point (`exports["./*"]` → `src/*.ts`; `src/index.ts` re-exports them as namespaces). A nested subpath is a directory `src/<subpath>/` with its own `index.ts` barrel, exported as `./<subpath>` and `./<subpath>/*` (listed in the package's `vite.config.ts` `subpaths` and in `.fallowrc.json`'s `entry`), with its tests in `test/<subpath>/`; it is kept off the root barrel. Test-only workspace dependencies are `devDependencies`; `.fallowrc.json`'s boundary rules allow both.
 
 A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` and `README.md`, a `.fallowrc.json` zone and rule, and its name in the `packages` list of the root `vite.config.ts`.
 
@@ -35,7 +33,7 @@ A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` a
 - **The root README's quick tour is a test.** `packages/shacl-sparql/test/readme-example.test.ts` holds the same code; change both together.
 - **Dependabot groups only the lockstep sets** (`.github/dependabot.yml`: `toolchain` — vite-plus, vitest, `@vitest/*`, `@effect/tsgo`; `effect` — `effect` + `@effect/*`; everything else arrives as its own PR), with a 1-day `cooldown` (its smallest unit; pnpm's `minimumReleaseAge` is 480 minutes, 8 hours). By hand on the toolchain PR's branch: the npm-alias entries (`vite`, `typescript`, `@typescript/native`) and an `@effect/tsgo` that supports the new oxlint; the `overrides` and `catalogs.peers` are hand moves too (the file's header lists them).
 - **CI is hardened for Dependabot PRs**: `permissions: {}` at the top with per-job grants, every action pinned to a commit SHA, `persist-credentials: false` except in the Release job (which pushes), no secrets or OIDC outside the Release job, which never runs for Dependabot. CI's Node is `node-version: '*'` with `check-latest: true`, never `latest` (setup-node resolves that to a pre-release). `uvx zizmor --offline .github` audits the workflows (config in `.github/zizmor.yml`).
-- **Fourteen native `tsc` processes exhaust memory.** Run the type gate as `vp run --concurrency-limit 2 check`.
+- **Thirteen native `tsc` processes exhaust memory.** Run the type gate as `vp run --concurrency-limit 2 check`.
 
 Package-local invariants, terms and import boundaries live only in each package's `CLAUDE.md` (`packages/<dir>/CLAUDE.md`); read it before changing that package.
 
@@ -43,10 +41,10 @@ Package-local invariants, terms and import boundaries live only in each package'
 
 - **One module per concept** in `src/`; `src/index.ts` re-exports modules as namespaces (`export * as Turtle from './Turtle.ts'`). Private helpers go in `src/internal/`.
 - **Every export has a doc comment** whose first sentence stands alone in a hover, with `@since 0.1.0` (the version it first shipped in) and `@category`.
-- **Dependencies flow towards core**: syntax packages and engines depend on `effect-rdf`; an integration joining two packages gets its own package (e.g. `effect-shacl-sparql`) so each stays lean. No third-party runtime dependencies beyond Effect's own packages; prefer self-contained Effect-native code.
+- **Dependencies flow towards core**: syntax packages and engines depend on `effect-rdf`. Code that needs no dependency a package lacks lives as a nested subpath of that package (core's `/rdfjson`), and an integration lives as a subpath of the package it extends (the `effect/ai` tools are `effect-sparql/ai`). A separate package is only for code that would bring its host a dependency it lacks, test-only dependencies included (a devDependency back onto a package that depends on the host is a cycle `vp run -r` refuses): `effect-sparql-sql` (the SQL drivers), `effect-csvw` and `effect-shacl` (their suites read Turtle manifests, and turtle depends on core), and `effect-shacl-sparql` (it would add `effect-shacl` to `effect-sparql`). No third-party runtime dependencies beyond Effect's own packages; prefer self-contained Effect-native code.
 - **Syntax packages** implement the core `Serialization` interfaces and export `format`, `parser`, `serializer`, `codec`, `parse` and `serialize`. Parsers fail with `Serialization.RdfParseError` (with `line` / `column`), serialisers with `RdfSerializeError`.
 - **TypeScript 7** (native `tsc`, Effect-patched), `strict`, `exactOptionalPropertyTypes` (optional members are `?: T | undefined`), `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `erasableSyntaxOnly` (sources run under Node's type stripping); relative imports carry the `.ts` extension.
-- **Tests** live in `packages/<dir>/test/*.test.ts`; effectful ones use `@effect/vitest` (`it.effect`), anything else imports from `vite-plus/test`, never `vitest`. Conformance tests read the suites from `process.env.RDF_TEST_SUITES ?? <repo>/.test-suites` with `describe.skipIf(!exists)`; manifests are read with `@thomasfosterau/effect-turtle` (`Manifest`) and graphs compared with `Isomorphism.isomorphic`. Aim for 100%: a deliberately skipped test is in a skip list with its reason, and the package README states the pass rates.
+- **Tests** live in `packages/<dir>/test/*.test.ts`; effectful ones use `@effect/vitest` (`it.effect`), anything else imports from `vite-plus/test`, never `vitest`. Conformance tests read the suites from `process.env.RDF_TEST_SUITES ?? <repo>/.test-suites` with `describe.skipIf(!exists)`; manifests are read with `@thomasfosterau/effect-turtle` (`Manifest`) and graphs compared with `Isomorphism.isomorphic`. Aim for 100%: a deliberately skipped test is in a skip list with its reason, and the package README states the pass rates (a subpath's in its section of the package README).
 - **Formatting and linting** are Oxfmt / Oxlint (single quotes, semicolons, width 100) with the Effect presets (`@enfect/oxlint`'s `recommended` and `@effect/tsgo`'s) plus oxlint's `correctness`, `suspicious` and `perf` categories over the `typescript`, `unicorn`, `oxc`, `import`, `promise`, `jsdoc` and `vitest` plugins. `vp check` must report zero errors; the `warn`-tier allowances in `vite.config.ts` carry their adoption counts, and a new site is a defect, not headroom.
 
 ## Commands
