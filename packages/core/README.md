@@ -6,7 +6,7 @@ The [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) / RDF-star data model for [
 pnpm add effect @thomasfosterau/effect-rdf
 ```
 
-`effect` (`>=4.1.0`) is a peer dependency.
+`effect` (`^4.0.0`) is a peer dependency.
 
 ## Modules
 

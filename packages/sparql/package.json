@@ -70,7 +70,7 @@
   },
   "peerDependencies": {
     "@thomasfosterau/effect-parse": "catalog:peers",
-    "effect": "catalog:peers"
+    "effect": "catalog:platform-node-peers"
   },
   "engines": {
     "node": ">=22"
