@@ -129,25 +129,6 @@ importers:
         specifier: 'catalog:'
         version: 5.0.5(@types/node@26.6.6)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
 
-  packages/csvw:
-    dependencies:
-      '@thomasfosterau/effect-rdf':
-        specifier: workspace:*
-        version: link:../core
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.1.2(effect@4.1.2)(vitest@5.0.5)
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
-      effect:
-        specifier: 4.1.2
-        version: 4.1.2
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@types/node@26.6.6)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
-
   packages/jsonld:
     dependencies:
       '@thomasfosterau/effect-rdf':
@@ -220,53 +201,6 @@ importers:
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.4.1(effect@4.1.2)
-      effect:
-        specifier: 4.1.2
-        version: 4.1.2
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@types/node@26.6.6)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
-
-  packages/shacl:
-    dependencies:
-      '@thomasfosterau/effect-rdf':
-        specifier: workspace:*
-        version: link:../core
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.1.2(effect@4.1.2)(vitest@5.0.5)
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
-      effect:
-        specifier: 4.1.2
-        version: 4.1.2
-      vitest:
-        specifier: 'catalog:'
-        version: 5.0.5(@types/node@26.6.6)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
-
-  packages/shacl-sparql:
-    dependencies:
-      '@thomasfosterau/effect-rdf':
-        specifier: workspace:*
-        version: link:../core
-      '@thomasfosterau/effect-shacl':
-        specifier: workspace:*
-        version: link:../shacl
-      '@thomasfosterau/effect-sparql':
-        specifier: workspace:*
-        version: link:../sparql
-    devDependencies:
-      '@effect/vitest':
-        specifier: 'catalog:'
-        version: 4.1.2(effect@4.1.2)(vitest@5.0.5)
-      '@thomasfosterau/effect-jsonld':
-        specifier: workspace:*
-        version: link:../jsonld
-      '@thomasfosterau/effect-turtle':
-        specifier: workspace:*
-        version: link:../turtle
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -398,6 +332,24 @@ importers:
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.4.1(effect@4.1.2)
+      effect:
+        specifier: 4.1.2
+        version: 4.1.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@26.6.6)(@vitest/browser-preview@5.0.5)(@vitest/coverage-istanbul@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.6)(@typescript/typescript6@6.0.2)(yaml@2.9.1))
+
+  tests/conformance:
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.1.2(effect@4.1.2)(vitest@5.0.5)
+      '@thomasfosterau/effect-rdf':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@thomasfosterau/effect-turtle':
+        specifier: workspace:*
+        version: link:../../packages/turtle
       effect:
         specifier: 4.1.2
         version: 4.1.2

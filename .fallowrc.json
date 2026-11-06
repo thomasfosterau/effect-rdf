@@ -2,11 +2,15 @@
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
     "packages/*/src/*.ts",
-    // The nested subpaths: core's `/rdfjson` and sparql's `/ai` (each `./<subpath>/*` export).
-    // Listed one by one so `src/internal/` stays private.
+    // The nested subpaths: core's `/csvw`, `/rdfjson` and `/shacl`, sparql's `/ai` and `/shacl`
+    // (each `./<subpath>/*` export). Listed one by one so `src/internal/` stays private.
+    "packages/core/src/csvw/*.ts",
     "packages/core/src/rdfjson/*.ts",
+    "packages/core/src/shacl/*.ts",
     "packages/sparql/src/ai/*.ts",
+    "packages/sparql/src/shacl/*.ts",
     "packages/*/test/**/*.test.ts",
+    "tests/*/test/**/*.test.ts",
     "packages/*/bench/*.ts",
     "packages/sparql/bin/*.mjs",
     "**/vite.config.ts",
@@ -52,9 +56,10 @@
         "name": "core",
         "patterns": ["packages/core/**"]
       },
+      // Private: the core subpaths' suites that read Turtle (AGENTS.md).
       {
-        "name": "csvw",
-        "patterns": ["packages/csvw/**"]
+        "name": "conformance",
+        "patterns": ["tests/conformance/**"]
       },
       {
         "name": "jsonld",
@@ -71,14 +76,6 @@
       {
         "name": "rdfxml",
         "patterns": ["packages/rdfxml/**"]
-      },
-      {
-        "name": "shacl",
-        "patterns": ["packages/shacl/**"]
-      },
-      {
-        "name": "shacl-sparql",
-        "patterns": ["packages/shacl-sparql/**"]
       },
       {
         "name": "shex",
@@ -107,7 +104,7 @@
         "allow": []
       },
       {
-        "from": "csvw",
+        "from": "conformance",
         "allow": ["core", "turtle"]
       },
       {
@@ -125,14 +122,6 @@
       {
         "from": "rdfxml",
         "allow": ["core"]
-      },
-      {
-        "from": "shacl",
-        "allow": ["core", "turtle"]
-      },
-      {
-        "from": "shacl-sparql",
-        "allow": ["core", "jsonld", "shacl", "sparql", "turtle"]
       },
       {
         "from": "shex",

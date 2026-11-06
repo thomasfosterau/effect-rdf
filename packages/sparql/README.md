@@ -7,8 +7,10 @@ pluggable storage service, the standard results formats, a strongly-typed
 query builder, and — on `effect/http` — a [SPARQL 1.1
 Protocol](https://www.w3.org/TR/sparql11-protocol/) and [Graph Store HTTP
 Protocol](https://www.w3.org/TR/sparql11-http-rdf-update/)
-[server](#protocol-server) and [client](#protocol-client). On its `/ai` subpath it ships
-[knowledge-graph tools for `effect/ai`](#knowledge-graph-tools-thomasfosteraueffect-sparqlai).
+[server](#protocol-server) and [client](#protocol-client). Two subpaths build on the engine:
+[SHACL-SPARQL](#shacl-sparql-thomasfosteraueffect-sparqlshacl) for the core's SHACL validator
+(`/shacl`) and [knowledge-graph tools for `effect/ai`](#knowledge-graph-tools-thomasfosteraueffect-sparqlai)
+(`/ai`).
 
 - **`Parser`** — a compiled LL(1) grammar (on
   [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse),
@@ -649,6 +651,108 @@ falls back to `ClientFormats.defaults` (N-Triples, Turtle, N-Quads, TriG, RDF/XM
 JSON-LD, N3, RDF/JSON). `ResultsStream` exposes the incremental results
 parsers.
 
+## SHACL-SPARQL (`@thomasfosterau/effect-sparql/shacl`)
+
+[SHACL-SPARQL](https://www.w3.org/TR/shacl/#sparql-constraints) for
+[`@thomasfosterau/effect-rdf/shacl`](https://github.com/thomasfosterau/effect-rdf/tree/main/packages/core#shacl-thomasfosteraueffect-rdfshacl), on
+`@thomasfosterau/effect-sparql/shacl` (and `…/shacl/Evaluator`, `…/shacl/Query`),
+evaluated with this package's engine. It implements the
+`Sparql.SparqlConstraintEvaluator` service that the SHACL validator delegates
+SPARQL features to, so the core's SHACL validator itself stays free of a
+SPARQL dependency.
+
+- **`Evaluator`**: `Evaluator.layer(options?)` / `Evaluator.make(options?)`
+  providing the evaluator.
+- **`Query`**: reading `sh:select` / `sh:ask` queries with their prefix
+  declarations, the pre-binding restrictions and `$PATH` substitution.
+
+Supported:
+
+- SPARQL-based constraints (`sh:sparql` with `sh:select`, `sh:message`,
+  `sh:deactivated`) on node and property shapes;
+- SPARQL-based constraint components: parameters (mandatory and
+  `sh:optional`), `sh:nodeValidator` / `sh:propertyValidator` (SELECT) and
+  `sh:validator` (ASK), validator and component messages;
+- SPARQL-based targets (`sh:SPARQLTarget`) and target types
+  (`sh:SPARQLTargetType` with parameters) from SHACL Advanced Features;
+- pre-bound `$this`, `$value` (ASK validators), `$currentShape`,
+  `$shapesGraph` and parameters, with the exact pre-binding semantics of the
+  specification (values insertion, see `Algebra.prebind` in
+  `effect-sparql`) and its restrictions: `MINUS`, `VALUES`, `SERVICE`,
+  `AS ?prebound` and sub-queries that drop pre-bound variables are failures;
+- `$PATH` substitution with the property shape's path (any other use of
+  `$PATH` is a failure);
+- prefixes via `sh:prefixes` / `owl:imports` / `sh:declare` (conflicting
+  declarations are failures);
+- the result variables `?this`, `?value`, `?path`, `?message` and `?failure`;
+- `{?var}` / `{$param}` placeholders in messages (substituted by the
+  validator from the solution and parameters).
+
+### Usage
+
+```ts
+import { Effect } from 'effect';
+import { ValidationReport, Validator } from '@thomasfosterau/effect-rdf/shacl';
+import { Evaluator } from '@thomasfosterau/effect-sparql/shacl';
+import { Turtle } from '@thomasfosterau/effect-turtle';
+
+const program = Effect.gen(function* () {
+  const { dataset: shapes } = yield* Turtle.parse(`
+    @prefix sh: <http://www.w3.org/ns/shacl#> .
+    @prefix ex: <http://example.org/> .
+    @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+    ex: sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/"^^xsd:anyURI ] .
+
+    ex:PersonShape a sh:NodeShape ;
+      sh:targetClass ex:Person ;
+      sh:sparql [
+        sh:prefixes ex: ;
+        sh:message "{$this} is their own parent" ;
+        sh:select """
+          SELECT $this WHERE { $this ex:parent $this }
+        """ ;
+      ] .
+  `);
+  const { dataset: data } = yield* Turtle.parse(`
+    @prefix ex: <http://example.org/> .
+    ex:alice a ex:Person ; ex:parent ex:alice .
+  `);
+  const report = yield* Validator.validate(data, shapes);
+  console.log(ValidationReport.format(report));
+}).pipe(Effect.provide(Evaluator.layer()));
+```
+
+#### Constraint components
+
+```turtle
+ex:MaxWordsComponent a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:maxWords ] ;
+  sh:message "Value has more than {$maxWords} words" ;
+  sh:validator [
+    a sh:SPARQLAskValidator ;
+    sh:ask """ASK { FILTER (strlen(replace(str($value), "[^ ]", "")) < $maxWords) }""" ;
+  ] .
+
+ex:BookShape a sh:NodeShape ;
+  sh:targetClass ex:Book ;
+  sh:property [ sh:path ex:title ; ex:maxWords 8 ] .
+```
+
+#### Options
+
+```ts
+Evaluator.layer({
+  // The IRI of the named graph holding the shapes graph ($shapesGraph).
+  shapesGraphIri: 'urn:x-shacl:shapesGraph',
+  // Options of the SPARQL engine, e.g. extension functions.
+  engine: { functions },
+});
+```
+
+The data graph is the default graph of the queried dataset (named graphs of
+the data are merged into it, as the core validator sees them). Per data graph
+the evaluator builds one in-memory store and caches compiled queries.
+
 ## Knowledge-graph tools (`@thomasfosterau/effect-sparql/ai`)
 
 On `@thomasfosterau/effect-sparql/ai` (and `…/ai/Tools`, `…/ai/Mcp`):
@@ -777,6 +881,10 @@ the HTTP requests and expected responses from the manifests — once against
   by `graph-store-protocol`), its requests are prose-only and depend on state
   it never creates.
 
+**SHACL-SPARQL** (`/shacl`): the W3C SHACL test suite (`.test-suites/data-shapes`, or
+`$RDF_TEST_SUITES`): all **22 / 22** SHACL-SPARQL tests (`sparql/`: node,
+property, component and pre-binding tests) pass, and all 98 Core tests pass
+with the evaluator installed.
+
 **Knowledge-graph tools** (`/ai`): there is no conformance suite for tools; the tests
-(`test/ai/`) drive every handler against an in-memory engine and round-trip the tools through
-`McpTest`.
+(`test/ai/`) drive every handler against an in-memory engine and round-trip the tools through `McpTest`.

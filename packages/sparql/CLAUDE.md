@@ -4,13 +4,14 @@ The SPARQL 1.1 / 1.2 engine: parser (an LL(1) `effect-parse` grammar), AST and g
 
 - **the server** — a SPARQL 1.1 Protocol and Graph Store HTTP Protocol server on `effect/http` (`SparqlServer`, `Protocol`, `GraphStore`, `ServiceDescription`, `Options`, `ServerFormats`, `ProtocolErrors`), with content negotiation over the `Serialization.Formats` service, service description, read-only mode, time limits, its `HttpApi` definition (`SparqlApi`, served by `SparqlApiBuilder`), a `Testing` harness and a CLI (`Cli`, `bin/effect-sparql-server.mjs`);
 - **the client** — a typed Protocol and Graph Store client on `effect/http` `HttpClient` (`SparqlClient`, `ClientErrors`, `ClientFormats`, `ResultsStream`): string, `Ast` or `QueryBuilder` queries with typed (optionally `Schema`-decoded) rows, streaming result parsing, updates, Graph Store operations, typed errors, timeouts and retries, `Federation` (`SERVICE` / `LOAD` for the in-memory engine) and `SparqlApiClient` derived from `SparqlApi`;
-- **`/ai`** (`src/ai/`, formerly the never-published `effect-sparql-ai` package) — knowledge-graph tools for `effect/ai`: `Tools` (the `sparql_query`, `describe_resource`, `list_classes`, `list_properties`, `search_labels` and opt-in `sparql_update` tools, the read-only `toolkit` / `toolkitWithUpdate`, and handler layers over `SparqlEngine`) and `Mcp` (their `McpServer.toolkit` registration).
+- **`/shacl`** (`src/shacl/`, formerly `effect-shacl-sparql`) — SHACL-SPARQL: implements the core's `@thomasfosterau/effect-rdf/shacl` `Sparql.SparqlConstraintEvaluator` (`Evaluator.layer` / `make`) for `sh:sparql` constraints, SPARQL-based constraint components and SHACL-AF SPARQL targets; `Query` reads `sh:select` / `sh:ask` with prefixes, pre-binding and `$PATH` substitution;
+- **`/ai`** (`src/ai/`, formerly `effect-sparql-ai`) — knowledge-graph tools for `effect/ai`: `Tools` (the `sparql_query`, `describe_resource`, `list_classes`, `list_properties`, `search_labels` and opt-in `sparql_update` tools, the read-only `toolkit` / `toolkitWithUpdate`, and handler layers over `SparqlEngine`) and `Mcp` (their `McpServer.toolkit` registration).
 
 ## Boundary
 
-Peers: `@thomasfosterau/effect-parse`, `effect`. Runtime dependencies: `@effect/platform-node` (the server's Node listener and CLI). Imports from this workspace: core (its `/rdfjson` subpath included), jsonld, n3, ntriples, rdfxml, turtle — `.fallowrc.json` zone `sparql`.
+Peers: `@thomasfosterau/effect-parse`, `effect`. Runtime dependencies: `@effect/platform-node` (the server's Node listener and CLI). Imports from this workspace: core (its `/rdfjson` and `/shacl` subpaths included), jsonld, n3, ntriples, rdfxml, turtle — `.fallowrc.json` zone `sparql`.
 
-Entry points: every `src/*.ts` is `./<Module>`; the `/ai` subpath is `./ai` (its `index.ts` barrel) and `./ai/<Module>`, kept off the root barrel. It imports the engine through relative paths (`../Engine.ts`), never through the package's own name; the engine never imports it.
+Entry points: every `src/*.ts` is `./<Module>`; the `/shacl` and `/ai` subpaths are `./shacl` / `./ai` (their `index.ts` barrels) and `./shacl/<Module>` / `./ai/<Module>`, not on the root barrel. A subpath imports the engine through relative paths (`../Engine.ts`), never through the package's own name; the engine never imports a subpath.
 
 ## Invariants
 
@@ -27,6 +28,12 @@ Entry points: every `src/*.ts` is `./<Module>`; the `/ai` subpath is `./ai` (its
 - **Every failure of `SparqlClient` is a `SparqlClientError` member** (`HttpStatusError` with the body, `MalformedResponseError`, `UnsupportedMediaTypeError`, `TransportError`, `TimeoutError`, `ConfigurationError`); retries apply to transient failures only by default.
 - **707 / 707 evaluation tests also pass over HTTP** (client against an in-process server); `service` 7 / 7.
 
+### `/shacl`
+
+- **Pre-binding follows the specification exactly** (values insertion, `Algebra.prebind`), and its restrictions — `MINUS`, `VALUES`, `SERVICE`, `AS ?prebound`, sub-queries dropping pre-bound variables — are failures.
+- **22 / 22 SHACL-SPARQL tests pass, and the 98 Core tests with the evaluator installed.**
+- **`test/readme-example.test.ts` is the root README's quick tour:** change both together.
+
 ### `/ai`
 
 - **Tool input is untrusted (model-generated).** `sparql_query` is read-only (it only parses queries), updates need the separate `toolkitWithUpdate`, every result is capped at `maxRows` and reports `isTruncated`, every call has a `timeout`, and `SERVICE` is refused unless `federation: true`. `SECURITY.md` states these; a change to any of them updates it.
@@ -37,7 +44,8 @@ Entry points: every `src/*.ts` is `./<Module>`; the `/ai` subpath is `./ai` (its
 ## Terms
 
 - **Pre-binding** — SHACL-SPARQL's values insertion (`Algebra.prebind`); **solution** — a `Bindings` row.
+- **Constraint component** (`/shacl`) — a SPARQL-defined, parameterised constraint (`sh:ConstraintComponent`).
+- **Tool** / **toolkit** (`/ai`) — `effect/ai`'s `Tool.make` definitions and their `Toolkit`; **MCP** — the Model Context Protocol.
 - **Federation** — evaluating `SERVICE <url> { … }` by sending the group to that endpoint.
 - **Direct / indirect identification** — Graph Store addressing by URL path vs `?graph=<iri>`.
 - **`Errors` / `ProtocolErrors` / `ClientErrors`** — the engine's evaluation and update errors, the server's HTTP-status `ProtocolError`, and the client's `SparqlClientError` members. **`ServerFormats` / `ClientFormats`** — the server's default codecs (Turtle first, for negotiation) and the client's (N-Triples first, parsed incrementally).
-- **Tool** / **toolkit** (`/ai`) — `effect/ai`'s `Tool.make` definitions and their `Toolkit`; **MCP** — the Model Context Protocol.

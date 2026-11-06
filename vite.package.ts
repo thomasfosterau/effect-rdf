@@ -29,6 +29,17 @@ export interface PackageConfigOptions {
    * entries, e.g. core's `csvw`, `rdfjson` and `shacl`.
    */
   readonly subpaths?: ReadonlyArray<string> | undefined;
+  /**
+   * `false` for a private test-only package (`tests/conformance`): no `src/`,
+   * so no `build` task and no `vp pack` settings. Default `true`.
+   */
+  readonly published?: boolean | undefined;
+  /**
+   * The sources the package's own coverage run measures, when they are not its
+   * own `src/` (globs relative to the package, outside it allowed), e.g. the
+   * conformance package's `../../packages/core/src/**` .
+   */
+  readonly coverageOf?: ReadonlyArray<string> | undefined;
 }
 
 /**
@@ -45,12 +56,46 @@ const cacheInputs = [
   { pattern: 'pnpm-lock.yaml', base: 'workspace' as const },
 ];
 
+/**
+ * The `build` task and `vp pack` settings of a published package: one ESM
+ * module + declaration file per `src/*.ts` (the `./*` export) and per
+ * `src/<subpath>/*.ts`, via `vp pack` → tsdown.
+ */
+const publishing = ({
+  subpaths = [],
+  packTsconfig,
+}: Pick<PackageConfigOptions, 'subpaths' | 'packTsconfig'>) => ({
+  tasks: {
+    build: {
+      command: 'vp pack',
+      cache: { input: cacheInputs, output: ['dist/**'] },
+    },
+  },
+  pack: {
+    entry: ['src/*.ts', ...subpaths.map((name) => `src/${name}/*.ts`)],
+    dts: true,
+    format: ['esm' as const],
+    sourcemap: true,
+    ...(packTsconfig === undefined ? {} : { tsconfig: packTsconfig }),
+  },
+});
+
+/** What a package's coverage run measures: its own `src/`, or `coverageOf`. */
+const coverageSources = ({ coverageOf }: Pick<PackageConfigOptions, 'coverageOf'>) =>
+  coverageOf === undefined
+    ? { include: ['src/**/*.ts'], allowExternal: false }
+    : // Sources outside the package root are measured only when asked for.
+      { include: [...coverageOf], allowExternal: true };
+
 export const packageConfig = ({
   testTimeout = 60_000,
   packTsconfig,
   subpaths = [],
+  published = true,
+  coverageOf,
 }: PackageConfigOptions = {}) => {
   const maxWorkers = process.env.VITEST_MAX_WORKERS;
+  const release = published ? publishing({ subpaths, packTsconfig }) : { tasks: {} };
   return defineConfig({
     run: {
       tasks: {
@@ -59,13 +104,8 @@ export const packageConfig = ({
           command: 'tsc -p tsconfig.json',
           cache: { input: cacheInputs, output: [] },
         },
-        // The published artifact: one ESM module + declaration file per
-        // `src/*.ts` (the `./*` export) and per `src/<subpath>/*.ts`, via
-        // `vp pack` → tsdown.
-        build: {
-          command: 'vp pack',
-          cache: { input: cacheInputs, output: ['dist/**'] },
-        },
+        // The published artifact (`build`), unless the package is private.
+        ...release.tasks,
         // Never cached: the conformance suites read `RDF_TEST_SUITES`
         // (default `<repo>/.test-suites`, fetched by
         // `scripts/fetch-test-suites.sh`) and skip when it is absent, and a
@@ -81,13 +121,7 @@ export const packageConfig = ({
         },
       },
     },
-    pack: {
-      entry: ['src/*.ts', ...subpaths.map((name) => `src/${name}/*.ts`)],
-      dts: true,
-      format: ['esm'],
-      sourcemap: true,
-      ...(packTsconfig === undefined ? {} : { tsconfig: packTsconfig }),
-    },
+    ...('pack' in release ? { pack: release.pack } : {}),
     test: {
       include: ['test/**/*.test.ts'],
       testTimeout,
@@ -98,7 +132,7 @@ export const packageConfig = ({
         // reads for exact per-function CRAP scores.
         reporter: ['text-summary', 'json-summary', 'json'],
         reportsDirectory: './coverage',
-        include: ['src/**/*.ts'],
+        ...coverageSources({ coverageOf }),
         exclude: ['**/*.d.ts'],
       },
     },

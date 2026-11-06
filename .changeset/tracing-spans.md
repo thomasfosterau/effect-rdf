@@ -7,7 +7,6 @@
 '@thomasfosterau/effect-jsonld': patch
 '@thomasfosterau/effect-rdfxml': patch
 '@thomasfosterau/effect-xmp': patch
-'@thomasfosterau/effect-shacl': patch
 '@thomasfosterau/effect-shex': patch
 ---
 

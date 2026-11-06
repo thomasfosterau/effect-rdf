@@ -1,6 +1,5 @@
 ---
-'@thomasfosterau/effect-shacl': patch
-'@thomasfosterau/effect-shacl-sparql': patch
+'@thomasfosterau/effect-sparql': patch
 '@thomasfosterau/effect-rdf': patch
 '@thomasfosterau/effect-xmp': patch
 ---

@@ -2,12 +2,13 @@
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql",
   "version": "0.0.0",
-  "description": "Effect-idiomatic SPARQL 1.1 / 1.2: parser, algebra, query engine, results formats, a typed query builder, a SPARQL Protocol / Graph Store server and client, and knowledge-graph tools for effect/ai",
+  "description": "Effect-idiomatic SPARQL 1.1 / 1.2: parser, algebra, query engine, results formats, a typed query builder, a SPARQL Protocol / Graph Store server and client, SHACL-SPARQL, and knowledge-graph tools for effect/ai",
   "keywords": [
     "ai",
     "effect",
     "mcp",
     "rdf",
+    "shacl",
     "sparql",
     "typescript"
   ],
@@ -38,6 +39,8 @@
     ".": "./src/index.ts",
     "./ai": "./src/ai/index.ts",
     "./ai/*": "./src/ai/*.ts",
+    "./shacl": "./src/shacl/index.ts",
+    "./shacl/*": "./src/shacl/*.ts",
     "./*": "./src/*.ts"
   },
   "publishConfig": {
@@ -53,6 +56,14 @@
       "./ai/*": {
         "types": "./dist/ai/*.d.mts",
         "default": "./dist/ai/*.mjs"
+      },
+      "./shacl": {
+        "types": "./dist/shacl/index.d.mts",
+        "default": "./dist/shacl/index.mjs"
+      },
+      "./shacl/*": {
+        "types": "./dist/shacl/*.d.mts",
+        "default": "./dist/shacl/*.mjs"
       },
       "./*": {
         "types": "./dist/*.d.mts",

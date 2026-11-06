@@ -1,0 +1,611 @@
+import { assert, describe, expect, it, layer } from '@effect/vitest';
+import { Dataset, Isomorphism, Namespace, Term, Vocab } from '@thomasfosterau/effect-rdf';
+import * as Arr from 'effect/Array';
+import * as Effect from 'effect/Effect';
+import { identity } from 'effect/Function';
+import * as Layer from 'effect/Layer';
+import * as Option from 'effect/Option';
+import * as Order from 'effect/Order';
+import * as Predicate from 'effect/Predicate';
+import * as Record from 'effect/Record';
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
+import type * as SchemaIssue from 'effect/SchemaIssue';
+import * as Match from 'effect/Match';
+import {
+  Message,
+  Path,
+  Shapes,
+  Sparql,
+  ValidationReport,
+  Validator,
+  Vocabulary,
+} from '@thomasfosterau/effect-rdf/shacl';
+import { parseTurtle } from './utils/turtle.ts';
+import { Turtle } from '@thomasfosterau/effect-turtle';
+
+const sorted = (xs: Iterable<string>) => Arr.sort(xs, Order.String);
+
+const { sh } = Vocabulary;
+// The validation issues under the `Encoding` node `Schema.decodeTo` wraps them in, and the
+// annotations each carries.
+const issueList = (issue: SchemaIssue.Issue): ReadonlyArray<SchemaIssue.Issue> =>
+  Match.value(issue).pipe(
+    Match.tag('Encoding', (e) => issueList(e.issue)),
+    Match.tag('Composite', (c) => c.issues),
+    Match.orElse((i) => [i]),
+  );
+const messageOf = (issue: SchemaIssue.Issue): Option.Option<string> =>
+  Match.value(issue).pipe(
+    Match.tag('InvalidValue', (i) => Option.fromNullishOr(i.annotations?.message)),
+    Match.orElse(() => Option.none()),
+  );
+const resultHas = (issue: SchemaIssue.Issue, key: string): boolean =>
+  Match.value(issue).pipe(
+    Match.tag('InvalidValue', (i) => Predicate.hasProperty(i.annotations?.['result'], key)),
+    Match.orElse(() => false),
+  );
+
+const { rdf, xsd } = Vocab;
+const ex = Namespace.make('http://example.org/');
+
+/** The IRI of a term the test expects to be a named node. */
+const iri = (t: Term.Term): string =>
+  Term.isNamedNode(t) ? t.value : assert.fail(`expected an IRI, got ${t.key}`);
+
+const isPropertyShape = (s: Shapes.Shape): s is Shapes.PropertyShape =>
+  Predicate.isTagged(s, 'PropertyShape');
+
+const prefixes = `
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+`;
+const ttl = (s: string) => parseTurtle(prefixes + s);
+
+const personShapes = ttl(`
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:property [
+    sh:path ex:name ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string ;
+    sh:message "A person needs exactly one string name"@en ;
+  ] ;
+  sh:property [
+    sh:path ex:age ;
+    sh:datatype xsd:integer ;
+    sh:minInclusive 0 ;
+    sh:severity sh:Warning ;
+  ] ;
+  sh:property [
+    sh:path ex:knows ;
+    sh:class ex:Person ;
+  ] .
+`);
+
+const personData = ttl(`
+ex:Student rdfs:subClassOf ex:Person .
+ex:alice a ex:Person ; ex:name "Alice" ; ex:age 30 ; ex:knows ex:bob .
+ex:bob a ex:Student ; ex:name "Bob" ; ex:age -1 ; ex:knows ex:carol .
+ex:carol ex:name "Carol" .
+ex:dave a ex:Person .
+`);
+
+describe('Vocabulary', () => {
+  it('exposes typed SHACL terms', () => {
+    expect(sh.NodeShape.value).toBe('http://www.w3.org/ns/shacl#NodeShape');
+    expect(sh.in.value).toBe('http://www.w3.org/ns/shacl#in');
+  });
+});
+
+describe('Path', () => {
+  const data = ttl(`
+    ex:a ex:p ex:b . ex:b ex:p ex:c . ex:c ex:q ex:d . ex:x ex:p ex:a .
+  `);
+  it('evaluates complex paths', () => {
+    const keys = (p: Path.Path, focus: Term.GroundTerm = ex('a')) =>
+      sorted(Path.evaluate(data, focus, p).map((t) => t.key));
+    const p = Path.predicate(ex('p'));
+    expect(keys(p)).toEqual([ex('b').key]);
+    expect(keys(Path.inverse(p))).toEqual([ex('x').key]);
+    expect(keys(Path.sequence(p, p, Path.predicate(ex('q'))))).toEqual([ex('d').key]);
+    expect(keys(Path.zeroOrMore(p))).toEqual(sorted([ex('a').key, ex('b').key, ex('c').key]));
+    expect(keys(Path.oneOrMore(p))).toEqual(sorted([ex('b').key, ex('c').key]));
+    expect(keys(Path.zeroOrOne(p))).toEqual(sorted([ex('a').key, ex('b').key]));
+    expect(keys(Path.alternative(p, Path.inverse(p)))).toEqual(sorted([ex('b').key, ex('x').key]));
+    expect(keys(Path.inverse(Path.sequence(p, p)), ex('c'))).toEqual([ex('a').key]);
+    expect(Path.toSparql(Path.sequence(Path.inverse(p), Path.zeroOrMore(p)))).toBe(
+      '^<http://example.org/p>/<http://example.org/p>*',
+    );
+  });
+
+  it('round-trips through RDF', () => {
+    const path = Path.sequence(
+      Path.alternative(Path.predicate(ex('p')), Path.inverse(Path.predicate(ex('q')))),
+      Path.oneOrMore(Path.predicate(ex('r'))),
+    );
+    const { node, quads } = Path.toRdf(path);
+    const decoded = Path.fromRdf(Dataset.fromIterable(quads), node);
+    expect(Result.isSuccess(decoded) && Path.equals(decoded.success, path)).toBe(true);
+  });
+
+  it('rejects ill-formed paths', () => {
+    const g = ttl(`ex:s sh:path [ ex:unknown ex:p ] .`);
+    const node = Dataset.objectsOf(g, ex('s'), sh.path)[0] ?? assert.fail('expected an sh:path');
+    expect(Result.isFailure(Path.fromRdf(g, node))).toBe(true);
+  });
+});
+
+describe('Shapes', () => {
+  it.effect('parses a shapes graph into a typed model', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(personShapes);
+      const found = Shapes.get(shapes, ex('PersonShape'));
+      assert(Option.isSome(found));
+      const person = found.value;
+      expect(person._tag).toBe('NodeShape');
+      expect(person.targets).toEqual([
+        { _tag: 'TargetClass', class: ex('Person'), implicit: false },
+      ]);
+      expect(person.constraints.map((c) => c._tag)).toEqual(['Property', 'Property', 'Property']);
+      const props = shapes.shapes.filter(isPropertyShape);
+      expect(props).toHaveLength(3);
+      const age =
+        props.find((s) => Path.equals(s.path, Path.predicate(ex('age')))) ??
+        assert.fail('expected the ex:age property shape');
+      expect(age.severity.value).toBe(sh.Warning.value);
+      expect(age.constraints.map((c) => Shapes.componentOf(c).value)).toEqual([
+        sh.DatatypeConstraintComponent.value,
+        sh.MinInclusiveConstraintComponent.value,
+      ]);
+      expect(Shapes.targetedShapes(shapes)).toEqual([person]);
+      expect(Shapes.usesSparql(shapes)).toBe(false);
+    }),
+  );
+
+  it.effect('reports ill-formed shapes graphs', () =>
+    Effect.gen(function* () {
+      const bad = [
+        `ex:S sh:targetNode ex:a ; sh:minCount "two" .`,
+        `ex:S a sh:PropertyShape ; sh:path ex:p, ex:q .`,
+        `ex:S sh:targetNode ex:a ; sh:pattern "(" .`,
+        `ex:S sh:targetNode ex:a ; sh:in ex:notAList .`,
+        `ex:S sh:targetNode ex:a ; sh:nodeKind ex:Whatever .`,
+        `ex:S sh:targetNode ex:a ; sh:node "literal" .`,
+      ];
+      yield* Effect.forEach(
+        bad,
+        Effect.fnUntraced(function* (src) {
+          const error = yield* Effect.flip(Shapes.parse(ttl(src)));
+          expect(error._tag).toBe('ShapesGraphError');
+        }),
+        { concurrency: 1, discard: true },
+      );
+    }),
+  );
+
+  it.effect('recognises implicit class targets and SPARQL constructs', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(
+        ttl(`
+          ex:Person a rdfs:Class, sh:NodeShape ; sh:sparql [ sh:select "SELECT $this WHERE {}" ] .
+          ex:T sh:target [ a sh:SPARQLTarget ; sh:select "SELECT ?this WHERE {}" ] .
+        `),
+      );
+      const found = Shapes.get(shapes, ex('Person'));
+      assert(Option.isSome(found));
+      const person = found.value;
+      expect(person.targets).toEqual([
+        { _tag: 'TargetClass', class: ex('Person'), implicit: true },
+      ]);
+      expect(person.constraints[0]?._tag).toBe('Sparql');
+      expect(Shapes.usesSparql(shapes)).toBe(true);
+    }),
+  );
+});
+
+describe('Validator', () => {
+  it.effect('validates with RDFS subclass reasoning', () =>
+    Effect.gen(function* () {
+      const report = yield* Validator.validate(personData, personShapes);
+      expect(report.conforms).toBe(false);
+      const summary = sorted(
+        report.results.map(
+          (r) =>
+            `${iri(r.focusNode)} ${sh.localName(iri(r.sourceConstraintComponent))} ${sh.localName(r.severity)}`,
+        ),
+      );
+      expect(summary).toEqual([
+        'http://example.org/bob ClassConstraintComponent Violation',
+        'http://example.org/bob MinInclusiveConstraintComponent Warning',
+        'http://example.org/dave MinCountConstraintComponent Violation',
+      ]);
+      expect(ValidationReport.violations(report)).toHaveLength(2);
+      const dave =
+        report.results.find((r) => r.focusNode.key === ex('dave').key) ??
+        assert.fail('expected a result for ex:dave');
+      expect(dave.messages.map((m) => m.value)).toEqual(['A person needs exactly one string name']);
+      expect(Option.map(dave.resultPath, Path.toSparql)).toEqual(Option.some(ex('name').key));
+      expect(ValidationReport.format(report)).toContain('MinCountConstraintComponent');
+    }),
+  );
+
+  it.effect('converts reports to the standard RDF vocabulary', () =>
+    Effect.gen(function* () {
+      const report = yield* Validator.validate(personData, personShapes);
+      const ds = ValidationReport.toDataset(report);
+      expect(Dataset.subjectsOf(ds, rdf.type, sh.ValidationReport)).toHaveLength(1);
+      expect(Dataset.subjectsOf(ds, rdf.type, sh.ValidationResult)).toHaveLength(3);
+      expect(
+        Dataset.has(
+          ds,
+          Term.quad(
+            Dataset.subjectsOf(ds, rdf.type, sh.ValidationReport)[0] ??
+              assert.fail('expected a validation report'),
+            sh.conforms,
+            Term.literal('false', xsd.boolean),
+          ),
+        ),
+      ).toBe(true);
+      const back = ValidationReport.fromDataset(ds);
+      assert(Result.isSuccess(back));
+      const again = ValidationReport.toDataset(back.success);
+      expect(Isomorphism.isomorphic(ds, again)).toBe(true);
+    }),
+  );
+
+  it('encodes a report through Schema.toCodecJson', () => {
+    const report = ValidationReport.make([
+      ValidationReport.makeResult({
+        focusNode: ex('n'),
+        sourceShape: Term.blankNode('shape'),
+        sourceConstraintComponent: sh.MinCountConstraintComponent,
+        resultPath: Option.some(
+          Path.sequence(
+            Path.predicate(ex('p')),
+            Path.inverse(Path.zeroOrMore(Path.predicate(ex('q')))),
+          ),
+        ),
+        value: Option.some(Term.triple(ex('s'), ex('p'), Term.literal('o', 'en'))),
+        messages: [Term.literal('too few')],
+        details: [
+          ValidationReport.makeResult({
+            focusNode: Term.literal('1', xsd.integer),
+            sourceShape: ex('S'),
+            sourceConstraintComponent: sh.DatatypeConstraintComponent,
+          }),
+        ],
+      }),
+    ]);
+    const codec = Schema.toCodecJson(ValidationReport.ValidationReportSchema);
+    const json = Schema.encodeSync(codec)(report);
+    const text = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(json);
+    expect(Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(text)).toStrictEqual(json);
+    const back = Schema.decodeSync(codec)(json);
+    expect(
+      Isomorphism.isomorphic(ValidationReport.toDataset(back), ValidationReport.toDataset(report)),
+    ).toBe(true);
+    expect(back.results[0]?.details[0]?.focusNode.key).toBe(
+      '"1"^^<http://www.w3.org/2001/XMLSchema#integer>',
+    );
+    expect(Schema.encodeSync(codec)(back)).toStrictEqual(json);
+  });
+
+  it.effect('covers value, string and pair constraints', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetNode ex:n ;
+          sh:property [ sh:path ex:code ; sh:pattern "^[a-z]+$" ; sh:flags "i" ; sh:maxLength 3 ] ;
+          sh:property [ sh:path ex:label ; sh:languageIn ( "en" "de" ) ; sh:uniqueLang true ] ;
+          sh:property [ sh:path ex:start ; sh:lessThan ex:end ] ;
+          sh:property [ sh:path ex:colour ; sh:in ( ex:Red ex:Green ) ; sh:hasValue ex:Red ] ;
+          sh:property [ sh:path ex:same ; sh:equals ex:other ; sh:disjoint ex:code ] .
+      `);
+      const data = ttl(`
+        ex:n ex:code "AB", "abcd", "a1" ;
+          ex:label "x"@en, "y"@en-GB, "z"@fr ;
+          ex:start 5 ; ex:end 3 ;
+          ex:colour ex:Blue ;
+          ex:same "AB" ; ex:other "q" .
+      `);
+      const report = yield* Validator.validate(data, shapes);
+      const names = report.results.map(
+        (r) =>
+          sh.localName(iri(r.sourceConstraintComponent)) ??
+          assert.fail('expected a SHACL constraint component'),
+      );
+      expect(Record.map(Arr.groupBy(names, identity), (group) => group.length)).toEqual({
+        PatternConstraintComponent: 1, // "a1"
+        MaxLengthConstraintComponent: 1, // "abcd"
+        LanguageInConstraintComponent: 1, // "z"@fr
+        LessThanConstraintComponent: 1,
+        InConstraintComponent: 1,
+        HasValueConstraintComponent: 1,
+        EqualsConstraintComponent: 2,
+        DisjointConstraintComponent: 1,
+      });
+    }),
+  );
+
+  it.effect('supports closed shapes and logical constraints', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetNode ex:a, ex:b ;
+          sh:closed true ; sh:ignoredProperties ( rdf:type ) ;
+          sh:property [ sh:path ex:p ] ;
+          sh:or ( [ sh:property [ sh:path ex:p ; sh:minCount 1 ] ] [ sh:nodeKind sh:BlankNode ] ) ;
+          sh:not [ sh:hasValue ex:b ] .
+      `);
+      const data = ttl(`ex:a a ex:T ; ex:p 1 ; ex:q 2 . ex:b ex:p 1 .`);
+      const report = yield* Validator.validate(data, shapes, { details: true });
+      const tags = sorted(
+        report.results.map(
+          (r) => `${iri(r.focusNode)} ${sh.localName(iri(r.sourceConstraintComponent))}`,
+        ),
+      );
+      expect(tags).toEqual([
+        'http://example.org/a ClosedConstraintComponent',
+        'http://example.org/b NotConstraintComponent',
+      ]);
+      const closed =
+        report.results.find((r) => r.focusNode.key === ex('a').key) ??
+        assert.fail('expected a result for ex:a');
+      expect(Option.map(closed.resultPath, Path.toSparql)).toEqual(Option.some(ex('q').key));
+    }),
+  );
+
+  it.effect('attaches nested details for sh:node when requested', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:node ex:Inner ] .
+        ex:Inner sh:property [ sh:path ex:q ; sh:minCount 1 ] .
+      `);
+      const data = ttl(`ex:a ex:p ex:b .`);
+      const withDetails = yield* Validator.validate(data, shapes, { details: true });
+      expect(withDetails.results[0]?.details).toHaveLength(1);
+      const withoutDetails = yield* Validator.validate(data, shapes);
+      expect(withoutDetails.results[0]?.details).toHaveLength(0);
+    }),
+  );
+
+  it.effect('detects recursive shapes', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetNode ex:a ; sh:property [ sh:path ex:knows ; sh:node ex:S ] .
+      `);
+      const data = ttl(`ex:a ex:knows ex:b . ex:b ex:knows ex:a .`);
+      const error = yield* Effect.flip(Validator.validate(data, shapes));
+      expect(error._tag).toBe('RecursiveShapeError');
+      const report = yield* Validator.validate(data, shapes, { recursion: 'ignore' });
+      expect(report.conforms).toBe(true);
+    }),
+  );
+
+  it.effect('can include the shapes graph in the data graph', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetSubjectsOf sh:targetSubjectsOf ; sh:property [ sh:path sh:targetSubjectsOf ; sh:nodeKind sh:Literal ] .
+      `);
+      const without = yield* Validator.validate(Dataset.empty, shapes);
+      expect(without.conforms).toBe(true);
+      const withShapes = yield* Validator.validate(Dataset.empty, shapes, {
+        includeShapesGraph: true,
+      });
+      expect(withShapes.conforms).toBe(false);
+    }),
+  );
+
+  it.effect('skips deactivated shapes', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`ex:S sh:targetNode ex:a ; sh:deactivated true ; sh:minLength 100 .`);
+      expect(yield* Validator.conforms(Dataset.empty, shapes)).toBe(true);
+    }),
+  );
+
+  layer(Validator.layer(personShapes))((test) => {
+    test.effect('provides a pre-compiled Validator service', () =>
+      Effect.gen(function* () {
+        const validator = yield* Validator.Validator;
+        expect(yield* validator.conforms(personData)).toBe(false);
+        const error = yield* Effect.flip(validator.check(personData));
+        expect(error._tag).toBe('ConformanceError');
+        const good = ttl(`ex:x a ex:Person ; ex:name "X" .`);
+        expect(yield* validator.check(good)).toBe(good);
+      }),
+    );
+  });
+
+  it.effect('fails building the layer from an ill-formed shapes graph', () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        Layer.build(Validator.layer(ttl(`ex:S sh:targetNode ex:a ; sh:maxCount ex:x .`))),
+      );
+      expect(error._tag).toBe('ShapesGraphError');
+    }),
+  );
+
+  it.effect('exposes a Schema that only accepts conforming datasets', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(personShapes);
+      const schema = Validator.schema(shapes);
+      const good = ttl(`ex:x a ex:Person ; ex:name "X" .`);
+      expect(yield* Schema.decodeEffect(schema)(good)).toBe(good);
+      const error = yield* Effect.flip(Schema.decodeEffect(schema)(personData));
+      expect(error.message).toContain('MinCountConstraintComponent');
+    }),
+  );
+
+  it.effect('reports one structured issue per failing result, by severity', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(personShapes);
+      // Two violations (bob's class, dave's name) and one warning (bob's age).
+      const violations = yield* Effect.flip(
+        Schema.decodeEffect(Validator.schema(shapes))(personData),
+      );
+      const found = issueList(violations.issue);
+      expect(found).toHaveLength(2);
+      expect(found.every((issue) => resultHas(issue, 'focusNode'))).toBe(true);
+      expect(Arr.getSomes(Arr.map(found, (issue) => messageOf(issue)))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(
+            '[Violation] MinCountConstraintComponent on <http://example.org/dave>',
+          ),
+        ]),
+      );
+      const withWarnings = yield* Effect.flip(
+        Schema.decodeEffect(Validator.schema(shapes, { failOn: 'warning' }))(personData),
+      );
+      expect(issueList(withWarnings.issue)).toHaveLength(3);
+      // Only a warning: accepted unless warnings fail.
+      const warned = ttl(`ex:x a ex:Person ; ex:name "X" ; ex:age -5 .`);
+      expect(yield* Schema.decodeEffect(Validator.schema(shapes))(warned)).toBe(warned);
+      const strict = yield* Effect.flip(
+        Schema.decodeEffect(Validator.schema(shapes, { failOn: 'info' }))(warned),
+      );
+      expect(issueList(strict.issue)).toHaveLength(1);
+    }),
+  );
+
+  it.effect('parses and validates in one decode (Turtle codec + Validator.schema)', () =>
+    Effect.gen(function* () {
+      const shapes = yield* Shapes.parse(personShapes);
+      const PersonData = Turtle.codec.schema.pipe(Schema.decodeTo(Validator.schema(shapes)));
+      const prefix = '@prefix ex: <http://example.org/> .\n';
+      const ok = yield* Schema.decodeEffect(PersonData)(
+        `${prefix}ex:x a ex:Person ; ex:name "X" .`,
+      );
+      expect(ok.size).toBe(2);
+      const bad = yield* Effect.flip(
+        Schema.decodeEffect(PersonData)(`${prefix}ex:x a ex:Person .`),
+      );
+      expect(bad.message).toContain('MinCountConstraintComponent');
+      const syntax = yield* Effect.flip(Schema.decodeEffect(PersonData)('ex:x'));
+      expect(syntax._tag).toBe('SchemaError');
+    }),
+  );
+});
+
+describe('SHACL-SPARQL extension point', () => {
+  const shapes = ttl(`
+    ex:S sh:targetNode ex:a ;
+      sh:sparql [ sh:select "SELECT $this WHERE { $this ex:bad ?x }" ] .
+  `);
+  const data = ttl(`ex:a ex:bad 1 .`);
+
+  it.effect('fails with UnsupportedFeatureError without an evaluator', () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(Validator.validate(data, shapes));
+      expect(error._tag).toBe('UnsupportedFeatureError');
+    }),
+  );
+
+  it.effect('can ignore unsupported SPARQL constraints', () =>
+    Effect.gen(function* () {
+      const report = yield* Validator.validate(data, shapes, { sparql: 'ignore' });
+      expect(report.conforms).toBe(true);
+    }),
+  );
+
+  it.effect('delegates to a SparqlConstraintEvaluator', () =>
+    Effect.gen(function* () {
+      const report = yield* Validator.validate(data, shapes);
+      expect(report.results).toHaveLength(1);
+      const result = report.results[0] ?? assert.fail('expected a validation result');
+      expect(result.sourceConstraintComponent.key).toBe(sh.SPARQLConstraintComponent.key);
+      expect(Option.isSome(result.sourceConstraint)).toBe(true);
+      expect(Option.map(result.value, (v) => v.key)).toEqual(
+        Option.some(Term.literal('1', xsd.integer).key),
+      );
+    }).pipe(
+      Effect.provideService(Sparql.SparqlConstraintEvaluator, {
+        evaluateConstraint: (input) =>
+          Effect.succeed(
+            (Term.isSubject(input.focusNode)
+              ? Dataset.objectsOf(input.dataGraph, input.focusNode, ex('bad'))
+              : []
+            ).map((value) => ({ value })),
+          ),
+        selectTargets: () => Effect.succeed([]),
+      }),
+    ),
+  );
+
+  it.effect('substitutes evaluator bindings in messages', () =>
+    Effect.gen(function* () {
+      const report = yield* Validator.validate(
+        data,
+        ttl(`
+          ex:S sh:targetNode ex:a ;
+            sh:message "{$this} is bad: {?value} ({?reason})" ;
+            sh:sparql [ sh:select "SELECT $this WHERE { }" ] .
+        `),
+      );
+      expect(report.results[0]?.messages.map((m) => m.value)).toEqual([
+        'http://example.org/a is bad: 1 (too bad)',
+      ]);
+    }).pipe(
+      Effect.provideService(Sparql.SparqlConstraintEvaluator, {
+        evaluateConstraint: () =>
+          Effect.succeed([
+            {
+              value: Term.literal('1', xsd.integer),
+              bindings: new Map([['reason', Term.literal('too bad')]]),
+            },
+          ]),
+        selectTargets: () => Effect.succeed([]),
+      }),
+    ),
+  );
+});
+
+const messageLookup = (name: string) =>
+  name === 'value' ? ex('a') : name === 'n' ? Term.literal('3', xsd.integer) : undefined;
+
+describe('Message templates', () => {
+  it('substitutes {?var} and {$var} placeholders', () => {
+    expect(Message.format('{$value} has {?n} items ({?unknown})', messageLookup)).toBe(
+      'http://example.org/a has 3 items ({?unknown})',
+    );
+    const message = Message.substitute(Term.literal('Wert {?n}', 'de'), messageLookup);
+    expect(message.value).toBe('Wert 3');
+    expect(message.language).toBe('de');
+    expect(Message.variables('{?a} {$b} {c}')).toEqual(['a', 'b']);
+    expect(Message.display(Term.blankNode('b0'))).toBe('_:b0');
+  });
+
+  it('derives parameter names from IRIs', () => {
+    expect(Message.localName(ex('maxWords'))).toBe('maxWords');
+    expect(Message.localName('http://example.org/ns#lang')).toBe('lang');
+    expect(Message.localName('urn:x:9abc')).toBe('abc');
+    expect(Message.localName('http://example.org/')).toBe('');
+  });
+
+  it.effect('substitutes core constraint parameters in sh:message', () =>
+    Effect.gen(function* () {
+      const shapes = ttl(`
+        ex:S sh:targetNode ex:a ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 2 ;
+            sh:message "{$this} needs at least {$minCount} values for {$path}"@en ;
+          ] ;
+          sh:property [
+            sh:path ex:age ;
+            sh:datatype xsd:integer ;
+            sh:message "{?value} is not an {$datatype}" ;
+          ] .
+      `);
+      const report = yield* Validator.validate(ttl(`ex:a ex:name "A" ; ex:age "x" .`), shapes);
+      const texts = report.results.flatMap((r) => r.messages.map((m) => m.value));
+      expect(texts).toHaveLength(2);
+      expect(texts).toContain(
+        'http://example.org/a needs at least 2 values for http://example.org/name',
+      );
+      expect(texts).toContain('x is not an http://www.w3.org/2001/XMLSchema#integer');
+    }),
+  );
+});

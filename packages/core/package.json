@@ -2,11 +2,14 @@
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdf",
   "version": "0.0.0",
-  "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model, with an RDF/JSON codec",
+  "description": "Effect-idiomatic RDF 1.2, RDF Schema and RDF-star data model, with RDF/JSON, CSV on the Web (CSVW) and a SHACL Core validator",
   "keywords": [
+    "csv",
+    "csvw",
     "effect",
     "rdf",
     "rdf-json",
+    "shacl",
     "typescript"
   ],
   "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/core#readme",
@@ -30,8 +33,12 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./csvw": "./src/csvw/index.ts",
+    "./csvw/*": "./src/csvw/*.ts",
     "./rdfjson": "./src/rdfjson/index.ts",
     "./rdfjson/*": "./src/rdfjson/*.ts",
+    "./shacl": "./src/shacl/index.ts",
+    "./shacl/*": "./src/shacl/*.ts",
     "./*": "./src/*.ts"
   },
   "publishConfig": {
@@ -40,6 +47,14 @@
         "types": "./dist/index.d.mts",
         "default": "./dist/index.mjs"
       },
+      "./csvw": {
+        "types": "./dist/csvw/index.d.mts",
+        "default": "./dist/csvw/index.mjs"
+      },
+      "./csvw/*": {
+        "types": "./dist/csvw/*.d.mts",
+        "default": "./dist/csvw/*.mjs"
+      },
       "./rdfjson": {
         "types": "./dist/rdfjson/index.d.mts",
         "default": "./dist/rdfjson/index.mjs"
@@ -47,6 +62,14 @@
       "./rdfjson/*": {
         "types": "./dist/rdfjson/*.d.mts",
         "default": "./dist/rdfjson/*.mjs"
+      },
+      "./shacl": {
+        "types": "./dist/shacl/index.d.mts",
+        "default": "./dist/shacl/index.mjs"
+      },
+      "./shacl/*": {
+        "types": "./dist/shacl/*.d.mts",
+        "default": "./dist/shacl/*.mjs"
       },
       "./*": {
         "types": "./dist/*.d.mts",

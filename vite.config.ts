@@ -23,13 +23,13 @@ const packages = [
   'effect-jsonld',
   'effect-rdfxml',
   'effect-xmp',
-  'effect-csvw',
   'effect-sparql',
-  'effect-shacl',
-  'effect-shacl-sparql',
   'effect-shex',
   'effect-sparql-sql',
 ].map((name) => `@thomasfosterau/${name}`);
+
+// Private, never-published test packages: in the type gate, not in `check:dist`.
+const testPackages = ['@effect-rdf/conformance'];
 
 export default defineConfig({
   // Staged-file checks run by `vp staged` (pre-commit).
@@ -167,7 +167,7 @@ export default defineConfig({
       // IS the runtime boundary that `effect-run-in-body` asks for. A
       // benchmark's console output is its product.
       {
-        files: ['packages/*/test/**', 'packages/*/bench/**'],
+        files: ['packages/*/test/**', 'packages/*/bench/**', 'tests/*/test/**'],
         rules: {
           'effect/avoid-node-imports': 'off',
           'effect/avoid-sync-fs': 'off',
@@ -337,7 +337,7 @@ export default defineConfig({
       // new package adds itself to `packages` above.
       check: {
         command: "echo 'check: every type gate green'",
-        dependsOn: packages.map((name) => `${name}#check`),
+        dependsOn: [...packages, ...testPackages].map((name) => `${name}#check`),
         cache: false,
       },
       // Import guard: the built dist of every published package imports no
@@ -362,8 +362,9 @@ export default defineConfig({
   },
   test: {
     // One entry per package: each package's own vite.config.ts is a vitest
-    // project, so the root run and the root coverage map cover them all.
-    projects: ['packages/*/vite.config.ts'],
+    // project, so the root run and the root coverage map cover them all. The
+    // conformance package's suites count toward the core sources they hit.
+    projects: ['packages/*/vite.config.ts', 'tests/*/vite.config.ts'],
     coverage: {
       provider: 'istanbul',
       reporter: ['text-summary', 'json-summary', 'json'],
