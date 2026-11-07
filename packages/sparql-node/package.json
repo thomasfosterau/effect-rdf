@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-sparql-node",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The Node side of @thomasfosterau/effect-rdf/sparql: a SPARQL 1.1 Protocol / Graph Store server on node:http, its command-line launcher, and the typed SparqlApi HttpApi definition, server and client",
   "keywords": [
     "effect",
