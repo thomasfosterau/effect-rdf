@@ -1,5 +1,25 @@
 # @thomasfosterau/effect-sparql-node
 
+## 0.2.0
+
+### Minor Changes
+
+- [#128](https://github.com/thomasfosterau/effect-rdf/pull/128) [`d7935a7`](https://github.com/thomasfosterau/effect-rdf/commit/d7935a74b830c3f060c70bbe1089467abfbf70c7) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - RDF/XML, XMP and SPARQL XML results now read XML with [`@thomasfosterau/effect-xml`](https://www.npmjs.com/package/@thomasfosterau/effect-xml)'s tokenizer, the family's shared XML layer, instead of a private effect-parse grammar ([#13](https://github.com/thomasfosterau/effect-rdf/issues/13)).
+  
+  - **effect-rdf:** `@thomasfosterau/effect-xml` (`^0.1.0`) is a new **optional** peer, needed by `/rdfxml`, `/xmp` and `/sparql` (with `/sparql/shacl` and `/sparql/ai`). effect-xml requires `@thomasfosterau/effect-parse` `^0.4.1` itself, so those subpaths need both installed.
+  - **effect-sparql-node:** `@thomasfosterau/effect-xml` is a new **required** peer.
+  - **API and model unchanged.** `Xml`'s document model, `parse` / `parseResult`, `XmlParseError` (with `line` / `column`), `canonicalize` and the escapes stay the same, and so do `RdfXml` and `Xmp`. So do the limits: entity expansion 1,000,000 characters, entity nesting 64, element nesting 1,024.
+  - **Error messages** for malformed XML are now effect-xml's wording, for example `Resource limit maxDepth (1024) exceeded at 1:3073`.
+  - **`Xml.Position`** now counts offsets in the input as written (after any byte order mark), with `\r\n` and `\r` as line ends. Before, offsets counted the line-end-normalised text.
+  - **`DocumentType.entities`** records the internal general entities as declared, with character references expanded.
+  - **Conformance:** the W3C RDF 1.1 and RDF 1.2 RDF/XML tests (550 / 550) and the veraPDF XMP corpus (503 / 503) still all pass.
+
+### Patch Changes
+
+- [#132](https://github.com/thomasfosterau/effect-rdf/pull/132) [`c401d0f`](https://github.com/thomasfosterau/effect-rdf/commit/c401d0f8cac5b1aa65a13442c879961668f8d535) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Ship `CHANGELOG.md` in the published tarball, so the release notes can be read from `node_modules`.
+- Updated dependencies [[`c401d0f`](https://github.com/thomasfosterau/effect-rdf/commit/c401d0f8cac5b1aa65a13442c879961668f8d535), [`8fd49a8`](https://github.com/thomasfosterau/effect-rdf/commit/8fd49a85f35415a0678f5e323e73f0452a2a1f5e), [`f0de8a5`](https://github.com/thomasfosterau/effect-rdf/commit/f0de8a5a2b92dd211429f425df996a3b10188205), [`662413d`](https://github.com/thomasfosterau/effect-rdf/commit/662413dc47f28960ac21433dd9b4605dc4ca9157), [`d7935a7`](https://github.com/thomasfosterau/effect-rdf/commit/d7935a74b830c3f060c70bbe1089467abfbf70c7)]:
+  - @thomasfosterau/effect-rdf@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes
