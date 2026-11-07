@@ -30,7 +30,7 @@ import * as PrefixMap from '../PrefixMap.ts';
 import * as Serialization from '../Serialization.ts';
 import * as Term from '../Term.ts';
 import * as Xml from './Xml.ts';
-import * as XmlParser from './internal/parser.ts';
+import * as XmlParser from './internal/builder.ts';
 
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const ITS = 'http://www.w3.org/2005/11/its';

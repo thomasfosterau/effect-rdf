@@ -4,7 +4,7 @@ The Node side of `@thomasfosterau/effect-rdf/sparql`: `NodeSparqlServer` (the pl
 
 ## Boundary
 
-Peers: `effect` (`catalogs.platform-node-peers`, `^4.1.2`), `@thomasfosterau/effect-parse` (effect-rdf's `/sparql` needs it). Runtime dependencies: `@thomasfosterau/effect-rdf` (imported only through its published subpaths, `@thomasfosterau/effect-rdf/sparql/<Module>`), `@effect/platform-node`. `.fallowrc.json` zone `sparql-node`, which may import `core` only. Nothing in the workspace imports it.
+Peers: `effect` (`catalogs.platform-node-peers`, `^4.1.2`), `@thomasfosterau/effect-parse` and `@thomasfosterau/effect-xml` (effect-rdf's `/sparql` needs both). Runtime dependencies: `@thomasfosterau/effect-rdf` (imported only through its published subpaths, `@thomasfosterau/effect-rdf/sparql/<Module>`), `@effect/platform-node`. `.fallowrc.json` zone `sparql-node`, which may import `core` only. Nothing in the workspace imports it.
 
 Entry points: every `src/*.ts` is `./<Module>`, and `.` re-exports them as namespaces.
 

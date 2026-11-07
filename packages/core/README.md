@@ -25,10 +25,11 @@ Each subpath is `@thomasfosterau/effect-rdf/<subpath>` (its barrel, re-exporting
 pnpm add effect @thomasfosterau/effect-rdf
 ```
 
-`effect` (`^4.0.0`) is a peer dependency. [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse) (`^0.4.0`) is an optional peer, needed by the syntax and SPARQL-parser subpaths (`/ntriples`, `/turtle`, `/n3`, `/jsonld`, `/rdfxml`, `/xmp`, `/shex`, `/sparql`, `/sparql/shacl`, `/sparql/ai`); the root entry, `/rdfjson`, `/csvw`, `/shacl` and `/sparql/sql` never import it:
+`effect` (`^4.0.0`) is a peer dependency. [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse) (`^0.4.0`) is an optional peer, needed by the syntax and SPARQL-parser subpaths (`/ntriples`, `/turtle`, `/n3`, `/jsonld`, `/rdfxml`, `/xmp`, `/shex`, `/sparql`, `/sparql/shacl`, `/sparql/ai`); the root entry, `/rdfjson`, `/csvw`, `/shacl` and `/sparql/sql` never import it. [`@thomasfosterau/effect-xml`](https://www.npmjs.com/package/@thomasfosterau/effect-xml) (`^0.1.0`) is a second optional peer, needed by the subpaths that read XML: `/rdfxml`, `/xmp` and `/sparql` (SPARQL XML results and the RDF/XML codec), with `/sparql/shacl` and `/sparql/ai`. effect-xml itself requires effect-parse `^0.4.1`, so those subpaths need both:
 
 ```sh
 pnpm add @thomasfosterau/effect-parse
+pnpm add @thomasfosterau/effect-xml # for /rdfxml, /xmp and /sparql
 ```
 
 ## Modules
@@ -626,17 +627,18 @@ const roundTrip = (text: string) =>
 for [`@thomasfosterau/effect-rdf`](#modules).
 
 - `RdfXml` — parser and serializer implementing the core `Serialization` interfaces.
-- `Xml` — the small namespace-aware, non-validating XML 1.0 parser it is built on
-  (internal DTD entities and attribute defaults, CDATA, comments, PIs) plus Exclusive XML
-  Canonicalization, usable on its own.
+- `Xml` — the namespace-aware, non-validating XML 1.0 document tree it is built on
+  (internal DTD entities and attribute defaults, CDATA, comments, PIs, with a position on
+  every node) plus Exclusive XML Canonicalization, usable on its own.
 
-The XML parser is a compiled
-[`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse)
-grammar (an optional peer dependency of effect-rdf, needed by this subpath). It never loads external entities, caps entity
+`Xml` builds its tree from the SAX events of
+[`@thomasfosterau/effect-xml`](https://www.npmjs.com/package/@thomasfosterau/effect-xml)'s tokenizer (an optional peer dependency of effect-rdf, needed by this subpath),
+adding well-formed structure, unique attributes and Namespaces in XML 1.0 on top. The internal
+subset is read only when the document has a DOCTYPE. It never loads external entities, caps entity
 expansion at 1,000,000 characters (defeating "billion laughs"), and limits entity references to
 64 levels of nesting and elements to 1,024, reporting an `XmlParseError` rather than exhausting
-the stack. `vp run --filter ./packages/core bench:rdfxml` times it on every RDF/XML and SPARQL XML results file of the W3C suites
-(about 38 MB/s) and on a 10.8 MB synthetic RDF/XML document (about 15 MB/s).
+the stack. Positions count UTF-16 code units of the input after any byte order mark. `vp run --filter ./packages/core bench:rdfxml` times it on every RDF/XML and SPARQL XML results file of the W3C suites
+(about 20 MB/s: effect-xml's per-document setup dominates on files this small) and on a 10.8 MB synthetic RDF/XML document (about 18 MB/s).
 
 The parser passes every test of the W3C RDF 1.1 and RDF 1.2 RDF/XML test suites, including
 `rdf:version`, base direction via `its:dir`, triple terms via `rdf:parseType="Triple"` and
@@ -715,7 +717,7 @@ consumers expect.
 | `Photoshop`, `Exif`, `Tiff`                                   | typed getters and setters for the image schemas' common properties                                |
 | `Namespaces`                                                  | the schema namespace IRIs and their conventional prefixes                                         |
 
-It needs the optional peer `@thomasfosterau/effect-parse` (the XML grammar behind `/rdfxml`).
+It needs the optional peers `@thomasfosterau/effect-xml` (the XML tokenizer behind `/rdfxml`) and `@thomasfosterau/effect-parse` (effect-xml's own peer).
 
 ### Reading
 

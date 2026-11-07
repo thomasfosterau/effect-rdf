@@ -1,7 +1,7 @@
 /**
- * A small, namespace-aware, non-validating XML 1.0 parser producing an
- * immutable document tree, plus Exclusive XML Canonicalization (with
- * comments) of element content.
+ * A namespace-aware, non-validating XML 1.0 parser producing an immutable
+ * document tree with a position on every node, plus Exclusive XML
+ * Canonicalization (with comments) of element content.
  *
  * Supported: the XML declaration, a document type declaration whose internal
  * subset may declare general entities and attribute defaults, elements,
@@ -10,12 +10,14 @@
  * entity references. External entities and parameter entities are not
  * loaded (they are reported as errors when referenced).
  *
- * The parser is a compiled `@thomasfosterau/effect-parse` grammar; it is
+ * The tree is built from the SAX events of `@thomasfosterau/effect-xml`'s
+ * tokenizer, an optional peer of effect-rdf needed by this subpath; it is
  * pure and synchronous internally, and the public `parse` API returns an
  * `Effect` failing with `XmlParseError`. It is safe on hostile input:
  * entity replacement text may add at most 1,000,000 characters to a
  * document, entity references nest at most 64 deep and elements at most
- * 1,024 deep, and the time it takes grows with the text it expands.
+ * 1,024 deep. Positions count UTF-16 code units of the input after any byte
+ * order mark, with line breaks as written.
  *
  * @since 0.1.0
  */
@@ -28,8 +30,8 @@ import * as Order from 'effect/Order';
 import type * as Ordering from 'effect/Ordering';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
+import * as Builder from './internal/builder.ts';
 import * as Chars from './internal/chars.ts';
-import * as Internal from './internal/parser.ts';
 
 /**
  * The XML namespace, bound to the `xml` prefix.
@@ -52,8 +54,9 @@ export const XMLNS_NAMESPACE = 'http://www.w3.org/2000/xmlns/';
 // -----------------------------------------------------------------------------
 
 /**
- * A position in the (line-end normalised) input. Lines and columns are
- * 1-based; the column counts UTF-16 code units.
+ * A position in the input (after any byte order mark). Lines and columns
+ * are 1-based; `\r\n`, `\r` and `\n` each end a line, and the offset and
+ * column count UTF-16 code units.
  *
  * @since 0.1.0
  * @category models
@@ -261,16 +264,13 @@ export const isName: (value: string) => boolean = Chars.isName;
  */
 export const isValidText: (value: string) => boolean = Chars.isValidText;
 
-// Hoisted: a regex literal makes a new `RegExp` each time it is evaluated.
-const WHITESPACE = /^[ \t\r\n]*$/;
-
 /**
  * Whether a string consists only of XML white space (`S`).
  *
  * @since 0.1.0
  * @category predicates
  */
-export const isWhitespace = (value: string): boolean => WHITESPACE.test(value);
+export const isWhitespace: (value: string) => boolean = Builder.isWhitespace;
 
 // -----------------------------------------------------------------------------
 // Parser
@@ -283,7 +283,7 @@ export const isWhitespace = (value: string): boolean => WHITESPACE.test(value);
  * @since 0.1.0
  * @category parsing
  */
-export const normalizeInput: (input: string) => string = Internal.normalizeInput;
+export const normalizeInput: (input: string) => string = Builder.normalizeInput;
 
 /**
  * Parses an XML document, returning a `Result`.
@@ -293,9 +293,9 @@ export const normalizeInput: (input: string) => string = Internal.normalizeInput
  */
 export const parseResult = (input: string): Result.Result<Document, XmlParseError> =>
   Result.try({
-    try: () => Internal.parseText(input),
+    try: () => Builder.parseText(input),
     catch: (e) => {
-      if (e instanceof Internal.Failure) {
+      if (e instanceof Builder.Failure) {
         return new XmlParseError({
           message: e.message,
           offset: e.position.offset,

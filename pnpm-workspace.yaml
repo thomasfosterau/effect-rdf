@@ -59,6 +59,12 @@ catalog:
   # syntax and SPARQL subpaths (see `catalogs.peers`), and a required peer of
   # effect-sparql-node.
   '@thomasfosterau/effect-parse': 0.4.1
+  # The family's shared XML layer (SAX tokenizer, limits, internal subset)
+  # behind `/rdfxml`'s `Xml` (RDF/XML, XMP, SPARQL XML results): an optional
+  # peer of effect-rdf (see `catalogs.peers`), a required peer of
+  # effect-sparql-node. Its own peers are `effect ^4.0.0` and
+  # `@thomasfosterau/effect-parse ^0.4.1` (required).
+  '@thomasfosterau/effect-xml': 0.1.0
   '@types/node': ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
@@ -94,6 +100,9 @@ catalogs:
     # Caret, not `>=`: on 0.x a minor release may break the combinator API
     # the grammars are written against.
     '@thomasfosterau/effect-parse': ^0.4.0
+    # Caret on 0.x for the same reason. effect-xml itself requires
+    # effect-parse ^0.4.1, so the XML subpaths effectively need 0.4.1.
+    '@thomasfosterau/effect-xml': ^0.1.0
     # The owner's peer-range policy: `effect` is `^4.0.0`, decided per
     # package. A package whose own dependencies require a newer `effect`
     # takes a named catalog below whose comment names that dependency; our

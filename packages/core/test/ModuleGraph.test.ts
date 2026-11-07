@@ -4,8 +4,12 @@
  * reached only from the syntax and SPARQL-parser subpaths, so the root entry
  * and the subpaths that parse nothing (`/csvw`, `/rdfjson`, `/shacl`,
  * `/sparql/sql` and every flat module) must never import it, not even for a
- * type. The root barrel also
- * re-exports no nested subpath.
+ * type. `@thomasfosterau/effect-xml`, the other optional peer, is reached
+ * only from the subpaths that read XML: `/rdfxml`, `/xmp` (through
+ * `/rdfxml`) and `/sparql` (SPARQL XML results and the RDF/XML codec) with
+ * the subpaths built on it. effect-xml itself requires effect-parse, so
+ * `/rdfxml` and `/xmp` need both installed though neither imports
+ * effect-parse. The root barrel also re-exports no nested subpath.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -46,8 +50,10 @@ const walk = (entry: string) => {
   return { files, bare };
 };
 
-const reachesParse = (entry: string) =>
-  walk(entry).bare.some((spec) => spec.startsWith('@thomasfosterau/effect-parse'));
+const reaches = (entry: string, peer: string) =>
+  walk(entry).bare.some((spec) => spec === peer || spec.startsWith(`${peer}/`));
+const reachesParse = (entry: string) => reaches(entry, '@thomasfosterau/effect-parse');
+const reachesXml = (entry: string) => reaches(entry, '@thomasfosterau/effect-xml');
 
 const flatModules = fs.readdirSync(src).filter((name) => name.endsWith('.ts'));
 const subpathModules = (subpath: string) =>
@@ -64,13 +70,18 @@ const parsing = [
   'jsonld',
   'n3',
   'ntriples',
-  'rdfxml',
   'shex',
   'sparql',
   'sparql/ai',
   'sparql/shacl',
   'turtle',
-  'xmp',
+];
+const readingXml = ['rdfxml', 'sparql', 'sparql/ai', 'sparql/shacl', 'xmp'];
+const subpaths = Arr.dedupe([...parsing, ...readingXml]);
+const xmlFree = [
+  ...flatModules,
+  ...['csvw', 'rdfjson', 'shacl', 'sparql/sql'].flatMap(subpathModules),
+  ...subpaths.filter((subpath) => !readingXml.includes(subpath)).map((s) => `${s}/index.ts`),
 ];
 
 describe('module graph', () => {
@@ -84,6 +95,20 @@ describe('module graph', () => {
     expect(reachesParse(`${subpath}/index.ts`)).toBe(true);
   });
 
+  // `/rdfxml` and `/xmp` read XML through effect-xml only; effect-parse
+  // reaches them as effect-xml's own (required) peer.
+  it.each(['rdfxml', 'xmp'])('/%s imports effect-parse only through effect-xml', (subpath) => {
+    expect(reachesParse(`${subpath}/index.ts`)).toBe(false);
+  });
+
+  it.each(xmlFree)('%s never imports @thomasfosterau/effect-xml', (entry) => {
+    expect(reachesXml(entry)).toBe(false);
+  });
+
+  it.each(readingXml)('/%s reaches @thomasfosterau/effect-xml', (subpath) => {
+    expect(reachesXml(`${subpath}/index.ts`)).toBe(true);
+  });
+
   it('the root entry re-exports no nested subpath', () => {
     const nested = walk('index.ts')
       .files.map((file) => path.relative(src, file))
@@ -92,7 +117,7 @@ describe('module graph', () => {
   });
 
   it('no module imports a Node platform package or a SQL driver', () => {
-    const entries = [...flatModules, ...parsing.map((subpath) => `${subpath}/index.ts`)];
+    const entries = [...flatModules, ...subpaths.map((subpath) => `${subpath}/index.ts`)];
     const bare = Arr.dedupe(entries.flatMap((entry) => walk(entry).bare));
     expect(
       bare.filter((spec) => /^@effect\/(platform-|sql-)/.test(spec) || spec === 'node:http'),

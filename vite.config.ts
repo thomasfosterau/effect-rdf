@@ -248,6 +248,17 @@ export default defineConfig({
         files: ['packages/core/src/sparql/Results.ts', 'packages/core/src/sparql/ResultsStream.ts'],
         rules: { 'effect/effect-run-in-body': 'off' },
       },
+      // The RDF/XML tree builder handles every SAX event of a document: a
+      // `switch` on the tag, as effect-xml's own lexer does (its AGENTS.md:
+      // `$match` / `$is` cost a third of the throughput there, since one
+      // shared function per program goes megamorphic).
+      {
+        files: ['packages/core/src/rdfxml/internal/builder.ts'],
+        rules: {
+          'effect/prefer-match-over-switch': 'off',
+          'effect/avoid-direct-tag-checks': 'off',
+        },
+      },
       // The SPARQL parser's per-token `hook` / `take` combinators catch the
       // parse failure they throw; a `Result` per token is the per-step
       // allocation AGENTS.md keeps out of hot loops.
