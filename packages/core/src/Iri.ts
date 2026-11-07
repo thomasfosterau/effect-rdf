@@ -240,11 +240,14 @@ const IUNRESERVED = `A-Za-z0-9\\-._~${UCSCHAR}`;
 const SUBDELIMS = "!$&'()*+,;=";
 const PCT = '%[0-9A-Fa-f]{2}';
 const IPCHAR = `(?:[${IUNRESERVED}${SUBDELIMS}:@]|${PCT})`;
-// `ihier-part` / `irelative-part` (optional authority, then a path), query and fragment: the
-// IRI grammar after the scheme, shared by absolute IRIs and relative references.
+// `ihier-part` / `irelative-part`, query and fragment: the IRI grammar after the scheme, shared
+// by absolute IRIs and relative references. Either an authority and an `ipath-abempty` (every
+// segment starts with `/`), or no authority and a path that does not start with `//`. No two
+// adjacent quantifiers can match the same character, so a failing match backtracks in linear
+// time (a nested `(?:/?ipchar*)*` here was exponential, #107).
 const IRI_AFTER_SCHEME =
-  `(?://(?:(?:[${IUNRESERVED}${SUBDELIMS}:]|${PCT})*@)?(?:\\[[0-9A-Fa-f:.vV${IUNRESERVED}${SUBDELIMS}]*\\]|(?:[${IUNRESERVED}${SUBDELIMS}]|${PCT})*)(?::[0-9]*)?)?` +
-  `(?:/?${IPCHAR}*)*` +
+  `(?://(?:(?:[${IUNRESERVED}${SUBDELIMS}:]|${PCT})*@)?(?:\\[[0-9A-Fa-f:.vV${IUNRESERVED}${SUBDELIMS}]*\\]|(?:[${IUNRESERVED}${SUBDELIMS}]|${PCT})*)(?::[0-9]*)?(?:/${IPCHAR}*)*` +
+  `|(?!//)(?:${IPCHAR}|/)*)` +
   `(?:\\?(?:${IPCHAR}|[/?${IPRIVATE}])*)?` +
   `(?:#(?:${IPCHAR}|[/?])*)?`;
 const IRI_RE = new RegExp(`^[A-Za-z][A-Za-z0-9+.\\-]*:${IRI_AFTER_SCHEME}$`, 'u');

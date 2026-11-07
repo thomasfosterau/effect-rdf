@@ -917,7 +917,10 @@ class SerializeFailure {
   }
 }
 
-const LOCAL_SUFFIX_RE = new RegExp(`[${Xml.NAME_START}][${Xml.NAME_CHAR}]*$`, 'u');
+// The trailing run of name characters. The lookbehind fails at once inside a run, so the match is
+// attempted in full only at each run's start: linear, where `[start][char]*$` was quadratic.
+const TRAILING_NAME_CHARS_RE = new RegExp(`(?<![${Xml.NAME_CHAR}])[${Xml.NAME_CHAR}]*$`, 'u');
+const NAME_START_RE = new RegExp(`[${Xml.NAME_START}]`, 'u');
 
 /**
  * Splits an IRI into a namespace and a local name that is an XML `NCName`,
@@ -929,10 +932,13 @@ const LOCAL_SUFFIX_RE = new RegExp(`[${Xml.NAME_START}][${Xml.NAME_CHAR}]*$`, 'u
  * @category serializing
  */
 export const splitIri = (iri: string): Option.Option<readonly [string, string]> => {
-  // The leftmost match is the longest NCName suffix.
-  const m = LOCAL_SUFFIX_RE.exec(iri);
-  if (m === null || m.index === 0) return Option.none();
-  return Option.some([iri.slice(0, m.index), m[0]] as const);
+  // The longest NCName suffix starts at the first name-start character of the trailing run.
+  const run = TRAILING_NAME_CHARS_RE.exec(iri);
+  const first = run === null ? null : NAME_START_RE.exec(run[0]);
+  if (run === null || first === null) return Option.none();
+  const start = run.index + first.index;
+  if (start === 0) return Option.none();
+  return Option.some([iri.slice(0, start), iri.slice(start)] as const);
 };
 
 const escapeAttr = Xml.escapeAttribute;

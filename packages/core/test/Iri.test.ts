@@ -95,6 +95,37 @@ describe('Iri', () => {
     expect(Iri.isValid('urn:isbn:123')).toBe(true);
     expect(Iri.isValid('relative')).toBe(false);
   });
+
+  it('validates the path forms of RFC 3987', () => {
+    expect(Iri.isValid('http://h')).toBe(true);
+    expect(Iri.isValid('http://h:80/a//b/./c')).toBe(true);
+    expect(Iri.isValid('file:///etc/hosts')).toBe(true);
+    expect(Iri.isValid('file:////share/x')).toBe(true);
+    expect(Iri.isValid('mailto:a@b.c')).toBe(true);
+    expect(Iri.isValid('tag:x:/a/b')).toBe(true);
+    // After an authority the path is empty or starts with `/` (`ipath-abempty`).
+    expect(Iri.isValid('http://h:80x')).toBe(false);
+    expect(Iri.isValid('http://[::1]x')).toBe(false);
+    expect(Iri.isValidReference('//h:80x')).toBe(false);
+  });
+
+  // #107: a nested quantifier made a failing match exponential (JSON-LD toRdf e111 took ~3 s).
+  it('rejects invalid IRIs in linear time', () => {
+    const inputs = [
+      'http://example.com/vocabulary/./rel2##fragment-works',
+      `http://example.com/vocabulary/${'./'.repeat(5000)}rel2##fragment-works`,
+      `http://example.com/${'a/'.repeat(5000)}##`,
+      `http://${'a'.repeat(20_000)} `,
+      `http://a@${'b@'.repeat(5000)} `,
+      `urn:${'a:'.repeat(10_000)}#x#`,
+      `http://e/${'./'.repeat(5000)}?${'q'.repeat(5000)}##`,
+      `${'a/'.repeat(10_000)}##`,
+    ];
+    const start = performance.now();
+    expect(inputs.filter((input) => Iri.isValid(input))).toEqual([]);
+    expect(inputs.filter((input) => Iri.isValidReference(input))).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
 });
 
 describe('Iri schemas', () => {
