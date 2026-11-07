@@ -114,10 +114,48 @@ fi
 
 TMP_JSON="$(mktemp)"
 TMP_ERR="$(mktemp)"
+TMP_COV="$(mktemp)"
 cleanup() {
-  rm -f "$TMP_JSON" "$TMP_ERR"
+  rm -f "$TMP_JSON" "$TMP_ERR" "$TMP_COV"
 }
 trap cleanup EXIT
+
+# --- Coverage map: local deviation from the generated script (effect-rdf#116) ---
+# The audit reads `coverage/coverage-final.json` (`.fallowrc.json` `audit.coverage`)
+# and never writes it. Without it the audit is a runtime error, which fails open,
+# so a commit from a fresh checkout or worktree went through unaudited; with a
+# map older than the change, the CRAP scores describe the old code. Regenerate
+# it first when it is missing or older than a changed source or test file
+# (against origin/trunk, committed or not). A failing regeneration (a red test)
+# fails open with a notice like any other runtime error. `.claude/settings.json`
+# gives this hook the time a coverage run needs.
+COVERAGE_MAP="coverage/coverage-final.json"
+COVERAGE_STALE=
+if [ ! -f "$COVERAGE_MAP" ]; then
+  COVERAGE_STALE="missing"
+else
+  while IFS= read -r changed; do
+    if [ -f "$changed" ] && [ "$changed" -nt "$COVERAGE_MAP" ]; then
+      COVERAGE_STALE="older than $changed"
+      break
+    fi
+  done < <(
+    {
+      git diff --name-only origin/trunk 2>/dev/null || true
+      git ls-files --others --exclude-standard 2>/dev/null || true
+    } | grep -E '^packages/[^/]+/(src|test)/' || true
+  )
+fi
+if [ -n "$COVERAGE_STALE" ]; then
+  echo "fallow-gate: coverage map $COVERAGE_STALE; running vp run test:coverage first." >&2
+  if command -v vp >/dev/null 2>&1 && vp run test:coverage >"$TMP_COV" 2>&1; then
+    :
+  else
+    echo "fallow-gate: vp run test:coverage failed; the audit below may skip. Last lines:" >&2
+    tail -n 5 "$TMP_COV" >&2 || true
+  fi
+fi
+# --- End coverage map ---
 
 if "${RUNNER[@]}" audit --format json --quiet --explain --gate-marker agent --base origin/trunk >"$TMP_JSON" 2>"$TMP_ERR"; then
   STATUS=0
