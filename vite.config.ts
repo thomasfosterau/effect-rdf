@@ -32,6 +32,7 @@ export default defineConfig({
       '**/test/fixtures/**',
       '.test-suites/**',
       'pnpm-lock.yaml',
+      '**/CHANGELOG.md',
     ],
   },
   lint: {
