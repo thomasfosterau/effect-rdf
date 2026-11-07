@@ -22,6 +22,21 @@ const doc = {
   knows: 'http://example.org/bob',
 };
 
+const isJsonArray = (v: JsonLd.JsonValue): v is JsonLd.JsonArray => Array.isArray(v);
+// How many `knows` objects are embedded below `node` (-1 when it is not an object).
+const depth = (node: JsonLd.JsonValue): number => {
+  if (
+    node === null ||
+    Predicate.isString(node) ||
+    Predicate.isNumber(node) ||
+    Predicate.isBoolean(node) ||
+    isJsonArray(node)
+  ) {
+    return -1;
+  }
+  return 1 + depth(node['knows'] ?? null);
+};
+
 describe('JsonLd', () => {
   it.effect('expands a document', () =>
     Effect.gen(function* () {
@@ -90,6 +105,58 @@ describe('JsonLd', () => {
       });
     }),
   );
+
+  // #108: framing a long chain overflowed the stack with a `RangeError`.
+  describe('deep structures', () => {
+    const vocab = { '@vocab': 'http://example.org/' };
+    const chain = (n: number) => ({
+      '@context': vocab,
+      '@graph': Arr.makeBy(n, (i) => ({
+        '@id': `http://example.org/n${i}`,
+        knows: i + 1 < n ? { '@id': `http://example.org/n${i + 1}` } : 'end',
+      })),
+    });
+
+    it.effect('frames a 256-level chain with the default @embed', () =>
+      Effect.gen(function* () {
+        const framed = yield* JsonLd.frame(chain(256), {
+          '@context': vocab,
+          '@id': 'http://example.org/n0',
+        });
+        expect(depth(framed)).toBe(255);
+      }),
+    );
+
+    it.effect('fails a 20k-node chain with a typed error, not a stack overflow', () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          JsonLd.frame(chain(20_000), { '@context': vocab, '@id': 'http://example.org/n0' }),
+        );
+        expect(error.code).toBe('maximum nesting exceeded');
+      }),
+    );
+
+    it.effect('frames a 20k-node chain without embedding (@embed @never)', () =>
+      Effect.gen(function* () {
+        const framed = yield* JsonLd.frame(chain(20_000), {
+          '@context': vocab,
+          '@embed': '@never',
+        });
+        expect(framed['@graph']).toHaveLength(20_000);
+      }),
+    );
+
+    it.effect('fails deeply nested input with a typed error in every algorithm', () =>
+      Effect.gen(function* () {
+        const nested = Arr.makeBy(100_000, () => 0).reduce<object>(
+          (inner) => ({ 'http://example.org/p': inner }),
+          { '@value': 'leaf' },
+        );
+        const error = yield* Effect.flip(JsonLd.expand(nested));
+        expect(error.code).toBe('maximum nesting exceeded');
+      }),
+    );
+  });
 
   it.effect('converts to and from RDF', () =>
     Effect.gen(function* () {

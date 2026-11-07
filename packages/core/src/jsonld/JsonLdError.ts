@@ -1,14 +1,18 @@
 /**
  * The error raised by every JSON-LD algorithm. It carries one of the error
  * codes defined by the JSON-LD 1.1 Processing Algorithms and API
- * specification (and the JSON-LD 1.1 Framing specification).
+ * specification (and the JSON-LD 1.1 Framing specification), or this
+ * processor's own `maximum nesting exceeded`.
  *
  * @since 0.1.0
  */
 import * as Schema from 'effect/Schema';
 
 /**
- * The JSON-LD error codes.
+ * The JSON-LD error codes: the specifications', and `maximum nesting
+ * exceeded`, this processor's own, for input nested deeper than it processes
+ * (framing embeds at most 256 levels; deeper structures in any algorithm fail
+ * with it rather than overflow the stack).
  *
  * @since 0.1.0
  * @category models
@@ -68,6 +72,7 @@ export const codes = [
   'recursive context inclusion',
   'invalid frame',
   'invalid @embed value',
+  'maximum nesting exceeded',
 ] as const;
 
 /**

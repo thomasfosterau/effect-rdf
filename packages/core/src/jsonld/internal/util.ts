@@ -320,8 +320,38 @@ export const loop = <S>(initial: S, step: (state: S) => Option.Option<S>): S => 
   return state;
 };
 
-/** @internal */
-export const clone = <A>(v: A): A => (v === undefined ? v : structuredClone(v));
+/**
+ * Deep-copies a JSON value with an explicit work stack: `structuredClone`
+ * recurses natively, so a deeply embedded framing result overflowed the stack
+ * (#108). Shared and cyclic references are kept, as `structuredClone` keeps them.
+ *
+ * @internal
+ */
+export const clone = <A>(v: A): A => {
+  if (!Predicate.isObjectOrArray(v)) return v;
+  const copies = new WeakMap<object>();
+  const copyOf = (source: object): Json => {
+    const known = copies.get(source);
+    if (known !== undefined) return known;
+    const copy: Json = Array.isArray(source) ? [] : {};
+    copies.set(source, copy);
+    pending.push([source, copy]);
+    return copy;
+  };
+  const pending: Array<readonly [Json, Json]> = [];
+  const root = copyOf(v);
+  loop(pending, (stack) => {
+    const top = stack.pop();
+    if (top === undefined) return Option.none();
+    const [source, copy] = top;
+    Record.keys(source).forEach((key) => {
+      const value = source[key];
+      copy[key] = Predicate.isObjectOrArray(value) ? copyOf(value) : value;
+    });
+    return Option.some(stack);
+  });
+  return root;
+};
 
 /**
  * The JSON Canonicalization Scheme (RFC 8785).

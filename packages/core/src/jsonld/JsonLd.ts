@@ -203,6 +203,10 @@ const makeEnv = (
  * Runs the algorithm once. A `NeedDocument` or `JsonLdError` it throws is the
  * failure; anything else is a bug and propagates (a defect in `run`).
  */
+/** Whether `e` is the engine's stack overflow (V8 and JavaScriptCore throw a `RangeError`). */
+const isStackOverflow = (e: unknown): boolean =>
+  e instanceof RangeError && /call stack/i.test(e.message);
+
 const attempt = <A>(
   f: (env: Env) => A,
   env: Env,
@@ -211,6 +215,11 @@ const attempt = <A>(
     try: () => f(env),
     catch: (e) => {
       if (e instanceof NeedDocument || JsonLdError.isJsonLdError(e)) return e;
+      // The algorithms recurse over the input's structure, so input nested deeper than the
+      // stack allows overflows it: a typed failure, as for every other untrusted-input limit.
+      if (isStackOverflow(e)) {
+        return JsonLdError.make('maximum nesting exceeded', 'the input is nested too deeply');
+      }
       throw e;
     },
   });
