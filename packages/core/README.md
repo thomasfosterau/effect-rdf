@@ -543,6 +543,12 @@ It passes the W3C JSON-LD 1.1 test suites for expand, compact, flatten, toRdf, f
 remote-doc and framing. The only tests it skips are JSON-LD 1.0-only tests and the ones that need
 generalized RDF.
 
+**Nesting is bounded.** Framing embeds at most 256 levels: a deeper chain fails with the
+`JsonLdError` code `maximum nesting exceeded` (frame it with `@embed: '@never'`
+instead). Input in any algorithm that is nested deeper than the stack allows fails with the same
+code, never a `RangeError`. That code is this processor's own; every other code is the
+specification's.
+
 ### Usage
 
 ```ts

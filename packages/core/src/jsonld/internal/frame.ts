@@ -183,6 +183,12 @@ const addFrameOutput = (parent: Json, property: Option.Option<string>, output: J
   }
 };
 
+/**
+ * How many levels framing embeds: deeper chains fail with `maximum nesting exceeded`. Framing
+ * and compaction recurse once per level, and about 750 levels exhaust Node's default stack.
+ */
+const MAX_EMBED_DEPTH = 256;
+
 const isSubjectReference = (v: Json): boolean =>
   isObject(v) && Record.keys(v).length === 1 && hasOwn(v, '@id');
 
@@ -232,6 +238,10 @@ const frameSubjects = (
       return;
     }
     if (flags.embed === '@last' && hasOwn(uniqueEmbeds, id)) removeEmbed(state, id);
+    // Each embedded level is a few stack frames here and in compaction (#108).
+    if (state.subjectStack.length >= MAX_EMBED_DEPTH) {
+      fail('maximum nesting exceeded', `framing embeds at most ${MAX_EMBED_DEPTH} levels`);
+    }
     uniqueEmbeds[id] = { parent, property };
     state.subjectStack.push({ subject, graph: state.graph });
     // the subject is also the name of a graph
