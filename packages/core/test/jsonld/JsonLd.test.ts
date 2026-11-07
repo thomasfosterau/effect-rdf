@@ -197,6 +197,30 @@ describe('JsonLd', () => {
     }),
   );
 
+  it.effect('maps @direction to RDF 1.2 directional strings with rdfDirection rdf-1.2', () =>
+    Effect.gen(function* () {
+      const quads = yield* JsonLd.toQuads(
+        {
+          'http://example.org/label': { '@value': 'abc', '@language': 'AR', '@direction': 'rtl' },
+          'http://example.org/bare': { '@value': 'xyz', '@direction': 'ltr' },
+        },
+        { rdfDirection: 'rdf-1.2' },
+      );
+      const objects = Arr.sort(
+        quads.map((q) => q.object.key),
+        Order.String,
+      );
+      // No language, no directional string: the direction is dropped.
+      expect(objects).toEqual(['"abc"@ar--rtl', '"xyz"']);
+      const back = yield* JsonLd.fromRdf(quads);
+      expect(back).toContainEqual({
+        '@id': '_:b0',
+        'http://example.org/label': [{ '@value': 'abc', '@language': 'ar', '@direction': 'rtl' }],
+        'http://example.org/bare': [{ '@value': 'xyz' }],
+      });
+    }),
+  );
+
   it.effect('fails with tagged JSON-LD errors', () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(JsonLd.expand({ '@id': 42 }));

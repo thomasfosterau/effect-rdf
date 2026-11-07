@@ -50,7 +50,7 @@ import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 
 /** @internal */
-export type RdfDirection = 'i18n-datatype' | 'compound-literal';
+export type RdfDirection = 'i18n-datatype' | 'compound-literal' | 'rdf-1.2';
 
 /** @internal */
 export interface ToRdfOptions {
@@ -172,6 +172,23 @@ const objectToRdf = (
     datatype = typed ? type : XSD_INTEGER;
   } else {
     datatype = typed ? type : '@language' in item ? RDF_LANG_STRING : XSD_STRING;
+  }
+  // RDF 1.2 (w3c/json-ld-syntax#488): `@language` + `@direction` is a directional
+  // language-tagged string. Without a language there is none, so the direction is dropped, as
+  // when `rdfDirection` is unset.
+  if (
+    '@direction' in item &&
+    Option.isSome(options.rdfDirection) &&
+    options.rdfDirection.value === 'rdf-1.2'
+  ) {
+    return Option.some(
+      '@language' in item
+        ? Term.literal(String(value), {
+            language: String(item['@language']),
+            direction: item['@direction'],
+          })
+        : Term.literal(String(value)),
+    );
   }
   // 13
   if ('@direction' in item && Option.isSome(options.rdfDirection)) {

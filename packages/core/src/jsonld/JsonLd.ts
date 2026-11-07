@@ -115,6 +115,16 @@ export interface Options {
 }
 
 /**
+ * How `toRdf` represents a value's base direction (`@direction`), and how
+ * `fromRdf` reads it back: JSON-LD 1.1's `i18n-datatype` and
+ * `compound-literal`, or RDF 1.2's directional language-tagged strings.
+ *
+ * @since 0.2.0
+ * @category options
+ */
+export type RdfDirection = 'i18n-datatype' | 'compound-literal' | 'rdf-1.2';
+
+/**
  * Options for `toRdf`.
  *
  * @since 0.1.0
@@ -123,9 +133,14 @@ export interface Options {
 export interface ToRdfOptions extends Options {
   /**
    * How to represent `@direction`: as `i18n-datatype` literals, as
-   * `compound-literal` blank nodes, or not at all (default).
+   * `compound-literal` blank nodes, as RDF 1.2 directional language-tagged
+   * strings (`rdf-1.2`, `rdf:dirLangString`), or not at all (default).
+   *
+   * `rdf-1.2` follows the JSON-LD 1.2 proposal (w3c/json-ld-syntax#488), not
+   * yet a Recommendation; a `@direction` without `@language` is dropped, as
+   * RDF 1.2 has no directional string without a language.
    */
-  readonly rdfDirection?: 'i18n-datatype' | 'compound-literal' | null | undefined;
+  readonly rdfDirection?: RdfDirection | null | undefined;
   /**
    * Generalized RDF (blank node predicates) cannot be represented by the
    * core term model; such triples are always dropped.
@@ -146,7 +161,12 @@ export interface FromRdfOptions {
   readonly useNativeTypes?: boolean | undefined;
   /** Keep `rdf:type` as a regular property instead of `@type`. */
   readonly useRdfType?: boolean | undefined;
-  readonly rdfDirection?: 'i18n-datatype' | 'compound-literal' | null | undefined;
+  /**
+   * How `@direction` was represented: `i18n-datatype` literals become
+   * `@direction` again. Directional language-tagged strings
+   * (`rdf:dirLangString`) always do, in every mode.
+   */
+  readonly rdfDirection?: RdfDirection | null | undefined;
 }
 
 /**
