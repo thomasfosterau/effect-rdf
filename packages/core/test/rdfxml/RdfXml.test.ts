@@ -483,6 +483,25 @@ describe('RdfXml.serialize', () => {
     );
     expect(RdfXml.splitIri('urn:isbn:123abc')).toEqual(Option.some(['urn:isbn:123', 'abc']));
     expect(RdfXml.splitIri('http://example.org/')).toEqual(Option.none());
+    expect(RdfXml.splitIri('local')).toEqual(Option.none());
+    expect(RdfXml.splitIri('http://example.org/123')).toEqual(Option.none());
+    expect(RdfXml.splitIri('http://example.org/1-2a.b')).toEqual(
+      Option.some(['http://example.org/1-2', 'a.b']),
+    );
+    // Astral name characters (U+10000–U+EFFFF) are one code point, two code units.
+    expect(RdfXml.splitIri('http://example.org/\u{10000}x')).toEqual(
+      Option.some(['http://example.org/', '\u{10000}x']),
+    );
+    expect(RdfXml.splitIri('http://example.org/\u{F0000}x')).toEqual(
+      Option.some(['http://example.org/\u{F0000}', 'x']),
+    );
+  });
+
+  it('splits long IRIs in linear time', () => {
+    const start = performance.now();
+    expect(RdfXml.splitIri(`http://e/${'a'.repeat(100_000)}/`)).toEqual(Option.none());
+    expect(Option.isSome(RdfXml.splitIri(`http://e/${'a'.repeat(100_000)}`))).toBe(true);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 });
 
