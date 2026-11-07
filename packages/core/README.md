@@ -625,7 +625,14 @@ const roundTrip = (text: string) =>
   term model, so `produceGeneralizedRdf` has no effect.
 - When `rdfDirection` is not set, `@direction` is dropped and the value becomes a plain
   language-tagged literal. `fromRdf` turns RDF 1.2 directional language-tagged literals into
-  `@direction`.
+  `@direction`, in every mode.
+- `rdfDirection: 'rdf-1.2'` maps `@language` + `@direction` to an RDF 1.2 directional
+  language-tagged literal (`"…"@ar--rtl`, `rdf:dirLangString`), so
+  `parse(serialize(dataset), { rdfDirection: 'rdf-1.2' })` round-trips directional strings. It
+  follows the JSON-LD 1.2 proposal ([w3c/json-ld-syntax#488](https://github.com/w3c/json-ld-syntax/issues/488)),
+  which is not yet a Recommendation, so it is opt-in and the default is unchanged. A
+  `@direction` without `@language` is dropped, as RDF 1.2 has no directional string without a
+  language.
 
 ## RDF/XML (`@thomasfosterau/effect-rdf/rdfxml`)
 
