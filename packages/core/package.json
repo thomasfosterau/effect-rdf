@@ -199,12 +199,12 @@
     "access": "public"
   },
   "scripts": {
-    "bench": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts && node --experimental-strip-types --no-warnings bench/n3/n3.ts && node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts && node --experimental-strip-types --no-warnings bench/shex/shexc.ts && node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts",
+    "bench": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts && node --experimental-strip-types --no-warnings bench/n3/n3.ts && node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts && node --experimental-strip-types --no-warnings bench/shex/shexc.ts && node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts && node --experimental-strip-types --no-warnings bench/sparql/optional.ts",
     "bench:turtle": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts",
     "bench:n3": "node --experimental-strip-types --no-warnings bench/n3/n3.ts",
     "bench:rdfxml": "node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts",
     "bench:shex": "node --experimental-strip-types --no-warnings bench/shex/shexc.ts",
-    "bench:sparql": "node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts"
+    "bench:sparql": "node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts && node --experimental-strip-types --no-warnings bench/sparql/optional.ts"
   },
   "devDependencies": {
     "@effect/sql-pg": "catalog:",
