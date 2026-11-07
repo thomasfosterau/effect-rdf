@@ -43,7 +43,7 @@ catalog:
   # failing `pnpm install` itself in the `prepare` script. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  '@effect/tsgo': 0.63.0
+  '@effect/tsgo': 0.67.4
   # Must match `vitest` below: its peer is `vitest: >=5.0.0 <6.0.0`, and its
   # `effect` peer follows the singleton.
   '@effect/vitest': 4.1.2
@@ -68,7 +68,7 @@ catalog:
   '@types/node': ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
-  '@vitest/coverage-istanbul': 5.0.5
+  '@vitest/coverage-istanbul': 5.1.0
   effect: 4.1.2
   fallow: 3.40.0
   # TypeScript 6/7 side-by-side: TS7 (the native Go compiler) ships no JS API
@@ -87,9 +87,9 @@ catalog:
   # bump: move it by hand with `vite-plus`), and `vitest` must match
   # vite-plus's exact pin (1.4.0 → 5.0.5) because the `vitest@*` override
   # forces every resolution to the catalog singleton.
-  vite-plus: 1.4.0
+  vite-plus: 1.5.0
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
-  vitest: 5.0.5
+  vitest: 5.1.0
 
 # Peer ranges the PUBLISHED packages declare. Kept as a named catalog so the
 # strict catalog mode still governs them while they stay ranges. `pnpm
