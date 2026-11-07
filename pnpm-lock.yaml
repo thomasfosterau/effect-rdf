@@ -39,6 +39,9 @@ catalogs:
     '@thomasfosterau/effect-parse':
       specifier: 0.4.1
       version: 0.4.1
+    '@thomasfosterau/effect-xml':
+      specifier: 0.1.0
+      version: 0.1.0
     '@types/node':
       specifier: ^26.6.6
       version: 26.6.6
@@ -134,6 +137,9 @@ importers:
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.4.1(effect@4.1.2)
+      '@thomasfosterau/effect-xml':
+        specifier: 'catalog:'
+        version: 0.1.0(@thomasfosterau/effect-parse@0.4.1(effect@4.1.2))(effect@4.1.2)
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -156,6 +162,9 @@ importers:
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.4.1(effect@4.1.2)
+      '@thomasfosterau/effect-xml':
+        specifier: 'catalog:'
+        version: 0.1.0(@thomasfosterau/effect-parse@0.4.1(effect@4.1.2))(effect@4.1.2)
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -823,6 +832,13 @@ packages:
     resolution: {integrity: sha512-7/jiPHebeKmJjfUxMdjoWCqW6a1WHLqqFk7lnl23oYAHXO1Dk55fq1MOROARy5rgUTvZegPAuUuSDt51JJXgtw==}
     engines: {node: '>=22', pnpm: '>=11'}
     peerDependencies:
+      effect: 4.1.2
+
+  '@thomasfosterau/effect-xml@0.1.0':
+    resolution: {integrity: sha512-CQx9SGen7Nisgl3BKyyPQW/ZD5xXoPHnHVoVwaRSOC39k6H+dMGnTUy/gf6lsyOtTJhfi7pGPbYizujVt/ACJQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@thomasfosterau/effect-parse': ^0.4.1
       effect: 4.1.2
 
   '@types/aria-query@5.0.4':
@@ -2280,6 +2296,11 @@ snapshots:
 
   '@thomasfosterau/effect-parse@0.4.1(effect@4.1.2)':
     dependencies:
+      effect: 4.1.2
+
+  '@thomasfosterau/effect-xml@0.1.0(@thomasfosterau/effect-parse@0.4.1(effect@4.1.2))(effect@4.1.2)':
+    dependencies:
+      '@thomasfosterau/effect-parse': 0.4.1(effect@4.1.2)
       effect: 4.1.2
 
   '@types/aria-query@5.0.4': {}

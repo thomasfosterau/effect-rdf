@@ -212,15 +212,20 @@
     "@effect/vitest": "catalog:",
     "@electric-sql/pglite": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
+    "@thomasfosterau/effect-xml": "catalog:",
     "effect": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
     "@thomasfosterau/effect-parse": "catalog:peers",
+    "@thomasfosterau/effect-xml": "catalog:peers",
     "effect": "catalog:peers"
   },
   "peerDependenciesMeta": {
     "@thomasfosterau/effect-parse": {
+      "optional": true
+    },
+    "@thomasfosterau/effect-xml": {
       "optional": true
     }
   },

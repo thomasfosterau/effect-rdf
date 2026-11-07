@@ -163,19 +163,19 @@ describe('Xml.parse', () => {
   );
 
   it('rejects hostile documents with parse errors', () => {
-    expect(parseErr(laughs('ha')).message).toContain('Entity expansion limit exceeded');
-    expect(parseErr(laughs('<b/>')).message).toContain('Entity expansion limit exceeded');
+    expect(parseErr(laughs('ha')).message).toContain('maxEntityExpansion (1000000) exceeded');
+    expect(parseErr(laughs('<b/>')).message).toContain('maxEntityExpansion (1000000) exceeded');
     expect(
       parseErr(`<!DOCTYPE a [<!ENTITY x SYSTEM "file:///etc/passwd">]><a>&x;</a>`).message,
-    ).toBe('External entity "x" is not supported');
+    ).toContain('external entity "x" is not supported');
     expect(parseOk(deep(1024)).root.localName).toBe('a');
-    expect(parseErr(deep(100_000)).message).toBe('Elements are nested too deeply');
+    expect(parseErr(deep(100_000)).message).toContain('maxDepth (1024) exceeded');
     expect(parseOk(`${chain(60, '<b>', '</b>')}<a>&e0;</a>`).root.children).toHaveLength(1);
     expect(parseErr(`${chain(2000, '<b>', '</b>')}<a>&e0;</a>`).message).toContain(
-      'Entity references are nested too deeply',
+      'maxEntityDepth (64) exceeded',
     );
-    expect(parseErr(`${chain(2000, 'x', '')}<a b="&e0;"/>`).message).toBe(
-      'Entity references are nested too deeply',
+    expect(parseErr(`${chain(2000, 'x', '')}<a b="&e0;"/>`).message).toContain(
+      'maxEntityDepth (64) exceeded',
     );
   });
 
@@ -207,6 +207,36 @@ describe('Xml.parse', () => {
     expect(children.at(29)?.position.line).toBe(31);
     expect(children.at(30)?.attributes.at(0)?.position).toMatchObject({ line: 33, column: 2 });
     expect(doc.root.position).toEqual({ offset: 0, line: 1, column: 1 });
+  });
+
+  it('counts \\r\\n, \\r and \\n as line ends, and offsets in the input as written', () => {
+    const children = elements(parseOk('<a>\r\n<b/>\r<c/>\n<d/></a>').root);
+    expect(children.map((c) => c.position)).toEqual([
+      { offset: 5, line: 2, column: 1 },
+      { offset: 10, line: 3, column: 1 },
+      { offset: 15, line: 4, column: 1 },
+    ]);
+    expect(parseErr('<a>\r\n<b></a>')).toMatchObject({ line: 2, column: 4 });
+  });
+
+  it('drops a leading byte order mark', () => {
+    const doc = parseOk('﻿<?xml version="1.0"?><a/>');
+    expect(doc.version).toBe('1.0');
+    expect(doc.root.position).toEqual({ offset: 21, line: 1, column: 22 });
+  });
+
+  it('reads the internal subset after comments and processing instructions', () => {
+    const doc = parseOk(
+      '<?xml version="1.0"?>\n<!-- c -->\n<?pi x?>\n<!DOCTYPE a [<!ENTITY e "x&#65;y"><!ENTITY % p "q"><!ENTITY s SYSTEM "s.xml"><!ENTITY e "ignored">]><a>&e;</a>',
+    );
+    expect(doc.root.children).toMatchObject([{ _tag: 'Text', value: 'xAy' }]);
+    expect([...(doc.doctype?.entities ?? [])]).toEqual([['e', 'xAy']]);
+    expect(doc.prolog.map((n) => n._tag)).toEqual(['Comment', 'ProcessingInstruction']);
+  });
+
+  it('reads no internal subset without a DOCTYPE in the prolog', () => {
+    expect(parseErr('<a>&e;</a>').message).toContain('unknown entity');
+    expect(parseErr('<a/><!DOCTYPE a [<!ENTITY e "x">]>')._tag).toBe('XmlParseError');
   });
 
   it('validates names', () => {

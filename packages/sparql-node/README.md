@@ -14,14 +14,15 @@ The Node side of [`@thomasfosterau/effect-rdf/sparql`](https://github.com/thomas
   from it.
 
 ```sh
-pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-rdf @thomasfosterau/effect-sparql-node
+pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-xml @thomasfosterau/effect-rdf @thomasfosterau/effect-sparql-node
 ```
 
 Peers: `effect` (`^4.1.2`: its runtime dependency `@effect/platform-node`
 needs it, and `SparqlApi` declares a list of response content types per
 stream, a 4.1 form of `HttpApiSchema.StreamUint8Array`) and
 `@thomasfosterau/effect-parse` (the SPARQL parser behind effect-rdf's
-`/sparql`). `@thomasfosterau/effect-rdf` and `@effect/platform-node` are
+`/sparql`) and `@thomasfosterau/effect-xml` (the XML tokenizer behind its
+SPARQL XML results and RDF/XML). `@thomasfosterau/effect-rdf` and `@effect/platform-node` are
 dependencies.
 
 ## Serving data

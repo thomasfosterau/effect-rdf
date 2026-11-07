@@ -26,10 +26,12 @@ The packages are published to npm under the `@thomasfosterau` scope.
 `effect` is a peer dependency: `^4.0.0` for `effect-rdf`, `^4.1.2` for
 `effect-sparql-node` (its `@effect/platform-node` dependency needs it).
 `@thomasfosterau/effect-parse` is an optional peer of `effect-rdf`, needed by
-the syntax and SPARQL-parser subpaths, and a peer of `effect-sparql-node`:
+the syntax and SPARQL-parser subpaths, and a peer of `effect-sparql-node`;
+`@thomasfosterau/effect-xml` likewise, needed by the subpaths that read XML
+(`/rdfxml`, `/xmp`, `/sparql`):
 
 ```sh
-pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-rdf
+pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-xml @thomasfosterau/effect-rdf
 pnpm add @thomasfosterau/effect-sparql-node # the Node server, CLI and SparqlApi
 ```
 
