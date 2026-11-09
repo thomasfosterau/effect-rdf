@@ -58,7 +58,7 @@ catalog:
   # and XML grammars: an optional peer of effect-rdf, reached only from the
   # syntax and SPARQL subpaths (see `catalogs.peers`), and a required peer of
   # effect-sparql-node.
-  '@thomasfosterau/effect-parse': 0.4.1
+  '@thomasfosterau/effect-parse': 0.5.0
   # The family's shared XML layer (SAX tokenizer, limits, internal subset)
   # behind `/rdfxml`'s `Xml` (RDF/XML, XMP, SPARQL XML results): an optional
   # peer of effect-rdf (see `catalogs.peers`), a required peer of
