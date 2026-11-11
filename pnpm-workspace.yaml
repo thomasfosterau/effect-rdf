@@ -20,7 +20,7 @@ catalog:
   '@changesets/cli': ^3.0.3
   # Test-only (core devDependency): effect-rdf/sparql/sql's PostgreSQL suite
   # runs on PGlite, through `@effect/sql-pg`'s statement compiler.
-  '@electric-sql/pglite': 0.5.15
+  '@electric-sql/pglite': 0.5.16
   # The Effect Language Service plugin named in tsconfig.base.json; the
   # patched native `tsc` (see @effect/tsgo) runs its diagnostics.
   '@effect/language-service': ^0.87.5
