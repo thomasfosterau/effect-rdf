@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package",
   "name": "@thomasfosterau/effect-rdf",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Effect-idiomatic RDF 1.2 / RDF-star toolkit: the data model, parsers and serialisers for N-Triples, N-Quads, Turtle, TriG, N3, JSON-LD, RDF/XML, RDF/JSON and XMP, CSV on the Web, a SPARQL 1.1 / 1.2 engine, client and protocol handler with a SQL translation layer, and SHACL and ShEx validation",
   "keywords": [
     "csvw",
