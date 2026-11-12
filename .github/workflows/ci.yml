@@ -1,32 +1,38 @@
 name: CI
 
-# ONE required job, ONE required check: the pipeline's task graph lives in
-# vite.config.ts (the root `check` and `check:dist` tasks and every package's
-# `test:unit` / `build`), not in GitHub Actions `needs:`. Shaped after the
-# effect-web library's workflow, plus the W3C conformance suites the tests
-# read: nothing here needs a database, a stage or a credential (the
-# PostgreSQL suite runs on PGlite in-process), so every PR runs the whole gate.
+# ONE workflow whose only command is `vp run ci`: the whole pipeline is the
+# `ci` task in vite.config.ts (format and lint, the type gates, the W3C
+# conformance suites, the tests, the build, the dist import guard and the
+# audit, in that order), so a local `vp run ci` and this workflow are the same
+# thing. It runs on the current LTS and the current release line of Node.js;
+# the final `ci` job is the one stable check name for required-check rules.
+# Nothing here needs a database, a stage or a credential (the PostgreSQL suite
+# runs on PGlite in-process).
 
 on:
   pull_request:
-    branches: [trunk]
-    types: [opened, reopened, synchronize, ready_for_review]
   push:
     branches: [trunk]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
 
-# No permissions by default; the single job grants only read access.
+# No permissions by default; each job grants only what it needs.
 permissions: {}
 
 jobs:
-  ci:
+  test:
+    name: ci (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [lts, latest]
     env:
       # A ceiling for every Node process in the pipeline. NODE_OPTIONS is
       # inherited by every child, including each vitest fork; the
@@ -37,29 +43,39 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      # Vite+ at the catalog's `vite-plus` pin, the matrix's Node.js and the
+      # `packageManager`'s pnpm, with the pnpm store cache. An exact tag: the
+      # action's moving `v1` tag is frozen at v1.15.0, and its releases are
+      # immutable.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: true
+          run-install: false
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
       - name: Restore the Vite+ task cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules/.vite/task-cache
-          key: vp-task-v1-${{ runner.os }}-${{ github.sha }}
+          key: vp-task-v1-${{ runner.os }}-${{ matrix.node }}-${{ github.sha }}
           restore-keys: |
-            vp-task-v1-${{ runner.os }}-
-      - name: Format and lint
-        run: vp check
-      # Two at a time: fourteen native `tsc` processes at once exhaust the
-      # runner's memory.
-      - name: Type gates
-        run: vp run --concurrency-limit 2 check
-      # The conformance tests skip when the suites are absent; CI always runs
-      # them. Shallow clones of the upstream W3C / community repositories.
-      - name: Fetch conformance test suites
-        run: ./scripts/fetch-test-suites.sh
-      - name: Unit and conformance tests
-        run: vp run --concurrency-limit 2 -r test:unit
-      - name: Build
-        run: vp run -r build
-      - name: Dist import guard (no effect/unstable)
-        run: vp run check:dist
-      - name: Audit
-        run: pnpm audit --audit-level high
+            vp-task-v1-${{ runner.os }}-${{ matrix.node }}-
+      - name: CI
+        run: vp run ci
+
+  # The one check required-check rules name: green only when every matrix
+  # entry is.
+  ci:
+    name: ci
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      RESULT: ${{ needs.test.result }}
+    steps:
+      - name: Require every matrix entry to pass
+        run: test "$RESULT" = "success"
