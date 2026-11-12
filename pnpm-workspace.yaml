@@ -36,14 +36,14 @@ catalog:
   # of the 6/7 split. `effect-tsgo patch` overwrites the native `tsc` binary
   # with an Effect-patched build matched by gitHead, so this pins in lockstep
   # with `@typescript/native` below and with the `oxlint` and `oxlint-tsgolint`
-  # that `vite-plus` pulls in: 0.63.0 supports typescript 7.0.2, oxlint
-  # 1.88.0 – 1.90.0 and tsgolint 7.0.2004 / 7.0.2005 (vite-plus 1.4.0 carries
-  # oxlint 1.89.0 and tsgolint 7.0.2004). Each @effect/tsgo release hard-errors
+  # that `vite-plus` pulls in: 0.67.5 supports typescript 7.0.2, oxlint
+  # 1.88.0 – 1.92.0 and tsgolint 7.0.2004 – 7.0.2006 (vite-plus 1.5.1 carries
+  # oxlint 1.91.0 and tsgolint 7.0.2005). Each @effect/tsgo release hard-errors
   # (UnsupportedTargetPackageVersionError) on any other component version,
   # failing `pnpm install` itself in the `prepare` script. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  '@effect/tsgo': 0.63.0
+  '@effect/tsgo': 0.67.5
   # Must match `vitest` below: its peer is `vitest: >=5.0.0 <6.0.0`, and its
   # `effect` peer follows the singleton.
   '@effect/vitest': 4.1.3
@@ -68,7 +68,7 @@ catalog:
   '@types/node': ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
-  '@vitest/coverage-istanbul': 5.0.5
+  '@vitest/coverage-istanbul': 5.1.0
   effect: 4.1.3
   fallow: 3.42.0
   # TypeScript 6/7 side-by-side: TS7 (the native Go compiler) ships no JS API
@@ -81,15 +81,15 @@ catalog:
   '@typescript/native': 'npm:typescript@7.0.2'
   # vite-plus pins `oxlint`, `oxfmt` and `vitest` to exact versions, so this
   # entry decides the oxlint version `effect-tsgo patch --oxlint` has to
-  # support (see the @effect/tsgo note above): 1.4.0 carries oxlint 1.89.0,
-  # tsgolint 7.0.2004, oxfmt 0.74.0 and vitest 5.0.5. `vite` is the same
+  # support (see the @effect/tsgo note above): 1.5.1 carries oxlint 1.91.0,
+  # tsgolint 7.0.2005, oxfmt 0.76.0 and vitest 5.1.0. `vite` is the same
   # release under its aliased core package (an npm alias Dependabot cannot
   # bump: move it by hand with `vite-plus`), and `vitest` must match
-  # vite-plus's exact pin (1.4.0 → 5.0.5) because the `vitest@*` override
+  # vite-plus's exact pin (1.5.1 → 5.1.0) because the `vitest@*` override
   # forces every resolution to the catalog singleton.
-  vite-plus: 1.4.0
-  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
-  vitest: 5.0.5
+  vite-plus: 1.5.1
+  vite: npm:@voidzero-dev/vite-plus-core@1.5.1
+  vitest: 5.1.0
 
 # Peer ranges the PUBLISHED packages declare. Kept as a named catalog so the
 # strict catalog mode still governs them while they stay ranges. `pnpm
