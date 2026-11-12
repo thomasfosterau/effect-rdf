@@ -149,8 +149,8 @@ export class ResultsParseError extends Schema.TaggedError<
 >()('ResultsParseError', {
   format: Schema.String,
   message: Schema.String,
-  line: Schema.optional(Schema.Number),
-  column: Schema.optional(Schema.Number),
+  line: Schema.optional(Schema.Int),
+  column: Schema.optional(Schema.Int),
 }) {}
 
 /** The last line of a rendered `ParseError`: what was expected and found. */

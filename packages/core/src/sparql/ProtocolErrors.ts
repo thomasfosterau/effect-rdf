@@ -18,7 +18,7 @@ export class ProtocolError extends Schema.TaggedError<
   ProtocolError,
   { readonly brand: unique symbol }
 >()('ProtocolError', {
-  status: Schema.Number,
+  status: Schema.Int,
   message: Schema.String,
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 }) {}

@@ -32,7 +32,7 @@ export class HttpStatusError extends Schema.TaggedError<
 >()('HttpStatusError', {
   method: Schema.String,
   url: Schema.String,
-  status: Schema.Number,
+  status: Schema.Int,
   /** The response body (truncated to 64 KiB). */
   body: Schema.String,
 }) {

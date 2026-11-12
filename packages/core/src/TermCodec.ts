@@ -225,7 +225,7 @@ export const number: TermCodec<number> = make(Schema.Number, {
  * @since 0.1.0
  * @category schemas
  */
-export const integer: TermCodec<number> = make(Schema.Number, {
+export const integer: TermCodec<number> = make(Schema.Finite, {
   expected: 'an integer literal',
   decode: (t) =>
     Term.isLiteral(t) && Xsd.isIntegerDatatype(t.datatype.value)

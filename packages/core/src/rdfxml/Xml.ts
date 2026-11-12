@@ -216,9 +216,9 @@ export class XmlParseError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()('XmlParseError', {
   message: Schema.String,
-  offset: Schema.Number,
-  line: Schema.Number,
-  column: Schema.Number,
+  offset: Schema.Int,
+  line: Schema.Int,
+  column: Schema.Int,
 }) {}
 
 // -----------------------------------------------------------------------------
