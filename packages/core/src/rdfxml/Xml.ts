@@ -211,7 +211,10 @@ export interface Document {
  * @since 0.1.0
  * @category errors
  */
-export class XmlParseError extends Schema.TaggedError<XmlParseError>()('XmlParseError', {
+export class XmlParseError extends Schema.TaggedError<
+  XmlParseError,
+  { readonly brand: unique symbol }
+>()('XmlParseError', {
   message: Schema.String,
   offset: Schema.Number,
   line: Schema.Number,

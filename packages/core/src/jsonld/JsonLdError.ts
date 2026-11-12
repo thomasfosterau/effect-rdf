@@ -89,7 +89,10 @@ export type Code = (typeof codes)[number];
  * @since 0.1.0
  * @category errors
  */
-export class JsonLdError extends Schema.TaggedError<JsonLdError>()('JsonLdError', {
+export class JsonLdError extends Schema.TaggedError<
+  JsonLdError,
+  { readonly brand: unique symbol }
+>()('JsonLdError', {
   code: Schema.Literals(codes),
   message: Schema.String,
 }) {}

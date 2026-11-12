@@ -143,15 +143,15 @@ export const fromResultSet = (set: ResultSet): SelectResult => ({
  * @since 0.1.0
  * @category errors
  */
-export class ResultsParseError extends Schema.TaggedError<ResultsParseError>()(
-  'ResultsParseError',
-  {
-    format: Schema.String,
-    message: Schema.String,
-    line: Schema.optional(Schema.Number),
-    column: Schema.optional(Schema.Number),
-  },
-) {}
+export class ResultsParseError extends Schema.TaggedError<
+  ResultsParseError,
+  { readonly brand: unique symbol }
+>()('ResultsParseError', {
+  format: Schema.String,
+  message: Schema.String,
+  line: Schema.optional(Schema.Number),
+  column: Schema.optional(Schema.Number),
+}) {}
 
 /** The last line of a rendered `ParseError`: what was expected and found. */
 const parseErrorSummary = (error: ParseError.ParseError): string =>

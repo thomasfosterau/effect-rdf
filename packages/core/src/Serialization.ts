@@ -37,7 +37,10 @@ import type * as Term from './Term.ts';
  * @since 0.1.0
  * @category errors
  */
-export class RdfParseError extends Schema.TaggedError<RdfParseError>()('RdfParseError', {
+export class RdfParseError extends Schema.TaggedError<
+  RdfParseError,
+  { readonly brand: unique symbol }
+>()('RdfParseError', {
   format: Schema.String,
   message: Schema.String,
   line: Schema.optional(Schema.Number),
@@ -51,13 +54,13 @@ export class RdfParseError extends Schema.TaggedError<RdfParseError>()('RdfParse
  * @since 0.1.0
  * @category errors
  */
-export class RdfSerializeError extends Schema.TaggedError<RdfSerializeError>()(
-  'RdfSerializeError',
-  {
-    format: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class RdfSerializeError extends Schema.TaggedError<
+  RdfSerializeError,
+  { readonly brand: unique symbol }
+>()('RdfSerializeError', {
+  format: Schema.String,
+  message: Schema.String,
+}) {}
 
 // -----------------------------------------------------------------------------
 // Formats

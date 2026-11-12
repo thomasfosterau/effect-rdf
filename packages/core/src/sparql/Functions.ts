@@ -32,7 +32,10 @@ import * as V from './internal/values.ts';
  * @since 0.1.0
  * @category errors
  */
-export class ExpressionError extends Schema.TaggedError<ExpressionError>()('ExpressionError', {
+export class ExpressionError extends Schema.TaggedError<
+  ExpressionError,
+  { readonly brand: unique symbol }
+>()('ExpressionError', {
   message: Schema.String,
 }) {}
 

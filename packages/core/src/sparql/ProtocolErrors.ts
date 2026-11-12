@@ -14,7 +14,10 @@ import * as HttpServerResponse from 'effect/http/HttpServerResponse';
  * @since 0.1.0
  * @category errors
  */
-export class ProtocolError extends Schema.TaggedError<ProtocolError>()('ProtocolError', {
+export class ProtocolError extends Schema.TaggedError<
+  ProtocolError,
+  { readonly brand: unique symbol }
+>()('ProtocolError', {
   status: Schema.Number,
   message: Schema.String,
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),

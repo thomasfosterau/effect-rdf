@@ -19,7 +19,10 @@ import type * as SqlClient from 'effect/sql/SqlClient';
  * @since 0.1.0
  * @category errors
  */
-export class DialectError extends Schema.TaggedError<DialectError>()('DialectError', {
+export class DialectError extends Schema.TaggedError<
+  DialectError,
+  { readonly brand: unique symbol }
+>()('DialectError', {
   message: Schema.String,
 }) {}
 

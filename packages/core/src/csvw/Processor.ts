@@ -32,10 +32,13 @@ import * as Url from './internal/url.ts';
  * @since 0.1.0
  * @category errors
  */
-export class LoadError extends Schema.TaggedError<LoadError>()('LoadError', {
-  message: Schema.String,
-  url: Schema.String,
-}) {}
+export class LoadError extends Schema.TaggedError<LoadError, { readonly brand: unique symbol }>()(
+  'LoadError',
+  {
+    message: Schema.String,
+    url: Schema.String,
+  },
+) {}
 
 /**
  * Reads the resources CSVW processing needs: a table's rows, parsed with its

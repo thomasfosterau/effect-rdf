@@ -44,7 +44,10 @@ const { rdfs, xsd } = Vocab;
  * @since 0.1.0
  * @category errors
  */
-export class ShapesGraphError extends Schema.TaggedError<ShapesGraphError>()('ShapesGraphError', {
+export class ShapesGraphError extends Schema.TaggedError<
+  ShapesGraphError,
+  { readonly brand: unique symbol }
+>()('ShapesGraphError', {
   message: Schema.String,
   /** The N-Triples form of the offending node, when known. */
   node: Schema.optional(Schema.String),
