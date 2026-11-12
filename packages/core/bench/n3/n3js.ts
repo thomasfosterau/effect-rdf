@@ -25,7 +25,6 @@ const median = (run: () => void): number => {
 };
 
 const report = (name: string, ms: number) => {
-  // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${(big.length / 1e6).toFixed(2)} MB, median ${ms.toFixed(0)} ms` +
       ` (${(big.length / 1e3 / ms).toFixed(1)} MB/s)`,
