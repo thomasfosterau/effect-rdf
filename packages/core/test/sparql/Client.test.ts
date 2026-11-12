@@ -208,33 +208,31 @@ describe('SparqlClient ↔ SparqlServer', () => {
   );
 
   it.effect('sends dataset parameters with GET, POST and auto', () =>
-    Effect.gen(function* () {
-      yield* Effect.forEach(
-        ['get', 'post', 'auto'] as const,
-        Effect.fnUntraced(function* (method) {
-          yield* run(
-            Effect.gen(function* () {
-              const client = yield* SparqlClient.SparqlClient;
-              const rows = yield* Stream.runCollect(
-                client.select('SELECT ?name { ?s ?p ?name }', { defaultGraphs: [ex('g1')] }),
-              );
-              expect(rows.map((r) => lexical(r['name']))).toEqual(['Carol']);
-              const named = yield* Stream.runCollect(
-                client.select('SELECT ?g { GRAPH ?g { ?s ?p ?o } }', {
-                  namedGraphs: ['http://example.org/g1'],
-                }),
-              );
-              expect(named).toHaveLength(1);
-              // A long query is sent with POST in auto mode.
-              const long = `SELECT * { ?s ?p ?o FILTER(?o != "${'x'.repeat(3000)}") }`;
-              expect(yield* Stream.runCollect(client.select(long))).toHaveLength(5);
-            }),
-            { method },
-          );
-        }),
-        { concurrency: 1, discard: true },
-      );
-    }),
+    Effect.forEach(
+      ['get', 'post', 'auto'] as const,
+      Effect.fnUntraced(function* (method) {
+        yield* run(
+          Effect.gen(function* () {
+            const client = yield* SparqlClient.SparqlClient;
+            const rows = yield* Stream.runCollect(
+              client.select('SELECT ?name { ?s ?p ?name }', { defaultGraphs: [ex('g1')] }),
+            );
+            expect(rows.map((r) => lexical(r['name']))).toEqual(['Carol']);
+            const named = yield* Stream.runCollect(
+              client.select('SELECT ?g { GRAPH ?g { ?s ?p ?o } }', {
+                namedGraphs: ['http://example.org/g1'],
+              }),
+            );
+            expect(named).toHaveLength(1);
+            // A long query is sent with POST in auto mode.
+            const long = `SELECT * { ?s ?p ?o FILTER(?o != "${'x'.repeat(3000)}") }`;
+            expect(yield* Stream.runCollect(client.select(long))).toHaveLength(5);
+          }),
+          { method },
+        );
+      }),
+      { concurrency: 1, discard: true },
+    ),
   );
 
   it.effect('runs updates with USING parameters', () =>

@@ -270,16 +270,8 @@ const endpoint = (options: Options.Resolved, kind: Protocol.EndpointKind) =>
     const baseIri = options.baseIri ?? base.href;
     const decoded = yield* Protocol.decode(request, kind, baseIri);
     return yield* Match.value(decoded).pipe(
-      Match.tag('Query', (operation) =>
-        Effect.gen(function* () {
-          return yield* runQuery(options, operation, baseIri);
-        }),
-      ),
-      Match.tag('Update', (operation) =>
-        Effect.gen(function* () {
-          return yield* runUpdate(options, operation, baseIri);
-        }),
-      ),
+      Match.tag('Query', (operation) => runQuery(options, operation, baseIri)),
+      Match.tag('Update', (operation) => runUpdate(options, operation, baseIri)),
       Match.tag('ServiceDescription', () =>
         Effect.gen(function* () {
           if (!options.serviceDescription) {
