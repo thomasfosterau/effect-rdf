@@ -93,14 +93,26 @@ export const registry = (functions: Readonly<Record<string, ExtensionFunction>>)
 // Helpers
 // -----------------------------------------------------------------------------
 
-const literalArg = (t: Term.Term): Term.Literal =>
-  Term.isLiteral(t) ? t : V.fail('Expected a literal');
+/** An argument position: absent when the call has fewer arguments (the array type cannot say). */
+type Slot<T extends Term.Term = Term.Term> = T | undefined;
 
-const stringArg = (t: Term.Term): Term.Literal =>
-  V.isStringLiteral(t) ? t : V.fail('Expected a string literal');
+/** The term in a position, failing when the call has no such argument. */
+const arg = <T extends Term.Term>(t: Slot<T>): T => t ?? V.fail('Missing argument');
 
-const simpleArg = (t: Term.Term): Term.Literal =>
-  V.isSimpleString(t) ? t : V.fail('Expected a simple literal');
+const literalArg = (t: Slot): Term.Literal => {
+  const x = arg(t);
+  return Term.isLiteral(x) ? x : V.fail('Expected a literal');
+};
+
+const stringArg = (t: Slot): Term.Literal => {
+  const x = arg(t);
+  return V.isStringLiteral(x) ? x : V.fail('Expected a string literal');
+};
+
+const simpleArg = (t: Slot): Term.Literal => {
+  const x = arg(t);
+  return V.isSimpleString(x) ? x : V.fail('Expected a simple literal');
+};
 
 /** Argument compatibility (SPARQL 1.1 §17.4.3.1.2). */
 const compatible = (a: Term.Literal, b: Term.Literal): boolean =>
@@ -111,10 +123,10 @@ const codepoints = (s: string): Array<string> => Array.from(s);
 const intLiteral = (n: number | bigint): Term.Literal =>
   new Term.Literal(BigInt(n).toString(), V.dt.integer);
 
-const numArg = V.requireNum;
+const numArg = (t: Slot): V.Num => V.requireNum(arg(t));
 
 const roundNum = (
-  t: Term.Term,
+  t: Slot,
   mode: 'ceil' | 'floor' | 'half-ceil',
   fn: (x: number) => number,
 ): Term.Literal => {
@@ -154,7 +166,7 @@ const regexFlags = (args: BuiltInArgs, i: number): string => {
   return Option.isSome(t) ? simpleArg(t.value).value : '';
 };
 
-const parseDateParts = (t: Term.Term) => {
+const parseDateParts = (t: Slot) => {
   const lit = literalArg(t);
   const d = lit.datatype.value;
   if (
@@ -217,17 +229,12 @@ const LANG_TAG = /^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$/;
 
 /**
  * The evaluated arguments of a built-in function. Positions beyond the
- * function's arity are `undefined` at runtime; the type assumes the
- * required positions are present (checked by the parser).
+ * function's arity are absent (`undefined` under `noUncheckedIndexedAccess`).
  *
  * @since 0.1.0
  * @category models
  */
-export type BuiltInArgs = ReadonlyArray<Term.GroundTerm> & {
-  readonly 0: Term.GroundTerm;
-  readonly 1: Term.GroundTerm;
-  readonly 2: Term.GroundTerm;
-};
+export type BuiltInArgs = ReadonlyArray<Term.GroundTerm>;
 
 /**
  * Implementation of a strict built-in function.
@@ -433,12 +440,12 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     }
     return new Term.Literal(lex, datatype);
   },
-  SAMETERM: ([a, b]) => V.bool(a.key === b.key),
+  SAMETERM: ([a, b]) => V.bool(arg(a).key === arg(b).key),
   ISIRI: ([a]) => V.bool(Term.isNamedNode(a)),
   ISURI: ([a]) => V.bool(Term.isNamedNode(a)),
   ISBLANK: ([a]) => V.bool(Term.isBlankNode(a)),
   ISLITERAL: ([a]) => V.bool(Term.isLiteral(a)),
-  ISNUMERIC: ([a]) => V.bool(V.isNumeric(a)),
+  ISNUMERIC: ([a]) => V.bool(V.isNumeric(arg(a))),
   HASLANG: ([a]) => V.bool(Term.isLiteral(a) && a.language !== ''),
   HASLANGDIR: ([a]) => V.bool(Term.isLiteral(a) && a.direction !== undefined),
   REGEX: (args) => {
@@ -454,7 +461,7 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
       return V.fail('TRIPLE subject must be an IRI or blank node');
     }
     if (!Term.isNamedNode(p)) return V.fail('TRIPLE predicate must be an IRI');
-    return Term.triple(s, p, o);
+    return Term.triple(s, p, arg(o));
   },
   SUBJECT: ([a]) => (Term.isTriple(a) ? a.subject : V.fail('Not a triple term')),
   PREDICATE: ([a]) => (Term.isTriple(a) ? a.predicate : V.fail('Not a triple term')),
