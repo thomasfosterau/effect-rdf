@@ -7,6 +7,7 @@
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Match from 'effect/Match';
+import * as HashMap from 'effect/HashMap';
 import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Iri from '../Iri.ts';
@@ -44,7 +45,8 @@ export interface ParseResult {
 
 const isPrefixMap = (
   prefixes: Readonly<Record<string, string>> | PrefixMap.PrefixMap,
-): prefixes is PrefixMap.PrefixMap => 'prefixes' in prefixes && prefixes.prefixes instanceof Map;
+): prefixes is PrefixMap.PrefixMap =>
+  'prefixes' in prefixes && HashMap.isHashMap(prefixes.prefixes);
 
 const toPrefixMap = (prefixes: ParseOptions['prefixes']): PrefixMap.PrefixMap =>
   prefixes === undefined
@@ -373,10 +375,7 @@ class Printer {
   schema(schema: ShExJ.Schema): string {
     const header = [
       ...Arr.fromOption(Option.map(this.base, (base) => `BASE <${escapeIri(base)}>`)),
-      ...Arr.map(
-        Arr.fromIterable(this.prefixes.prefixes),
-        ([p, ns]) => `PREFIX ${p}: <${escapeIri(ns)}>`,
-      ),
+      ...Arr.map(PrefixMap.entries(this.prefixes), ([p, ns]) => `PREFIX ${p}: <${escapeIri(ns)}>`),
       ...Arr.map(schema.imports ?? [], (imp) => `IMPORT ${this.iri(imp)}`),
     ];
     const out = [

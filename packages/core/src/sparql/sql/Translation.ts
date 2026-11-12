@@ -36,6 +36,8 @@
 import * as Arr from 'effect/Array';
 import * as Equal from 'effect/Equal';
 import * as Match from 'effect/Match';
+import * as HashMap from 'effect/HashMap';
+import * as HashSet from 'effect/HashSet';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
@@ -112,9 +114,9 @@ export interface CompiledQuery {
    */
   readonly columns: ReadonlyArray<OutputColumn>;
   /** Query-local terms (by negative id). */
-  readonly locals: ReadonlyMap<number, Term.GroundTerm>;
+  readonly locals: HashMap.HashMap<number, Term.GroundTerm>;
   /** The comparison classes of the query-local terms. */
-  readonly localClasses: ReadonlySet<number>;
+  readonly localClasses: HashSet.HashSet<number>;
   readonly risks: ReadonlyArray<Risk>;
 }
 
@@ -125,8 +127,12 @@ export interface CompiledQuery {
  * @since 0.1.0
  * @category utils
  */
-export const isRisky = (compiled: CompiledQuery, storeClasses: ReadonlySet<number>): boolean => {
-  const present = (c: number) => storeClasses.has(c) || compiled.localClasses.has(c);
+export const isRisky = (
+  compiled: CompiledQuery,
+  storeClasses: HashSet.HashSet<number>,
+): boolean => {
+  const present = (c: number) =>
+    HashSet.has(storeClasses, c) || HashSet.has(compiled.localClasses, c);
   return compiled.risks.some((r) => (r.aStatic || present(r.a)) && (r.bStatic || present(r.b)));
 };
 
@@ -502,7 +508,7 @@ class Compiler {
   readonly params: Array<unknown> = [];
   readonly paramIndex = MutableHashMap.empty<string, number>();
   readonly risks: Array<Risk> = [];
-  readonly localClasses = new Set<number>();
+  readonly localClasses = MutableHashSet.empty<number>();
 
   readonly context: TranslationContext;
   readonly resolve: (term: Term.GroundTerm) => Option.Option<number>;
@@ -582,7 +588,7 @@ class Compiler {
       MutableHashMap.set(this.locals, term.key, created);
       return created;
     });
-    this.localClasses.add(Enc.classify(term).cls);
+    MutableHashSet.add(this.localClasses, Enc.classify(term).cls);
     return local.id;
   }
 
@@ -1843,8 +1849,7 @@ const compileOnce = (
     });
     return context.dialect.placeholder(n);
   });
-  // `CompiledQuery.locals` is a `ReadonlyMap`.
-  const byId = new Map(
+  const byId = HashMap.fromIterable(
     Arr.fromIterable(MutableHashMap.values(locals)).map(({ id, term }) => [id, term] as const),
   );
   return {
@@ -1852,7 +1857,7 @@ const compileOnce = (
     params,
     columns,
     locals: byId,
-    localClasses: c.localClasses,
+    localClasses: HashSet.fromIterable(c.localClasses),
     risks: c.risks,
   };
 };

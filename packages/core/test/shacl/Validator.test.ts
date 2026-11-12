@@ -2,6 +2,7 @@ import { assert, describe, expect, it, layer } from '@effect/vitest';
 import { Dataset, Isomorphism, Namespace, Term, Vocab } from '@thomasfosterau/effect-rdf';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
 import { identity } from 'effect/Function';
 import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
@@ -553,7 +554,7 @@ describe('SHACL-SPARQL extension point', () => {
           Effect.succeed([
             {
               value: Term.literal('1', xsd.integer),
-              bindings: new Map([['reason', Term.literal('too bad')]]),
+              bindings: HashMap.make(['reason', Term.literal('too bad')]),
             },
           ]),
         selectTargets: () => Effect.succeed([]),

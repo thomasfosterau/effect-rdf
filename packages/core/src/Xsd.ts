@@ -6,6 +6,7 @@
  */
 import * as BigDecimal from 'effect/BigDecimal';
 import * as Arr from 'effect/Array';
+import * as HashSet from 'effect/HashSet';
 import * as Match from 'effect/Match';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
@@ -97,11 +98,11 @@ const integerBounds = MutableHashMap.fromIterable<string, Bounds>(
 );
 
 /**
- * The XSD numeric datatypes recognised by SPARQL, ordered by type promotion.
+ * The XSD numeric datatypes recognised by SPARQL.
  *
  * @since 0.1.0
  */
-export const numericDatatypes: ReadonlySet<string> = new Set([
+export const numericDatatypes: HashSet.HashSet<string> = HashSet.fromIterable([
   ...Arr.map(Arr.fromIterable(MutableHashMap.keys(integerBounds)), (t) => XSD + t),
   `${XSD}decimal`,
   `${XSD}float`,
@@ -122,7 +123,8 @@ export const isIntegerDatatype = (datatype: string): boolean =>
  *
  * @since 0.1.0
  */
-export const isNumericDatatype = (datatype: string): boolean => numericDatatypes.has(datatype);
+export const isNumericDatatype = (datatype: string): boolean =>
+  HashSet.has(numericDatatypes, datatype);
 
 /**
  * Whether this implementation knows the lexical space of a datatype.

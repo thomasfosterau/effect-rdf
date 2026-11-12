@@ -9,6 +9,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
 import * as Iterable from 'effect/Iterable';
 import * as Match from 'effect/Match';
 import * as MutableHashMap from 'effect/MutableHashMap';
@@ -28,14 +29,14 @@ import * as Predicate from 'effect/Predicate';
 export interface SchemaIndex {
   readonly schema: ShExJ.Schema;
   /** Shape declarations by label. */
-  readonly shapes: ReadonlyMap<string, ShExJ.ShapeDecl>;
+  readonly shapes: HashMap.HashMap<string, ShExJ.ShapeDecl>;
   /** Labelled triple expressions by label. */
-  readonly tripleExprs: ReadonlyMap<string, ShExJ.TripleExpr>;
+  readonly tripleExprs: HashMap.HashMap<string, ShExJ.TripleExpr>;
   /**
    * The extension hierarchy: for each label, the labels of the declarations
    * that (directly or transitively) extend it.
    */
-  readonly descendants: ReadonlyMap<string, ReadonlyArray<string>>;
+  readonly descendants: HashMap.HashMap<string, ReadonlyArray<string>>;
 }
 
 const forEachShapeExprChild: (
@@ -209,12 +210,11 @@ export const makeIndex = (schema: ShExJ.Schema): SchemaIndex => {
         append(children, p, d.id);
     }),
   );
-  // `SchemaIndex` exposes `ReadonlyMap`s, so the index is built on native maps.
   return {
     schema,
-    shapes: new Map(decls),
-    tripleExprs: new Map(tripleExprs),
-    descendants: new Map(
+    shapes: HashMap.fromIterable(decls),
+    tripleExprs: HashMap.fromIterable(tripleExprs),
+    descendants: HashMap.fromIterable(
       Arr.map(Arr.fromIterable(MutableHashMap.keys(children)), (label) => [
         label,
         descendantsOf(children, label),

@@ -13,7 +13,7 @@ import * as Exit from 'effect/Exit';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
 import * as Record from 'effect/Record';
-import { Dataset, Iri, Serialization, Term } from '@thomasfosterau/effect-rdf';
+import { Dataset, Iri, PrefixMap, Serialization, Term } from '@thomasfosterau/effect-rdf';
 import { RdfXml, Xml } from '../../src/rdfxml/index.ts';
 
 // -----------------------------------------------------------------------------
@@ -337,7 +337,7 @@ const outcome = (
     ? {
         _tag: 'Parsed',
         nquads: Dataset.toNQuads(exit.value.dataset),
-        prefixes: Array.from(exit.value.prefixes.prefixes),
+        prefixes: Array.from(PrefixMap.entries(exit.value.prefixes)),
         baseIri: exit.value.baseIri ?? '',
       }
     : {

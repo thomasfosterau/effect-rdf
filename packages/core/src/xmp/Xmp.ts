@@ -174,7 +174,7 @@ const prefixFor = (prefixes: Prefixes, ns: string): Option.Option<string> =>
 const usable = (map: PrefixMap.PrefixMap): Prefixes =>
   Arr.map(
     Arr.filter(
-      Arr.fromIterable(map.prefixes),
+      PrefixMap.entries(map),
       ([prefix]) => prefix !== '' && !HashSet.has(RESERVED, prefix.toLowerCase()),
     ),
     ([prefix, ns]) => [ns, prefix] as const,

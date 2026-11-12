@@ -17,6 +17,7 @@ import * as Term from '../Term.ts';
 import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
 import * as Arr from 'effect/Array';
+import * as HashSet from 'effect/HashSet';
 import * as Match from 'effect/Match';
 import * as StringMap from './internal/stringMap.ts';
 
@@ -467,11 +468,8 @@ export const isInternalVariable = (name: string): boolean => name.startsWith('@'
 /** A string set of the type the variable helpers below return. */
 type VariableSet = Map<string, true>;
 
-/**
- * The public, native `ReadonlySet` of a variable set: the helpers below
- * return `ReadonlySet` by contract, and only `new Set` makes one.
- */
-const toReadonlySet = (vars: VariableSet): ReadonlySet<string> => new Set(vars.keys());
+/** The public, immutable `HashSet` of a variable set, copied once at the boundary. */
+const toHashSet = (vars: VariableSet): HashSet.HashSet<string> => HashSet.fromIterable(vars.keys());
 
 const termVariables = (t: Term.Term | Ast.TermPattern, out: VariableSet): void => {
   if (Term.isVariable(t)) out.set(t.value, true);
@@ -489,7 +487,7 @@ const termVariables = (t: Term.Term | Ast.TermPattern, out: VariableSet): void =
  * @since 0.1.0
  * @category utils
  */
-export const variables = (op: Operation): ReadonlySet<string> => toReadonlySet(variableSet(op));
+export const variables = (op: Operation): HashSet.HashSet<string> => toHashSet(variableSet(op));
 
 const variableSet = (op: Operation): VariableSet => {
   const out = StringMap.emptySet();
@@ -542,8 +540,8 @@ const collectVariables = (op: Operation, out: VariableSet): void => {
  * @since 0.1.0
  * @category utils
  */
-export const certainVariables = (op: Operation): ReadonlySet<string> =>
-  toReadonlySet(certainSet(op));
+export const certainVariables = (op: Operation): HashSet.HashSet<string> =>
+  toHashSet(certainSet(op));
 
 const certainSet = (op: Operation): VariableSet => {
   return Match.value(op).pipe(
@@ -586,7 +584,7 @@ const certainSet = (op: Operation): VariableSet => {
  * @since 0.1.0
  * @category utils
  */
-export const expressionVariables = (expression: Expression): ReadonlySet<string> => {
+export const expressionVariables = (expression: Expression): HashSet.HashSet<string> => {
   const out = StringMap.emptySet();
   const go = (e: Expression): void => {
     Match.value(e).pipe(
@@ -596,7 +594,7 @@ export const expressionVariables = (expression: Expression): ReadonlySet<string>
     );
   };
   go(expression);
-  return toReadonlySet(out);
+  return toHashSet(out);
 };
 
 /**

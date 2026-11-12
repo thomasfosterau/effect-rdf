@@ -15,6 +15,7 @@ import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
+import * as HashMap from 'effect/HashMap';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
@@ -239,7 +240,7 @@ export const make = Effect.fnUntraced(function* (schema: ShExJ.Schema, options: 
           ? resolved.start === undefined
             ? Option.some('the shape map uses START but the schema has no start')
             : Option.none()
-          : index.shapes.has(a.shape)
+          : HashMap.has(index.shapes, a.shape)
             ? Option.none()
             : Option.some(`the schema does not declare shape ${a.shape}`),
       );

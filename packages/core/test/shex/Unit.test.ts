@@ -3,6 +3,7 @@ import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
 import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
+import * as PrefixMap from '@thomasfosterau/effect-rdf/PrefixMap';
 import * as Predicate from 'effect/Predicate';
 import * as Schema from 'effect/Schema';
 import type * as SchemaIssue from 'effect/SchemaIssue';
@@ -66,7 +67,7 @@ describe('ShExC', () => {
     Effect.gen(function* () {
       const r = yield* ShExC.parseWithMetadata(schemaText);
       expect(r.schema.shapes?.[0]?.id).toBe('http://ex.example/Person');
-      expect(r.prefixes.prefixes.get('ex')).toBe('http://ex.example/');
+      expect(PrefixMap.get(r.prefixes, 'ex')).toEqual(Option.some('http://ex.example/'));
     }),
   );
 

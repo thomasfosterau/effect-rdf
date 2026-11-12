@@ -19,6 +19,7 @@ import * as Arr from 'effect/Array';
 import * as Cause from 'effect/Cause';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as HashMap from 'effect/HashMap';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
@@ -95,7 +96,7 @@ interface Frame {
   readonly namespace: string;
   readonly attributes: ReadonlyArray<Xml.Attribute>;
   readonly declarations: ReadonlyArray<Xml.NamespaceDeclaration>;
-  readonly inScope: ReadonlyMap<string, string>;
+  readonly inScope: HashMap.HashMap<string, string>;
   readonly children: Array<Xml.Node>;
   /** Character data not yet added to `children`, and where it starts. */
   text: string;
@@ -118,8 +119,7 @@ const documentFrame = (): Frame => ({
   namespace: '',
   attributes: [],
   declarations: [],
-  // `inScopeNamespaces` is a public `ReadonlyMap`
-  inScope: new Map(),
+  inScope: HashMap.empty(),
   children: [],
   text: '',
   textPosition: NO_TEXT,
@@ -177,17 +177,15 @@ const checkDeclaration = (prefix: string, uri: string, position: Xml.Position): 
 
 /** The namespaces in scope of an element that makes `declarations` (which are not empty). */
 const declare = (
-  parentNs: ReadonlyMap<string, string>,
+  parentNs: HashMap.HashMap<string, string>,
   declarations: ReadonlyArray<Xml.NamespaceDeclaration>,
-): ReadonlyMap<string, string> => {
-  // `inScopeNamespaces` is a public `ReadonlyMap`
-  const own = new Map(parentNs);
-  declarations.forEach((d) => {
-    if (d.namespace === '') own.delete('');
-    else own.set(d.prefix, d.namespace);
+): HashMap.HashMap<string, string> =>
+  HashMap.mutate(parentNs, (own) => {
+    declarations.forEach((d) => {
+      if (d.namespace === '') HashMap.remove(own, '');
+      else HashMap.set(own, d.prefix, d.namespace);
+    });
   });
-  return own;
-};
 
 const CHAR_REF_RE = /&#(x[0-9a-fA-F]+|[0-9]+);/g;
 const COMMENT_OR_PI_RE = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>/g;
@@ -199,23 +197,21 @@ const ENTITY_DECL_RE =
  * with character references expanded); the first declaration of a name wins.
  * effect-xml expands them in the content; this is only the record of them.
  */
-const entitiesOf = (subset: string): ReadonlyMap<string, string> => {
-  // `DocumentType.entities` is a public `ReadonlyMap`
-  const entities = new Map<string, string>();
-  Array.from(subset.replace(COMMENT_OR_PI_RE, '').matchAll(ENTITY_DECL_RE), (m) => {
-    const name = m[1] ?? '';
-    if (!entities.has(name)) {
-      const value = (m[2] ?? m[3] ?? '').replace(CHAR_REF_RE, (_, body: string) =>
-        String.fromCodePoint(
-          body.startsWith('x') ? Number.parseInt(body.slice(1), 16) : Number.parseInt(body, 10),
-        ),
-      );
-      entities.set(name, value);
-    }
-    return name;
+const entitiesOf = (subset: string): HashMap.HashMap<string, string> =>
+  HashMap.mutate(HashMap.empty<string, string>(), (entities) => {
+    Array.from(subset.replace(COMMENT_OR_PI_RE, '').matchAll(ENTITY_DECL_RE), (m) => {
+      const name = m[1] ?? '';
+      if (!HashMap.has(entities, name)) {
+        const value = (m[2] ?? m[3] ?? '').replace(CHAR_REF_RE, (_, body: string) =>
+          String.fromCodePoint(
+            body.startsWith('x') ? Number.parseInt(body.slice(1), 16) : Number.parseInt(body, 10),
+          ),
+        );
+        HashMap.set(entities, name, value);
+      }
+      return name;
+    });
   });
-  return entities;
-};
 
 /** The document being built. */
 class Builder {
@@ -389,7 +385,9 @@ class Builder {
     };
     const [prefix, localName] = this.nameParts(qname, namePosition);
     const namespace =
-      prefix === '' ? (inScope.get('') ?? '') : this.namespaceOf(prefix, inScope, namePosition);
+      prefix === ''
+        ? Option.getOrElse(HashMap.get(inScope, ''), () => '')
+        : this.namespaceOf(prefix, inScope, namePosition);
 
     const large = raw.length >= SMALL;
     if (large) MutableHashSet.clear(this.expanded);
@@ -449,12 +447,13 @@ class Builder {
 
   namespaceOf(
     prefix: string,
-    inScope: ReadonlyMap<string, string>,
+    inScope: HashMap.HashMap<string, string>,
     position: Xml.Position,
   ): string {
     if (prefix === 'xml') return XML_NAMESPACE;
-    const uri = inScope.get(prefix);
-    return uri ?? fail(`Unbound namespace prefix "${prefix}"`, position);
+    return Option.getOrElse(HashMap.get(inScope, prefix), () =>
+      fail(`Unbound namespace prefix "${prefix}"`, position),
+    );
   }
 
   end(e: Extract<Sax.SaxEvent, { readonly _tag: 'EndElement' }>): void {

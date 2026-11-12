@@ -9,6 +9,7 @@
 import * as Arr from 'effect/Array';
 import { dual } from 'effect/Function';
 import * as Iterable from 'effect/Iterable';
+import * as HashMap from 'effect/HashMap';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
@@ -183,10 +184,11 @@ const classOf = (
   Option.getOrElse(MutableHashMap.get(groups, labelOf(labels, node)), () => []);
 
 /**
- * The public result of `bijection`: a native `ReadonlyMap`, copied once
- * from the search's map at the end.
+ * The public result of `bijection`: an immutable `HashMap`, copied once
+ * from the search's mutable map at the end.
  */
-const toReadonlyMap = (mapping: Labels): ReadonlyMap<string, string> => new Map(mapping);
+const toHashMap = (mapping: Labels): HashMap.HashMap<string, string> =>
+  HashMap.fromIterable(mapping);
 
 /**
  * Finds a blank node bijection from `self` to `that` under which the two
@@ -198,7 +200,7 @@ const toReadonlyMap = (mapping: Labels): ReadonlyMap<string, string> => new Map(
 export const bijection = (
   self: Dataset.Dataset,
   that: Dataset.Dataset,
-): Option.Option<ReadonlyMap<string, string>> => {
+): Option.Option<HashMap.HashMap<string, string>> => {
   if (self.size !== that.size) return Option.none();
   const aBlank: Array<Term.Quad> = [];
   const groundMissing = Iterable.some(self, (q) => {
@@ -209,7 +211,7 @@ export const bijection = (
   if (groundMissing) return Option.none();
   const bBlank = Arr.filter(Arr.fromIterable(that), (q) => Term.hasBlankNodes(q));
   if (aBlank.length !== bBlank.length) return Option.none();
-  if (Arr.isReadonlyArrayEmpty(aBlank)) return Option.some(toReadonlyMap(MutableHashMap.empty()));
+  if (Arr.isReadonlyArrayEmpty(aBlank)) return Option.some(toHashMap(MutableHashMap.empty()));
 
   const a = refine(aBlank);
   const b = refine(bBlank);
@@ -277,7 +279,7 @@ export const bijection = (
     else cursors.pop();
     return true;
   });
-  return found ? Option.some(toReadonlyMap(mapping)) : Option.none();
+  return found ? Option.some(toHashMap(mapping)) : Option.none();
 };
 
 /**
