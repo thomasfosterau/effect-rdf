@@ -49,9 +49,12 @@ import * as NodeSparqlServer from './NodeSparqlServer.ts';
  * @since 0.1.0
  * @category errors
  */
-export class CliError extends Schema.TaggedError<CliError>()('CliError', {
-  message: Schema.String,
-}) {}
+export class CliError extends Schema.TaggedError<CliError, { readonly brand: unique symbol }>()(
+  'CliError',
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * The prefix of the environment variables that back the flags:

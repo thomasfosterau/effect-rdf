@@ -49,10 +49,10 @@ import * as Model from './Model.ts';
  * @since 0.1.0
  * @category errors
  */
-export class UnrepresentableError extends Schema.TaggedError<UnrepresentableError>()(
-  'N3UnrepresentableError',
-  { message: Schema.String },
-) {}
+export class UnrepresentableError extends Schema.TaggedError<
+  UnrepresentableError,
+  { readonly brand: unique symbol }
+>()('N3UnrepresentableError', { message: Schema.String }) {}
 
 class Failure {
   readonly message: string;

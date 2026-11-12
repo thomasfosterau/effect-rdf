@@ -20,7 +20,10 @@ import * as Schema from 'effect/Schema';
  * @since 0.1.0
  * @category errors
  */
-export class XmpExtractError extends Schema.TaggedError<XmpExtractError>()('XmpExtractError', {
+export class XmpExtractError extends Schema.TaggedError<
+  XmpExtractError,
+  { readonly brand: unique symbol }
+>()('XmpExtractError', {
   message: Schema.String,
 }) {}
 
