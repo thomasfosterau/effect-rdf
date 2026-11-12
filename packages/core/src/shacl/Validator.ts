@@ -603,13 +603,14 @@ const makeEngine = (
     }) =>
       Effect.map(
         Effect.filter(valueNodes, (v) =>
-          Effect.flatMap(conforms(c.shape, v), (ok) =>
-            !ok || !c.disjoint
-              ? Effect.succeed(ok)
-              : Effect.map(
-                  Effect.findFirst(c.siblings, (s) => conforms(s, v)),
-                  Option.isNone,
-                ),
+          Effect.filterOrElse(
+            conforms(c.shape, v),
+            (ok) => !ok || !c.disjoint,
+            () =>
+              Effect.map(
+                Effect.findFirst(c.siblings, (s) => conforms(s, v)),
+                Option.isNone,
+              ),
           ),
         ),
         (counted) => counted.length,

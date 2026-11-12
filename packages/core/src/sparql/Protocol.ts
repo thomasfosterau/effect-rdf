@@ -332,11 +332,9 @@ export const decode = (
         }),
       ),
       Match.orElse((other) =>
-        Effect.gen(function* () {
-          return yield* ProtocolErrors.unsupportedMediaType(
-            `Unsupported Content-Type '${other.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
-          );
-        }),
+        ProtocolErrors.unsupportedMediaType(
+          `Unsupported Content-Type '${other.mediaType}'; expected ${FORM}, ${SPARQL_QUERY} or ${SPARQL_UPDATE}`,
+        ),
       ),
     );
   });

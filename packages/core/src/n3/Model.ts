@@ -384,10 +384,10 @@ export const collection = (items: Iterable<N3Term> = []): Collection =>
  * @category constructors
  */
 export const document = (
-  formula: Formula,
+  root: Formula,
   options?: { readonly prefixes?: PrefixMap.PrefixMap; readonly baseIri?: string | undefined },
 ): Document => ({
-  formula,
+  formula: root,
   prefixes: options?.prefixes ?? PrefixMap.empty,
   baseIri: options?.baseIri,
 });
@@ -565,8 +565,8 @@ export const addStatements = (self: Formula, statements: Iterable<Statement>): F
  * @since 0.1.0
  * @category predicates
  */
-export const hasStatement = (self: Formula, statement: Statement): boolean =>
-  self.statements.some((s) => s.key === statement.key);
+export const hasStatement = (self: Formula, candidate: Statement): boolean =>
+  self.statements.some((s) => s.key === candidate.key);
 
 // -----------------------------------------------------------------------------
 // Schemas
