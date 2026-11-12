@@ -12,6 +12,7 @@ import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
 import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
+import * as Regex from '../../internal/regex.ts';
 import * as Term from '../../Term.ts';
 import { xsd } from '../../Vocab.ts';
 import * as Xsd from '../../Xsd.ts';
@@ -375,8 +376,8 @@ const stringFunction =
     return solutions(Option.isNone(r) ? [] : ctx.unify(o, Term.literal(r.value), b));
   };
 
-const regex = (pattern: string, flags = ''): Option.Option<RegExp> =>
-  Result.getSuccess(Result.try(() => new RegExp(pattern, flags)));
+const regex = (pattern: string): Option.Option<Regex.Regex> =>
+  Result.getSuccess(Regex.compileCached(pattern, 'ecma'));
 
 const stringBuiltins = {
   concatenation: stringFunction((args) => Option.some(args.join(''))),
@@ -390,17 +391,22 @@ const stringBuiltins = {
   lessThan: stringTest((a, b) => a < b),
   notGreaterThan: stringTest((a, b) => a <= b),
   notLessThan: stringTest((a, b) => a >= b),
-  matches: stringTest((a, b) => Option.exists(regex(b), (re) => re.test(a))),
+  matches: stringTest((a, b) => Option.exists(regex(b), (re) => Regex.test(re, a))),
   notMatches: stringTest(
-    (a, b) => !Option.match(regex(b), { onNone: () => true, onSome: (re) => re.test(a) }),
+    (a, b) => !Option.match(regex(b), { onNone: () => true, onSome: (re) => Regex.test(re, a) }),
   ),
   replace: stringFunction(([s, p, r]) => {
     if (s === undefined || p === undefined || r === undefined) return Option.none();
-    return Option.map(regex(p, 'g'), (re) => s.replace(re, r.replace(/\\(\d)/g, '$$$1')));
+    const template = r.replace(/\\(\d)/g, '$$$1');
+    return Option.flatMap(regex(p), (re) =>
+      Regex.replaceAll(re, s, (captures) => Regex.expand(re, template, s, captures)),
+    );
   }),
   scrape: stringFunction(([s, p]) => {
     if (s === undefined || p === undefined) return Option.none();
-    return Option.flatMap(regex(p), (re) => Option.fromUndefinedOr(re.exec(s)?.[1]));
+    return Option.flatMap(regex(p), (re) =>
+      Option.flatMap(Regex.first(re, s), (captures) => Regex.group(s, captures, 1)),
+    );
   }),
   format: stringFunction(([fmt, ...args]) => {
     if (fmt === undefined) return Option.none();

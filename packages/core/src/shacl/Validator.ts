@@ -658,7 +658,7 @@ const makeEngine = (
           Effect.sync(() => each((v) => failsString(v, (s) => codePointLength(s) <= c.maxLength))),
         ),
         Match.tag('Pattern', (c) =>
-          Effect.sync(() => each((v) => failsString(v, (s) => c.regex.test(s)))),
+          Effect.sync(() => each((v) => failsString(v, (s) => c.test(s)))),
         ),
         Match.tag('LanguageIn', (c) =>
           Effect.sync(() =>

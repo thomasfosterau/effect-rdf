@@ -27,7 +27,7 @@ import * as Predicate from 'effect/Predicate';
 import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
-import * as Regex from './internal/regex.ts';
+import * as Regex from '../internal/regex.ts';
 import * as Path from './Path.ts';
 import { SH, sh } from './Vocabulary.ts';
 
@@ -116,7 +116,8 @@ export type Constraint =
       readonly _tag: 'Pattern';
       readonly pattern: string;
       readonly flags: string;
-      readonly regex: RegExp;
+      /** Whether a string matches the pattern (in time linear in its length). */
+      readonly test: (value: string) => boolean;
     }
   | { readonly _tag: 'LanguageIn'; readonly languages: ReadonlyArray<string> }
   | { readonly _tag: 'UniqueLang' }
@@ -716,9 +717,15 @@ const patternConstraints = (r: Reader, id: ShapeId): ReadonlyArray<Constraint> =
   return Arr.map(patterns, (p): Constraint => {
     if (!Term.isLiteral(p))
       return failShapes(`the value of sh:pattern on ${id.key} must be a literal`, id);
-    return Result.match(Regex.compile(p.value, flags), {
-      onFailure: (error) => failShapes(`${error} (sh:pattern on ${id.key})`, id),
-      onSuccess: (regex) => ({ _tag: 'Pattern', pattern: p.value, flags, regex }),
+    return Result.match(Regex.compileCached(p.value, 'xpath', flags), {
+      onFailure: (error) =>
+        failShapes(`invalid regular expression: ${error} (sh:pattern on ${id.key})`, id),
+      onSuccess: (regex) => ({
+        _tag: 'Pattern',
+        pattern: p.value,
+        flags,
+        test: (value) => Regex.test(regex, value),
+      }),
     });
   });
 };

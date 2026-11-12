@@ -28,6 +28,7 @@ Entry points: every `src/*.ts` is `./<Module>`; each subpath is `./<subpath>` (i
 - **Terms have value equality.** Every term implements Effect `Equal` / `Hash`, so `Dataset` deduplicates and `HashSet` / `HashMap` work by value; a new term kind implements both.
 - **`Dataset` is immutable and indexed.** Every operation returns a new dataset; pattern matching uses the indexes, so a change to the index layout is a performance change the syntax and SPARQL suites measure.
 - **`Serialization` is the contract between the data model and the syntaxes.** A parser fails with `RdfParseError` (with `line` / `column` where known), a serializer with `RdfSerializeError`; changing either shape is breaking for every syntax subpath.
+- **A pattern from the data never reaches `new RegExp` whole.** SPARQL `REGEX` / `REPLACE`, `sh:pattern`, ShEx `pattern`, CSVW `format` and the N3 string built-ins compile through `src/internal/regex.ts` (XPath or ECMAScript dialect): a Pike VM, linear in the input, with a step-budgeted backtracking matcher only for back-references and lookahead, and a cap on the program size. Only a single character class is handed to the JavaScript engine. A new call site that takes a pattern from input uses it too (SECURITY.md).
 - **`Isomorphism.isomorphic` is the conformance oracle** every subpath's suite compares graphs with; it must stay correct for blank nodes inside triple terms and must not overflow the stack on large blank-node graphs.
 
 ### `/rdfjson`
