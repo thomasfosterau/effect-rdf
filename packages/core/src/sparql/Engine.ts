@@ -485,10 +485,10 @@ export const make = (
     }).pipe(Effect.withSpan('SparqlEngine.query', { attributes: textAttributes(q) }));
 
   const select: SparqlEngineShape['select'] = (q, request) =>
-    Effect.flatMap(query(q, request), (r) =>
-      Predicate.isTagged(r, 'Select')
-        ? Effect.succeed(r)
-        : Effect.fail(new EvaluationError({ message: 'Not a SELECT query' })),
+    Effect.filterOrFail(
+      query(q, request),
+      (r) => Predicate.isTagged(r, 'Select'),
+      () => new EvaluationError({ message: 'Not a SELECT query' }),
     );
 
   const ask: SparqlEngineShape['ask'] = (q, request) =>

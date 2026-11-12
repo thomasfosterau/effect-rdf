@@ -428,20 +428,11 @@ export const make = (
       const timeout = options?.timeout ?? config.timeout;
       const attempt = http.execute(withHeaders).pipe(
         Effect.mapError(fromHttpClientError),
-        Effect.flatMap(
-          (
-            response,
-          ): Effect.Effect<
-            HttpClientResponse.HttpClientResponse,
-            ClientErrors.SparqlClientError
-          > => {
-            if (
-              (response.status >= 200 && response.status < 300) ||
-              accept.includes(response.status)
-            ) {
-              return Effect.succeed(response);
-            }
-            return response.text.pipe(
+        Effect.filterOrElse(
+          (response) =>
+            (response.status >= 200 && response.status < 300) || accept.includes(response.status),
+          (response) =>
+            response.text.pipe(
               Effect.orElseSucceed(() => ''),
               Effect.flatMap((body) =>
                 Effect.fail(
@@ -453,8 +444,7 @@ export const make = (
                   }),
                 ),
               ),
-            );
-          },
+            ),
         ),
       );
       const timed =
