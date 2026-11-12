@@ -6,8 +6,9 @@
  * The suite's CSV files are split into records by `test/support/csv.ts`, a
  * test-only stand-in for `@thomasfosterau/effect-csv`. Metadata at the
  * default locations (`{+url}-metadata.json`, `csv-metadata.json`) is found
- * through the `Loader`; tests that need an HTTP `Link` header or a site-wide
- * `/.well-known/csvm` file are in the skip list.
+ * through the `Loader`, as is the `Link` header a test declares
+ * (`csvt:httpLink`) and the site-wide `/.well-known/csvm` file (the suite
+ * ships none, so the harness stands it in).
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -34,35 +35,38 @@ const BASE = 'http://www.w3.org/2013/csvw/tests/';
 const csvt = (local: string) => Term.namedNode(`http://www.w3.org/2013/csvw/tests/vocab#${local}`);
 
 /** Tests deliberately not run, with the reason (by test number). */
-const skipList: ReadonlyArray<readonly [string, string]> = [
-  ['test014', 'metadata located through an HTTP Link header'],
-  ['test016', 'metadata located through an HTTP Link header'],
-  ['test120', 'metadata located through an HTTP Link header'],
-  ['test122', 'metadata located through an HTTP Link header'],
-  ['test259', 'metadata located through a site-wide /.well-known/csvm configuration'],
-  ['test260', 'metadata located through a site-wide /.well-known/csvm configuration'],
-];
+const skipList: ReadonlyArray<readonly [string, string]> = [];
+
+/**
+ * The site-wide `/.well-known/csvm` file of the suite's server, the same for
+ * every test: the two default locations, then the two more that test259
+ * (`csvm.json`) and test260 (`{+url}.json`) find their metadata at.
+ */
+const WELL_KNOWN = '{+url}-metadata.json\ncsv-metadata.json\n{+url}.json\ncsvm.json\n';
 
 const fileOf = (url: string): string => path.join(root, url.slice(BASE.length));
 
-const loader = Processor.Loader.of({
-  table: (url, dialect) =>
-    Effect.suspend(() => {
-      const file = fileOf(url.replace(/[?#].*$/, ''));
-      if (!url.startsWith(BASE) || !fs.existsSync(file))
-        return Effect.fail(new Processor.LoadError({ message: `no table at ${url}`, url }));
-      return Effect.succeed(
-        Csv.parse(Csv.decode(new Uint8Array(fs.readFileSync(file)), dialect.encoding), dialect),
-      );
-    }),
-  document: (url) =>
-    Effect.sync(() => {
-      const file = fileOf(url.replace(/#.*$/, ''));
-      return url.startsWith(BASE) && fs.existsSync(file) && fs.statSync(file).isFile()
-        ? Option.some(fs.readFileSync(file, 'utf8'))
-        : Option.none();
-    }),
-});
+const loaderFor = (c: Case) =>
+  Processor.Loader.of({
+    table: (url, dialect) =>
+      Effect.suspend(() => {
+        const file = fileOf(url.replace(/[?#].*$/, ''));
+        if (!url.startsWith(BASE) || !fs.existsSync(file))
+          return Effect.fail(new Processor.LoadError({ message: `no table at ${url}`, url }));
+        return Effect.succeed(
+          Csv.parse(Csv.decode(new Uint8Array(fs.readFileSync(file)), dialect.encoding), dialect),
+        );
+      }),
+    document: (url) =>
+      Effect.sync(() => {
+        if (url === 'http://www.w3.org/.well-known/csvm') return Option.some(WELL_KNOWN);
+        const file = fileOf(url.replace(/#.*$/, ''));
+        return url.startsWith(BASE) && fs.existsSync(file) && fs.statSync(file).isFile()
+          ? Option.some(fs.readFileSync(file, 'utf8'))
+          : Option.none();
+      }),
+    linkHeader: (url) => Effect.succeed(url === c.action ? c.httpLink : Option.none()),
+  });
 
 interface Case {
   readonly id: string;
@@ -70,6 +74,8 @@ interface Case {
   readonly action: string;
   readonly result: Option.Option<string>;
   readonly metadata: Option.Option<string>;
+  /** The `Link` header the test's HTTP response carries (`csvt:httpLink`). */
+  readonly httpLink: Option.Option<string>;
   readonly minimal: boolean;
 }
 
@@ -99,6 +105,13 @@ const load = (manifest: string): ReadonlyArray<Case> =>
                   Option.filter(optionValue('metadata'), Term.isNamedNode),
                   (t) => t.value,
                 ),
+                httpLink: Option.map(
+                  Option.filter(
+                    Dataset.objectOf(e.dataset, e.node, csvt('httpLink')),
+                    Term.isLiteral,
+                  ),
+                  (t) => t.value,
+                ),
                 minimal: Option.exists(
                   optionValue('minimal'),
                   (t) => Term.isLiteral(t) && t.value === 'true',
@@ -110,6 +123,7 @@ const load = (manifest: string): ReadonlyArray<Case> =>
     : [];
 
 const run = (c: Case, validate: boolean) => {
+  const loader = loaderFor(c);
   const program = c.action.endsWith('.json')
     ? Effect.flatMap(loader.document(c.action), (text) =>
         Processor.fromMetadata(
