@@ -642,8 +642,8 @@ export const make = (
     const constructDataset: SparqlClientShape['constructDataset'] = (query, options) =>
       Effect.map(Stream.runCollect(construct(query, options)), Dataset.fromIterable);
 
-    const query: SparqlClientShape['query'] = (q, options) =>
-      Effect.gen(function* () {
+    const query: SparqlClientShape['query'] = Effect.fn('SparqlClient.query')(
+      function* (q, options) {
         const response = yield* send(queryRequest(q, anyAccept, options), options);
         const mediaType = mediaTypeOf(response);
         if (Option.isSome(ResultsStream.parserFor(mediaType))) {
@@ -665,7 +665,8 @@ export const make = (
         }
         const quads = yield* Stream.runCollect(yield* graphQuads(response, config.endpoint));
         return { _tag: 'Graph', dataset: Dataset.fromIterable(quads) } as const;
-      }).pipe(Effect.withSpan('SparqlClient.query'));
+      },
+    );
 
     const update: SparqlClientShape['update'] = (u, options) => {
       const params: Array<[string, string]> = [
@@ -722,8 +723,8 @@ export const make = (
     const getGraphDataset: SparqlClientShape['getGraphDataset'] = (graph, options) =>
       Effect.map(Stream.runCollect(getGraph(graph, options)), Dataset.fromIterable);
 
-    const hasGraph: SparqlClientShape['hasGraph'] = (graph, options) =>
-      Effect.gen(function* () {
+    const hasGraph: SparqlClientShape['hasGraph'] = Effect.fn('SparqlClient.hasGraph')(
+      function* (graph, options) {
         const request = HttpClientRequest.setHeader(
           yield* graphRequest('HEAD', graph),
           'accept',
@@ -731,7 +732,8 @@ export const make = (
         );
         const response = yield* send(request, options, [404]);
         return response.status !== 404;
-      }).pipe(Effect.withSpan('SparqlClient.hasGraph'));
+      },
+    );
 
     const serialize = (triples: Iterable<Term.Quad>, mediaType: string) =>
       Effect.gen(function* () {
@@ -780,8 +782,8 @@ export const make = (
     const postGraph: SparqlClientShape['postGraph'] = (graph, triples, options) =>
       upload('POST', graph, triples, options).pipe(Effect.withSpan('SparqlClient.postGraph'));
 
-    const createGraph: SparqlClientShape['createGraph'] = (triples, options) =>
-      Effect.gen(function* () {
+    const createGraph: SparqlClientShape['createGraph'] = Effect.fn('SparqlClient.createGraph')(
+      function* (triples, options) {
         const endpoint = yield* graphStore;
         const mediaType = options?.mediaType ?? config.graphMediaType ?? 'application/n-triples';
         const body = yield* serialize(triples, mediaType);
@@ -799,13 +801,15 @@ export const make = (
           });
         }
         return Term.namedNode(new URL(location, endpoint).href);
-      }).pipe(Effect.withSpan('SparqlClient.createGraph'));
+      },
+    );
 
-    const deleteGraph: SparqlClientShape['deleteGraph'] = (graph, options) =>
-      Effect.gen(function* () {
+    const deleteGraph: SparqlClientShape['deleteGraph'] = Effect.fn('SparqlClient.deleteGraph')(
+      function* (graph, options) {
         const response = yield* send(yield* graphRequest('DELETE', graph), options);
         yield* Effect.mapError(response.arrayBuffer, fromHttpClientError);
-      }).pipe(Effect.withSpan('SparqlClient.deleteGraph'));
+      },
+    );
 
     return SparqlClient.of({
       config,
