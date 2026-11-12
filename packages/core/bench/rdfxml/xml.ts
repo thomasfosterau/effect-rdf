@@ -59,7 +59,6 @@ const bench = (name: string, size: number, unit: string, run: () => void) => {
   });
   const sorted = Arr.sort(samples, Order.Number);
   const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
-  // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${unit}, median ${median.toFixed(1)} ms (${(size / median).toFixed(1)}/ms)`,
   );

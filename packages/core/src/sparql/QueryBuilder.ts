@@ -650,6 +650,12 @@ type Kind = Ast.Query['_tag'];
 
 type QueryOf<K extends Kind> = Extract<Ast.Query, { readonly _tag: K }>;
 
+/** Patches fields of a query; a spread of a generic keeps its type. */
+const patchQuery = <Q extends Ast.Query>(
+  query: Q,
+  patch: Partial<Ast.QueryBase> & Partial<Pick<Ast.SelectQuery, 'distinct' | 'reduced'>>,
+): Q => ({ ...query, ...patch });
+
 /**
  * An immutable query builder. `K` is the query form; `R` and `O` are the
  * required and optional variables of `SELECT` rows.
@@ -671,9 +677,7 @@ export class Builder<
   private with(
     patch: Partial<Ast.QueryBase> & Partial<Pick<Ast.SelectQuery, 'distinct' | 'reduced'>>,
   ): Builder<K, R, O> {
-    // SAFETY: patching fields of a query keeps its kind `K`; the spread only loses the
-    // discriminant's narrowing.
-    return new Builder({ ...this.query, ...patch } as QueryOf<K>);
+    return new Builder<K, R, O>(patchQuery(this.query, patch));
   }
 
   private append(patterns: ReadonlyArray<Ast.Pattern>): Builder<K, R, O> {

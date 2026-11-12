@@ -63,7 +63,6 @@ const time = Effect.fn('time')(function* (
   const start = performance.now();
   const result = yield* engine.select(query);
   const rows = yield* Stream.runCount(result.bindings);
-  // oxlint-disable-next-line no-console -- benchmark output
   console.log(`${name.padEnd(34)} ${rows} rows  ${(performance.now() - start).toFixed(0)} ms`);
 });
 
@@ -74,6 +73,5 @@ const program = Effect.fn('program')(function* () {
   });
 });
 
-// oxlint-disable-next-line no-console -- benchmark output
 console.log(`${people} people`);
 await Effect.runPromise(program());

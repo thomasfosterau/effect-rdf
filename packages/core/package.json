@@ -203,6 +203,7 @@
     "bench": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts && node --experimental-strip-types --no-warnings bench/n3/n3.ts && node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts && node --experimental-strip-types --no-warnings bench/shex/shexc.ts && node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts && node --experimental-strip-types --no-warnings bench/sparql/optional.ts",
     "bench:turtle": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts",
     "bench:n3": "node --experimental-strip-types --no-warnings bench/n3/n3.ts",
+    "bench:n3js": "node --experimental-strip-types --no-warnings bench/n3/n3js.ts",
     "bench:rdfxml": "node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts",
     "bench:shex": "node --experimental-strip-types --no-warnings bench/shex/shexc.ts",
     "bench:sparql": "node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts && node --experimental-strip-types --no-warnings bench/sparql/optional.ts"
@@ -215,7 +216,9 @@
     "@thomasfosterau/effect-ext": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
     "@thomasfosterau/effect-xml": "catalog:",
+    "@types/n3": "catalog:",
     "effect": "catalog:",
+    "n3": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
