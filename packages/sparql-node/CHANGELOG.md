@@ -1,5 +1,19 @@
 # @thomasfosterau/effect-sparql-node
 
+## 0.3.0
+
+### Minor Changes
+
+- [#161](https://github.com/thomasfosterau/effect-rdf/pull/161) [`16f3f83`](https://github.com/thomasfosterau/effect-rdf/commit/16f3f836376941d86d5bcfcbe5eefb97d7d49878) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Tagged error classes are now nominally branded (`Schema.TaggedError<Self, { readonly brand: unique symbol }>`): a structurally identical object is no longer assignable to an error class type such as `RdfParseError`, `ShExError` or `SparqlError`.
+  
+  Integer-valued error fields now use `Schema.Int` and reject `NaN`, `Infinity` and fractional values when decoded or constructed: `line` and `column` of `RdfParseError`, `XmlParseError` (`offset` too), `SparqlParseError` and `ResultsParseError`, and `status` of `HttpStatusError` and `ProtocolError`. ShEx JSON `mininclusive`, `minexclusive`, `maxinclusive` and `maxexclusive`, and the `TermCodec.integer` codec's schema, now use `Schema.Finite` and reject `NaN` and the infinities. `TermCodec.number`, `TermCodec.value` and the `xsd:double` / `xsd:float` codec keep `Schema.Number` because `NaN` and `INF` are valid XSD values.
+
+### Patch Changes
+
+- [#150](https://github.com/thomasfosterau/effect-rdf/pull/150) [`c83f38b`](https://github.com/thomasfosterau/effect-rdf/commit/c83f38bfa2dde8fd3c8015c58a516290badf8ae2) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Widen the `@thomasfosterau/effect-parse` peer to `^0.4.0 || ^0.5.0` (was `^0.4.0`, which on 0.x refuses 0.5). The grammars run unchanged on both lines: every unit and conformance test passes against effect-parse 0.4.1 and 0.5.0. A consumer already on effect-parse 0.5 (effect-bib, effect-document) no longer gets an unmet peer or a second copy with its own `Parser` / `Token` identities. `@thomasfosterau/effect-xml` 0.1.0 still declares effect-parse `^0.4.1` itself; its next release widens the same way.
+- Updated dependencies [[`9c1bbaf`](https://github.com/thomasfosterau/effect-rdf/commit/9c1bbaf7d5a8cfa9cca36401b843b830d00799c8), [`296f14f`](https://github.com/thomasfosterau/effect-rdf/commit/296f14fe7ac20377eca93fe4abe902a144e8aed7), [`4564569`](https://github.com/thomasfosterau/effect-rdf/commit/4564569c96f986a43f5acbd41b91f04dd3b42efe), [`16f3f83`](https://github.com/thomasfosterau/effect-rdf/commit/16f3f836376941d86d5bcfcbe5eefb97d7d49878), [`3191f0f`](https://github.com/thomasfosterau/effect-rdf/commit/3191f0fe9a30ad44bb171454456f3e706cd578d3), [`2724268`](https://github.com/thomasfosterau/effect-rdf/commit/2724268f6217642252323a75d65aa0a68e44c835), [`c83f38b`](https://github.com/thomasfosterau/effect-rdf/commit/c83f38bfa2dde8fd3c8015c58a516290badf8ae2)]:
+  - @thomasfosterau/effect-rdf@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
