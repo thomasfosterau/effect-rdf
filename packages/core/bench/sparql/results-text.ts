@@ -84,7 +84,6 @@ const bench = (name: string, codec: Results.ResultsCodec) => {
     return performance.now() - t;
   });
   const median = Arr.sort(samples, Order.Number)[Math.floor(samples.length / 2)] ?? 0;
-  // oxlint-disable-next-line no-console -- benchmark output
   console.log(
     `${name}: ${docs.length} docs, ${(bytes / 1e6).toFixed(2)} MB, median ${median.toFixed(1)} ms` +
       ` (${(bytes / 1e3 / median).toFixed(1)} MB/s)`,

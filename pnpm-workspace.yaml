@@ -70,12 +70,18 @@ catalog:
   # effect-sparql-node. Its own peers are `effect ^4.0.0` and
   # `@thomasfosterau/effect-parse ^0.4.1` (required).
   '@thomasfosterau/effect-xml': 0.1.0
+  # N3.js's types (see `n3` below): bench-only, like the package.
+  '@types/n3': 1.26.6
   '@types/node': ^26.6.6
   # Must equal the vitest that vite-plus bundles (see `vitest` below); vite-plus
   # refuses to run coverage on a mismatch.
   '@vitest/coverage-istanbul': 5.1.0
   effect: 4.1.3
   fallow: 3.42.0
+  # N3.js, the reference JavaScript N3 / Turtle parser: a core devDependency
+  # for `bench/n3` only (the like-for-like parse benchmark, effect-rdf#73).
+  # Never imported from `src/` or `test/`.
+  n3: 2.13.12
   # TypeScript 6/7 side-by-side: TS7 (the native Go compiler) ships no JS API
   # until 7.1, so JS-API consumers (@effect/language-service, tsdown's
   # declaration bundler) stay on TS6 while native `tsc` type-checks. The alias

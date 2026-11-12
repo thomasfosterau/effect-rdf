@@ -152,6 +152,12 @@ export default defineConfig({
           'effecttsgo/unstable-api-usage': 'off',
         },
       },
+      // A benchmark's console output is its product: each `bench/*.ts`
+      // script prints its timings and nothing else reads them.
+      {
+        files: ['packages/*/bench/**'],
+        rules: { 'no-console': 'off' },
+      },
       // Effect 4.1 ships HTTP, SQL, AI, the CLI, `FileSystem` / `Path` and
       // `Graph` only in its "unstable" tier: the marker states their
       // stability, it does not point at a stable alternative. These are the
