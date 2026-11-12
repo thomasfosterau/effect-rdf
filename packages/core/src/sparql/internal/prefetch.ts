@@ -33,7 +33,7 @@ export const prefetch = <A, E>(
           });
     const fiber = yield* Effect.forkDetach(limited);
     const first = yield* Queue.take(queue).pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.catchIf(Cause.isDone, () => Effect.succeed(Option.none<A>())),
       Effect.onError(() => Fiber.interrupt(fiber)),
     );
