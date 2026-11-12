@@ -97,11 +97,13 @@ catalog:
 # manifest.
 catalogs:
   peers:
-    # Caret, not `>=`: on 0.x a minor release may break the combinator API
-    # the grammars are written against.
-    '@thomasfosterau/effect-parse': ^0.4.0
-    # Caret on 0.x for the same reason. effect-xml itself requires
-    # effect-parse ^0.4.1, so the XML subpaths effectively need 0.4.1.
+    # Carets, not `>=`: on 0.x a minor release may break the combinator API
+    # the grammars are written against, so each minor line is listed once the
+    # suites have run against it (0.4.1 and 0.5.0 both pass every gate).
+    '@thomasfosterau/effect-parse': ^0.4.0 || ^0.5.0
+    # Caret on 0.x for the same reason. effect-xml 0.1.0 itself requires
+    # effect-parse ^0.4.1, so the XML subpaths need effect-parse 0.4.1 until
+    # an effect-xml release widens that peer (merged upstream, unreleased).
     '@thomasfosterau/effect-xml': ^0.1.0
     # The owner's peer-range policy: `effect` is `^4.0.0`, decided per
     # package. A package whose own dependencies require a newer `effect`
