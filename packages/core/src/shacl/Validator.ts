@@ -65,14 +65,14 @@ const { rdf, rdfs, xsd } = Vocab;
  * @since 0.1.0
  * @category errors
  */
-export class RecursiveShapeError extends Schema.TaggedError<RecursiveShapeError>()(
-  'RecursiveShapeError',
-  {
-    message: Schema.String,
-    shape: Schema.String,
-    focusNode: Schema.String,
-  },
-) {}
+export class RecursiveShapeError extends Schema.TaggedError<
+  RecursiveShapeError,
+  { readonly brand: unique symbol }
+>()('RecursiveShapeError', {
+  message: Schema.String,
+  shape: Schema.String,
+  focusNode: Schema.String,
+}) {}
 
 /**
  * The shapes graph uses a feature this validator cannot evaluate (currently:
@@ -82,14 +82,14 @@ export class RecursiveShapeError extends Schema.TaggedError<RecursiveShapeError>
  * @since 0.1.0
  * @category errors
  */
-export class UnsupportedFeatureError extends Schema.TaggedError<UnsupportedFeatureError>()(
-  'UnsupportedFeatureError',
-  {
-    message: Schema.String,
-    feature: Schema.String,
-    shape: Schema.String,
-  },
-) {}
+export class UnsupportedFeatureError extends Schema.TaggedError<
+  UnsupportedFeatureError,
+  { readonly brand: unique symbol }
+>()('UnsupportedFeatureError', {
+  message: Schema.String,
+  feature: Schema.String,
+  shape: Schema.String,
+}) {}
 
 /**
  * The data graph does not conform to the shapes graph (raised by
@@ -98,7 +98,10 @@ export class UnsupportedFeatureError extends Schema.TaggedError<UnsupportedFeatu
  * @since 0.1.0
  * @category errors
  */
-export class ConformanceError extends Schema.TaggedError<ConformanceError>()('ConformanceError', {
+export class ConformanceError extends Schema.TaggedError<
+  ConformanceError,
+  { readonly brand: unique symbol }
+>()('ConformanceError', {
   message: Schema.String,
   report: ValidationReport.ValidationReportSchema,
 }) {}
@@ -600,13 +603,14 @@ const makeEngine = (
     }) =>
       Effect.map(
         Effect.filter(valueNodes, (v) =>
-          Effect.flatMap(conforms(c.shape, v), (ok) =>
-            !ok || !c.disjoint
-              ? Effect.succeed(ok)
-              : Effect.map(
-                  Effect.findFirst(c.siblings, (s) => conforms(s, v)),
-                  Option.isNone,
-                ),
+          Effect.filterOrElse(
+            conforms(c.shape, v),
+            (ok) => !ok || !c.disjoint,
+            () =>
+              Effect.map(
+                Effect.findFirst(c.siblings, (s) => conforms(s, v)),
+                Option.isNone,
+              ),
           ),
         ),
         (counted) => counted.length,

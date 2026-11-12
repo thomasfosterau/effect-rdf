@@ -283,7 +283,7 @@ describe('N3 codec', () => {
   );
 
   it('provides a Schema codec', () => {
-    const dataset = Schema.decodeUnknownSync(N3.codec.schema)(`${prefix}:a :b "c" .`);
+    const dataset = Schema.decodeSync(N3.codec.schema)(`${prefix}:a :b "c" .`);
     expect(dataset.size).toBe(1);
     expect(N3.format.mediaType).toBe('text/n3');
   });

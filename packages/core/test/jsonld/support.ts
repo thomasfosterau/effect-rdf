@@ -60,9 +60,12 @@ const unescape = (s: string): string =>
 const TERM =
   /\s*(?:<([^>]*)>|_:([^\s.]+(?:\.[^\s.]+)*)|"((?:[^"\\]|\\.)*)"(?:@([a-zA-Z]+(?:-[a-zA-Z0-9]+)*)|\^\^<([^>]*)>)?)/gy;
 
-class BadNQuadsLine extends Schema.TaggedError<BadNQuadsLine>()('BadNQuadsLine', {
-  message: Schema.String,
-}) {}
+class BadNQuadsLine extends Schema.TaggedError<BadNQuadsLine, { readonly brand: unique symbol }>()(
+  'BadNQuadsLine',
+  {
+    message: Schema.String,
+  },
+) {}
 
 const termOf = (m: RegExpMatchArray): Term.Term => {
   if (m[1] !== undefined) return Term.namedNode(unescape(m[1]));

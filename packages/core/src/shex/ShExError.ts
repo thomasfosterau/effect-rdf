@@ -16,9 +16,12 @@ import * as Schema from 'effect/Schema';
  * @since 0.1.0
  * @category errors
  */
-export class ShExJError extends Schema.TaggedError<ShExJError>()('ShExJError', {
-  message: Schema.String,
-}) {}
+export class ShExJError extends Schema.TaggedError<ShExJError, { readonly brand: unique symbol }>()(
+  'ShExJError',
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * A schema that is syntactically valid but violates one of the ShEx
@@ -28,12 +31,12 @@ export class ShExJError extends Schema.TaggedError<ShExJError>()('ShExJError', {
  * @since 0.1.0
  * @category errors
  */
-export class ShExStructureError extends Schema.TaggedError<ShExStructureError>()(
-  'ShExStructureError',
-  {
-    message: Schema.String,
-  },
-) {}
+export class ShExStructureError extends Schema.TaggedError<
+  ShExStructureError,
+  { readonly brand: unique symbol }
+>()('ShExStructureError', {
+  message: Schema.String,
+}) {}
 
 /**
  * A failure to load an imported schema.
@@ -41,7 +44,10 @@ export class ShExStructureError extends Schema.TaggedError<ShExStructureError>()
  * @since 0.1.0
  * @category errors
  */
-export class ShExImportError extends Schema.TaggedError<ShExImportError>()('ShExImportError', {
+export class ShExImportError extends Schema.TaggedError<
+  ShExImportError,
+  { readonly brand: unique symbol }
+>()('ShExImportError', {
   iri: Schema.String,
   message: Schema.String,
 }) {}
@@ -52,9 +58,12 @@ export class ShExImportError extends Schema.TaggedError<ShExImportError>()('ShEx
  * @since 0.1.0
  * @category errors
  */
-export class ShExRError extends Schema.TaggedError<ShExRError>()('ShExRError', {
-  message: Schema.String,
-}) {}
+export class ShExRError extends Schema.TaggedError<ShExRError, { readonly brand: unique symbol }>()(
+  'ShExRError',
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * A validation request that cannot be evaluated, e.g. a shape map that names
@@ -63,9 +72,9 @@ export class ShExRError extends Schema.TaggedError<ShExRError>()('ShExRError', {
  * @since 0.1.0
  * @category errors
  */
-export class ShExValidationError extends Schema.TaggedError<ShExValidationError>()(
-  'ShExValidationError',
-  {
-    message: Schema.String,
-  },
-) {}
+export class ShExValidationError extends Schema.TaggedError<
+  ShExValidationError,
+  { readonly brand: unique symbol }
+>()('ShExValidationError', {
+  message: Schema.String,
+}) {}

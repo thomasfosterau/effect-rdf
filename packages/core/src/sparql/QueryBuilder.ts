@@ -518,7 +518,7 @@ export const call = (
 ): Ast.Expression => Ast.functionCall(iri, args.map(toExpression));
 
 /** @since 0.1.0 @category expressions */
-export const bound = (variable: Term.Variable): Ast.Expression => Ast.operation('BOUND', variable);
+export const bound = (operand: Term.Variable): Ast.Expression => Ast.operation('BOUND', operand);
 /** @since 0.1.0 @category expressions */
 export const str = op('STR');
 /** @since 0.1.0 @category expressions */
@@ -924,7 +924,7 @@ export const decode = <R extends string, O extends string, A, RD>(
   schema: Schema.Decoder<A, RD>,
   options?: Engine.RequestOptions,
 ): Stream.Stream<A, Engine.SparqlError | Schema.SchemaError, Engine.SparqlEngine | RD> =>
-  Stream.mapEffect(execute(builder, options), (row) => Schema.decodeUnknownEffect(schema)(row));
+  Stream.mapEffect(execute(builder, options), (row) => Schema.decodeEffect(schema)(row));
 
 /**
  * Executes an `ASK` builder.

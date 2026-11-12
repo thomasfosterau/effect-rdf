@@ -20,7 +20,10 @@ import * as Schema from 'effect/Schema';
  * @since 0.1.0
  * @category errors
  */
-export class XmpExtractError extends Schema.TaggedError<XmpExtractError>()('XmpExtractError', {
+export class XmpExtractError extends Schema.TaggedError<
+  XmpExtractError,
+  { readonly brand: unique symbol }
+>()('XmpExtractError', {
   message: Schema.String,
 }) {}
 
@@ -340,12 +343,12 @@ export const png = (
   Effect.flatMap(
     Effect.suspend(() => Effect.fromResult(catchExtract(() => pngXmpChunk(bytes)))),
     Option.match({
-      onNone: () => Effect.succeed(Option.none()),
+      onNone: () => Effect.succeedNone,
       onSome: (chunk) =>
         chunk.compressed
           ? Effect.map(inflate(chunk.text, options?.maxXmpBytes ?? DEFAULT_MAX_XMP_BYTES), (text) =>
               Option.some(utf8(text)),
             )
-          : Effect.succeed(Option.some(utf8(chunk.text))),
+          : Effect.succeedSome(utf8(chunk.text)),
     }),
   );
