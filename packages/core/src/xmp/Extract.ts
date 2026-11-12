@@ -340,12 +340,12 @@ export const png = (
   Effect.flatMap(
     Effect.suspend(() => Effect.fromResult(catchExtract(() => pngXmpChunk(bytes)))),
     Option.match({
-      onNone: () => Effect.succeed(Option.none()),
+      onNone: () => Effect.succeedNone,
       onSome: (chunk) =>
         chunk.compressed
           ? Effect.map(inflate(chunk.text, options?.maxXmpBytes ?? DEFAULT_MAX_XMP_BYTES), (text) =>
               Option.some(utf8(text)),
             )
-          : Effect.succeed(Option.some(utf8(chunk.text))),
+          : Effect.succeedSome(utf8(chunk.text)),
     }),
   );
