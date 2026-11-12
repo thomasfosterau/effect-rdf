@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`CLAUDE.md` is a symlink to this file. Project conventions live here; personal style preferences live in user memory.
+Project conventions for every coding agent live here. Claude Code reads it through `.claude/CLAUDE.md`, which imports this file, `CONTRIBUTING.md` and `README.md` and adds the Claude-only notes (hooks, plugins); each package's `CLAUDE.md` imports its `AGENTS.md` the same way. Personal style preferences live in user memory.
 
 This repo publishes two packages: `@thomasfosterau/effect-rdf`, an Effect 4-native RDF 1.2 / RDF-star toolkit in one package — the data model, parsers and serialisers for every common syntax, a SPARQL 1.1 / 1.2 engine with a platform-neutral protocol server and client and a driver-agnostic SQL store, and SHACL and ShEx validation, one nested subpath per area — and `@thomasfosterau/effect-sparql-node`, the Node server, CLI and `HttpApi` definition over it. Everything is self-contained TypeScript checked against the W3C and community conformance suites; those suites are the behavioural spec.
 
@@ -11,7 +11,7 @@ This repo publishes two packages: `@thomasfosterau/effect-rdf`, an Effect 4-nati
 
 Every module of a package is an entry point (`exports["./*"]` → `src/*.ts`; `src/index.ts` re-exports them as namespaces). A nested subpath is a directory `src/<subpath>/` (nested further for `sparql/shacl`, `sparql/ai`, `sparql/sql`) with its own `index.ts` barrel, exported as `./<subpath>` and `./<subpath>/*` (listed in the package's `vite.config.ts` `subpaths` and `.fallowrc.json`'s `entry`), and kept off the root barrel. Its tests are `test/<subpath>/`, its benchmarks `bench/<subpath>/`.
 
-A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` and `README.md`, a `.fallowrc.json` zone and rule, and its name in the `packages` list of the root `vite.config.ts`. A new SPARQL backend for a driver is such a package (`@thomasfosterau/effect-sparql-<driver>`, below), and its zone may import `core` only. A new subpath of effect-rdf adds its `exports` and `publishConfig.exports` entries, its name in `subpaths` in `packages/core/vite.config.ts`, its `entry` glob in `.fallowrc.json`, its place in `test/ModuleGraph.test.ts` (whether it may reach `@thomasfosterau/effect-parse`), a README section and its rules in `packages/core/CLAUDE.md`.
+A new package adds a row here and in the root `README.md`, its own `AGENTS.md` (with a `CLAUDE.md` that is the one line `@AGENTS.md`) and `README.md`, a `.fallowrc.json` zone and rule, and its name in the `packages` list of the root `vite.config.ts`. A new SPARQL backend for a driver is such a package (`@thomasfosterau/effect-sparql-<driver>`, below), and its zone may import `core` only. A new subpath of effect-rdf adds its `exports` and `publishConfig.exports` entries, its name in `subpaths` in `packages/core/vite.config.ts`, its `entry` glob in `.fallowrc.json`, its place in `test/ModuleGraph.test.ts` (whether it may reach `@thomasfosterau/effect-parse`), a README section and its rules in `packages/core/AGENTS.md`.
 
 **A SPARQL backend for a specific driver is its own package**, `@thomasfosterau/effect-sparql-<driver>` (e.g. `-sqlite-node`, `-pg`): a store layer over `@thomasfosterau/effect-rdf/sparql/sql` (`SqlStore.layer`, which also provides that driver's `SqlClient`), with the driver as its dependency or peer and its own effect floor catalog only if the driver forces one. None exists yet: `/sparql/sql` holds the dialects (SQLite, PostgreSQL), the store and the translation on `effect/sql` alone, and its tests use `@effect/sql-sqlite-node` and PGlite as effect-rdf devDependencies only, never runtime dependencies or peers.
 
@@ -26,7 +26,7 @@ A new package adds a row here and in the root `README.md`, its own `CLAUDE.md` a
 - **CI is hardened for Dependabot PRs**: `permissions: {}` at the top with per-job grants, every action pinned to a commit SHA (`voidzero-dev/setup-vp` alone to an exact, immutable release tag), `persist-credentials: false` on every checkout (the Release workflow pushes through the GitHub API), no secrets or OIDC outside the Release job, which never runs for Dependabot. The CI and Dev Container jobs get Vite+, Node and pnpm from `voidzero-dev/setup-vp` (the composite `.github/actions/setup`): CI's Node is `node-version: lts`, and the `vp` version is the catalog's `vite-plus` pin (the Release workflow still sets up pnpm and Node 22 with `pnpm/action-setup` and `actions/setup-node`). `uvx zizmor --offline .github` audits the workflows (config in `.github/zizmor.yml`).
 - **effect-rdf's type check is one large native `tsc` program** (every subpath's sources, tests and benchmarks). Run the type gate as `vp run --concurrency-limit 2 check`, so it never runs beside more than one other `tsc`.
 
-Package-local invariants, terms and import boundaries live only in each package's `CLAUDE.md` (`packages/<dir>/CLAUDE.md`); read it before changing that package.
+Package-local invariants, terms and import boundaries live only in each package's `AGENTS.md` (`packages/<dir>/AGENTS.md`); read it before changing that package.
 
 ## Conventions
 
@@ -90,16 +90,9 @@ Read the installed package before writing Effect code — `node_modules/effect/d
 - `Effect.fn` / `Effect.fnUntraced` for reusable effectful functions; pure helpers stay pure (and synchronous `…Result` variants return `Result`). Hot loops (parsers, evaluators, the dataset index) are plain code, not an Effect per step.
 - `Option` instead of `undefined` in public return types where it reads well; `dual` APIs where natural; `Schema.decodeTo` + `SchemaTransformation` for schema transformations; HTTP is `effect/http/*`, SQL `effect/sql/*` (not `effect/unstable/*`, removed in rc.118).
 
-## Agent sessions
-
-- The SessionStart hook (`.claude/hooks/session-start.sh`) installs the global Vite+ CLI at the catalog's `vite-plus` pin with the official installer (npm-provenance and SHA-512 checked; it needs `vite.plus` and `viteplus.dev` on the environment's network allowlist), links `vp` and `vpx` into `~/.local/bin` (the CLI lives under `$VP_HOME` when set, as in the Vite+ container image, else `~/.local/share/vite-plus`), and runs `vp install --frozen-lockfile`. Everything else goes through Vite+: `vp exec fallow …` for fallow, `vpx <file>.ts` for a TypeScript script. Nothing else is put on PATH. If the installer can't run, `vp` falls back to this checkout's `node_modules` copy. It hydrates no secrets (none are needed, and nothing here can publish) and does not fetch the conformance suites.
-- `.claude/settings.json` should enable the `@enfect/claude` plugin (Effect guidance, skills and post-write pattern checks; marketplace `mpsuesser/enfect`, pinned by `ref` to a reviewed commit).
-- A PreToolUse hook (`.claude/hooks/fallow-gate.sh`) blocks `git commit` / `git push` when `fallow audit --base origin/trunk` (run as `vp exec fallow`) fails; it audits only this checkout and its `.claude/worktrees/*`, skipping any other tree with a notice, and runs `vp run test:coverage` first when the coverage map is missing or older than a changed source or test file (a failing run, like any runtime error, fails open with a notice). A PostToolUse hook runs `vp fmt` on every source, JSON or Markdown file you write or edit.
-- Every gate in [Verification](#verification) runs in an agent session; fetching the suites and `pnpm audit` need the network.
-
 ## Documentation surfaces
 
-`README.md` at the root is the landing page; each package `README.md` is the API reference consumers read on npm (with usage examples and a conformance summary); each package `CLAUDE.md` carries its boundary, invariants and terms (it is not published); `CONTRIBUTING.md` carries human setup, CI expectations and single-check commands; `PUBLISHING.md` the release pipeline and its one-time owner setup; `SECURITY.md` the reporting channel, the untrusted-input defences and the supply-chain posture. No `docs/` tree is committed; decisions go in issue comments.
+`README.md` at the root is the landing page; each package `README.md` is the API reference consumers read on npm (with usage examples and a conformance summary); each package `AGENTS.md` carries its boundary, invariants and terms (it is not published); `CONTRIBUTING.md` carries human setup, CI expectations and single-check commands; `PUBLISHING.md` the release pipeline and its one-time owner setup; `SECURITY.md` the reporting channel, the untrusted-input defences and the supply-chain posture. No `docs/` tree is committed; decisions go in issue comments.
 
 ---
 
