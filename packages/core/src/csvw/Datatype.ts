@@ -14,6 +14,7 @@ import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
+import * as Regex from '../internal/regex.ts';
 import * as Schema from 'effect/Schema';
 import * as DateFormat from './internal/dateFormat.ts';
 import * as NumberFormat from './internal/numberFormat.ts';
@@ -323,8 +324,9 @@ const quote = (s: string): string => `"${s}"`;
 
 const isValidRegex = (source: string): boolean => Result.isSuccess(regexOf(source));
 
-const regexOf = (source: string): Result.Result<RegExp, string> =>
-  Result.try({ try: () => new RegExp(`^(?:${source})$`, 'u'), catch: (e) => String(e) });
+/** A string `format`: an ECMAScript pattern the whole value must match. */
+const regexOf = (source: string): Result.Result<Regex.Regex, string> =>
+  Regex.compileCached(`^(?:${source})$`, 'ecma');
 
 /**
  * Checks a datatype's `format` against its base, returning a warning when the
@@ -453,7 +455,10 @@ const parseOther = (text: string, datatype: Datatype): Result.Result<string, str
   const base = canonicalName(datatype.base);
   const format = datatype.format;
   const matches = Predicate.isString(format)
-    ? Result.match(regexOf(format), { onFailure: () => true, onSuccess: (re) => re.test(text) })
+    ? Result.match(regexOf(format), {
+        onFailure: () => true,
+        onSuccess: (re) => Regex.test(re, text),
+      })
     : true;
   if (!matches) return Result.fail(`${quote(text)} does not match its format`);
   if (base === 'json' || base === 'xml' || base === 'html' || base === 'anyAtomicType')

@@ -28,10 +28,12 @@ The packages are published to npm under the `@thomasfosterau` scope.
 `@thomasfosterau/effect-parse` is an optional peer of `effect-rdf`, needed by
 the syntax and SPARQL-parser subpaths, and a peer of `effect-sparql-node`;
 `@thomasfosterau/effect-xml` likewise, needed by the subpaths that read XML
-(`/rdfxml`, `/xmp`, `/sparql`):
+(`/rdfxml`, `/xmp`, `/sparql`); `@thomasfosterau/effect-ext` is an optional
+peer of `effect-rdf` only, needed by `/csvw` (URI templates and metadata
+discovery):
 
 ```sh
-pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-xml @thomasfosterau/effect-rdf
+pnpm add effect @thomasfosterau/effect-parse @thomasfosterau/effect-xml @thomasfosterau/effect-ext @thomasfosterau/effect-rdf
 pnpm add @thomasfosterau/effect-sparql-node # the Node server, CLI and SparqlApi
 ```
 

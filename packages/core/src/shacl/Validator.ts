@@ -479,10 +479,7 @@ const makeEngine = (
       deactivated: false,
     }));
 
-  const unsupported = (
-    shape: Shapes.Shape,
-    feature: string,
-  ): Effect.Effect<Results, EngineError> =>
+  const unsupported = (shape: Shapes.Shape, feature: string): Effect.Effect<Results, EngineError> =>
     options.sparql === 'ignore'
       ? Effect.succeed([])
       : Effect.fail(
@@ -657,7 +654,7 @@ const makeEngine = (
           Effect.sync(() => each((v) => failsString(v, (s) => codePointLength(s) <= c.maxLength))),
         ),
         Match.tag('Pattern', (c) =>
-          Effect.sync(() => each((v) => failsString(v, (s) => c.regex.test(s)))),
+          Effect.sync(() => each((v) => failsString(v, (s) => c.test(s)))),
         ),
         Match.tag('LanguageIn', (c) =>
           Effect.sync(() =>
