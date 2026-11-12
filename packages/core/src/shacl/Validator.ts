@@ -28,6 +28,7 @@ import { Dataset, Term, Vocab, Xsd } from '../index.ts';
 import * as Arr from 'effect/Array';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
 import { constVoid, identity, pipe } from 'effect/Function';
 import * as Iterable from 'effect/Iterable';
 import * as Layer from 'effect/Layer';
@@ -792,7 +793,9 @@ const makeEngine = (
                 violation.path !== undefined ? Option.some(violation.path) : shapePath;
               const lookup = (name: string): Option.Option<Term.Term> =>
                 pipe(
-                  Option.fromNullishOr(violation.bindings?.get(name)),
+                  Option.flatMap(Option.fromNullishOr(violation.bindings), (b) =>
+                    HashMap.get(b, name),
+                  ),
                   Option.orElse(() => parameterNamed(parameters, name)),
                   Option.orElse(() =>
                     Option.flatten(builtinVariable(name, focusNode, value, resultPath)),

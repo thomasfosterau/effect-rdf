@@ -1,5 +1,7 @@
 import { assert, describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
+import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Record from 'effect/Record';
 import * as Result from 'effect/Result';
@@ -60,7 +62,7 @@ describe('Xml.parse', () => {
       expect(child?.namespace).toBe('urn:default');
       expect(other?.namespace).toBe('urn:b');
       expect(other?.children).toMatchObject([{ _tag: 'Text', value: 'text' }]);
-      expect(other?.inScopeNamespaces.has('')).toBe(false);
+      expect(other === undefined ? false : HashMap.has(other.inScopeNamespaces, '')).toBe(false);
       expect(plain?.namespace).toBe('urn:default');
     }),
   );
@@ -107,7 +109,9 @@ describe('Xml.parse', () => {
 ]>
 <r tok="  a  " a="&greeting;">&greeting;! &markup; &amp2;</r>`);
     expect(doc.doctype?.name).toBe('r');
-    expect(doc.doctype?.entities.get('name')).toBe('World');
+    expect(
+      Option.getOrUndefined(HashMap.get(doc.doctype?.entities ?? HashMap.empty(), 'name')),
+    ).toBe('World');
     const attrs = Record.fromEntries(doc.root.attributes.map((a) => [a.localName, a.value]));
     expect(attrs).toEqual({ tok: 'a', a: 'Hello World', kind: 'default' });
     expect(doc.root.attributes.find((a) => a.localName === 'kind')?.defaulted).toBe(true);

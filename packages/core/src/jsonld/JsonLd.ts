@@ -16,6 +16,7 @@ import * as Serialization from '../Serialization.ts';
 import * as Term from '../Term.ts';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
 import * as Record from 'effect/Record';
@@ -810,9 +811,9 @@ export const serialize = (
     const expanded = yield* fromRdf(quads, options);
     let context: Json = options?.context ?? null;
     if (isObject(context) && '@context' in context) context = context['@context'];
-    if (options?.prefixes !== undefined && options.prefixes.prefixes.size > 0) {
+    if (options?.prefixes !== undefined && HashMap.size(options.prefixes.prefixes) > 0) {
       const prefixContext: JsonObject = {};
-      options.prefixes.prefixes.forEach((namespace, prefix) => {
+      PrefixMap.entries(options.prefixes).forEach(([prefix, namespace]) => {
         prefixContext[prefix] = namespace;
       });
       if (options.baseIri !== undefined) prefixContext['@base'] = options.baseIri;

@@ -37,6 +37,7 @@ import { type Ast, Bindings, Engine, Store } from '../index.ts';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import { pipe } from 'effect/Function';
+import * as HashMap from 'effect/HashMap';
 import * as HashSet from 'effect/HashSet';
 import * as Layer from 'effect/Layer';
 import * as MutableHashMap from 'effect/MutableHashMap';
@@ -176,7 +177,7 @@ const toViolation = (
   const value = solution.get('value');
   const message = solution.get('message');
   // Solution bindings take precedence over parameter values of the same name.
-  const bindings = Bindings.fromEntries([...parameters, ...solution]).map;
+  const bindings = HashMap.fromIterable(Bindings.fromEntries([...parameters, ...solution]).map);
   return Effect.succeed({
     focusNode: solution.get('this'),
     path: Term.isNamedNode(path) ? Path.predicate(path) : undefined,

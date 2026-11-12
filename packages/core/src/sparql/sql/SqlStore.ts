@@ -26,6 +26,8 @@ import * as Layer from 'effect/Layer';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
+import * as HashMap from 'effect/HashMap';
+import * as HashSet from 'effect/HashSet';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Order from 'effect/Order';
@@ -912,9 +914,8 @@ export const make = (
 
     // --- SPARQL to SQL ------------------------------------------------------------
 
-    const storeClasses = Effect.map(
-      run(`SELECT cls FROM ${tables.classes}`),
-      (rows) => new Set(rows.map((r) => num(r[0]))),
+    const storeClasses = Effect.map(run(`SELECT cls FROM ${tables.classes}`), (rows) =>
+      HashSet.fromIterable(rows.map((r) => num(r[0]))),
     );
 
     const translationContext = (
@@ -941,7 +942,7 @@ export const make = (
         const layout = columnLayout(compiled.columns);
         const terms = layout.filter(({ column }) => column.type === 'id');
         const state = newState();
-        compiled.locals.forEach((t, id) => {
+        HashMap.forEach(compiled.locals, (t, id) => {
           MutableHashMap.set(state.known, id, t);
         });
         rows.forEach((r) =>
@@ -954,11 +955,11 @@ export const make = (
           }),
         );
         yield* complete(state);
-        compiled.locals.forEach((_, id) => {
+        HashMap.forEach(compiled.locals, (_, id) => {
           MutableHashMap.remove(state.known, id);
         });
         yield* remember(state);
-        compiled.locals.forEach((t, id) => {
+        HashMap.forEach(compiled.locals, (t, id) => {
           MutableHashMap.set(state.known, id, t);
         });
         return rows.map((r) =>

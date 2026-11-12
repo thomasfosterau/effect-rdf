@@ -10,6 +10,7 @@
 import * as Arr from 'effect/Array';
 import * as Iterable from 'effect/Iterable';
 import * as Match from 'effect/Match';
+import * as HashMap from 'effect/HashMap';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
@@ -321,11 +322,12 @@ export class Engine {
   }
 
   private satisfiesDescendant(n: Term.Term, label: string, deps: Deps): Outcome {
-    const decl = this.index.shapes.get(label);
-    if (decl === undefined) return Option.some(`unknown shape ${label}`);
-    const candidates = [label, ...(this.index.descendants.get(label) ?? [])].filter(
-      (l) => this.index.shapes.get(l)?.abstract !== true,
-    );
+    const decl = HashMap.get(this.index.shapes, label);
+    if (Option.isNone(decl)) return Option.some(`unknown shape ${label}`);
+    const candidates = [
+      label,
+      ...Option.getOrElse(HashMap.get(this.index.descendants, label), () => []),
+    ].filter((l) => !Option.exists(HashMap.get(this.index.shapes, l), (d) => d.abstract === true));
     if (Arr.isReadonlyArrayEmpty(candidates))
       return Option.some(`${label} is abstract and has no concrete extension`);
     let first: Outcome = Option.none();
@@ -353,8 +355,9 @@ export class Engine {
   }
 
   private satisfiesDecl(n: Term.Term, label: string, ctx: Ctx, deps: Deps): Outcome {
-    const decl = this.index.shapes.get(label);
-    if (decl === undefined) return Option.some(`unknown shape ${label}`);
+    const found = HashMap.get(this.index.shapes, label);
+    if (Option.isNone(found)) return Option.some(`unknown shape ${label}`);
+    const decl = found.value;
     return Arr.findFirst([...(decl.restricts ?? []), decl.shapeExpr], (e) =>
       this.satisfies(n, e, ctx, deps, Option.some(label)),
     );
@@ -394,8 +397,8 @@ export class Engine {
     if (Predicate.isString(te)) {
       if (MutableHashSet.has(seen, te)) return;
       MutableHashSet.add(seen, te);
-      const included = this.index.tripleExprs.get(te);
-      if (included !== undefined) this.tcsOf(included, out, seen);
+      const included = HashMap.get(this.index.tripleExprs, te);
+      if (Option.isSome(included)) this.tcsOf(included.value, out, seen);
       return;
     }
     if (te.type === 'TripleConstraint') {
@@ -421,10 +424,10 @@ export class Engine {
     if (Predicate.isString(e)) {
       if (MutableHashSet.has(seen, e)) return;
       MutableHashSet.add(seen, e);
-      const decl = this.index.shapes.get(e);
-      if (decl !== undefined) {
-        decl.restricts?.forEach((r) => this.extensionTcs(r, out, seen));
-        this.extensionTcs(decl.shapeExpr, out, seen);
+      const decl = HashMap.get(this.index.shapes, e);
+      if (Option.isSome(decl)) {
+        decl.value.restricts?.forEach((r) => this.extensionTcs(r, out, seen));
+        this.extensionTcs(decl.value.shapeExpr, out, seen);
       }
       return;
     }
@@ -586,9 +589,7 @@ export class Engine {
   }
 
   private resolveTe(te: ShExJ.TripleExprOrRef): Option.Option<ShExJ.TripleExpr> {
-    return Predicate.isString(te)
-      ? Option.fromUndefinedOr(this.index.tripleExprs.get(te))
-      : Option.some(te);
+    return Predicate.isString(te) ? HashMap.get(this.index.tripleExprs, te) : Option.some(te);
   }
 
   /** All bags remaining after `te` (with its cardinality) consumes part of `bag`. */

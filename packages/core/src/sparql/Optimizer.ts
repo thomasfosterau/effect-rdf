@@ -15,6 +15,7 @@
  */
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as HashSet from 'effect/HashSet';
 import * as Match from 'effect/Match';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
@@ -43,8 +44,8 @@ const conjuncts = (e: Algebra.Expression): Array<Algebra.Expression> =>
 const conjunction = (es: ReadonlyArray<Algebra.Expression>): Algebra.Expression =>
   es.reduce((a, b) => ({ _tag: 'Operation', operator: '&&', args: [a, b] }));
 
-const subset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean =>
-  Array.from(a).every((x) => b.has(x));
+const subset = (a: HashSet.HashSet<string>, b: HashSet.HashSet<string>): boolean =>
+  Array.from(a).every((x) => HashSet.has(b, x));
 
 /** Pushes one filter condition as deep as possible; `None` if it cannot move. */
 const push = (e: Algebra.Expression, op: Algebra.Operation): Option.Option<Algebra.Operation> => {

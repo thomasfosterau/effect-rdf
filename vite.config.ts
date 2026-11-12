@@ -82,15 +82,6 @@ export default defineConfig({
       // by the type it describes.
       'effect/avoid-schema-suffix': 'off',
 
-      // ---- Effect preset: allowances (effect-rdf#18) --------------------
-      // The packages predate the Effect oxlint preset, and AGENTS.md makes
-      // hot loops (parsers, evaluators, the dataset index) plain code rather
-      // than an Effect per step. The rules below sit at `warn` with their
-      // count at adoption, too many sites to rewrite safely in one change;
-      // the issue lists them. A new site is a defect, not headroom. Once a
-      // rule's count reaches zero its line is deleted, so it is back at the
-      // preset's `error`.
-      'effect/avoid-native-object-helpers': 'warn', // 16
       // ---- Effect preset: rules this workspace's conventions cut across ----
       // `prefer-option-over-null` also fires on `?: T | undefined`, which is
       // the ONLY spelling of an optional member `exactOptionalPropertyTypes`

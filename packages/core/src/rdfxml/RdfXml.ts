@@ -987,7 +987,7 @@ class Writer {
     this.options = options;
     const byNamespace = MutableHashMap.empty<string, string>();
     const used = MutableHashSet.empty<string>();
-    prefixes.prefixes.forEach((ns, prefix) => {
+    PrefixMap.entries(prefixes).forEach(([prefix, ns]) => {
       if (
         isConfigurable(prefix, ns) &&
         !MutableHashMap.has(byNamespace, ns) &&

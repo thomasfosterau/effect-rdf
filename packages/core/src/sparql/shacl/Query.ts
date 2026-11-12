@@ -26,6 +26,7 @@ import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import { pipe } from 'effect/Function';
 import * as Match from 'effect/Match';
+import * as HashSet from 'effect/HashSet';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
@@ -42,7 +43,10 @@ const owlImports = Term.namedNode('http://www.w3.org/2002/07/owl#imports');
  * @since 0.1.0
  * @category constants
  */
-export const optionalPrebound: ReadonlySet<string> = new Set(['shapesGraph', 'currentShape']);
+export const optionalPrebound: HashSet.HashSet<string> = HashSet.make(
+  'shapesGraph',
+  'currentShape',
+);
 
 const fail = (message: string): Result.Result<never, Sparql.SparqlEvaluationError> =>
   Result.fail(new Sparql.SparqlEvaluationError({ message }));
@@ -318,7 +322,10 @@ export const checkPrebinding = (
   const unprojected = (q: Ast.SelectQuery): Option.Option<string> => {
     const projected = MutableHashSet.fromIterable(Ast.projectedVariables(q));
     return Option.map(
-      Arr.findFirst(ordered, (v) => !optionalPrebound.has(v) && !MutableHashSet.has(projected, v)),
+      Arr.findFirst(
+        ordered,
+        (v) => !HashSet.has(optionalPrebound, v) && !MutableHashSet.has(projected, v),
+      ),
       (v) => `sub-queries must project the pre-bound variable ?${v}`,
     );
   };

@@ -6,7 +6,7 @@
 import * as Dataset from '../../Dataset.ts';
 import * as Iri from '../../Iri.ts';
 import * as Isomorphism from '../../Isomorphism.ts';
-import type * as PrefixMap from '../../PrefixMap.ts';
+import * as PrefixMap from '../../PrefixMap.ts';
 import * as Term from '../../Term.ts';
 import { commonPrefixes, rdf, xsd } from '../../Vocab.ts';
 import * as Lexical from '../../ntriples/Lexical.ts';
@@ -310,7 +310,7 @@ export class Writer {
       });
     }
     if (Option.isSome(options.prefixes)) {
-      Iterable.forEach(options.prefixes.value.prefixes, ([p, ns]) => {
+      Iterable.forEach(PrefixMap.entries(options.prefixes.value), ([p, ns]) => {
         // A declared prefix replaces any detected one for the same namespace
         Arr.forEach(
           Arr.filter(Arr.fromIterable(declared), ([q, other]) => other === ns && q !== p),

@@ -19,6 +19,7 @@
 import { Dataset, Rdfs, Term, Vocab, Xsd } from '../index.ts';
 import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
+import * as HashMap from 'effect/HashMap';
 import * as Match from 'effect/Match';
 import * as MutableHashMap from 'effect/MutableHashMap';
 import * as MutableHashSet from 'effect/MutableHashSet';
@@ -251,7 +252,7 @@ export interface ShapesGraph {
   /** Every shape of the shapes graph, in a deterministic order. */
   readonly shapes: ReadonlyArray<Shape>;
   /** Shapes indexed by the N-Triples form of their identifier. */
-  readonly index: ReadonlyMap<string, Shape>;
+  readonly index: HashMap.HashMap<string, Shape>;
 }
 
 // -----------------------------------------------------------------------------
@@ -271,7 +272,7 @@ export const isShapesGraph = (u: unknown): u is ShapesGraph => Predicate.isTagge
  * @category accessors
  */
 export const get = (self: ShapesGraph, id: Term.Term): Option.Option<Shape> =>
-  Option.fromNullishOr(self.index.get(id.key));
+  HashMap.get(self.index, id.key);
 
 /**
  * The shapes that declare at least one target and are not deactivated.
@@ -914,7 +915,6 @@ const parseUnsafe = (g: Dataset.Dataset): ShapesGraph => {
     Arr.map(Rdfs.instancesOf(g, rdfs.Class), (c) => c.key),
   );
   const shapes = Arr.map(candidates, (id) => parseShape(r, components, classInstances, id));
-  // The public `index` is a `ReadonlyMap`.
-  const index = new Map(shapes.map((s) => [s.id.key, s]));
+  const index = HashMap.fromIterable(shapes.map((s) => [s.id.key, s] as const));
   return { _tag: 'ShapesGraph', dataset: g, shapes, index };
 };

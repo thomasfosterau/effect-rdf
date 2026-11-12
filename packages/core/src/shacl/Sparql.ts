@@ -26,6 +26,7 @@
 import type { Dataset, Term } from '../index.ts';
 import * as Context from 'effect/Context';
 import type * as Effect from 'effect/Effect';
+import type * as HashMap from 'effect/HashMap';
 import * as Schema from 'effect/Schema';
 import type * as Path from './Path.ts';
 import type * as Shapes from './Shapes.ts';
@@ -89,7 +90,7 @@ export interface Violation {
    * query and, for SPARQL-based constraint components, the parameter values
    * by parameter name.
    */
-  readonly bindings?: ReadonlyMap<string, Term.GroundTerm> | undefined;
+  readonly bindings?: HashMap.HashMap<string, Term.GroundTerm> | undefined;
 }
 
 /**

@@ -101,7 +101,7 @@ class Writer {
       onNone: () => '',
       onSome: (iri) => `@base <${Term.escapeIri(iri)}> .\n`,
     });
-    const header = Arr.reduce(Arr.fromIterable(this.prefixes.prefixes), base, (acc, [prefix, ns]) =>
+    const header = Arr.reduce(PrefixMap.entries(this.prefixes), base, (acc, [prefix, ns]) =>
       MutableHashSet.has(this.usedPrefixes, prefix)
         ? `${acc}@prefix ${prefix}: <${Term.escapeIri(ns)}> .\n`
         : acc,

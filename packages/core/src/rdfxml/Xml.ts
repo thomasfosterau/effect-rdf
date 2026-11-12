@@ -125,7 +125,7 @@ export interface Element {
    * default namespace). The implicit `xml` binding is not included and
    * undeclared default namespaces are absent.
    */
-  readonly inScopeNamespaces: ReadonlyMap<string, string>;
+  readonly inScopeNamespaces: HashMap.HashMap<string, string>;
   readonly children: ReadonlyArray<Node>;
   readonly position: Position;
 }
@@ -183,7 +183,7 @@ export interface DocumentType {
   readonly publicId: string | undefined;
   readonly systemId: string | undefined;
   /** Internal general entities (name → replacement text). */
-  readonly entities: ReadonlyMap<string, string>;
+  readonly entities: HashMap.HashMap<string, string>;
 }
 
 /**
@@ -399,7 +399,7 @@ const canonicalNode: (node: Node, rendered: HashMap.HashMap<string, string>) => 
   Match.tag('Element', (node, _node, rendered) => {
     const decls = Arr.sort(
       Arr.filterMap(utilizedPrefixes(node), (p) => {
-        const uri = node.inScopeNamespaces.get(p) ?? '';
+        const uri = Option.getOrElse(HashMap.get(node.inScopeNamespaces, p), () => '');
         return Option.getOrElse(HashMap.get(rendered, p), () => '') === uri
           ? Result.failVoid
           : Result.succeed([p, uri] as const);
