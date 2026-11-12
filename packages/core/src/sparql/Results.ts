@@ -257,7 +257,7 @@ export const JsonResultsSchema = Schema.Struct({
  * @since 0.1.0
  * @category json
  */
-export type JsonResults = typeof JsonResultsSchema.Type;
+export type JsonResults = JsonResultsSchema;
 
 /**
  * The type `JsonResultsSchema` decodes to (the same as `JsonResults`).
