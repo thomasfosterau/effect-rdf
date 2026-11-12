@@ -518,7 +518,7 @@ export const call = (
 ): Ast.Expression => Ast.functionCall(iri, args.map(toExpression));
 
 /** @since 0.1.0 @category expressions */
-export const bound = (variable: Term.Variable): Ast.Expression => Ast.operation('BOUND', variable);
+export const bound = (operand: Term.Variable): Ast.Expression => Ast.operation('BOUND', operand);
 /** @since 0.1.0 @category expressions */
 export const str = op('STR');
 /** @since 0.1.0 @category expressions */

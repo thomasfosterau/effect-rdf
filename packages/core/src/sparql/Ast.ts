@@ -1010,8 +1010,8 @@ export const zeroOrOne = (path: Path): PathZeroOrOne => ({ _tag: 'PathZeroOrOne'
  */
 export const negated = (
   iris: ReadonlyArray<Term.NamedNode>,
-  inverse: ReadonlyArray<Term.NamedNode> = [],
-): PathNegated => ({ _tag: 'PathNegated', iris, inverse });
+  inverted: ReadonlyArray<Term.NamedNode> = [],
+): PathNegated => ({ _tag: 'PathNegated', iris, inverse: inverted });
 
 /**
  * @since 0.1.0
@@ -1054,9 +1054,9 @@ export const aggregate = (
  * @since 0.1.0
  * @category constructors
  */
-export const exists = (pattern: GroupPattern, negated = false): ExistsExpression => ({
+export const exists = (pattern: GroupPattern, isNegated = false): ExistsExpression => ({
   _tag: 'Exists',
-  negated,
+  negated: isNegated,
   pattern,
 });
 
