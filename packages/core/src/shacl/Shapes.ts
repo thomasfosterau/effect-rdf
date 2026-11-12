@@ -45,7 +45,10 @@ const { rdfs, xsd } = Vocab;
  * @since 0.1.0
  * @category errors
  */
-export class ShapesGraphError extends Schema.TaggedError<ShapesGraphError>()('ShapesGraphError', {
+export class ShapesGraphError extends Schema.TaggedError<
+  ShapesGraphError,
+  { readonly brand: unique symbol }
+>()('ShapesGraphError', {
   message: Schema.String,
   /** The N-Triples form of the offending node, when known. */
   node: Schema.optional(Schema.String),
@@ -484,10 +487,7 @@ export const parseResult = (
  * @category parsing
  */
 export const parse = (dataset: Dataset.Dataset): Effect.Effect<ShapesGraph, ShapesGraphError> =>
-  Effect.suspend(() => {
-    const result = parseResult(dataset);
-    return Result.isSuccess(result) ? Effect.succeed(result.success) : Effect.fail(result.failure);
-  });
+  Effect.suspend(() => Effect.fromResult(parseResult(dataset)));
 
 const failShapes = (message: string, node?: Term.Term): never => {
   throw new ParseFailure(message, Option.fromUndefinedOr(node));

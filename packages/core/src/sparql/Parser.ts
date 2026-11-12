@@ -29,14 +29,17 @@ import * as Internal from './internal/parser.ts';
  * @since 0.1.0
  * @category errors
  */
-export class SparqlParseError extends Schema.TaggedError<SparqlParseError>()('SparqlParseError', {
+export class SparqlParseError extends Schema.TaggedError<
+  SparqlParseError,
+  { readonly brand: unique symbol }
+>()('SparqlParseError', {
   message: Schema.String,
   /** 1-based line of the error. */
-  line: Schema.Number,
+  line: Schema.Int,
   /** 1-based column of the error. */
-  column: Schema.Number,
+  column: Schema.Int,
   /** 0-based character offset of the error. */
-  offset: Schema.Number,
+  offset: Schema.Int,
 }) {}
 
 /**

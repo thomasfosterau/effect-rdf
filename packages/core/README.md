@@ -25,11 +25,12 @@ Each subpath is `@thomasfosterau/effect-rdf/<subpath>` (its barrel, re-exporting
 pnpm add effect @thomasfosterau/effect-rdf
 ```
 
-`effect` (`^4.0.0`) is a peer dependency. [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse) (`^0.4.0 || ^0.5.0`) is an optional peer, needed by the syntax and SPARQL-parser subpaths (`/ntriples`, `/turtle`, `/n3`, `/jsonld`, `/rdfxml`, `/xmp`, `/shex`, `/sparql`, `/sparql/shacl`, `/sparql/ai`); the root entry, `/rdfjson`, `/csvw`, `/shacl` and `/sparql/sql` never import it. [`@thomasfosterau/effect-xml`](https://www.npmjs.com/package/@thomasfosterau/effect-xml) (`^0.1.0`) is a second optional peer, needed by the subpaths that read XML: `/rdfxml`, `/xmp` and `/sparql` (SPARQL XML results and the RDF/XML codec), with `/sparql/shacl` and `/sparql/ai`. effect-xml 0.1.0 itself requires effect-parse `^0.4.1` (its widening to 0.5 is merged but not yet released, so a package manager reports that peer as unmet beside effect-parse 0.5; the suites pass on that pairing), so those subpaths need both:
+`effect` (`^4.0.0`) is a peer dependency. [`@thomasfosterau/effect-parse`](https://www.npmjs.com/package/@thomasfosterau/effect-parse) (`^0.4.0 || ^0.5.0`) is an optional peer, needed by the syntax and SPARQL-parser subpaths (`/ntriples`, `/turtle`, `/n3`, `/jsonld`, `/rdfxml`, `/xmp`, `/shex`, `/sparql`, `/sparql/shacl`, `/sparql/ai`); the root entry, `/rdfjson`, `/csvw`, `/shacl` and `/sparql/sql` never import it. [`@thomasfosterau/effect-xml`](https://www.npmjs.com/package/@thomasfosterau/effect-xml) (`^0.1.0`) is a second optional peer, needed by the subpaths that read XML: `/rdfxml`, `/xmp` and `/sparql` (SPARQL XML results and the RDF/XML codec), with `/sparql/shacl` and `/sparql/ai`. effect-xml 0.1.0 itself requires effect-parse `^0.4.1` (its widening to 0.5 is merged but not yet released, so a package manager reports that peer as unmet beside effect-parse 0.5; the suites pass on that pairing), so those subpaths need both. [`@thomasfosterau/effect-ext`](https://www.npmjs.com/package/@thomasfosterau/effect-ext) (`^0.2.0`) is a third optional peer, needed by `/csvw` only (RFC 6570 URI templates, `Link` headers and `/.well-known/` URLs, imported through its `./UriTemplate` entry); no other subpath imports it:
 
 ```sh
 pnpm add @thomasfosterau/effect-parse
 pnpm add @thomasfosterau/effect-xml # for /rdfxml, /xmp and /sparql
+pnpm add @thomasfosterau/effect-ext # for /csvw
 ```
 
 ## Modules
@@ -890,15 +891,15 @@ This example is run by [`test/csvw/readme-example.test.ts`](test/csvw/readme-exa
 
 ### Modules
 
-| Module      | Contents                                                                                                                                                                                                                                                                                                  |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Processor` | `fromMetadata(url, text, options)` and `fromTabular(url, options)` → `Processed` (`group`, `metadata`, `report`); the `Loader` service (`table(url, dialect)`, `document(url)`) with `makeLoader(sources, documents)` and `layerSources`; `defaultLocations(url)`; `LoadError`                            |
-| `Metadata`  | The normalized description model as `Schema`s (`TableGroup`, `Table`, `TableSchema`, `Column`, `Dialect`, `ForeignKey`, `Reference`, `Transformation`, `Inherited`, `LanguageMap`, `CommonProperties`); `decode` / `decodeJson`; `defaultDialect`; inheritance and compatibility helpers; `MetadataError` |
-| `Table`     | `Source` (the parsed input); the annotated model (`TableGroup`, `Table`, `Column`, `Row`, `Cell`, `CellValue`); `read` (dialect row flags and embedded metadata), `annotate`, `parseCell`, `validateKeys`                                                                                                 |
-| `Datatype`  | The built-in datatypes (`builtIn`, `iri`, `isNumeric`, …), the `Datatype` description schema, `parse` (formats, length and value constraints) and `checkFormat`                                                                                                                                           |
-| `Report`    | `Issue` (`level`, `message`, `table`, `row`, `column`) and `Report` schemas; `errors`, `warnings`, `isValid`                                                                                                                                                                                              |
-| `Csv2Rdf`   | `toDataset(group, { mode })` → core `Dataset` (`standard` or `minimal`); `convert` (an Effect with a span)                                                                                                                                                                                                |
-| `Csv2Json`  | `toJson(group, { mode })` → JSON (`standard` or `minimal`, with nested objects); `convert`                                                                                                                                                                                                                |
+| Module      | Contents                                                                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Processor` | `fromMetadata(url, text, options)` and `fromTabular(url, options)` → `Processed` (`group`, `metadata`, `report`); the `Loader` service (`table(url, dialect)`, `document(url)`, `linkHeader(url)`) with `makeLoader(sources, documents, linkHeaders)` and `layerSources`; `defaultLocations(url)`, `linkedLocations(url, header)`; `LoadError` |
+| `Metadata`  | The normalized description model as `Schema`s (`TableGroup`, `Table`, `TableSchema`, `Column`, `Dialect`, `ForeignKey`, `Reference`, `Transformation`, `Inherited`, `LanguageMap`, `CommonProperties`); `decode` / `decodeJson`; `defaultDialect`; inheritance and compatibility helpers; `MetadataError`                                      |
+| `Table`     | `Source` (the parsed input); the annotated model (`TableGroup`, `Table`, `Column`, `Row`, `Cell`, `CellValue`); `read` (dialect row flags and embedded metadata), `annotate`, `parseCell`, `validateKeys`                                                                                                                                      |
+| `Datatype`  | The built-in datatypes (`builtIn`, `iri`, `isNumeric`, …), the `Datatype` description schema, `parse` (formats, length and value constraints) and `checkFormat`                                                                                                                                                                                |
+| `Report`    | `Issue` (`level`, `message`, `table`, `row`, `column`) and `Report` schemas; `errors`, `warnings`, `isValid`                                                                                                                                                                                                                                   |
+| `Csv2Rdf`   | `toDataset(group, { mode })` → core `Dataset` (`standard` or `minimal`); `convert` (an Effect with a span)                                                                                                                                                                                                                                     |
+| `Csv2Json`  | `toJson(group, { mode })` → JSON (`standard` or `minimal`, with nested objects); `convert`                                                                                                                                                                                                                                                     |
 
 #### Processing
 
@@ -910,9 +911,24 @@ compatibility with its schema.
 
 `fromTabular` starts from a tabular data file and takes its metadata from the
 `metadata` option (user-supplied, overriding metadata), else the first
-document at a default location (`{+url}-metadata.json`, `csv-metadata.json`)
-that describes the file, else the file's embedded metadata (column titles from
-the header row).
+metadata document that describes the file, found as the specification's
+[Locating Metadata](https://www.w3.org/TR/tabular-data-model/#locating-metadata)
+orders it: a document named by a `Link: <…>; rel="describedby"` header of the
+file's response (with no `type`, or `application/csvm+json`,
+`application/ld+json` or `application/json`), then the locations in the
+site's `/.well-known/csvm` file (URI templates, one per line, expanded with
+the file's `url`) or, when the site has none, the defaults
+`{+url}-metadata.json` and `csv-metadata.json`; else the file's embedded
+metadata (column titles from the header row). A located document that does
+not describe the file is ignored with a warning.
+
+The subpath performs no network I/O. The `Loader` supplies what HTTP gave it:
+`linkHeader(url)` is the `Link` header value of the response that served the
+table (`None` when it had none), and `document(url)` is any metadata document
+by URL, `/.well-known/csvm` (`<origin>/.well-known/csvm`) included.
+`makeLoader(sources, documents, linkHeaders)` holds all three in memory. A
+loader over `fetch` or `HttpClient` implements `linkHeader` from the table
+response's `Link` header and `document` as a `GET` that maps a `404` to `None`.
 
 With `validate: true` the processor is a validator: metadata incompatible with
 the data and invalid cells are **errors**, and primary keys and foreign keys
@@ -945,10 +961,6 @@ aliases; `format` patterns for numbers (the UAX 35 subset: `0`, `#`, grouping,
 
 ### Not yet supported
 
-- **Locating metadata over HTTP**: `Link: rel="describedby"` headers on a
-  tabular data file and a site-wide `/.well-known/csvm` configuration are not
-  consulted (the default locations are, through the `Loader`). A caller that
-  has fetched such metadata can pass it as `metadata`.
 - **Parsing CSV text**: the `Loader` hands back parsed records; a CSV scanner
   (`@thomasfosterau/effect-csv`) will provide them.
 - **Provenance**: the optional PROV triples of CSV2RDF are not generated.
@@ -2150,13 +2162,13 @@ Every suite below runs when it is checked out under `.test-suites` (`scripts/fet
 
 **CSV on the Web**: the [W3C CSVW test suite](https://github.com/w3c/csvw/tree/gh-pages/tests) (`.test-suites/csvw`). The suite's CSV files are split into records by a test-only stand-in for `effect-csv` (`test/csvw/support/csv.ts`).
 
-| Manifest                   | Result                    |
-| -------------------------- | ------------------------- |
-| `manifest-validation.ttl`  | 276 / 276 run (6 skipped) |
-| `manifest-rdf.ttl` (RDF)   | 264 / 264 run (6 skipped) |
-| `manifest-json.ttl` (JSON) | 264 / 264 run (6 skipped) |
+| Manifest                   | Result                       |
+| -------------------------- | ---------------------------- |
+| `manifest-validation.ttl`  | 282 / 282 run (none skipped) |
+| `manifest-rdf.ttl` (RDF)   | 270 / 270 run (none skipped) |
+| `manifest-json.ttl` (JSON) | 270 / 270 run (none skipped) |
 
-RDF results are compared with `Isomorphism.isomorphic`, JSON results structurally. The skipped tests need metadata discovery over HTTP, which the CSVW subpath does not do: `test014`, `test016`, `test120` and `test122` (an HTTP `Link` header) and `test259` and `test260` (a site-wide `/.well-known/csvm` file).
+RDF results are compared with `Isomorphism.isomorphic`, JSON results structurally. The harness feeds the `Loader` what HTTP would: the `Link` header a test declares (`csvt:httpLink`: `test014`, `test016`, `test120`, `test122`) and one site-wide `/.well-known/csvm` file for every test (the suite ships none: the two default locations, then `{+url}.json` and `csvm.json`, where `test260` and `test259` keep their metadata).
 
 **SHACL**: the W3C SHACL test suite (`.test-suites/data-shapes`): all 98 SHACL Core tests pass. The 22 SHACL-SPARQL tests (`sparql/`) need a SPARQL evaluator; they run in `@thomasfosterau/effect-rdf/sparql`'s suite, where all 22 pass, and all 98 Core tests pass with the evaluator installed.
 

@@ -37,13 +37,13 @@ import type * as Shapes from './Shapes.ts';
  * @since 0.1.0
  * @category errors
  */
-export class SparqlEvaluationError extends Schema.TaggedError<SparqlEvaluationError>()(
-  'SparqlEvaluationError',
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class SparqlEvaluationError extends Schema.TaggedError<
+  SparqlEvaluationError,
+  { readonly brand: unique symbol }
+>()('SparqlEvaluationError', {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /**
  * The input to the evaluation of a SPARQL-based constraint for one focus

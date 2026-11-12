@@ -133,7 +133,10 @@ export interface Metadata {
  * @since 0.1.0
  * @category errors
  */
-export class XmpModelError extends Schema.TaggedError<XmpModelError>()('XmpModelError', {
+export class XmpModelError extends Schema.TaggedError<
+  XmpModelError,
+  { readonly brand: unique symbol }
+>()('XmpModelError', {
   message: Schema.String,
 }) {}
 

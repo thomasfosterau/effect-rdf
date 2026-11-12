@@ -154,7 +154,30 @@ export default defineConfig({
           'effect/use-path-service': 'off',
           'effect/use-console-service': 'off',
           'effect/effect-run-in-body': 'off',
+          // Tests are written on `@effect/vitest` (`it.effect`, `layer`),
+          // which Effect marks unstable as a whole, and exercise the same
+          // unstable modules as the sources below.
+          'effecttsgo/unstable-api-usage': 'off',
         },
+      },
+      // Effect 4.1 ships HTTP, SQL, AI, the CLI, `FileSystem` / `Path` and
+      // `Graph` only in its "unstable" tier: the marker states their
+      // stability, it does not point at a stable alternative. These are the
+      // sources built on them, and only these: the SPARQL protocol server,
+      // client, SQL store and AI tools; effect-sparql-node (the Node server,
+      // CLI and `HttpApi`); the JSON-LD `DocumentLoader` over `HttpClient`;
+      // `Serialization`'s file helpers; and `Dataset`'s `Graph` conversion. A
+      // new use anywhere else is still reported.
+      {
+        files: [
+          'packages/core/src/sparql/**',
+          'packages/core/src/jsonld/DocumentLoader.ts',
+          'packages/core/src/Serialization.ts',
+          'packages/core/src/Dataset.ts',
+          'packages/sparql-node/src/**',
+          'packages/sparql-node/bin/**',
+        ],
+        rules: { 'effecttsgo/unstable-api-usage': 'off' },
       },
       // The one native `JSON.parse` per nested subpath: `Schema.fromJsonString`
       // replaces the engine's SyntaxError with "Expected a valid JSON

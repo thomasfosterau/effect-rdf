@@ -1,0 +1,10 @@
+---
+'@thomasfosterau/effect-rdf': minor
+---
+
+`/csvw`: discover metadata through `Link` headers and `/.well-known/csvm`, and expand URI templates with `@thomasfosterau/effect-ext`.
+
+- **New optional peer `@thomasfosterau/effect-ext` `^0.2.0`, needed by `/csvw` only** (imported through its `./UriTemplate` entry). A consumer of `/csvw` must now install it (`pnpm add @thomasfosterau/effect-ext`); no other subpath imports it. The private RFC 6570 implementation is gone: `aboutUrl`, `propertyUrl` and `valueUrl` templates expand through effect-ext, with the same results on every W3C case (a template that is not RFC 6570 syntax is still left as written).
+- **Metadata discovery follows "Model for Tabular Data and Metadata on the Web" §5.** After the user's metadata, `Processor.fromTabular` takes a document named by the tabular data file's `Link` header (`rel="describedby"`, no `type` or `application/csvm+json`, `application/ld+json` or `application/json`), then the locations in the site's `/.well-known/csvm` (URI templates, one per line, expanded with the file's `url`) or, when the site has none, the defaults `{+url}-metadata.json` and `csv-metadata.json`, then the embedded metadata. A located document that does not describe the file is ignored with a warning. `/csvw` still does no network I/O of its own.
+- **Breaking: the `Loader` service has a new member**, `linkHeader: (url) => Effect<Option<string>, LoadError>`, the `Link` header value of the response that served a table (`None` when it had none). `/.well-known/csvm` is read through the existing `document(url)` at `<origin>/.well-known/csvm`. Custom loaders must add `linkHeader`; `makeLoader` and `layerSources` take a third argument, `linkHeaders`, a record from table URL to `Link` header value (existing calls keep working). New export `Processor.linkedLocations`.
+- **Conformance:** the six HTTP tests of each W3C manifest (`test014`, `test016`, `test120`, `test122`, `test259`, `test260`) now run and pass: validation 282 / 282 (was 276 / 276 run, 6 skipped), CSV2RDF 270 / 270 (was 264 / 264) and CSV2JSON 270 / 270 (was 264 / 264), none skipped.

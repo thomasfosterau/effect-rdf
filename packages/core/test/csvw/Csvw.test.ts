@@ -162,6 +162,106 @@ describe('Processor', () => {
   });
 });
 
+const document = (url: string, title: string) =>
+  `{"@context": "http://www.w3.org/ns/csvw", "url": "${url}", "dc:title": "${title}"}`;
+
+const titleOf = (processed: Processor.Processed) => processed.group.tables[0]?.common['dc:title'];
+
+describe('Processor metadata discovery', () => {
+  const table = 'http://example.org/data/countries.csv';
+  const source: Table.Source = { url: table, rows: countries.rows };
+  const discover = (
+    documents: Readonly<Record<string, string>>,
+    linkHeaders: Readonly<Record<string, string>> = {},
+  ) =>
+    Effect.provideService(
+      Processor.fromTabular(table),
+      Processor.Loader,
+      Processor.makeLoader([source], documents, linkHeaders),
+    );
+
+  it.effect('prefers a Link header to the site-wide and default locations', () =>
+    Effect.gen(function* () {
+      const processed = yield* discover(
+        {
+          'http://example.org/data/linked.json': document('countries.csv', 'linked'),
+          'http://example.org/data/countries.csv-metadata.json': document(
+            'countries.csv',
+            'default',
+          ),
+        },
+        { [table]: '<linked.json>; rel="describedby"; type="application/csvm+json"' },
+      );
+      expect(titleOf(processed)).toEqual({ '@value': 'linked' });
+    }),
+  );
+
+  it.effect('ignores Link headers that are not metadata links', () =>
+    Effect.gen(function* () {
+      const processed = yield* discover(
+        {
+          'http://example.org/data/other.html': document('countries.csv', 'html'),
+          'http://example.org/data/next.json': document('countries.csv', 'next'),
+          'http://example.org/data/countries.csv-metadata.json': document(
+            'countries.csv',
+            'default',
+          ),
+        },
+        { [table]: '<other.html>; rel="describedby"; type="text/html", <next.json>; rel="next"' },
+      );
+      expect(titleOf(processed)).toEqual({ '@value': 'default' });
+    }),
+  );
+
+  it.effect('reads the templates of /.well-known/csvm, replacing the defaults', () =>
+    Effect.gen(function* () {
+      const processed = yield* discover({
+        'http://example.org/.well-known/csvm': 'meta/{+url}.json\r\n\r\n/site-metadata.json\n',
+        'http://example.org/data/countries.csv-metadata.json': document('countries.csv', 'default'),
+        'http://example.org/site-metadata.json': document(table, 'site'),
+      });
+      expect(titleOf(processed)).toEqual({ '@value': 'site' });
+    }),
+  );
+
+  it.effect('ignores a located document that does not describe the table, with a warning', () =>
+    Effect.gen(function* () {
+      const processed = yield* discover(
+        {
+          'http://example.org/data/linked.json': document('other.csv', 'other'),
+          'http://example.org/data/countries.csv-metadata.json': document(
+            'countries.csv',
+            'default',
+          ),
+        },
+        { [table]: '<linked.json>; rel=describedby' },
+      );
+      expect(titleOf(processed)).toEqual({ '@value': 'default' });
+      expect(processed.report.issues.map((i) => i.message)).toEqual([
+        'http://example.org/data/linked.json does not describe http://example.org/data/countries.csv',
+      ]);
+    }),
+  );
+
+  it.effect('falls back to the defaults with no Link header and no site configuration', () =>
+    Effect.gen(function* () {
+      const processed = yield* discover({
+        'http://example.org/data/csv-metadata.json': document('countries.csv', 'directory'),
+      });
+      expect(titleOf(processed)).toEqual({ '@value': 'directory' });
+      const embedded = yield* discover({});
+      expect(embedded.group.tables[0]?.common).toEqual({});
+      expect(embedded.report.issues).toEqual([]);
+    }),
+  );
+
+  it('expands the Link header targets against the table', () => {
+    expect(Processor.linkedLocations(`${table}#x`, '</m.json>; rel="describedby"')).toEqual([
+      'http://example.org/m.json',
+    ]);
+  });
+});
+
 describe('Metadata', () => {
   it.effect('normalizes natural-language and common properties', () =>
     Effect.gen(function* () {

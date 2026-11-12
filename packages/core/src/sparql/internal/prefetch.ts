@@ -8,7 +8,10 @@ import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 
 /** Raised when a query exceeds its time limit. */
-export class QueryTimeout extends Schema.TaggedError<QueryTimeout>()('QueryTimeout', {}) {}
+export class QueryTimeout extends Schema.TaggedError<
+  QueryTimeout,
+  { readonly brand: unique symbol }
+>()('QueryTimeout', {}) {}
 
 /**
  * Starts evaluating a stream in the background and waits for its first
@@ -33,7 +36,7 @@ export const prefetch = <A, E>(
           });
     const fiber = yield* Effect.forkDetach(limited);
     const first = yield* Queue.take(queue).pipe(
-      Effect.map(Option.some),
+      Effect.asSome,
       Effect.catchIf(Cause.isDone, () => Effect.succeed(Option.none<A>())),
       Effect.onError(() => Fiber.interrupt(fiber)),
     );

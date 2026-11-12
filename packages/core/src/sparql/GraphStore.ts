@@ -332,10 +332,6 @@ export const handle = (
           return HttpServerResponse.empty({ status: 204 });
         }),
       ),
-      Match.orElse(() =>
-        Effect.gen(function* () {
-          return yield* ProtocolErrors.methodNotAllowed(method, allowed);
-        }),
-      ),
+      Match.orElse(() => ProtocolErrors.methodNotAllowed(method, allowed)),
     );
   }).pipe(Effect.withSpan('SparqlServer.graphStore'));

@@ -106,17 +106,15 @@ describe('SPARQL endpoint', () => {
 
   it.effect('answers ASK in JSON and XML', () =>
     withServer((client) =>
-      Effect.gen(function* () {
-        yield* Effect.forEach(
-          ['application/sparql-results+json', 'application/sparql-results+xml'],
-          Effect.fnUntraced(function* (accept) {
-            const r = yield* get(client, q('ASK { ?s ?p "Bob" }'), { accept });
-            const parsed = yield* some(Results.codecFor(accept), accept).parse(yield* r.text);
-            expect(parsed).toEqual({ _tag: 'Boolean', value: true });
-          }),
-          { concurrency: 1, discard: true },
-        );
-      }),
+      Effect.forEach(
+        ['application/sparql-results+json', 'application/sparql-results+xml'],
+        Effect.fnUntraced(function* (accept) {
+          const r = yield* get(client, q('ASK { ?s ?p "Bob" }'), { accept });
+          const parsed = yield* some(Results.codecFor(accept), accept).parse(yield* r.text);
+          expect(parsed).toEqual({ _tag: 'Boolean', value: true });
+        }),
+        { concurrency: 1, discard: true },
+      ),
     ),
   );
 
