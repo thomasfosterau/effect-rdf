@@ -36,6 +36,9 @@ catalogs:
     '@enfect/oxlint':
       specifier: ^0.10.0
       version: 0.10.0
+    '@thomasfosterau/effect-ext':
+      specifier: 0.2.0
+      version: 0.2.0
     '@thomasfosterau/effect-parse':
       specifier: 0.5.0
       version: 0.5.0
@@ -134,6 +137,9 @@ importers:
       '@electric-sql/pglite':
         specifier: 'catalog:'
         version: 0.5.16
+      '@thomasfosterau/effect-ext':
+        specifier: 'catalog:'
+        version: 0.2.0(@effect/platform-node@4.1.2(effect@4.1.2)(redis@6.3.0))(@thomasfosterau/effect-parse@0.5.0(effect@4.1.2))(effect@4.1.2)
       '@thomasfosterau/effect-parse':
         specifier: 'catalog:'
         version: 0.5.0(effect@4.1.2)
@@ -827,6 +833,26 @@ packages:
     engines: {node: '>=12', npm: '>=6'}
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
+
+  '@thomasfosterau/effect-ext@0.2.0':
+    resolution: {integrity: sha512-T1EukW6BJDub7EMdii65Qisy1uDMwAkbso6s2gQQD9MbUC8jGycJppsL4McRdnjgboEu5yVxirzr2pobkh9qFw==}
+    engines: {node: '>=22.18'}
+    hasBin: true
+    peerDependencies:
+      '@effect/platform-browser': ^4.0.0
+      '@effect/platform-node': ^4.0.0
+      '@thomasfosterau/effect-jsonapi': '>=0.16.1'
+      '@thomasfosterau/effect-parse': ^0.4.1 || ^0.5.0
+      effect: 4.1.2
+    peerDependenciesMeta:
+      '@effect/platform-browser':
+        optional: true
+      '@effect/platform-node':
+        optional: true
+      '@thomasfosterau/effect-jsonapi':
+        optional: true
+      '@thomasfosterau/effect-parse':
+        optional: true
 
   '@thomasfosterau/effect-parse@0.5.0':
     resolution: {integrity: sha512-YlRPA+6zGPNCIoBp60M+eep2+ysQTBOrc6cnPjtARekm86Bb9Y/jGCwVzRUujvauc7Y6RWzb8vLYRJaNKf8m0g==}
@@ -2293,6 +2319,13 @@ snapshots:
   '@testing-library/user-event@14.6.8(@testing-library/dom@10.4.2)':
     dependencies:
       '@testing-library/dom': 10.4.2
+
+  '@thomasfosterau/effect-ext@0.2.0(@effect/platform-node@4.1.2(effect@4.1.2)(redis@6.3.0))(@thomasfosterau/effect-parse@0.5.0(effect@4.1.2))(effect@4.1.2)':
+    dependencies:
+      effect: 4.1.2
+    optionalDependencies:
+      '@effect/platform-node': 4.1.2(effect@4.1.2)(redis@6.3.0)
+      '@thomasfosterau/effect-parse': 0.5.0(effect@4.1.2)
 
   '@thomasfosterau/effect-parse@0.5.0(effect@4.1.2)':
     dependencies:

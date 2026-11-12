@@ -54,6 +54,11 @@ catalog:
   # singleton (the `effect` override below); its `vite.config.ts` load calls
   # Effect APIs, so an `effect` bump re-runs `vp check` against the plugin too.
   '@enfect/oxlint': ^0.10.0
+  # URI templates (RFC 6570), `Link` headers and well-known URIs behind
+  # `/csvw`'s metadata discovery and URL properties: an optional peer of
+  # effect-rdf, reached only from `/csvw` through its `./UriTemplate` entry
+  # (see `catalogs.peers`).
+  '@thomasfosterau/effect-ext': 0.2.0
   # Parser-combinator library behind the Turtle, N-Triples, N3, ShExC, SPARQL
   # and XML grammars: an optional peer of effect-rdf, reached only from the
   # syntax and SPARQL subpaths (see `catalogs.peers`), and a required peer of
@@ -105,6 +110,11 @@ catalogs:
     # effect-parse ^0.4.1, so the XML subpaths need effect-parse 0.4.1 until
     # an effect-xml release widens that peer (merged upstream, unreleased).
     '@thomasfosterau/effect-xml': ^0.1.0
+    # Caret on 0.x for the same reason. Optional, and reached only from
+    # effect-rdf's `/csvw` subpath, through effect-ext's `./UriTemplate` entry
+    # (URI templates, `Link` headers, `/.well-known/`); 0.2.0 is the first
+    # release with that entry.
+    '@thomasfosterau/effect-ext': ^0.2.0
     # The owner's peer-range policy: `effect` is `^4.0.0`, decided per
     # package. A package whose own dependencies require a newer `effect`
     # takes a named catalog below whose comment names that dependency; our
