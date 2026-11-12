@@ -920,7 +920,7 @@ export const decode = <R extends string, O extends string, A, RD>(
   schema: Schema.Decoder<A, RD>,
   options?: Engine.RequestOptions,
 ): Stream.Stream<A, Engine.SparqlError | Schema.SchemaError, Engine.SparqlEngine | RD> =>
-  Stream.mapEffect(execute(builder, options), (row) => Schema.decodeUnknownEffect(schema)(row));
+  Stream.mapEffect(execute(builder, options), (row) => Schema.decodeEffect(schema)(row));
 
 /**
  * Executes an `ASK` builder.

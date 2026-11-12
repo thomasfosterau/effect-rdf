@@ -896,7 +896,7 @@ export const decode = <A, RD>(
     Stream.unwrap(
       Effect.map(Effect.service(SparqlClient), (c) => c.selectBindings(query, options)),
     ),
-    (b) => Schema.decodeUnknownEffect(schema)(B.toRecord(b)),
+    (b) => Schema.decodeEffect(schema)(B.toRecord(b)),
   );
 
 /**

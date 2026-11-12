@@ -99,7 +99,7 @@ layer(Evaluator.layer())('README quick tour', (test) => {
       ]);
       expect(report).toContain('http://example.org/bob has an invalid age: -1');
       expect(report).not.toContain('knows themselves');
-      const json = yield* Schema.decodeUnknownEffect(
+      const json = yield* Schema.decodeEffect(
         Schema.fromJsonString(
           Schema.Struct({ '@context': Schema.Record(Schema.String, Schema.Unknown) }),
         ),
