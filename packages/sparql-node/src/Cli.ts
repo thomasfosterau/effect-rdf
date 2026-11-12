@@ -170,7 +170,7 @@ export type Flags = Command.Command.Config.Infer<typeof config>;
 
 const nonNegative = (name: string, value: Option.Option<number>) =>
   Option.match(value, {
-    onNone: () => Effect.succeed(undefined),
+    onNone: () => Effect.undefined,
     onSome: (n) =>
       Number.isInteger(n) && n >= 0
         ? Effect.succeed(n)
@@ -179,7 +179,7 @@ const nonNegative = (name: string, value: Option.Option<number>) =>
 
 const endpointPath = (name: string, value: Option.Option<string>) =>
   Option.match(value, {
-    onNone: () => Effect.succeed(undefined),
+    onNone: () => Effect.undefined,
     onSome: (path) =>
       Schema.is(EndpointPath)(path)
         ? Effect.succeed(path)

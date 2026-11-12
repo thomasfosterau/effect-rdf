@@ -88,14 +88,13 @@ type Failure = Serialization.RdfParseError | Serialization.RdfSerializeError;
 const negative = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
   Effect.gen(function* () {
     const input = fs.readFileSync(entry.action, 'utf8');
-    const error = yield* codec.parse(input).pipe(Effect.flip, Effect.orDie);
+    const error = yield* codec.parse(input).pipe(Effect.flip);
     expect(error._tag).toBe('RdfParseError');
     const streamed = yield* Stream.runCollect(codec.parseStream(chunked(input, 5))).pipe(
       Effect.flip,
-      Effect.orDie,
     );
     expect(streamed._tag).toBe('RdfParseError');
-  });
+  }).pipe(Effect.orDie);
 
 const positive = (codec: Codec, entry: Entry): Effect.Effect<void, Failure> =>
   Effect.gen(function* () {

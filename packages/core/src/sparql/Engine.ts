@@ -485,10 +485,10 @@ export const make = (
     }).pipe(Effect.withSpan('SparqlEngine.query', { attributes: textAttributes(q) }));
 
   const select: SparqlEngineShape['select'] = (q, request) =>
-    Effect.flatMap(query(q, request), (r) =>
-      Predicate.isTagged(r, 'Select')
-        ? Effect.succeed(r)
-        : Effect.fail(new EvaluationError({ message: 'Not a SELECT query' })),
+    Effect.filterOrFail(
+      query(q, request),
+      (r) => Predicate.isTagged(r, 'Select'),
+      () => new EvaluationError({ message: 'Not a SELECT query' }),
     );
 
   const ask: SparqlEngineShape['ask'] = (q, request) =>
@@ -513,31 +513,27 @@ export const make = (
   const graphQuads = (g: Term.Graph) => Stream.runCollect(store.match({ graph: g }));
 
   const clearTarget = (target: Ast.GraphTarget, silent: boolean, drop: boolean) =>
-    Effect.gen(function* () {
-      return yield* Match.value(target).pipe(
-        Match.tag('Default', (): Effect.Effect<void, SparqlError> =>
-          store.clear(Term.defaultGraph),
-        ),
-        Match.tag('NamedNode', (graph) =>
-          Effect.flatMap(store.hasGraph(graph), (exists): Effect.Effect<void, SparqlError> => {
-            if (!exists)
-              return silent ? Effect.void : updateFailed(`Graph <${graph.value}> does not exist`);
-            return drop ? store.dropGraph(graph) : store.clear(graph);
-          }),
-        ),
-        Match.tag('Named', 'All', (which) =>
-          Effect.gen(function* () {
-            const graphs = yield* Stream.runCollect(store.graphs);
-            yield* Effect.forEach(graphs, (g) => (drop ? store.dropGraph(g) : store.clear(g)), {
-              concurrency: 1,
-              discard: true,
-            });
-            if (Predicate.isTagged(which, 'All')) yield* store.clear(Term.defaultGraph);
-          }),
-        ),
-        Match.exhaustive,
-      );
-    });
+    Match.value(target).pipe(
+      Match.tag('Default', (): Effect.Effect<void, SparqlError> => store.clear(Term.defaultGraph)),
+      Match.tag('NamedNode', (graph) =>
+        Effect.flatMap(store.hasGraph(graph), (exists): Effect.Effect<void, SparqlError> => {
+          if (!exists)
+            return silent ? Effect.void : updateFailed(`Graph <${graph.value}> does not exist`);
+          return drop ? store.dropGraph(graph) : store.clear(graph);
+        }),
+      ),
+      Match.tag('Named', 'All', (which) =>
+        Effect.gen(function* () {
+          const graphs = yield* Stream.runCollect(store.graphs);
+          yield* Effect.forEach(graphs, (g) => (drop ? store.dropGraph(g) : store.clear(g)), {
+            concurrency: 1,
+            discard: true,
+          });
+          if (Predicate.isTagged(which, 'All')) yield* store.clear(Term.defaultGraph);
+        }),
+      ),
+      Match.exhaustive,
+    );
 
   const transfer = (
     op: Ast.TransferOperation,
