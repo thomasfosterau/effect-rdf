@@ -3,6 +3,7 @@ import * as Arr from 'effect/Array';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as Order from 'effect/Order';
+import type * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
 import { McpServer, type Tool } from 'effect/ai';
 import { Mcp, Tools } from '../../../src/sparql/ai/index.ts';
@@ -13,12 +14,14 @@ const readOnly = Tools.layer({ maxRows: 2 }).pipe(Layer.provideMerge(engine));
 const withUpdate = Tools.layerWithUpdate().pipe(Layer.provideMerge(engine));
 
 // Calls a tool and returns its decoded result (a success or the `SparqlToolError` the model sees).
+// The parameters are both the tool's encoded shape and JSON: effect 4.1.3 widened `handle`'s
+// parameter from the former to the latter, and the intersection type-checks on either side.
 type AllTools = (typeof Tools.toolkitWithUpdate)['tools'];
 type ReadOnlyTools = (typeof Tools.toolkit)['tools'];
 
 const call = <Name extends keyof AllTools>(
   name: Name,
-  params: Tool.ParametersEncoded<AllTools[Name]>,
+  params: Tool.ParametersEncoded<AllTools[Name]> & Schema.Json,
 ) =>
   Effect.gen(function* () {
     const handlers = yield* Tools.toolkitWithUpdate;
@@ -30,7 +33,7 @@ const call = <Name extends keyof AllTools>(
 
 const callReadOnly = <Name extends keyof ReadOnlyTools>(
   name: Name,
-  params: Tool.ParametersEncoded<ReadOnlyTools[Name]>,
+  params: Tool.ParametersEncoded<ReadOnlyTools[Name]> & Schema.Json,
 ) =>
   Effect.gen(function* () {
     const handlers = yield* Tools.toolkit;
