@@ -7,14 +7,13 @@
 import * as Arr from 'effect/Array';
 import * as MutableHashSet from 'effect/MutableHashSet';
 import * as Match from 'effect/Match';
-import * as MutableHashMap from 'effect/MutableHashMap';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Result from 'effect/Result';
 import * as Term from '../../Term.ts';
 import * as Xsd from '../../Xsd.ts';
 import type * as ShExJ from '../ShExJ.ts';
-import { compileXPathRegex } from './xpathRegex.ts';
+import * as Regex from '../../internal/regex.ts';
 
 const XSD = 'http://www.w3.org/2001/XMLSchema#';
 const XSD_STRING = `${XSD}string`;
@@ -46,25 +45,6 @@ const lexicalForm = (n: Term.Term): string =>
 /** The number of code points (a lone surrogate counts as one, as string iteration does). */
 const codePointLength = (s: string): number =>
   s.length - (s.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g)?.length ?? 0);
-
-const regexCache = MutableHashMap.empty<string, Result.Result<RegExp, string>>();
-
-/** Compiles (once) an XPath pattern; fails with the reason it is invalid. */
-const getRegex = (pattern: string, flags: string): Result.Result<RegExp, string> => {
-  const key = `${flags}/${pattern}`;
-  return Option.getOrElse(MutableHashMap.get(regexCache, key), () => {
-    const re = Result.try({
-      try: () => compileXPathRegex(pattern, flags),
-      // The message of the thrown `SyntaxError`, else the thrown value's string form.
-      catch: (e) =>
-        Predicate.hasProperty(e, 'message') && Predicate.isString(e.message)
-          ? e.message
-          : String(e),
-    });
-    MutableHashMap.set(regexCache, key, re);
-    return re;
-  });
-};
 
 interface DecimalParts {
   readonly negative: boolean;
@@ -288,12 +268,13 @@ const stringFacetFailure = (n: Term.Term, nc: ShExJ.NodeConstraint): Option.Opti
   if (nc.maxlength !== undefined && len > nc.maxlength)
     return Option.some(`${n.key} has length ${len}, expected at most ${nc.maxlength}`);
   if (nc.pattern === undefined) return Option.none();
-  const compiled = getRegex(nc.pattern, nc.flags ?? '');
+  const compiled = Regex.compileCached(nc.pattern, 'xpath', nc.flags ?? '');
   if (Result.isFailure(compiled))
     return Option.some(`invalid pattern /${nc.pattern}/: ${compiled.failure}`);
-  const re = compiled.success;
-  re.lastIndex = 0;
-  return failure(!re.test(lex), () => `${n.key} does not match /${nc.pattern}/${nc.flags ?? ''}`);
+  return failure(
+    !Regex.test(compiled.success, lex),
+    () => `${n.key} does not match /${nc.pattern}/${nc.flags ?? ''}`,
+  );
 };
 
 /** The numeric range facets, in order: the first one the node violates. */

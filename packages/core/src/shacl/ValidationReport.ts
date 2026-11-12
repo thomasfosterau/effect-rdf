@@ -337,10 +337,10 @@ export const toDataset = (
  * @since 0.1.0
  * @category errors
  */
-export class ReportSyntaxError extends Schema.TaggedError<ReportSyntaxError>()(
-  'ReportSyntaxError',
-  { message: Schema.String },
-) {}
+export class ReportSyntaxError extends Schema.TaggedError<
+  ReportSyntaxError,
+  { readonly brand: unique symbol }
+>()('ReportSyntaxError', { message: Schema.String }) {}
 
 /**
  * Reads a validation report from RDF. The report node defaults to the (only)

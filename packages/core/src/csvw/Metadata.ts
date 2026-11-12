@@ -37,7 +37,10 @@ import * as Vocab from './internal/vocab.ts';
  * @since 0.1.0
  * @category errors
  */
-export class MetadataError extends Schema.TaggedError<MetadataError>()('MetadataError', {
+export class MetadataError extends Schema.TaggedError<
+  MetadataError,
+  { readonly brand: unique symbol }
+>()('MetadataError', {
   message: Schema.String,
   url: Schema.optional(Schema.String),
 }) {}
