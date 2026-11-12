@@ -42,10 +42,13 @@ import type { Bindings } from './Bindings.ts';
  * @since 0.1.0
  * @category errors
  */
-export class StoreError extends Schema.TaggedError<StoreError>()('StoreError', {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect()),
-}) {}
+export class StoreError extends Schema.TaggedError<StoreError, { readonly brand: unique symbol }>()(
+  'StoreError',
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 /**
  * A quad pattern: `undefined` positions match anything. `graph` may be the

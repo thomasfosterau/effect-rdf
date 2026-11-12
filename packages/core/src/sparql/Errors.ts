@@ -12,7 +12,10 @@ import * as Schema from 'effect/Schema';
  * @since 0.1.0
  * @category errors
  */
-export class EvaluationError extends Schema.TaggedError<EvaluationError>()('EvaluationError', {
+export class EvaluationError extends Schema.TaggedError<
+  EvaluationError,
+  { readonly brand: unique symbol }
+>()('EvaluationError', {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -24,7 +27,10 @@ export class EvaluationError extends Schema.TaggedError<EvaluationError>()('Eval
  * @since 0.1.0
  * @category errors
  */
-export class UpdateError extends Schema.TaggedError<UpdateError>()('UpdateError', {
+export class UpdateError extends Schema.TaggedError<
+  UpdateError,
+  { readonly brand: unique symbol }
+>()('UpdateError', {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

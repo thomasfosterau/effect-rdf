@@ -51,7 +51,10 @@ import * as Turtle from '../../turtle/Turtle.ts';
  * @since 0.1.0
  * @category errors
  */
-export class SparqlToolError extends Schema.TaggedError<SparqlToolError>()('SparqlToolError', {
+export class SparqlToolError extends Schema.TaggedError<
+  SparqlToolError,
+  { readonly brand: unique symbol }
+>()('SparqlToolError', {
   message: Schema.String,
 }) {}
 
