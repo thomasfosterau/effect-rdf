@@ -486,10 +486,7 @@ export const parseResult = (
  * @category parsing
  */
 export const parse = (dataset: Dataset.Dataset): Effect.Effect<ShapesGraph, ShapesGraphError> =>
-  Effect.suspend(() => {
-    const result = parseResult(dataset);
-    return Result.isSuccess(result) ? Effect.succeed(result.success) : Effect.fail(result.failure);
-  });
+  Effect.suspend(() => Effect.fromResult(parseResult(dataset)));
 
 const failShapes = (message: string, node?: Term.Term): never => {
   throw new ParseFailure(message, Option.fromUndefinedOr(node));
