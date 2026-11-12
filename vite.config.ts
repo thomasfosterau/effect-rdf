@@ -372,6 +372,9 @@ export default defineConfig({
           'vp run -r build',
           'vp run check:dist',
           'pnpm audit --audit-level high',
+          // Last, so the Node the gates ran on closes the log: CI's matrix
+          // (`lts`, `latest`) is checked against this line.
+          'node --version',
         ].join(' && '),
         cache: false,
       },
