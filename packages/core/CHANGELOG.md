@@ -1,5 +1,64 @@
 # @thomasfosterau/effect-rdf
 
+## 0.3.0
+
+### Minor Changes
+
+- [#157](https://github.com/thomasfosterau/effect-rdf/pull/157) [`9c1bbaf`](https://github.com/thomasfosterau/effect-rdf/commit/9c1bbaf7d5a8cfa9cca36401b843b830d00799c8) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - `/csvw`: discover metadata through `Link` headers and `/.well-known/csvm`, and expand URI templates with `@thomasfosterau/effect-ext`.
+  
+  - **New optional peer `@thomasfosterau/effect-ext` `^0.2.0`, needed by `/csvw` only** (imported through its `./UriTemplate` entry). A consumer of `/csvw` must now install it (`pnpm add @thomasfosterau/effect-ext`); no other subpath imports it. The private RFC 6570 implementation is gone: `aboutUrl`, `propertyUrl` and `valueUrl` templates expand through effect-ext, with the same results on every W3C case (a template that is not RFC 6570 syntax is still left as written).
+  - **Metadata discovery follows "Model for Tabular Data and Metadata on the Web" §5.** After the user's metadata, `Processor.fromTabular` takes a document named by the tabular data file's `Link` header (`rel="describedby"`, no `type` or `application/csvm+json`, `application/ld+json` or `application/json`), then the locations in the site's `/.well-known/csvm` (URI templates, one per line, expanded with the file's `url`) or, when the site has none, the defaults `{+url}-metadata.json` and `csv-metadata.json`, then the embedded metadata. A located document that does not describe the file is ignored with a warning. `/csvw` still does no network I/O of its own.
+  - **Breaking: the `Loader` service has a new member**, `linkHeader: (url) => Effect<Option<string>, LoadError>`, the `Link` header value of the response that served a table (`None` when it had none). `/.well-known/csvm` is read through the existing `document(url)` at `<origin>/.well-known/csvm`. Custom loaders must add `linkHeader`; `makeLoader` and `layerSources` take a third argument, `linkHeaders`, a record from table URL to `Link` header value (existing calls keep working). New export `Processor.linkedLocations`.
+  - **Conformance:** the six HTTP tests of each W3C manifest (`test014`, `test016`, `test120`, `test122`, `test259`, `test260`) now run and pass: validation 282 / 282 (was 276 / 276 run, 6 skipped), CSV2RDF 270 / 270 (was 264 / 264) and CSV2JSON 270 / 270 (was 264 / 264), none skipped.
+
+- [#159](https://github.com/thomasfosterau/effect-rdf/pull/159) [`296f14f`](https://github.com/thomasfosterau/effect-rdf/commit/296f14fe7ac20377eca93fe4abe902a144e8aed7) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Public maps and sets are Effect's immutable `HashMap` / `HashSet` instead of native `ReadonlyMap` / `ReadonlySet` (the `effect/avoid-native-object-helpers` lint rule is now an error).
+  
+  **Breaking.** Changed public types:
+  
+  | Module                      | Field                                                    | Was                                   | Now                               |
+  | --------------------------- | -------------------------------------------------------- | ------------------------------------- | --------------------------------- |
+  | `PrefixMap`                 | `PrefixMap.prefixes`                                     | `ReadonlyMap<string, string>`         | `HashMap<string, string>`         |
+  | `Isomorphism`               | `bijection` result                                       | `Option<ReadonlyMap<string, string>>` | `Option<HashMap<string, string>>` |
+  | `Xsd`                       | `numericDatatypes`                                       | `ReadonlySet<string>`                 | `HashSet<string>`                 |
+  | `/shex` `Structure`         | `SchemaIndex.shapes`, `.tripleExprs`, `.descendants`     | `ReadonlyMap<string, …>`              | `HashMap<string, …>`              |
+  | `/shacl` `Shapes`           | `ShapesGraph.index`                                      | `ReadonlyMap<string, Shape>`          | `HashMap<string, Shape>`          |
+  | `/shacl` `Sparql`           | `Violation.bindings`                                     | `ReadonlyMap<string, GroundTerm>`     | `HashMap<string, GroundTerm>`     |
+  | `/rdfxml` `Xml`             | `Element.inScopeNamespaces`                              | `ReadonlyMap<string, string>`         | `HashMap<string, string>`         |
+  | `/rdfxml` `Xml`             | `DocumentType.entities`                                  | `ReadonlyMap<string, string>`         | `HashMap<string, string>`         |
+  | `/sparql` `Algebra`         | `variables`, `certainVariables`, `expressionVariables`   | `ReadonlySet<string>`                 | `HashSet<string>`                 |
+  | `/sparql/shacl` `Query`     | `optionalPrebound`                                       | `ReadonlySet<string>`                 | `HashSet<string>`                 |
+  | `/sparql/sql` `Translation` | `CompiledQuery.locals`                                   | `ReadonlyMap<number, GroundTerm>`     | `HashMap<number, GroundTerm>`     |
+  | `/sparql/sql` `Translation` | `CompiledQuery.localClasses`, `isRisky`'s `storeClasses` | `ReadonlySet<number>`                 | `HashSet<number>`                 |
+  
+  Migration: `map.get(k)` becomes `HashMap.get(map, k)` (an `Option`), `map.has(k)` / `set.has(a)` become `HashMap.has(map, k)` / `HashSet.has(set, a)`, `map.size` becomes `HashMap.size(map)`; both are still `Iterable`, so `[...map]` and `for … of` work.
+  
+  A `HashMap` has no insertion order. Writers that declare prefixes (Turtle, TriG, N3, RDF/XML, ShExC, XMP, JSON-LD contexts) now emit them sorted by prefix, and `PrefixMap.compact` breaks a tie between two prefixes for equally long namespaces by choosing the smaller prefix. `PrefixMap.entries` returns the entries sorted by prefix.
+
+- [#153](https://github.com/thomasfosterau/effect-rdf/pull/153) [`4564569`](https://github.com/thomasfosterau/effect-rdf/commit/4564569c96f986a43f5acbd41b91f04dd3b42efe) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Patterns that arrive in the data are now matched in bounded time (a ReDoS fix). SPARQL `REGEX` / `REPLACE`, SHACL `sh:pattern`, ShEx `pattern`, CSVW string `format` and the N3 `string:matches` / `notMatches` / `replace` / `scrape` built-ins no longer compile their pattern with `new RegExp`: effect-rdf parses it and runs it on its own matcher, so `FILTER REGEX(?s, "^(a+)+$")` over a long literal takes time linear in the literal instead of pinning the thread, and the SPARQL server's time limit holds.
+  
+  - A pattern without back-references or lookahead costs at most (compiled size × input length) steps. One with a back-reference or lookahead runs under a step budget; running out is an expression error in SPARQL and a non-match in SHACL, ShEx, CSVW and N3.
+  - A pattern that compiles to more than 10,000 instructions (counted repetition is expanded: `(a{100}){100}`), nests groups more than 200 deep, or uses lookbehind is rejected as invalid.
+  - SPARQL and SHACL patterns now have the XPath / XML Schema meaning the specifications give them, as ShEx patterns already had: `\d`, `\w` and `\s` are the Unicode classes, `.` excludes only `\n` and `\r`, and `\i`, `\c`, class subtraction (`[a-z-[aeiou]]`) and `\p{IsGreek}` work. `\b`, `\B`, lookahead and the JavaScript character escapes are still accepted.
+  - In a repeated group, an inner group keeps the text it last matched (as XPath has it) where JavaScript reset it on each iteration; this shows only in `$n` references of CSVW-style ECMAScript patterns and the N3 built-ins.
+  
+  **Breaking:** `/shacl`'s `Shapes.Constraint` member `Pattern` carries `test: (value: string) => boolean` in place of `regex: RegExp`, and `/sparql`'s `Functions.compileRegex` is no longer exported.
+
+- [#161](https://github.com/thomasfosterau/effect-rdf/pull/161) [`16f3f83`](https://github.com/thomasfosterau/effect-rdf/commit/16f3f836376941d86d5bcfcbe5eefb97d7d49878) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Tagged error classes are now nominally branded (`Schema.TaggedError<Self, { readonly brand: unique symbol }>`): a structurally identical object is no longer assignable to an error class type such as `RdfParseError`, `ShExError` or `SparqlError`.
+  
+  Integer-valued error fields now use `Schema.Int` and reject `NaN`, `Infinity` and fractional values when decoded or constructed: `line` and `column` of `RdfParseError`, `XmlParseError` (`offset` too), `SparqlParseError` and `ResultsParseError`, and `status` of `HttpStatusError` and `ProtocolError`. ShEx JSON `mininclusive`, `minexclusive`, `maxinclusive` and `maxexclusive`, and the `TermCodec.integer` codec's schema, now use `Schema.Finite` and reject `NaN` and the infinities. `TermCodec.number`, `TermCodec.value` and the `xsd:double` / `xsd:float` codec keep `Schema.Number` because `NaN` and `INF` are valid XSD values.
+
+- [#163](https://github.com/thomasfosterau/effect-rdf/pull/163) [`2724268`](https://github.com/thomasfosterau/effect-rdf/commit/2724268f6217642252323a75d65aa0a68e44c835) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Remove type assertions by making the types true.
+  
+  - `Sparql.Functions.BuiltInArgs`: `ReadonlyArray<GroundTerm> & { 0; 1; 2: GroundTerm }` becomes `ReadonlyArray<GroundTerm>`. Slots beyond a call's arity were never present; a custom `BuiltIn` now reads `GroundTerm | undefined` for each position.
+  - `RdfJs`: `RdfJsQuad` positions are now the ones RDF allows (`subject: RdfJsSubject`, `predicate: RdfJsNamedNode`, `object: RdfJsObject`, `graph: RdfJsGraph`, were `RdfJsTerm`), so `fromQuad` no longer asserts them; a variable can no longer be typed into a quad. New exported types `RdfJsNamedNode`, `RdfJsBlankNode`, `RdfJsLiteral`, `RdfJsVariable`, `RdfJsDefaultGraph`, `RdfJsSubject`, `RdfJsObject`, `RdfJsGraph`.
+  - `Term.toQuad`: a pair of overloads (no graph gives `Quad<S, P, O, DefaultGraph>`, a graph `G` gives `Quad<S, P, O, G>`) replaces the single generic signature `(self, graph?: G) => Quad<S, P, O, G>`.
+
+### Patch Changes
+
+- [#158](https://github.com/thomasfosterau/effect-rdf/pull/158) [`3191f0f`](https://github.com/thomasfosterau/effect-rdf/commit/3191f0fe9a30ad44bb171454456f3e706cd578d3) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Five positional parameters were renamed so they no longer shadow another export of their module (`Ast.negated`, `Ast.exists`, `QueryBuilder.bound`, n3 `Model.document` and `Model.hasStatement`); no call site changes.
+
+- [#150](https://github.com/thomasfosterau/effect-rdf/pull/150) [`c83f38b`](https://github.com/thomasfosterau/effect-rdf/commit/c83f38bfa2dde8fd3c8015c58a516290badf8ae2) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Widen the `@thomasfosterau/effect-parse` peer to `^0.4.0 || ^0.5.0` (was `^0.4.0`, which on 0.x refuses 0.5). The grammars run unchanged on both lines: every unit and conformance test passes against effect-parse 0.4.1 and 0.5.0. A consumer already on effect-parse 0.5 (effect-bib, effect-document) no longer gets an unmet peer or a second copy with its own `Parser` / `Token` identities. `@thomasfosterau/effect-xml` 0.1.0 still declares effect-parse `^0.4.1` itself; its next release widens the same way.
+
 ## 0.2.0
 
 ### Minor Changes
