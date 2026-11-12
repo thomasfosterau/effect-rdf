@@ -479,10 +479,7 @@ const makeEngine = (
       deactivated: false,
     }));
 
-  const unsupported = (
-    shape: Shapes.Shape,
-    feature: string,
-  ): Effect.Effect<Results, EngineError> =>
+  const unsupported = (shape: Shapes.Shape, feature: string): Effect.Effect<Results, EngineError> =>
     options.sparql === 'ignore'
       ? Effect.succeed([])
       : Effect.fail(
