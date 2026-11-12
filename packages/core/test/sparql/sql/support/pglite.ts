@@ -31,7 +31,16 @@ export const layer: Layer.Layer<SqlClient.SqlClient, SqlError> = Layer.effect(
           }),
       }),
       // A failure to close is a defect: there is nothing left to recover.
-      (d) => Effect.orDie(Effect.tryPromise(() => d.close())),
+      (d) =>
+        Effect.orDie(
+          Effect.tryPromise({
+            try: () => d.close(),
+            catch: (cause) =>
+              new SqlError({
+                reason: new UnknownError({ cause, message: 'PGlite failed to close' }),
+              }),
+          }),
+        ),
     );
     // PGlite takes a mutable parameter array.
     const query = (sql: string, params: ReadonlyArray<unknown>, rowMode: 'array' | 'object') =>

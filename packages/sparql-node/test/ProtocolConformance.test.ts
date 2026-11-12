@@ -216,17 +216,15 @@ const fetchDescription = (makeClient: MakeClient, accept?: string) =>
 servers.forEach(([server, makeClient]) => {
   describe.skipIf(!exists)(`SPARQL 1.1 Service Description (${server})`, () => {
     it.effect('returns-rdf: GET on endpoint returns RDF', () =>
-      Effect.gen(function* () {
-        yield* Effect.forEach(
-          [undefined, 'text/turtle', 'application/rdf+xml', 'application/ld+json'],
-          Effect.fnUntraced(function* (accept) {
-            const { response, dataset } = yield* fetchDescription(makeClient, accept);
-            expect(response.status).toBe(200);
-            expect(dataset.size).toBeGreaterThan(0);
-          }),
-          { concurrency: 1, discard: true },
-        );
-      }),
+      Effect.forEach(
+        [undefined, 'text/turtle', 'application/rdf+xml', 'application/ld+json'],
+        Effect.fnUntraced(function* (accept) {
+          const { response, dataset } = yield* fetchDescription(makeClient, accept);
+          expect(response.status).toBe(200);
+          expect(dataset.size).toBeGreaterThan(0);
+        }),
+        { concurrency: 1, discard: true },
+      ),
     );
 
     it.effect(

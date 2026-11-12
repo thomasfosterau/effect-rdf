@@ -9,7 +9,10 @@
  * `/rdfxml`) and `/sparql` (SPARQL XML results and the RDF/XML codec) with
  * the subpaths built on it. effect-xml itself requires effect-parse, so
  * `/rdfxml` and `/xmp` need both installed though neither imports
- * effect-parse. The root barrel also re-exports no nested subpath.
+ * effect-parse. `@thomasfosterau/effect-ext`, the third optional peer, is
+ * reached only from `/csvw` (URI templates and metadata discovery), which
+ * still reaches neither effect-parse nor effect-xml. The root barrel also
+ * re-exports no nested subpath.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -55,6 +58,8 @@ const reaches = (entry: string, peer: string) =>
 const reachesParse = (entry: string) => reaches(entry, '@thomasfosterau/effect-parse');
 const reachesXml = (entry: string) => reaches(entry, '@thomasfosterau/effect-xml');
 
+const reachesExt = (entry: string) => reaches(entry, '@thomasfosterau/effect-ext');
+
 const flatModules = fs.readdirSync(src).filter((name) => name.endsWith('.ts'));
 const subpathModules = (subpath: string) =>
   fs
@@ -84,6 +89,13 @@ const xmlFree = [
   ...subpaths.filter((subpath) => !readingXml.includes(subpath)).map((s) => `${s}/index.ts`),
 ];
 
+// Every entry but `/csvw`'s modules.
+const extFree = [
+  ...flatModules,
+  ...['rdfjson', 'shacl', 'sparql/sql'].flatMap(subpathModules),
+  ...subpaths.map((subpath) => `${subpath}/index.ts`),
+];
+
 describe('module graph', () => {
   it.each(parseFree)('%s never imports @thomasfosterau/effect-parse', (entry) => {
     expect(reachesParse(entry)).toBe(false);
@@ -107,6 +119,24 @@ describe('module graph', () => {
 
   it.each(readingXml)('/%s reaches @thomasfosterau/effect-xml', (subpath) => {
     expect(reachesXml(`${subpath}/index.ts`)).toBe(true);
+  });
+
+  it.each(extFree)('%s never imports @thomasfosterau/effect-ext', (entry) => {
+    expect(reachesExt(entry)).toBe(false);
+  });
+
+  // `/csvw` reads URI templates, `Link` headers and well-known URLs through
+  // effect-ext's `./UriTemplate` entry only, never its root barrel.
+  it('/csvw reaches @thomasfosterau/effect-ext through ./UriTemplate only', () => {
+    const { bare } = walk('csvw/index.ts');
+    expect(bare.filter((spec) => spec.startsWith('@thomasfosterau/effect-ext'))).toEqual([
+      '@thomasfosterau/effect-ext/UriTemplate',
+    ]);
+  });
+
+  it('/csvw reaches neither effect-parse nor effect-xml', () => {
+    expect(reachesParse('csvw/index.ts')).toBe(false);
+    expect(reachesXml('csvw/index.ts')).toBe(false);
   });
 
   it('the root entry re-exports no nested subpath', () => {

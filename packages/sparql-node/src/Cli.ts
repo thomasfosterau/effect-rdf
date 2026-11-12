@@ -49,9 +49,12 @@ import * as NodeSparqlServer from './NodeSparqlServer.ts';
  * @since 0.1.0
  * @category errors
  */
-export class CliError extends Schema.TaggedError<CliError>()('CliError', {
-  message: Schema.String,
-}) {}
+export class CliError extends Schema.TaggedError<CliError, { readonly brand: unique symbol }>()(
+  'CliError',
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * The prefix of the environment variables that back the flags:
@@ -167,7 +170,7 @@ export type Flags = Command.Command.Config.Infer<typeof config>;
 
 const nonNegative = (name: string, value: Option.Option<number>) =>
   Option.match(value, {
-    onNone: () => Effect.succeed(undefined),
+    onNone: () => Effect.undefined,
     onSome: (n) =>
       Number.isInteger(n) && n >= 0
         ? Effect.succeed(n)
@@ -176,7 +179,7 @@ const nonNegative = (name: string, value: Option.Option<number>) =>
 
 const endpointPath = (name: string, value: Option.Option<string>) =>
   Option.match(value, {
-    onNone: () => Effect.succeed(undefined),
+    onNone: () => Effect.undefined,
     onSome: (path) =>
       Schema.is(EndpointPath)(path)
         ? Effect.succeed(path)

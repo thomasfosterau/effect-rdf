@@ -143,15 +143,15 @@ export const fromResultSet = (set: ResultSet): SelectResult => ({
  * @since 0.1.0
  * @category errors
  */
-export class ResultsParseError extends Schema.TaggedError<ResultsParseError>()(
-  'ResultsParseError',
-  {
-    format: Schema.String,
-    message: Schema.String,
-    line: Schema.optional(Schema.Number),
-    column: Schema.optional(Schema.Number),
-  },
-) {}
+export class ResultsParseError extends Schema.TaggedError<
+  ResultsParseError,
+  { readonly brand: unique symbol }
+>()('ResultsParseError', {
+  format: Schema.String,
+  message: Schema.String,
+  line: Schema.optional(Schema.Int),
+  column: Schema.optional(Schema.Int),
+}) {}
 
 /** The last line of a rendered `ParseError`: what was expected and found. */
 const parseErrorSummary = (error: ParseError.ParseError): string =>
@@ -257,7 +257,7 @@ export const JsonResultsSchema = Schema.Struct({
  * @since 0.1.0
  * @category json
  */
-export type JsonResults = typeof JsonResultsSchema.Type;
+export type JsonResults = JsonResultsSchema;
 
 /**
  * The type `JsonResultsSchema` decodes to (the same as `JsonResults`).

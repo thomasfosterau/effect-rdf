@@ -47,7 +47,10 @@ import { log } from './Vocab.ts';
  * @since 0.1.0
  * @category errors
  */
-export class ReasonerError extends Schema.TaggedError<ReasonerError>()('N3ReasonerError', {
+export class ReasonerError extends Schema.TaggedError<
+  ReasonerError,
+  { readonly brand: unique symbol }
+>()('N3ReasonerError', {
   message: Schema.String,
 }) {}
 

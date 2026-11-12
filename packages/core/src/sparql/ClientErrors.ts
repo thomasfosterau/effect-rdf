@@ -26,10 +26,13 @@ import * as Schema from 'effect/Schema';
  * @since 0.1.0
  * @category errors
  */
-export class HttpStatusError extends Schema.TaggedError<HttpStatusError>()('HttpStatusError', {
+export class HttpStatusError extends Schema.TaggedError<
+  HttpStatusError,
+  { readonly brand: unique symbol }
+>()('HttpStatusError', {
   method: Schema.String,
   url: Schema.String,
-  status: Schema.Number,
+  status: Schema.Int,
   /** The response body (truncated to 64 KiB). */
   body: Schema.String,
 }) {
@@ -45,14 +48,14 @@ export class HttpStatusError extends Schema.TaggedError<HttpStatusError>()('Http
  * @since 0.1.0
  * @category errors
  */
-export class MalformedResponseError extends Schema.TaggedError<MalformedResponseError>()(
-  'MalformedResponseError',
-  {
-    message: Schema.String,
-    contentType: Schema.optional(Schema.String),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class MalformedResponseError extends Schema.TaggedError<
+  MalformedResponseError,
+  { readonly brand: unique symbol }
+>()('MalformedResponseError', {
+  message: Schema.String,
+  contentType: Schema.optional(Schema.String),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /**
  * The response has a media type the client cannot read.
@@ -60,13 +63,13 @@ export class MalformedResponseError extends Schema.TaggedError<MalformedResponse
  * @since 0.1.0
  * @category errors
  */
-export class UnsupportedMediaTypeError extends Schema.TaggedError<UnsupportedMediaTypeError>()(
-  'UnsupportedMediaTypeError',
-  {
-    contentType: Schema.String,
-    expected: Schema.Array(Schema.String),
-  },
-) {
+export class UnsupportedMediaTypeError extends Schema.TaggedError<
+  UnsupportedMediaTypeError,
+  { readonly brand: unique symbol }
+>()('UnsupportedMediaTypeError', {
+  contentType: Schema.String,
+  expected: Schema.Array(Schema.String),
+}) {
   override get message(): string {
     return `Unsupported response media type '${this.contentType}' (expected one of ${this.expected.join(', ')})`;
   }
@@ -78,7 +81,10 @@ export class UnsupportedMediaTypeError extends Schema.TaggedError<UnsupportedMed
  * @since 0.1.0
  * @category errors
  */
-export class TransportError extends Schema.TaggedError<TransportError>()('TransportError', {
+export class TransportError extends Schema.TaggedError<
+  TransportError,
+  { readonly brand: unique symbol }
+>()('TransportError', {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -89,7 +95,10 @@ export class TransportError extends Schema.TaggedError<TransportError>()('Transp
  * @since 0.1.0
  * @category errors
  */
-export class TimeoutError extends Schema.TaggedError<TimeoutError>()('TimeoutError', {
+export class TimeoutError extends Schema.TaggedError<
+  TimeoutError,
+  { readonly brand: unique symbol }
+>()('TimeoutError', {
   message: Schema.String,
 }) {}
 
@@ -100,12 +109,12 @@ export class TimeoutError extends Schema.TaggedError<TimeoutError>()('TimeoutErr
  * @since 0.1.0
  * @category errors
  */
-export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
-  'ConfigurationError',
-  {
-    message: Schema.String,
-  },
-) {}
+export class ConfigurationError extends Schema.TaggedError<
+  ConfigurationError,
+  { readonly brand: unique symbol }
+>()('ConfigurationError', {
+  message: Schema.String,
+}) {}
 
 /**
  * Any error of the SPARQL client.

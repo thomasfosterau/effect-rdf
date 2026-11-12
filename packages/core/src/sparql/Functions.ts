@@ -21,6 +21,7 @@ import * as Xsd from '../Xsd.ts';
 import type * as Ast from './Ast.ts';
 import type { Bindings } from './Bindings.ts';
 import * as Hash from './internal/hash.ts';
+import * as Regex from '../internal/regex.ts';
 import * as StringMap from './internal/stringMap.ts';
 import * as V from './internal/values.ts';
 
@@ -31,7 +32,10 @@ import * as V from './internal/values.ts';
  * @since 0.1.0
  * @category errors
  */
-export class ExpressionError extends Schema.TaggedError<ExpressionError>()('ExpressionError', {
+export class ExpressionError extends Schema.TaggedError<
+  ExpressionError,
+  { readonly brand: unique symbol }
+>()('ExpressionError', {
   message: Schema.String,
 }) {}
 
@@ -135,33 +139,17 @@ const xpathRound = (x: number): number => {
   return r === 0 && x < 0 ? -0 : r;
 };
 
-/** Compiled regular expressions by flags and pattern (read on every `REGEX` / `REPLACE` call). */
-const regexCache = StringMap.empty<RegExp>();
-
-/** Compiles an XPath regular expression with XPath flags to a JS RegExp. */
-export const compileRegex = (pattern: string, flags: string, global = false): RegExp => {
-  const key = `${global ? 'g' : ''}${flags}/${pattern}`;
-  const cached = regexCache.get(key);
-  if (cached !== undefined) return cached;
-  let source = pattern;
-  let jsFlags = global ? 'g' : '';
-  Array.from(flags).forEach((flag) => {
-    if (flag === 'i' || flag === 's' || flag === 'm') {
-      if (!jsFlags.includes(flag)) jsFlags += flag;
-    } else if (flag === 'x') source = source.replace(/[\t\n\r ]/g, '');
-    else if (flag === 'q') source = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    else V.fail(`Invalid regex flag '${flag}'`);
-  });
-  // Unicode mode first; patterns it rejects may still compile without it.
-  const compiled = Result.try(() => new RegExp(source, `${jsFlags}u`)).pipe(
-    Result.orElse(() => Result.try(() => new RegExp(source, jsFlags))),
+/**
+ * Compiles an XPath regular expression with XPath flags. Matching it takes
+ * time linear in the string (`internal/regex.ts`), whatever the pattern.
+ */
+const compileRegex = (pattern: string, flags: string): Regex.Regex =>
+  Result.getOrElse(Regex.compileCached(pattern, 'xpath', flags), (reason) =>
+    V.fail(`Invalid regular expression: ${reason}`),
   );
-  if (Result.isFailure(compiled)) return V.fail('Invalid regular expression');
-  const re = compiled.success;
-  if (regexCache.size > 1000) regexCache.clear();
-  regexCache.set(key, re);
-  return re;
-};
+
+/** A search that used up its step budget (a pattern with back-references or lookahead) is an error. */
+const exhausted = (): never => V.fail('Regular expression exceeded its step budget');
 
 /** The flags argument of `REGEX` / `REPLACE`, absent beyond the arguments given. */
 const regexFlags = (args: BuiltInArgs, i: number): string => {
@@ -354,16 +342,15 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
   REPLACE: (args) => {
     const [s, pattern, replacement] = args;
     const str = stringArg(s);
-    const re = compileRegex(simpleArg(pattern).value, regexFlags(args, 3), true);
-    if (re.test('')) {
-      re.lastIndex = 0;
-      return V.fail('REPLACE pattern matches the empty string');
-    }
-    re.lastIndex = 0;
+    const re = compileRegex(simpleArg(pattern).value, regexFlags(args, 3));
+    if (Regex.test(re, '')) return V.fail('REPLACE pattern matches the empty string');
     const repl = simpleArg(replacement).value.replace(/\\(\$|\\)|\$/g, (m, esc) =>
       esc === '$' ? '$$' : esc === '\\' ? '\\' : m,
     );
-    return V.stringLike(str.value.replace(re, repl), str);
+    const replaced = Regex.replaceAll(re, str.value, (captures) =>
+      Regex.expand(re, repl, str.value, captures),
+    );
+    return V.stringLike(Option.getOrElse(replaced, exhausted), str);
   },
   UCASE: ([a]) => {
     const s = stringArg(a);
@@ -461,7 +448,8 @@ export const builtIns: Partial<Record<Ast.BuiltInName, BuiltIn>> = {
     const [s, pattern] = args;
     const str = stringArg(s);
     const re = compileRegex(simpleArg(pattern).value, regexFlags(args, 2));
-    return V.bool(re.test(str.value));
+    const outcome = Regex.search(re, str.value);
+    return outcome === Regex.EXHAUSTED ? exhausted() : V.bool(outcome === Regex.MATCHED);
   },
   ISTRIPLE: ([a]) => V.bool(Term.isTriple(a)),
   TRIPLE: ([s, p, o]) => {
