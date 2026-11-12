@@ -5,7 +5,8 @@ name: CI
 # conformance suites, the tests, the build, the dist import guard and the
 # audit, in that order), so a local `vp run ci` and this workflow are the same
 # thing. It runs on the current LTS and the current release line of Node.js;
-# the final `ci` job is the one stable check name for required-check rules.
+# there is no aggregate job, so a ruleset requires each matrix entry by name:
+# `ci (node lts)` and `ci (node latest)`.
 # Nothing here needs a database, a stage or a credential (the PostgreSQL suite
 # runs on PGlite in-process).
 
@@ -23,7 +24,7 @@ concurrency:
 permissions: {}
 
 jobs:
-  test:
+  ci:
     name: ci (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -64,18 +65,3 @@ jobs:
             vp-task-v1-${{ runner.os }}-${{ matrix.node }}-
       - name: CI
         run: vp run ci
-
-  # The one check required-check rules name: green only when every matrix
-  # entry is.
-  ci:
-    name: ci
-    needs: [test]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
-    env:
-      RESULT: ${{ needs.test.result }}
-    steps:
-      - name: Require every matrix entry to pass
-        run: test "$RESULT" = "success"
