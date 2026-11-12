@@ -54,14 +54,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Only to run the CLI on the runner; the container installs its own.
-      - name: Setup pnpm
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Only to run the CLI on the runner (`pnpm dlx`); the container installs
+      # its own toolchain, so nothing is installed here.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          node-version: '*'
-          check-latest: true
+          node-version: lts
+          run-install: false
       # `up` fails when the image, a feature or `postCreateCommand` fails.
       - name: Build and start the container
         run: |
