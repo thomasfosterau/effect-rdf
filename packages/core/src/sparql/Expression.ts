@@ -229,9 +229,7 @@ const builtIn = (
   const f = Functions.builtIns[op];
   if (f === undefined) return V.fail(`Unsupported operator ${op}`);
   const values = e.args.map((a) => evaluateUnsafe(a, solution, ctx));
-  // SAFETY: `BuiltInArgs` types the first three slots as present; each built-in checks its own
-  // arity before reading them.
-  return f(values as unknown as Functions.BuiltInArgs, ctx, solution);
+  return f(values, ctx, solution);
 };
 
 /**

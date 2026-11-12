@@ -65,23 +65,6 @@ export default defineConfig({
       'eslint/no-underscore-dangle': ['error', { allow: ['_tag'] }],
       // Every export's doc comment carries `@since` and `@category` (AGENTS.md).
       'jsdoc/check-tag-names': ['error', { definedTags: ['since', 'category'] }],
-      // ---- oxlint categories: allowances (effect-rdf#42) --------------
-      // `suspicious` arrived with the Vite+ 1.4 toolchain move. This one sits
-      // at `warn` with its count at adoption, too many sites in the parsers
-      // and evaluators to rewrite safely in that change: short grammar-local
-      // names (`c`, `p`, `op`, `e`) reused in nested combinators. A new site
-      // is a defect, not headroom.
-      'eslint/no-shadow': 'warn', // 5
-      // ---- type-aware rules (tsgolint): allowances (effect-rdf#42) -------
-      // Type-aware linting arrived after the Vite+ 1.4 move. The safe,
-      // autofixable findings (unnecessary assertions, type arguments and
-      // template expressions) are fixed; these sit at `warn` with their count
-      // at adoption. `no-unsafe-type-assertion` fires on the `SAFETY:`-commented
-      // narrowing casts the parsers and evaluators rely on.
-      'typescript/no-unsafe-type-assertion': 'warn', // 14
-      // `casting-awareness` is an awareness prompt, not a defect rule — it
-      // fires on every `as`. Stays visible as a warning.
-      'effect/casting-awareness': 'warn',
       // Hard-codes abbreviations (`Arr`, `P`, `R`, …) with no options, so it is
       // unsatisfiable under the full-name convention (`import * as Option from
       // "effect/Option"`) this family shares with its consumers.
@@ -290,21 +273,28 @@ export default defineConfig({
         files: ['packages/core/src/sparql/internal/parser.ts'],
         rules: { 'effect/avoid-try-catch': 'off' },
       },
-      // The evaluator hands a built-in its evaluated arguments as the public
-      // `Functions.BuiltInArgs` (a tuple-like array whose first three slots
-      // are typed present); each built-in checks its own arity, so the cast
-      // from the plain array cannot be a single assertion without changing
-      // that public type.
+      // Three assertions TypeScript cannot check, each on a type whose keys
+      // are correlated one by one with a tuple or union the value was built
+      // from by iteration: `Namespace.vocabulary` (`{ [K in Terms]:
+      // NamedNode<`${Base}${K}`> }`), `QueryBuilder.vars` (`{ [K in
+      // N[number]]: Variable<K> }`) and `QueryBuilder.execute`'s rows (the
+      // projection lives only in the builder's type parameters; checking a
+      // row against it at run time is the per-row validation AGENTS.md keeps
+      // out of the evaluator). And `Term.tripleFromJson`: `TermJson.Triple`
+      // types its positions as any ground term on purpose, so an ill-formed
+      // triple decodes and `isWellFormed` (or the codec) rejects it; the two
+      // assertions there are that documented contract. Every other `as` in
+      // the workspace is an error.
       {
-        files: ['packages/core/src/sparql/Expression.ts'],
-        rules: { 'effect/avoid-any': 'off', 'effect/no-chained-type-assertions': 'off' },
-      },
-      // `Builder.patch` re-asserts `QueryOf<K>` after a spread. tsgolint calls
-      // the assertion unnecessary, but native `tsc` (the type gate) rejects
-      // the code without it (TS2322 / TS2345): the two checkers disagree here.
-      {
-        files: ['packages/core/src/sparql/QueryBuilder.ts'],
-        rules: { 'typescript/no-unnecessary-type-assertion': 'off' },
+        files: [
+          'packages/core/src/Namespace.ts',
+          'packages/core/src/Term.ts',
+          'packages/core/src/sparql/QueryBuilder.ts',
+        ],
+        rules: {
+          'typescript/no-unsafe-type-assertion': 'off',
+          'effect/casting-awareness': 'off',
+        },
       },
       {
         files: ['**/*.test.ts'],

@@ -553,17 +553,16 @@ export function quad(
  * @since 0.1.0
  * @category constructors
  */
-export const toQuad = <
-  S extends Subject,
-  P extends Predicate,
-  O extends Object,
-  G extends Graph = DefaultGraph,
->(
+export function toQuad<S extends Subject, P extends Predicate, O extends Object>(
   self: Triple<S, P, O>,
-  graph?: G,
-): Quad<S, P, O, G> =>
-  // SAFETY: `G` defaults to the default graph type when no graph is given.
-  new Quad(self.subject, self.predicate, self.object, (graph ?? defaultGraph) as G);
+): Quad<S, P, O, DefaultGraph>;
+export function toQuad<S extends Subject, P extends Predicate, O extends Object, G extends Graph>(
+  self: Triple<S, P, O>,
+  graph: G,
+): Quad<S, P, O, G>;
+export function toQuad(self: Triple, graph: Graph = defaultGraph): Quad {
+  return new Quad(self.subject, self.predicate, self.object, graph);
+}
 
 // -----------------------------------------------------------------------------
 // Guards
