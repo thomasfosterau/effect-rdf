@@ -356,6 +356,28 @@ export default defineConfig({
         dependsOn: packages.map((name) => `${name}#build`),
         cache: false,
       },
+      // The whole pipeline, as one task: what `.github/workflows/ci.yml` runs
+      // and what to run before pushing. A sequence, not a graph: each gate
+      // needs the one before it to have finished (the type gates and the
+      // tests are held to two packages at a time, since each is a large
+      // native `tsc` program or a suite holding W3C manifests in memory, and
+      // the tests need the conformance suites fetched), and the first failure
+      // stops it.
+      ci: {
+        command: [
+          'vp check',
+          'vp run --concurrency-limit 2 check',
+          './scripts/fetch-test-suites.sh',
+          'vp run --concurrency-limit 2 -r test:unit',
+          'vp run -r build',
+          'vp run check:dist',
+          'pnpm audit --audit-level high',
+          // Last, so the Node the gates ran on closes the log: CI's matrix
+          // (`lts`, `latest`) is checked against this line.
+          'node --version',
+        ].join(' && '),
+        cache: false,
+      },
       // Every package's suite under one Istanbul coverage map
       // (`coverage/coverage-final.json`), which `fallow audit` reads for exact
       // per-function CRAP scores (`health.coverage` in .fallowrc.json).
