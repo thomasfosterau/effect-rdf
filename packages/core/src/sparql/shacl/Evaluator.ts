@@ -407,8 +407,8 @@ export const make = (
       const shapes = input.shapesGraph.dataset;
       const target = input.target;
       if (!isNode(target)) {
-        return yield* Effect.fail(
-          evaluationError(`sh:target of ${input.shape.id.key} must be an IRI or blank node`),
+        return yield* evaluationError(
+          `sh:target of ${input.shape.id.key} must be an IRI or blank node`,
         );
       }
       const context = yield* contextFor(input.dataGraph, shapes);
@@ -428,10 +428,8 @@ export const make = (
         .filter(isNode)
         .find((t) => Arr.isReadonlyArrayNonEmpty(Dataset.objectsOf(shapes, t, sh.select)));
       if (type === undefined) {
-        return yield* Effect.fail(
-          evaluationError(
-            `unsupported custom target ${target.key} of ${input.shape.id.key} (neither a sh:SPARQLTarget nor an instance of a sh:SPARQLTargetType)`,
-          ),
+        return yield* evaluationError(
+          `unsupported custom target ${target.key} of ${input.shape.id.key} (neither a sh:SPARQLTarget nor an instance of a sh:SPARQLTargetType)`,
         );
       }
       const declared = yield* parametersOf(shapes, type);
@@ -448,10 +446,8 @@ export const make = (
       );
       if (problem !== undefined) {
         if (!invalid(problem)) return [];
-        return yield* Effect.fail(
-          evaluationError(
-            `target ${target.key} needs at most one non-blank value for ${problem.parameter.path.key}`,
-          ),
+        return yield* evaluationError(
+          `target ${target.key} needs at most one non-blank value for ${problem.parameter.path.key}`,
         );
       }
       const bound = supplied.flatMap(({ parameter, values }) =>
