@@ -43,7 +43,7 @@ catalog:
   # failing `pnpm install` itself in the `prepare` script. Read the
   # `components` table in node_modules/@effect/tsgo/dist/effect-tsgo.cjs
   # before bumping any of the three.
-  '@effect/tsgo': 0.67.5
+  '@effect/tsgo': 0.69.0
   # Must match `vitest` below: its peer is `vitest: >=5.0.0 <6.0.0`, and its
   # `effect` peer follows the singleton.
   '@effect/vitest': 4.1.4
@@ -98,7 +98,7 @@ catalog:
   # bump: move it by hand with `vite-plus`), and `vitest` must match
   # vite-plus's exact pin (1.5.1 → 5.1.0) because the `vitest@*` override
   # forces every resolution to the catalog singleton.
-  vite-plus: 1.5.1
+  vite-plus: 1.6.0
   vite: npm:@voidzero-dev/vite-plus-core@1.5.1
   vitest: 5.1.0
 
