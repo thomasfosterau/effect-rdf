@@ -21,4 +21,4 @@ The packages parse documents and run queries that may come from anyone. These de
 
 - Trusted publishing from a protected `release` environment that needs approval; only that job holds `id-token: write`, it installs with `--ignore-scripts`, and nothing privileged runs unless `.github/workflows/actions.lock` verifies. See [PUBLISHING.md](PUBLISHING.md).
 - Workflows default to `permissions: {}` and never persist checkout credentials.
-- Installs use the committed lockfile; `minimumReleaseAge` holds new versions for 8 hours, Dependabot waits a day, and CI runs `pnpm audit --audit-level high`.
+- Installs use the committed lockfile; `minimumReleaseAge` holds new versions for 24 hours, Dependabot waits a day, and CI runs `pnpm audit --audit-level high`.
