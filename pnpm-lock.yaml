@@ -43,8 +43,8 @@ catalogs:
       specifier: 0.6.1
       version: 0.6.1
     '@thomasfosterau/effect-xml':
-      specifier: 0.1.0
-      version: 0.1.0
+      specifier: 0.2.0
+      version: 0.2.0
     '@types/n3':
       specifier: 1.26.6
       version: 1.26.6
@@ -150,7 +150,7 @@ importers:
         version: 0.6.1(effect@4.1.4)
       '@thomasfosterau/effect-xml':
         specifier: 'catalog:'
-        version: 0.1.0(@thomasfosterau/effect-parse@0.6.1(effect@4.1.4))(effect@4.1.4)
+        version: 0.2.0(@thomasfosterau/effect-parse@0.6.1(effect@4.1.4))(effect@4.1.4)
       '@types/n3':
         specifier: 'catalog:'
         version: 1.26.6
@@ -181,7 +181,7 @@ importers:
         version: 0.6.1(effect@4.1.4)
       '@thomasfosterau/effect-xml':
         specifier: 'catalog:'
-        version: 0.1.0(@thomasfosterau/effect-parse@0.6.1(effect@4.1.4))(effect@4.1.4)
+        version: 0.2.0(@thomasfosterau/effect-parse@0.6.1(effect@4.1.4))(effect@4.1.4)
       effect:
         specifier: 4.1.4
         version: 4.1.4
@@ -945,11 +945,11 @@ packages:
     peerDependencies:
       effect: 4.1.4
 
-  '@thomasfosterau/effect-xml@0.1.0':
-    resolution: {integrity: sha512-CQx9SGen7Nisgl3BKyyPQW/ZD5xXoPHnHVoVwaRSOC39k6H+dMGnTUy/gf6lsyOtTJhfi7pGPbYizujVt/ACJQ==}
+  '@thomasfosterau/effect-xml@0.2.0':
+    resolution: {integrity: sha512-i5o+SJVmAgyNGKGK1YwC3nbOJCOSc0Iyy0XRgJ76fOsCBSDetuSvEMCdLnbyW2uKLUqllEzWOBGM4684iuIvFw==}
     engines: {node: '>=22'}
     peerDependencies:
-      '@thomasfosterau/effect-parse': ^0.4.1
+      '@thomasfosterau/effect-parse': ^0.4.1 || ^0.5.0
       effect: 4.1.4
 
   '@tybys/wasm-util@0.10.4':
@@ -2380,7 +2380,7 @@ snapshots:
     dependencies:
       effect: 4.1.4
 
-  '@thomasfosterau/effect-xml@0.1.0(@thomasfosterau/effect-parse@0.6.1(effect@4.1.4))(effect@4.1.4)':
+  '@thomasfosterau/effect-xml@0.2.0(@thomasfosterau/effect-parse@0.6.1(effect@4.1.4))(effect@4.1.4)':
     dependencies:
       '@thomasfosterau/effect-parse': 0.6.1(effect@4.1.4)
       effect: 4.1.4
