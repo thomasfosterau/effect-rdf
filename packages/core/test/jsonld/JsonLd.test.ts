@@ -106,6 +106,7 @@ describe('JsonLd', () => {
     }),
   );
 
+  // Framing a long chain must not overflow the stack.
   describe('deep structures', () => {
     const vocab = { '@vocab': 'http://example.org/' };
     const chain = (n: number) => ({
