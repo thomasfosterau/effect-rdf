@@ -8,7 +8,7 @@ const noTripleTerms = (ds: Dataset.Dataset): Dataset.Dataset =>
   Dataset.filter(ds, (q) => !Term.isTriple(q.object));
 
 // JSON-LD 1.1's `rdfDirection` modes map `@direction` to `i18n` datatypes or compound literals,
-// not RDF 1.2 directional language-tagged strings; only `rdf-1.2` gives those back (#70).
+// not RDF 1.2 directional language-tagged strings; only `rdf-1.2` gives those back.
 const representable = (ds: Dataset.Dataset): Dataset.Dataset =>
   Dataset.filter(
     noTripleTerms(ds),

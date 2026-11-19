@@ -322,8 +322,8 @@ export const loop = <S>(initial: S, step: (state: S) => Option.Option<S>): S => 
 
 /**
  * Deep-copies a JSON value with an explicit work stack: `structuredClone`
- * recurses natively, so a deeply embedded framing result overflowed the stack
- * (#108). Shared and cyclic references are kept, as `structuredClone` keeps them.
+ * recurses natively and overflows the stack on deeply embedded framing results.
+ * Shared and cyclic references are kept, as `structuredClone` keeps them.
  *
  * @internal
  */

@@ -173,7 +173,7 @@ const objectToRdf = (
   } else {
     datatype = typed ? type : '@language' in item ? RDF_LANG_STRING : XSD_STRING;
   }
-  // RDF 1.2 (w3c/json-ld-syntax#488): `@language` + `@direction` is a directional
+  // RDF 1.2 (JSON-LD 1.2 draft): `@language` + `@direction` is a directional
   // language-tagged string. Without a language there is none, so the direction is dropped, as
   // when `rdfDirection` is unset.
   if (

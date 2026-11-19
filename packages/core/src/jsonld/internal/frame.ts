@@ -238,7 +238,7 @@ const frameSubjects = (
       return;
     }
     if (flags.embed === '@last' && hasOwn(uniqueEmbeds, id)) removeEmbed(state, id);
-    // Each embedded level is a few stack frames here and in compaction (#108).
+    // Each embedded level is a few stack frames here and in compaction.
     if (state.subjectStack.length >= MAX_EMBED_DEPTH) {
       fail('maximum nesting exceeded', `framing embeds at most ${MAX_EMBED_DEPTH} levels`);
     }

@@ -1,6 +1,6 @@
 /**
  * Compares the N3 parser with N3.js (the `n3` package, a devDependency for
- * this file only) on the same synthetic document (effect-rdf#73).
+ * this file only) on the same synthetic document.
  *
  *   node --experimental-strip-types bench/n3/n3js.ts
  */

@@ -109,7 +109,7 @@ describe('Iri', () => {
     expect(Iri.isValidReference('//h:80x')).toBe(false);
   });
 
-  // #107: a nested quantifier made a failing match exponential (JSON-LD toRdf e111 took ~3 s).
+  // A nested quantifier would make a failing match exponential.
   it('rejects invalid IRIs in linear time', () => {
     const inputs = [
       'http://example.com/vocabulary/./rel2##fragment-works',
