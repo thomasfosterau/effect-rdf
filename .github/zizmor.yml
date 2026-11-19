@@ -1,16 +1,10 @@
-# zizmor configuration (`uvx zizmor --offline .github`).
+# `uvx zizmor --offline .github`. Actions are pinned to exact release tags,
+# which .github/workflows/actions.lock resolves to commits.
 rules:
-  # Every action is pinned to a commit SHA, except `voidzero-dev/setup-vp`,
-  # which the owner pins to an exact release tag (effect-rdf#140): its
-  # releases are immutable, so the tag cannot be moved, and the Actions
-  # workflow lockfile (effect-rdf#147) records the commit it resolves to.
   unpinned-uses:
     config:
       policies:
-        voidzero-dev/setup-vp: ref-pin
-        '*': hash-pin
+        '*': ref-pin
   dependabot-cooldown:
     config:
-      # The owner's policy: pnpm's `minimumReleaseAge` is 8 hours, and 1 day is
-      # Dependabot's smallest cooldown unit (see .github/dependabot.yml).
       days: 1

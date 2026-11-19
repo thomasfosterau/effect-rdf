@@ -11,7 +11,7 @@
     "sparql-protocol",
     "typescript"
   ],
-  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/sparql-node#readme",
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/trunk/packages/sparql-node#readme",
   "bugs": {
     "url": "https://github.com/thomasfosterau/effect-rdf/issues"
   },
@@ -30,7 +30,7 @@
     "dist",
     "src",
     "README.md",
-    "LICENSE",
+    "LICENSE.md",
     "CHANGELOG.md"
   ],
   "type": "module",

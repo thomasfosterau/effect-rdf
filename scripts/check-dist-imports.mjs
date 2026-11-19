@@ -1,8 +1,6 @@
 /**
- * Import guard: the built `dist/` of every published package must import no
- * `effect/unstable/*` path. Effect rc.118 removed those paths (now
- * `effect/http`, `effect/sql`, …), and the packages' `effect` peer floor
- * (`>=4.1.0`) is past it, so a stray one would break every consumer. Run after `vp run -r build` (`vp run check:dist`).
+ * Fails if any package's built `dist/` imports `effect/unstable/*`: those
+ * paths do not exist in the `effect` versions the peer ranges admit.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
