@@ -137,9 +137,9 @@ export interface ToRdfOptions extends Options {
    * `compound-literal` blank nodes, as RDF 1.2 directional language-tagged
    * strings (`rdf-1.2`, `rdf:dirLangString`), or not at all (default).
    *
-   * `rdf-1.2` follows the JSON-LD 1.2 proposal (w3c/json-ld-syntax#488), not
-   * yet a Recommendation; a `@direction` without `@language` is dropped, as
-   * RDF 1.2 has no directional string without a language.
+   * `rdf-1.2` follows the JSON-LD 1.2 draft, not yet a Recommendation; a
+   * `@direction` without `@language` is dropped, as RDF 1.2 has no directional
+   * string without a language.
    */
   readonly rdfDirection?: RdfDirection | null | undefined;
   /**

@@ -244,7 +244,7 @@ const IPCHAR = `(?:[${IUNRESERVED}${SUBDELIMS}:@]|${PCT})`;
 // by absolute IRIs and relative references. Either an authority and an `ipath-abempty` (every
 // segment starts with `/`), or no authority and a path that does not start with `//`. No two
 // adjacent quantifiers can match the same character, so a failing match backtracks in linear
-// time (a nested `(?:/?ipchar*)*` here was exponential, #107).
+// time (a nested `(?:/?ipchar*)*` would be exponential).
 const IRI_AFTER_SCHEME =
   `(?://(?:(?:[${IUNRESERVED}${SUBDELIMS}:]|${PCT})*@)?(?:\\[[0-9A-Fa-f:.vV${IUNRESERVED}${SUBDELIMS}]*\\]|(?:[${IUNRESERVED}${SUBDELIMS}]|${PCT})*)(?::[0-9]*)?(?:/${IPCHAR}*)*` +
   `|(?!//)(?:${IPCHAR}|/)*)` +

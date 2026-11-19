@@ -106,7 +106,7 @@ describe('JsonLd', () => {
     }),
   );
 
-  // #108: framing a long chain overflowed the stack with a `RangeError`.
+  // Framing a long chain must not overflow the stack.
   describe('deep structures', () => {
     const vocab = { '@vocab': 'http://example.org/' };
     const chain = (n: number) => ({

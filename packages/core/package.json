@@ -22,7 +22,7 @@
     "typescript",
     "xmp"
   ],
-  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/main/packages/core#readme",
+  "homepage": "https://github.com/thomasfosterau/effect-rdf/tree/trunk/packages/core#readme",
   "bugs": {
     "url": "https://github.com/thomasfosterau/effect-rdf/issues"
   },
@@ -37,7 +37,7 @@
     "dist",
     "src",
     "README.md",
-    "LICENSE",
+    "LICENSE.md",
     "CHANGELOG.md"
   ],
   "type": "module",
@@ -198,15 +198,6 @@
       }
     },
     "access": "public"
-  },
-  "scripts": {
-    "bench": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts && node --experimental-strip-types --no-warnings bench/n3/n3.ts && node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts && node --experimental-strip-types --no-warnings bench/shex/shexc.ts && node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts && node --experimental-strip-types --no-warnings bench/sparql/optional.ts",
-    "bench:turtle": "node --experimental-strip-types --no-warnings bench/turtle/parser.ts",
-    "bench:n3": "node --experimental-strip-types --no-warnings bench/n3/n3.ts",
-    "bench:n3js": "node --experimental-strip-types --no-warnings bench/n3/n3js.ts",
-    "bench:rdfxml": "node --experimental-strip-types --no-warnings bench/rdfxml/xml.ts",
-    "bench:shex": "node --experimental-strip-types --no-warnings bench/shex/shexc.ts",
-    "bench:sparql": "node --experimental-strip-types --no-warnings bench/sparql/results-text.ts && node --experimental-strip-types --no-warnings bench/sparql/parser.ts && node --experimental-strip-types --no-warnings bench/sparql/optional.ts"
   },
   "devDependencies": {
     "@effect/sql-pg": "catalog:",

@@ -1,11 +1,11 @@
 /**
- * The "Quick tour" example of the repository README, kept verbatim (between
- * the markers) so that it is type-checked and run by the test suite.
+ * The "Quick tour" example of docs/guide.md, kept verbatim (between the
+ * markers) so that it is type-checked and run.
  */
 import { expect, layer } from '@effect/vitest';
 import { readFileSync } from 'node:fs';
 
-// --- README example: begin ---
+// --- guide example: begin ---
 import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
 import * as Stream from 'effect/Stream';
@@ -73,21 +73,17 @@ const program = Effect.fn('program')(function* () {
 
   return { people, report: ValidationReport.format(report), jsonld };
 });
-// --- README example: end ---
+// --- guide example: end ---
 const between = (text: string, start: string, end: string) =>
   text.slice(text.indexOf(start) + start.length, text.indexOf(end, text.indexOf(start)));
 
-layer(Evaluator.layer())('README quick tour', (test) => {
-  test('matches the code in the README', () => {
-    const readme = readFileSync(new URL('../../../../README.md', import.meta.url), 'utf8');
+layer(Evaluator.layer())('guide quick tour', (test) => {
+  test('matches the code in docs/guide.md', () => {
+    const guide = readFileSync(new URL('../../../../docs/guide.md', import.meta.url), 'utf8');
     const self = readFileSync(new URL(import.meta.url), 'utf8');
-    const inReadme = between(readme, '## Quick tour', '\nEffect.runPromise');
-    const inTest = between(
-      self,
-      '// --- README example: begin ---\n',
-      '// --- README example: end',
-    );
-    expect(inReadme).toContain(inTest.trim());
+    const inGuide = between(guide, '## Quick tour', '\nEffect.runPromise');
+    const inTest = between(self, '// --- guide example: begin ---\n', '// --- guide example: end');
+    expect(inGuide).toContain(inTest.trim());
   });
 
   test.effect('runs end to end', () =>

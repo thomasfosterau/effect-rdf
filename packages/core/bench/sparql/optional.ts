@@ -1,7 +1,6 @@
 /**
- * Benchmarks `OPTIONAL` with a dependent filter over a synthetic graph
- * (effect-rdf#112): a chain of `:knows` links, every other node with an
- * `:age`.
+ * Benchmarks `OPTIONAL` with a dependent filter over a synthetic graph:
+ * a chain of `:knows` links, every other node with an `:age`.
  *
  *   node --experimental-strip-types bench/sparql/optional.ts [people] [fan-out]
  */

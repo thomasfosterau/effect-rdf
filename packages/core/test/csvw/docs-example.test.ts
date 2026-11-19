@@ -1,5 +1,5 @@
 /**
- * The README's usage example, type-checked and run. Keep the two in step.
+ * The usage example in docs/csvw.md, type-checked and run. Keep the two in step.
  */
 import { describe, expect, it } from '@effect/vitest';
 import * as Effect from 'effect/Effect';
@@ -46,7 +46,7 @@ const program = Effect.gen(function* () {
   ),
 );
 
-describe('README example', () => {
+describe('docs example', () => {
   it.effect('validates and converts a table', () =>
     Effect.gen(function* () {
       const { valid, dataset, json } = yield* program;

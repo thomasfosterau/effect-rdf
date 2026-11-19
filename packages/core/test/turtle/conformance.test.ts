@@ -53,7 +53,7 @@ const evaluation = Effect.fn(function* (suite: Suite, dataset: Dataset.Dataset, 
   };
 });
 
-// The rdf12 manifests no longer include the rdf11 ones (w3c/rdf-tests#396), so both are run.
+// The rdf12 manifests no longer include the rdf11 ones, so both are run.
 const suitesUnderTest = [
   { manifest: 'rdf/rdf11/rdf-turtle/manifest.ttl', syntax: Turtle, expected: NTriples },
   { manifest: 'rdf/rdf11/rdf-trig/manifest.ttl', syntax: TriG, expected: NQuads },

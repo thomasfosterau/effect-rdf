@@ -1,14 +1,7 @@
 /**
- * Root workspace config. Owns the repo-wide format/lint/staged passes (read
- * statically by `vp fmt` / `vp lint` / `vp staged`) and the root aggregates
- * (`check`, `test:coverage`). Every package's own tasks are defined once in
- * `vite.package.ts` and instantiated by each package's `vite.config.ts`; this
- * file compiles nothing, but a new package adds itself to the `check` list
- * below.
- *
- * Shaped after the effect-web library's root config: every comment that
- * explains a load-bearing decision is part of the standard and travels with
- * the config.
+ * Root config: the repo-wide format / lint / staged passes and the root tasks.
+ * Each package's own tasks come from `vite.package.ts`; a new package adds
+ * itself to `packages` below.
  */
 
 import { defineConfig } from 'vite-plus';
@@ -53,13 +46,13 @@ export default defineConfig({
     rules: {
       'no-console': 'error',
       'eslint/no-unused-vars': [
-        'warn',
+        'error',
         {
           argsIgnorePattern: '^_',
           varsIgnorePattern: '^_',
         },
       ],
-      'eslint/prefer-const': 'warn',
+      'eslint/prefer-const': 'error',
       // `_tag` is the discriminant of every Effect tagged union (`Data.TaggedEnum`,
       // `Schema.TaggedClass`, the AST and term types).
       'eslint/no-underscore-dangle': ['error', { allow: ['_tag'] }],
@@ -82,17 +75,9 @@ export default defineConfig({
       // by the type it describes.
       'effect/avoid-schema-suffix': 'off',
 
-      // ---- Effect preset: rules this workspace's conventions cut across ----
-      // `prefer-option-over-null` also fires on `?: T | undefined`, which is
-      // the ONLY spelling of an optional member `exactOptionalPropertyTypes`
-      // lets a caller forward an optional of its own into. A bare `null` /
-      // `undefined` in a return type is still a finding to read (692 at
-      // adoption, listed in the issue above).
+      // Not yet paid down: `T | undefined` / `T | null` in public signatures
+      // still to be moved onto `Option`.
       'effect/prefer-option-over-null': 'warn',
-      'typescript/no-explicit-any': 'off',
-      'typescript/no-empty-object-type': 'off',
-      'typescript/ban-ts-comment': 'off',
-      'unicorn/no-empty-file': 'off',
       'vite-plus/prefer-vite-plus-imports': 'error',
     },
     overrides: [
@@ -340,29 +325,21 @@ export default defineConfig({
   run: {
     cache: true,
     tasks: {
-      // The CI typecheck gate, as one task: every package's `check` (`src`,
-      // `test` and its config under its tsconfig.json). A pure graph node; a
-      // new package adds itself to `packages` above.
+      // Every package's type gate.
       check: {
         command: "echo 'check: every type gate green'",
         dependsOn: packages.map((name) => `${name}#check`),
         cache: false,
       },
-      // Import guard: the built dist of every published package imports no
-      // `effect/unstable/*` (removed in rc.118, before the `effect` peer floor).
-      // Reads `dist/`, hence the build edges.
+      // The built `dist/` of every package imports no `effect/unstable/*`.
       'check:dist': {
         command: 'node scripts/check-dist-imports.mjs',
         dependsOn: packages.map((name) => `${name}#build`),
         cache: false,
       },
-      // The whole pipeline, as one task: what `.github/workflows/ci.yml` runs
-      // and what to run before pushing. A sequence, not a graph: each gate
-      // needs the one before it to have finished (the type gates and the
-      // tests are held to two packages at a time, since each is a large
-      // native `tsc` program or a suite holding W3C manifests in memory, and
-      // the tests need the conformance suites fetched), and the first failure
-      // stops it.
+      // What CI runs. Sequential: each gate needs the one before it, and the
+      // type gates and suites (large `tsc` programs, W3C manifests in memory)
+      // run two packages at a time.
       ci: {
         command: [
           'vp check',
@@ -372,20 +349,29 @@ export default defineConfig({
           'vp run -r build',
           'vp run check:dist',
           'pnpm audit --audit-level high',
-          // Last, so the Node the gates ran on closes the log: CI's matrix
-          // (`lts`, `latest`) is checked against this line.
-          'node --version',
         ].join(' && '),
         cache: false,
       },
-      // Every package's suite under one Istanbul coverage map
-      // (`coverage/coverage-final.json`), which `fallow audit` reads for exact
-      // per-function CRAP scores (`health.coverage` in .fallowrc.json).
-      // Without it fallow estimates every function as uncovered. Run this
-      // before `fallow audit` (the Claude Code PreToolUse fallow gate runs the
-      // audit on `git commit` / `git push` but never refreshes this map).
+      // One Istanbul map for every package (coverage/coverage-final.json),
+      // which `fallow audit` reads for CRAP scores.
       'test:coverage': {
         command: 'vp test run --coverage',
+        cache: false,
+      },
+      // Run by the pre-commit hook after `vp staged`.
+      'fallow:audit': {
+        command: 'vp exec fallow audit --base origin/trunk --quiet',
+        dependsOn: ['test:coverage'],
+        cache: false,
+      },
+      fallow: {
+        command: 'vp exec fallow --summary',
+        cache: false,
+      },
+      // The Release workflow's version step. Changesets' own formatting is off
+      // (`"format": false`): it would run Vite+'s editor-only `oxfmt` shim.
+      'changeset:version': {
+        command: 'changeset version && vp fmt && pnpm install --lockfile-only',
         cache: false,
       },
     },

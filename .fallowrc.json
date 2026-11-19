@@ -99,8 +99,8 @@
       "dup:71613c48:2"
     ]
   },
-  // The complexity and duplication already on `main` when fallow was adopted
-  // (saved from main's sources with real coverage): the audit fails on what a
+  // The complexity and duplication already on `trunk` when fallow was adopted
+  // (saved from its sources with real coverage): the audit fails on what a
   // change adds or worsens, not on that inherited debt. Re-save a baseline
   // only to shrink it.
   "audit": {

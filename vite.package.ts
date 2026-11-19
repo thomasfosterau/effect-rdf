@@ -1,42 +1,22 @@
 /**
- * The one Vite+ configuration every package in this workspace shares: the
- * task graph (`check`, `build`, `test:unit`, `test:coverage`), the `vp pack`
- * (tsdown) settings and the vitest / coverage settings. Each
- * `packages/<name>/vite.config.ts` is a one-call instantiation of it.
- *
- * Shaped after the effect-web library's `vite.package.ts`, with one
- * deliberate difference: here a package's development `exports` point at
- * `src/*.ts` (its `publishConfig.exports` at `dist/`), so a sibling package
- * is consumed from source and no task needs a build edge first.
+ * The Vite+ config every package shares (tasks, `vp pack`, vitest); each
+ * `packages/<name>/vite.config.ts` instantiates it. Development `exports`
+ * point at `src/`, so siblings are consumed from source and no task needs a
+ * build first.
  */
 import { defineConfig } from 'vite-plus';
 
-/** What differs per package. */
 export interface PackageConfigOptions {
-  /**
-   * Per-test timeout in milliseconds. The conformance suites run thousands
-   * of manifest entries inside one test, hence the long default.
-   */
-  readonly testTimeout?: number | undefined;
-  /**
-   * The tsconfig `vp pack` declares types with, when `tsconfig.json` (which
-   * also covers `test/`) pulls in more than the published sources should.
-   */
-  readonly packTsconfig?: string | undefined;
-  /**
-   * Nested subpaths (`src/<name>/*.ts`, published as `./<name>` and
-   * `./<name>/<Module>`) that `vp pack` builds beside the flat `src/*.ts`
-   * entries, e.g. core's `turtle`, `shacl` and `sparql/sql`.
-   */
-  readonly subpaths?: ReadonlyArray<string> | undefined;
+  /** Per-test timeout in ms: a conformance suite runs a whole manifest in one test. */
+  readonly testTimeout?: number;
+  /** Nested subpaths (`src/<name>/*.ts`) built beside the flat `src/*.ts` entries. */
+  readonly subpaths?: ReadonlyArray<string>;
+  /** Extra uncached tasks (benchmarks). */
+  readonly tasks?: Readonly<Record<string, { readonly command: string }>>;
 }
 
-/**
- * Input fingerprint for a package's cached tasks: auto tracking minus
- * node_modules bookkeeping churn (pnpm rewrites `.modules.yaml` on every
- * install), with the lockfile back explicitly so a dependency upgrade still
- * invalidates a type-check or a test run.
- */
+// Auto tracking minus pnpm's node_modules bookkeeping, with the lockfile back
+// so a dependency upgrade still invalidates the cache.
 const cacheInputs = [
   { auto: true },
   '!node_modules/**',
@@ -45,52 +25,25 @@ const cacheInputs = [
   { pattern: 'pnpm-lock.yaml', base: 'workspace' as const },
 ];
 
-/**
- * The `build` task and `vp pack` settings of a published package: one ESM
- * module + declaration file per `src/*.ts` (the `./*` export) and per
- * `src/<subpath>/*.ts`, via `vp pack` → tsdown.
- */
-const publishing = ({
-  subpaths = [],
-  packTsconfig,
-}: Pick<PackageConfigOptions, 'subpaths' | 'packTsconfig'>) => ({
-  tasks: {
-    build: {
-      command: 'vp pack',
-      cache: { input: cacheInputs, output: ['dist/**'] },
-    },
-  },
-  pack: {
-    entry: ['src/*.ts', ...subpaths.map((name) => `src/${name}/*.ts`)],
-    dts: true,
-    format: ['esm' as const],
-    sourcemap: true,
-    ...(packTsconfig === undefined ? {} : { tsconfig: packTsconfig }),
-  },
-});
-
 export const packageConfig = ({
   testTimeout = 60_000,
-  packTsconfig,
   subpaths = [],
+  tasks = {},
 }: PackageConfigOptions = {}) => {
   const maxWorkers = process.env.VITEST_MAX_WORKERS;
-  const release = publishing({ subpaths, packTsconfig });
   return defineConfig({
     run: {
       tasks: {
-        // `src`, `test` and this config under the native, Effect-patched `tsc`.
         check: {
           command: 'tsc -p tsconfig.json',
           cache: { input: cacheInputs, output: [] },
         },
-        // The published artifact.
-        ...release.tasks,
-        // Never cached: the conformance suites read `RDF_TEST_SUITES`
-        // (default `<repo>/.test-suites`, fetched by
-        // `scripts/fetch-test-suites.sh`) and skip when it is absent, and a
-        // directory outside the package is not part of any task fingerprint,
-        // so a cached pass without the suites would mask a run with them.
+        build: {
+          command: 'vp pack',
+          cache: { input: cacheInputs, output: ['dist/**'] },
+        },
+        // Never cached: the conformance suites read `RDF_TEST_SUITES` (default
+        // `<repo>/.test-suites`), which is outside every task fingerprint.
         'test:unit': {
           command: 'vp test run',
           cache: false,
@@ -99,17 +52,23 @@ export const packageConfig = ({
           command: 'vp test run --coverage',
           cache: false,
         },
+        ...Object.fromEntries(
+          Object.entries(tasks).map(([name, { command }]) => [name, { command, cache: false }]),
+        ),
       },
     },
-    pack: release.pack,
+    pack: {
+      entry: ['src/*.ts', ...subpaths.map((name) => `src/${name}/*.ts`)],
+      dts: true,
+      format: ['esm'],
+      sourcemap: true,
+    },
     test: {
       include: ['test/**/*.test.ts'],
       testTimeout,
       ...(maxWorkers === undefined ? {} : { maxWorkers: Number(maxWorkers) }),
       coverage: {
         provider: 'istanbul',
-        // `json` writes coverage-final.json, the Istanbul map `fallow audit`
-        // reads for exact per-function CRAP scores.
         reporter: ['text-summary', 'json-summary', 'json'],
         reportsDirectory: './coverage',
         include: ['src/**/*.ts'],
