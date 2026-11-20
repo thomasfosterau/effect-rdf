@@ -9,7 +9,6 @@
   "type": "module",
   "scripts": {
     "changeset": "changeset",
-    "release": "pnpm -r --filter './packages/*' publish --access public --no-git-checks --ignore-scripts && changeset tag",
     "prepare": "vp config && effect-tsgo patch --typescript --oxlint"
   },
   "devDependencies": {

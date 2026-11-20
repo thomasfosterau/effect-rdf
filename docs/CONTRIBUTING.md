@@ -53,4 +53,4 @@ CI ([ci.yml](../.github/workflows/ci.yml)) runs `vp run ci` on Node `lts` and `l
 
 ## Changesets
 
-Every change to a published package's behaviour or its emitted `.d.ts` (doc comments included, as a `patch`) needs a changeset: run `pnpm changeset` and commit the file with the change. Docs, CI and tooling changes need none. While on `0.x`, a breaking change is a `minor`. Never version or publish by hand: see [PUBLISHING.md](PUBLISHING.md).
+Every change to a published package's behaviour or its emitted `.d.ts` (doc comments included, as a `patch`) needs a changeset: run `pnpm changeset` and commit the file with the change. Docs, CI and tooling changes need none. While on `0.x`, a breaking change is a `minor`. Never version or publish by hand: the Release workflow runs `vp run release` (`vp run release:dry-run` shows what it would publish); see [PUBLISHING.md](PUBLISHING.md).
