@@ -12,3 +12,7 @@ Read [README.md](README.md) and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) fir
 - Without `.test-suites/` the conformance tests skip silently; a green run then proves only the unit tests. In a git worktree, symlink the main checkout's `.test-suites`.
 - `vp check` (format + lint) and `vp run check` (the type gate) are different commands; run the type gate and suites with `--concurrency-limit 2`, or a small machine runs out of memory.
 - `effect` is a peer, never a dependency: two copies break `Context` / `Layer` / `Schema` identity.
+
+## Fallow
+
+- `vp install` links the `fallow` skill into `.claude/skills/fallow` from the installed package (approved under `permissions` in `pnpm-workspace.yaml`). The pre-commit `fallow:audit` gate and the rest of the repository's rules are in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
