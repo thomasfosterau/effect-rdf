@@ -371,7 +371,28 @@ export default defineConfig({
       // The Release workflow's version step. Changesets' own formatting is off
       // (`"format": false`): it would run Vite+'s editor-only `oxfmt` shim.
       'changeset:version': {
-        command: 'changeset version && vp fmt && pnpm install --lockfile-only',
+        command: 'changeset version && vp fmt && vp install --lockfile-only',
+        cache: false,
+      },
+      // The Release workflow's publish script, after every package's build and
+      // the offline dist check: pnpm publishes each public package whose
+      // version is not on npm yet, in dependency order, under OIDC trusted
+      // publishing; then `changeset git-tag` tags each version not tagged yet
+      // and reports the new tags to `changesets/action` through
+      // `CHANGESETS_OUTPUT`, which pushes them and creates the GitHub releases.
+      // A failed publish stops before tagging.
+      release: {
+        command: [
+          'vp pm publish -r --access public --no-git-checks -- --ignore-scripts',
+          'changeset git-tag',
+        ],
+        dependsOn: ['check:dist'],
+        cache: false,
+      },
+      // What `release` would publish, without publishing or tagging.
+      'release:dry-run': {
+        command: 'vp pm publish -r --access public --dry-run --no-git-checks -- --ignore-scripts',
+        dependsOn: ['check:dist'],
         cache: false,
       },
     },

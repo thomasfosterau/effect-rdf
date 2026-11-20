@@ -124,10 +124,11 @@ jobs:
           registry-url: https://registry.npmjs.org
           run-install: |
             - args: ['--frozen-lockfile', '--ignore-scripts']
-      - run: vp run -r build
-      # pnpm 11 performs the OIDC exchange itself.
+      # `vp run release` (vite.config.ts): builds every package and runs the
+      # offline dist check, then `vp pm publish -r` (pnpm, which performs the
+      # OIDC exchange, adds provenance and skips versions npm already has),
+      # then `changeset git-tag` reports the new tags through CHANGESETS_OUTPUT,
+      # and the action pushes them and creates the releases.
       - uses: changesets/action/publish@v2.1.2
         with:
-          script: pnpm run release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          script: vp run release
