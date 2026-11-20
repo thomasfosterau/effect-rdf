@@ -199,7 +199,11 @@
     },
     "access": "public"
   },
+  "scripts": {
+    "docgen": "docgen"
+  },
   "devDependencies": {
+    "@effect/docgen": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
