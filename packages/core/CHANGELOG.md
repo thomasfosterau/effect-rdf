@@ -1,5 +1,11 @@
 # @thomasfosterau/effect-rdf
 
+## 0.3.1
+
+### Patch Changes
+
+- [#173](https://github.com/thomasfosterau/effect-rdf/pull/173) [`82ed1b1`](https://github.com/thomasfosterau/effect-rdf/commit/82ed1b1566950f4deb12d87286ada5a44656cca1) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - Doc comments no longer cite issue numbers.
+
 ## 0.3.0
 
 ### Minor Changes
