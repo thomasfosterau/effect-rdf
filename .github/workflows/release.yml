@@ -125,7 +125,7 @@ jobs:
           run-install: |
             - args: ['--frozen-lockfile', '--ignore-scripts']
       - run: vp run -r build
-      # pnpm 11 performs the OIDC exchange itself.
+      # pnpm performs the OIDC exchange and adds provenance itself.
       - uses: changesets/action/publish@v2.1.2
         with:
           script: pnpm run release
