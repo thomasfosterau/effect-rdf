@@ -22,7 +22,7 @@ catalog:
   # table of node_modules/@effect/tsgo/dist/effect-tsgo.cjs, and fails
   # `vp install` on anything else. Move it with `@typescript/native` and
   # `vite-plus`.
-  '@effect/tsgo': 0.69.0
+  '@effect/tsgo': 0.70.0
   '@effect/vitest': 4.1.4
   '@enfect/oxlint': ^0.10.0
   '@thomasfosterau/effect-ext': 0.3.1
@@ -31,7 +31,7 @@ catalog:
   '@types/n3': 1.26.6
   '@types/node': ^26.6.6
   # Must equal the vitest vite-plus bundles.
-  '@vitest/coverage-istanbul': 5.1.0
+  '@vitest/coverage-istanbul': 5.1.1
   effect: 4.1.4
   fallow: 3.44.0
   # The reference N3 / Turtle parser, for `bench/n3` only.
@@ -40,11 +40,11 @@ catalog:
   # declaration bundler); TypeScript 7 (`tsc`) is the type checker.
   typescript: 'npm:@typescript/typescript6@6.0.2'
   '@typescript/native': 'npm:typescript@7.0.2'
-  vite-plus: 1.6.0
+  vite-plus: 1.7.0
   # npm aliases Dependabot cannot bump: `vite` follows `vite-plus`, `vitest`
   # equals vite-plus's exact pin.
   vite: npm:@voidzero-dev/vite-plus-core@1.6.0
-  vitest: 5.1.0
+  vitest: 5.1.1
 
 # The ranges the published packages declare.
 catalogs:
