@@ -52,7 +52,7 @@ catalogs:
     # Carets: a 0.x minor may break the API the grammars use, so each minor
     # line is listed once the suites pass against it.
     '@thomasfosterau/effect-parse': ^0.4.0 || ^0.5.0
-    '@thomasfosterau/effect-xml': ^0.1.0
+    '@thomasfosterau/effect-xml': ^0.2.0
     '@thomasfosterau/effect-ext': ^0.2.0
     # `^4.0.0` unless a package's own dependencies need more (below).
     effect: ^4.0.0
