@@ -25,7 +25,7 @@ catalog:
   '@effect/tsgo': 0.69.0
   '@effect/vitest': 4.1.4
   '@enfect/oxlint': ^0.10.0
-  '@thomasfosterau/effect-ext': 0.2.0
+  '@thomasfosterau/effect-ext': 0.3.1
   '@thomasfosterau/effect-parse': 0.6.1
   '@thomasfosterau/effect-xml': 0.1.0
   '@types/n3': 1.26.6
@@ -53,7 +53,7 @@ catalogs:
     # line is listed once the suites pass against it.
     '@thomasfosterau/effect-parse': ^0.4.0 || ^0.5.0
     '@thomasfosterau/effect-xml': ^0.1.0
-    '@thomasfosterau/effect-ext': ^0.2.0
+    '@thomasfosterau/effect-ext': ^0.2.0 || ^0.3.0
     # `^4.0.0` unless a package's own dependencies need more (below).
     effect: ^4.0.0
   # effect-sparql-node: `@effect/platform-node` declares `effect: ^4.1.2`.
