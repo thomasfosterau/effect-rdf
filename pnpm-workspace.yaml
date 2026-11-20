@@ -7,9 +7,9 @@ packages:
 catalogMode: strict
 
 catalog:
-  '@effect/docgen': ^4.1.4
   '@changesets/changelog-github': ^1.0.1
   '@changesets/cli': ^3.0.3
+  '@effect/docgen': ^4.1.4
   # Test-only: the /sparql/sql PostgreSQL suite runs on PGlite.
   '@electric-sql/pglite': 0.5.17
   '@effect/language-service': ^0.87.5
