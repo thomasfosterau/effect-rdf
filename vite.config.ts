@@ -325,6 +325,16 @@ export default defineConfig({
   run: {
     cache: true,
     tasks: {
+      // The API reference the Pages workflow publishes. Examples are
+      // rendered but not compiled (`tscExecutable: "true"` in docgen.json).
+      docgen: {
+        command: "echo 'docgen: every package documented'",
+        dependsOn: [
+          '@thomasfosterau/effect-rdf#docgen',
+          '@thomasfosterau/effect-sparql-node#docgen',
+        ],
+        cache: false,
+      },
       // Every package's type gate.
       check: {
         command: "echo 'check: every type gate green'",

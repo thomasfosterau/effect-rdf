@@ -53,3 +53,7 @@ coverage/
 vite.config.*.timestamp*
 *.tsbuildinfo
 .vitest/
+
+# docgen output (`vp run docgen`), published by the Pages workflow.
+packages/core/docs/api/
+packages/sparql-node/docs/api/

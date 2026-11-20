@@ -53,6 +53,7 @@
     "access": "public"
   },
   "scripts": {
+    "docgen": "docgen",
     "start": "node --experimental-transform-types --no-warnings bin/effect-sparql-server.mjs"
   },
   "dependencies": {
@@ -60,6 +61,7 @@
     "@thomasfosterau/effect-rdf": "workspace:*"
   },
   "devDependencies": {
+    "@effect/docgen": "catalog:",
     "@effect/vitest": "catalog:",
     "@thomasfosterau/effect-parse": "catalog:",
     "@thomasfosterau/effect-xml": "catalog:",
