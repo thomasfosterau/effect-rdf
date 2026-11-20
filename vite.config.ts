@@ -303,12 +303,12 @@ export default defineConfig({
         },
       },
     ],
-    // Type-aware linting through oxlint-tsgolint (bundled with Vite+, patched
-    // by `effect-tsgo patch --oxlint`), with `typeCheck` so the lint pass also
+    // Type-aware linting through tsrs (bundled with Vite+, patched by
+    // `effect-tsgo patch --tsrs`), with `typeCheck` so the lint pass also
     // reports type errors. The `check` tasks (native, Effect-patched `tsc`)
     // stay the type gate of record; both read the same tsconfig.json files,
     // so every linted TypeScript file must be in one (hence `bench` in the
-    // tsconfigs of the packages that have benchmarks): outside one, tsgolint
+    // tsconfigs of the packages that have benchmarks): outside one, tsrs
     // falls back to default compiler options (no `@types/node`, no
     // `noUncheckedIndexedAccess`) and reports false findings.
     options: {
