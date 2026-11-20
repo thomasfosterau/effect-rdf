@@ -33,7 +33,7 @@ catalog:
   # Must equal the vitest vite-plus bundles.
   '@vitest/coverage-istanbul': 5.1.0
   effect: 4.1.4
-  fallow: 3.43.1
+  fallow: 3.43.2
   # The reference N3 / Turtle parser, for `bench/n3` only.
   n3: 2.13.12
   # TypeScript 6 (`tsc6`) for JS-API consumers (the language service, tsdown's
