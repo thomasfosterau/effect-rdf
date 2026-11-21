@@ -323,15 +323,15 @@ class Builder {
         }
         this.doctype = Option.some({
           name: e.name,
-          publicId: e.publicId ?? undefined,
-          systemId: e.systemId ?? undefined,
-          entities: entitiesOf(e.internalSubset ?? ''),
+          publicId: Option.getOrUndefined(e.publicId),
+          systemId: Option.getOrUndefined(e.systemId),
+          entities: entitiesOf(Option.getOrElse(e.internalSubset, () => '')),
         });
         return;
       case 'XmlDeclaration':
         this.version = Option.some(e.version);
-        this.encoding = Option.fromNullishOr(e.encoding);
-        this.standalone = Option.fromNullishOr(e.standalone);
+        this.encoding = e.encoding;
+        this.standalone = e.standalone;
     }
   }
 
@@ -577,9 +577,12 @@ export const parseText = (input: string, onRootChild: RootChildHook = keepChild)
     const error = Cause.findErrorOption(exit.cause);
     if (Option.isSome(error)) {
       const failure = error.value;
-      // The decoding errors (bytes only, never a string) carry no position
-      const position = Predicate.hasProperty(failure, 'position') ? failure.position : null;
-      throw new Failure(failure.message, Predicate.isNullish(position) ? ORIGIN : plain(position));
+      // The decoding errors carry no position; a limit's is `none` only on bytes
+      const position = Predicate.hasProperty(failure, 'position')
+        ? failure.position
+        : Option.none();
+      const at = Option.isOption(position) ? position : Option.some(position);
+      throw new Failure(failure.message, Option.match(at, { onNone: () => ORIGIN, onSome: plain }));
     }
     // A `Failure` the builder threw, or a defect
     throw Cause.squash(exit.cause);
