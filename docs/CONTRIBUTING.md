@@ -29,7 +29,7 @@ The type gate and suites are large; keep them to two packages at a time (`--conc
 
 ### Dependencies
 
-Every version lives in the `pnpm-workspace.yaml` catalog; `package.json` files use `catalog:`, `catalog:peers` or `workspace:*`. After editing it, run `vp install` and commit `pnpm-lock.yaml`. Dependabot can't do these, so do them on its PR:
+Every version lives in the `pnpm-workspace.yaml` catalog; `package.json` files use `catalog:`, `catalog:peers` or `workspace:*`. After editing it, run `vp install` and commit `pnpm-lock.yaml`. Dependabot can't do these, so make them in a PR from a new branch started from its head (never push to a `dependabot/*` branch, which stops it rebasing), and it closes its own PR once yours merges:
 
 - `vite` (an npm alias) equals the `vite-plus` version, and `vitest` / `@vitest/coverage-istanbul` equal vite-plus's vitest.
 - `@effect/tsgo`, `@typescript/native` (an npm alias) and vite-plus's oxlint must be a combination the `components` table in `node_modules/@effect/tsgo/dist/effect-tsgo.cjs` supports, or `vp install` fails.
