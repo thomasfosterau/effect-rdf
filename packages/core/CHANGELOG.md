@@ -1,5 +1,15 @@
 # @thomasfosterau/effect-rdf
 
+## 0.4.0
+
+### Minor Changes
+
+- [#187](https://github.com/thomasfosterau/effect-rdf/pull/187) [`56e31e1`](https://github.com/thomasfosterau/effect-rdf/commit/56e31e13d4fb1360a22e592c4485ba739f90cebb) Thanks [@thomasfosterau](https://github.com/thomasfosterau)! - The optional `@thomasfosterau/effect-xml` peer is now `^0.2.0` (was `^0.1.0`): the RDF/XML reader reads effect-xml 0.2's `Option`-valued SAX events and error positions. **Breaking** for apps that install effect-xml 0.1: upgrade it to 0.2.
+
+### Patch Changes
+
+- [#172](https://github.com/thomasfosterau/effect-rdf/pull/172) [`26af0c3`](https://github.com/thomasfosterau/effect-rdf/commit/26af0c34df26807e2dc62cbbf7ad99dd2daaf435) Thanks [@dependabot](https://github.com/apps/dependabot)! - The optional `@thomasfosterau/effect-ext` peer, used by `/csvw` through `UriTemplate`, widens from `^0.2.0` to `^0.2.0 || ^0.3.0`; the CSVW suites pass on 0.3.1.
+
 ## 0.3.1
 
 ### Patch Changes
