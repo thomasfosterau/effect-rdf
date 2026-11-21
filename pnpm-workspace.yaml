@@ -19,11 +19,11 @@ catalog:
   '@effect/sql-pg': 4.1.4
   '@effect/sql-sqlite-node': 4.1.4
   # `effect-tsgo patch` (the `prepare` script) supports only the native `tsc`
-  # and the vite-plus oxlint / tsgolint versions listed in the `components`
+  # and the vite-plus oxlint / tsrs versions listed in the `components`
   # table of node_modules/@effect/tsgo/dist/effect-tsgo.cjs, and fails
   # `vp install` on anything else. Move it with `@typescript/native` and
   # `vite-plus`.
-  '@effect/tsgo': 0.69.0
+  '@effect/tsgo': 0.73.2
   '@effect/vitest': 4.1.4
   '@enfect/oxlint': ^0.10.0
   '@thomasfosterau/effect-ext': 0.3.1
@@ -41,10 +41,11 @@ catalog:
   # declaration bundler); TypeScript 7 (`tsc`) is the type checker.
   typescript: 'npm:@typescript/typescript6@6.0.2'
   '@typescript/native': 'npm:typescript@7.0.2'
-  vite-plus: 1.6.0
-  # npm aliases Dependabot cannot bump: `vite` follows `vite-plus`, `vitest`
-  # equals vite-plus's exact pin.
-  vite: npm:@voidzero-dev/vite-plus-core@1.6.0
+  vite-plus: 1.7.0
+  # Dependabot cannot bump these: `vite` (an npm alias) and `vitest` equal what
+  # vite-plus itself depends on (`npm view vite-plus@<v> dependencies`); `vite`
+  # no longer equals vite-plus.
+  vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
   vitest: 5.1.0
 
 # The ranges the published packages declare.
@@ -82,13 +83,6 @@ permissions:
 
 skills:
   dirs: [.claude/skills]
-peerDependencyRules:
-  allowAny:
-    - vite
-    - vitest
-  allowedVersions:
-    vite: '*'
-    vitest: '*'
 
 # Hold new versions for 24 hours (minutes); Dependabot's cooldown is 1 day.
 minimumReleaseAge: 1440
