@@ -32,7 +32,7 @@ catalog:
   '@types/n3': 1.26.6
   '@types/node': ^26.6.6
   # Must equal the vitest vite-plus bundles.
-  '@vitest/coverage-istanbul': 5.1.0
+  '@vitest/coverage-istanbul': 5.1.1
   effect: 4.1.4
   fallow: 3.44.0
   # The reference N3 / Turtle parser, for `bench/n3` only.
@@ -46,7 +46,7 @@ catalog:
   # vite-plus itself depends on (`npm view vite-plus@<v> dependencies`); `vite`
   # no longer equals vite-plus.
   vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
-  vitest: 5.1.0
+  vitest: 5.1.1
 
 # The ranges the published packages declare.
 catalogs:
