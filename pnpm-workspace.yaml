@@ -9,22 +9,22 @@ catalogMode: strict
 catalog:
   '@changesets/changelog-github': ^1.0.1
   '@changesets/cli': ^3.0.3
-  '@effect/docgen': ^4.1.4
+  '@effect/docgen': ^4.1.5
   # Test-only: the /sparql/sql PostgreSQL suite runs on PGlite.
   '@electric-sql/pglite': 0.5.17
   '@effect/language-service': ^0.87.5
   # Exact, in lockstep with `effect`. `@effect/sql-*` are core devDependencies
   # (the /sparql/sql suites' drivers), never runtime dependencies or peers.
-  '@effect/platform-node': 4.1.4
-  '@effect/sql-pg': 4.1.4
-  '@effect/sql-sqlite-node': 4.1.4
+  '@effect/platform-node': 4.1.5
+  '@effect/sql-pg': 4.1.5
+  '@effect/sql-sqlite-node': 4.1.5
   # `effect-tsgo patch` (the `prepare` script) supports only the native `tsc`
   # and the vite-plus oxlint / tsrs versions listed in the `components`
   # table of node_modules/@effect/tsgo/dist/effect-tsgo.cjs, and fails
   # `vp install` on anything else. Move it with `@typescript/native` and
   # `vite-plus`.
   '@effect/tsgo': 0.73.2
-  '@effect/vitest': 4.1.4
+  '@effect/vitest': 4.1.5
   '@enfect/oxlint': ^0.10.0
   '@thomasfosterau/effect-ext': 0.3.1
   '@thomasfosterau/effect-parse': 0.6.2
@@ -33,7 +33,7 @@ catalog:
   '@types/node': ^26.6.6
   # Must equal the vitest vite-plus bundles.
   '@vitest/coverage-istanbul': 5.1.0
-  effect: 4.1.4
+  effect: 4.1.5
   fallow: 3.44.0
   # The reference N3 / Turtle parser, for `bench/n3` only.
   n3: 2.13.12
