@@ -41,7 +41,7 @@ catalog:
   # declaration bundler); TypeScript 7 (`tsc`) is the type checker.
   typescript: 'npm:@typescript/typescript6@6.0.2'
   '@typescript/native': 'npm:typescript@7.0.2'
-  vite-plus: 1.7.0
+  vite-plus: 1.8.0
   # Dependabot cannot bump these: `vite` (an npm alias) and `vitest` equal what
   # vite-plus itself depends on (`npm view vite-plus@<v> dependencies`); `vite`
   # no longer equals vite-plus.
