@@ -32,7 +32,7 @@ catalog:
   '@types/n3': 1.26.6
   '@types/node': ^26.6.6
   # Must equal the vitest vite-plus bundles.
-  '@vitest/coverage-istanbul': 5.1.1
+  '@vitest/coverage-istanbul': 5.1.2
   effect: 4.1.5
   fallow: 3.48.0
   # The reference N3 / Turtle parser, for `bench/n3` only.
