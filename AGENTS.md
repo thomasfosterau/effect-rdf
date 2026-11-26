@@ -12,7 +12,7 @@ Read [README.md](README.md) and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) fir
 - Without `.test-suites/` the conformance tests skip silently; a green run then proves only the unit tests. In a git worktree, symlink the main checkout's `.test-suites`.
 - `vp check` (format + lint) and `vp run check` (the type gate) are different commands; run the type gate and suites with `--concurrency-limit 2`, or a small machine runs out of memory.
 - `effect` is a peer, never a dependency: two copies break `Context` / `Layer` / `Schema` identity.
-- Publish only through the Release workflow (`vp run release`; there is no publish script). Release-path registry calls go through `vp pm`, never `npm` / `pnpm` directly; `vp pm view` fails inside this repo (`devEngines.runtime` is `lts`), so rely on `vp pm publish -r` skipping published versions. `release` depends only on the build and offline checks: it runs in the OIDC job.
+- Publish only through the Release workflow (`vp run release`; there is no publish script). Release-path registry calls go through `vp pm`, never `npm` / `pnpm` directly; rely on `vp pm publish -r` skipping published versions. `release` depends only on the build and offline checks: it runs in the OIDC job.
 
 ## Fallow
 
